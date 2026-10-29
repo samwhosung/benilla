@@ -695,6 +695,17 @@ impl Player {
         self.server_riding
     }
 
+    /// The root mode as the frame's acks left it (`MOVEMENTFLAGS & 0x1200`).
+    pub(crate) fn rooted(&self) -> bool {
+        self.modes.rooted
+    }
+
+    /// Rooted, as a root's ack leaves the mover, for a test.
+    #[cfg(test)]
+    pub(crate) fn root_for_test(&mut self) {
+        self.modes.rooted = true;
+    }
+
     /// The synthesized forward and autorun, for a test to hold and read.
     #[cfg(test)]
     pub(crate) fn forward_for_test(&mut self, held: Option<bool>) -> (bool, bool) {

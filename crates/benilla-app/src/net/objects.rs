@@ -158,7 +158,9 @@ pub(crate) struct Scene<'w, 's> {
     place: crate::ui_party::net::SnapshotPlace<'w, 's>,
     /// The active mover, which its unit's release and destroy zero.
     mover: Option<ResMut<'w, super::MoverClaim>>,
-    /// The active mover's auto-move, which its release and the taxi flag's rise end.
+    /// The far-sight subject, whose view-out term the stun's tick reads.
+    view_subject: Option<Res<'w, crate::player::ViewSubject>>,
+    /// The active mover's auto-move, which its release and the watchers' stops end.
     follow: Option<ResMut<'w, crate::player::FollowState>>,
     approach: Option<ResMut<'w, crate::player::Approach>>,
     /// Who we drive and whether we may, which our own arrival gives back.
@@ -644,6 +646,18 @@ fn on_monster_move(In(ev): In<SessionEvent>, mut sc: Scene) {
             &mut sc.transforms,
             &mut sc.riders,
         );
+        // A path started on the active mover runs its input tick (`0x6187a0` → `0x602053`), whose
+        // precondition the server's spline fails (`0x5144e0`): the teardown leg stops the auto-move
+        // (`0x5146d6`). A stop starts no path (`0x601fee`).
+        if !stop {
+            update::stop_auto_move(
+                sc.mover.as_deref(),
+                sc.follow.as_deref_mut(),
+                sc.approach.as_deref_mut(),
+                &mut sc.field_notices,
+                guid,
+            );
+        }
     }
 }
 

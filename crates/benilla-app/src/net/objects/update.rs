@@ -842,9 +842,34 @@ fn deactivate(sc: &mut Scene, guid: u64, script: Option<&UiScript>) {
     }
 }
 
+/// Whether the mover's input tick takes its teardown leg (`0x5146c1`-`0x5146ce`): it may neither
+/// translate (`0x514560`) nor turn (`0x5145b0`), off its health, the far-sight latch, the root and
+/// the stun its new flags hold ([`crate::player::MoverInput`]).
+fn tick_tears_down(sc: &Scene, fields: &ObjectFields) -> bool {
+    let driving_own_body = sc
+        .mover_lock
+        .as_deref()
+        .is_none_or(|l| l.foreign_mover.is_none());
+    let input = crate::player::MoverInput {
+        dead: fields.unit_is_dead(),
+        view_is_out: crate::player::view_is_out(
+            driving_own_body,
+            sc.view_subject
+                .as_deref()
+                .is_some_and(|v| v.remote.is_some()),
+        ),
+    };
+    let rooted = sc
+        .player
+        .as_deref()
+        .is_some_and(crate::player::Player::rooted);
+    let stunned = fields.unit_flags() & crate::player::UNIT_FLAG_STUNNED != 0;
+    input.torn_down(rooted, stunned)
+}
+
 /// `StopAutoMove` (`0x60fb60`) on `guid`, a no-op unless it is the active mover
 /// ([`crate::player::AutoMoveStop`]): the scene's claim, auto-move and notice lane.
-fn stop_auto_move(
+pub(super) fn stop_auto_move(
     mover: Option<&crate::net::MoverClaim>,
     follow: Option<&mut crate::player::FollowState>,
     approach: Option<&mut crate::player::Approach>,
@@ -1134,9 +1159,8 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
             crate::field_watch::Step::Notice(crate::field_watch::FieldNotice::TrainerPass) => {
                 sc.trainer.owed()
             }
-            // The taxi flag's stop of our auto-move, its `AUTOFOLLOW_END` at this place
-            // (`0x5ff55a` → `0x60fb84`).
-            crate::field_watch::Step::Notice(crate::field_watch::FieldNotice::TaxiStop) => {
+            // A watcher's stop of the mover's auto-move, its `AUTOFOLLOW_END` at this place.
+            crate::field_watch::Step::Notice(crate::field_watch::FieldNotice::AutoMoveStop) => {
                 stop_auto_move(
                     sc.mover.as_deref(),
                     sc.follow.as_deref_mut(),
@@ -1144,6 +1168,32 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
                     &mut sc.field_notices,
                     guid,
                 );
+            }
+            // The stun's tick (`0x5ff501` → `0x514640`): its teardown leg (`0x5146d6`).
+            crate::field_watch::Step::Notice(crate::field_watch::FieldNotice::InputTick) => {
+                if tick_tears_down(sc, fields) {
+                    stop_auto_move(
+                        sc.mover.as_deref(),
+                        sc.follow.as_deref_mut(),
+                        sc.approach.as_deref_mut(),
+                        &mut sc.field_notices,
+                        guid,
+                    );
+                }
+            }
+            // A far sight on a held object (`0x5ee39c` on, past the unresolved return).
+            crate::field_watch::Step::Notice(crate::field_watch::FieldNotice::FarSightStop {
+                object,
+            }) => {
+                if sc.index.0.contains_key(&object) {
+                    stop_auto_move(
+                        sc.mover.as_deref(),
+                        sc.follow.as_deref_mut(),
+                        sc.approach.as_deref_mut(),
+                        &mut sc.field_notices,
+                        guid,
+                    );
+                }
             }
             // The ghost flag's clear (`0x5dea20`): `SetAreaSpiritHealer(0, 0)` runs at the packet,
             // a pending wave's `CMSG_CANCEL_AURA` going out here and its event on the lane ahead

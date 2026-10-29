@@ -33,6 +33,7 @@ fn following() -> App {
             f:RegisterEvent("PLAYER_REGEN_DISABLED")
             f:RegisterEvent("UNIT_AURA")
             f:RegisterEvent("PLAYER_TARGET_CHANGED")
+            f:RegisterEvent("PLAYER_FARSIGHT_FOCUS_CHANGED")
             f:SetScript("OnEvent", function() table.insert(Seen, event) end)
             "#,
         )
@@ -330,4 +331,70 @@ fn a_knockback_ends_the_follow_and_closes_the_loot_window() {
     let seen = frame(&mut app, vec![fall(5), knock, fall(5)]);
     ends_between_the_falls(&seen);
     assert_eq!(past_the_falls(&seen), ["AUTOFOLLOW_END", "LOOT_CLOSED"]);
+}
+
+/// The feign-death bit's rise on our mover runs its tick with `apply` clear (`0x6004f5`-
+/// `0x600530`), whose teardown leg ends the follow, inside the update's notify pass.
+#[test]
+fn feign_death_ends_the_follow_at_its_packet() {
+    use benilla_protocol::field::FIELD_UNIT_DYNAMIC_FLAGS;
+    let mut app = following();
+    let feign = values(ME, &[(FIELD_UNIT_DYNAMIC_FLAGS, 0x20)]);
+    ends_between_the_falls(&frame(&mut app, vec![fall(5), feign, fall(5)]));
+}
+
+/// The stun bit's flip runs the active player's tick first in the flags watcher (`0x5ff501`): a
+/// rooted mover that is now stunned may neither translate nor turn, so the follow ends there.
+#[test]
+fn a_stun_on_a_rooted_mover_ends_the_follow_at_its_packet() {
+    let mut app = following();
+    let world = app.world_mut();
+    world.init_resource::<crate::player::Player>();
+    world
+        .resource_mut::<crate::player::Player>()
+        .root_for_test();
+    let stun = values(ME, &[(FIELD_UNIT_FLAGS, crate::player::UNIT_FLAG_STUNNED)]);
+    ends_between_the_falls(&frame(&mut app, vec![fall(5), stun, fall(5)]));
+}
+
+/// A server path on our mover runs its tick (`0x602053`), whose precondition the spline fails:
+/// the follow ends inside the move's packet.
+#[test]
+fn a_monster_move_on_us_ends_the_follow_at_its_packet() {
+    let mut app = following();
+    let path = SessionEvent::MonsterMove {
+        guid: ME,
+        transport: None,
+        start: [0.0; 3],
+        spline_id: 1,
+        path: vec![[0.0; 3], [5.0, 0.0, 0.0]],
+        facing: benilla_protocol::messages::MonsterMoveFacing::None,
+        stop: false,
+        duration_ms: 1000,
+        flying: false,
+        run_mode: true,
+    };
+    ends_between_the_falls(&frame(&mut app, vec![fall(5), path, fall(5)]));
+}
+
+/// Far sight on a held object stops the mover's auto-move inside the field watcher
+/// (`0x5de0d0` → `0x5ee4a2`), ahead of its `PLAYER_FARSIGHT_FOCUS_CHANGED` (`0x5de167`).
+#[test]
+fn far_sight_ends_the_follow_ahead_of_its_focus_change() {
+    /// `PLAYER_FARSIGHT` (`+0x830` of the player section).
+    const FIELD_PLAYER_FARSIGHT: u16 = 712;
+    let mut app = following();
+    let eye = values(
+        ME,
+        &[
+            (FIELD_PLAYER_FARSIGHT, BOAR as u32),
+            (FIELD_PLAYER_FARSIGHT + 1, (BOAR >> 32) as u32),
+        ],
+    );
+    let seen = frame(&mut app, vec![fall(5), eye, fall(5)]);
+    assert_eq!(
+        past_the_falls(&seen),
+        ["AUTOFOLLOW_END", "PLAYER_FARSIGHT_FOCUS_CHANGED"],
+        "{seen:?}"
+    );
 }

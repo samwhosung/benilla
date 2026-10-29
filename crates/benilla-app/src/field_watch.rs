@@ -189,10 +189,20 @@ pub(crate) enum FieldNotice {
     /// A packet handler's `DisplayError(id)` (`0x496720`): the message row's line, by its
     /// `GlobalStrings` key, shown at once.
     Line { key: &'static str },
-    /// The active player's taxi flag raised (`0x5ff538`-`0x5ff552`): its auto-move stops
-    /// (`0x5ff55a` → `StopAutoMove(0, 1)`), which the notify walk runs at its place, ahead of the
-    /// rest of the flags watcher, and which reaches the lane only as the `AUTOFOLLOW_END` it owes.
-    TaxiStop,
+    /// A watcher's stop of the unit's auto-move, which the notify walk runs at its place when the
+    /// unit is the active mover, and which reaches the lane only as the `AUTOFOLLOW_END` it owes:
+    /// the taxi flag's rise on the active player (`0x5ff538`-`0x5ff55a`, `StopAutoMove(0, 1)`), and
+    /// the feign-death bit's rise (`0x6004f5`-`0x600530`), whose tick runs with `apply` clear, so
+    /// both its predicates fail (`0x51468d`, `0x5146a6`) and it stops (`0x5146d6`).
+    AutoMoveStop,
+    /// The stun bit's flip on the active player (`0x5ff4ef`-`0x5ff501`): the mover's input tick
+    /// with `apply` set, which stops the auto-move when the unit may neither translate nor turn
+    /// (`0x5146c1`-`0x5146d6`).
+    InputTick,
+    /// A far-sight start on `object` (`UpdateFarSight 0x5ee290` from `0x5de0d0`): with the object
+    /// held, the view goes out and the mover's tick stops its auto-move (`0x5ee4a2`), or a
+    /// controlled unit takes the mover, whose switch stops it (`0x5ee477` → `0x600742`).
+    FarSightStop { object: u64 },
 }
 
 /// The notice lane: each notice stamped as a handler writes it ([`crate::lanes::stamp`]), fired
@@ -848,6 +858,10 @@ pub(crate) fn placed_values(
         // `0x5ff580` on the flipped bits, against the new flags.
         let flipped = block.flipped(UNIT_SECTION + UNIT_FLAGS.0 / 4);
         let flags = fields.unit_flags();
+        // The active player's arm opens on the stun bit's tick (`0x5ff4ef`-`0x5ff501`).
+        if mine && flipped & crate::player::UNIT_FLAG_STUNNED != 0 {
+            pass.push(at, FieldNotice::InputTick);
+        }
         // The active player's arm first (`0x5ff5b4`, `0x5ff5c7` → `0x5ff4e0`): a usable refresh
         // on bits 0x1c20000 (`0x5ff50e`), then the in-combat bit 0x80000's own (`0x5ff51b`) and
         // `PLAYER_REGEN_DISABLED` when now set, else `PLAYER_REGEN_ENABLED` (`0x5ff513`-
@@ -866,7 +880,7 @@ pub(crate) fn placed_values(
         }
         // Last in the active player's arm, the taxi flag's rise (`0x5ff538`-`0x5ff55a`).
         if mine && flipped & flags & crate::player::UNIT_FLAG_TAXI_FLIGHT != 0 {
-            pass.push(at, FieldNotice::TaxiStop);
+            pass.push(at, FieldNotice::AutoMoveStop);
         }
         // The reaction on 0x4080 (`0x5ff71c`) and again on 0x1000 (`0x5ff72b`).
         if flipped & 0x4080 != 0 {
@@ -927,6 +941,10 @@ pub(crate) fn placed_values(
         if flipped & 0x20 != 0 {
             pass.signal(at, guid, id::UNIT_HEALTH);
             pass.signal(at, guid, id::POWER + u16::from(fields.unit_power_type()));
+            // Now set, the active mover's tick runs with `apply` clear (`0x600501`-`0x600530`).
+            if new & 0x20 != 0 {
+                pass.push(at, FieldNotice::AutoMoveStop);
+            }
         }
         if flipped & 0x4 != 0 {
             pass.signal(at, guid, id::UNIT_FACTION);
@@ -1072,6 +1090,10 @@ pub(crate) fn placed_values(
         // `0x5de0d0`: the far-sight update, then `PLAYER_FARSIGHT_FOCUS_CHANGED` bare on every
         // change, whether or not the new guid resolves (`0x5de14e`, `0x5de167`).
         if let Some(at) = at(PLAYER_SECTION, FARSIGHT, List::Object) {
+            let object = fields.player_farsight().unwrap_or(0);
+            if object != 0 {
+                pass.push(at, FieldNotice::FarSightStop { object });
+            }
             let id = id::PLAYER_FARSIGHT_FOCUS_CHANGED;
             pass.push(at, FieldNotice::Global { id });
         }
@@ -1936,15 +1958,21 @@ mod tests {
         );
     }
 
-    /// `0x600440`: the dead look signals the health and the power of the unit's power type, the
-    /// tap `UNIT_FACTION`, any other bit nothing of its own; the bridge follows.
+    /// `0x600440`: the dead look signals the health and the power of the unit's power type, then
+    /// on its rise stops the auto-move of a unit that is the active mover; the tap `UNIT_FACTION`,
+    /// any other bit nothing of its own; the bridge follows.
     #[test]
     fn the_dynamic_flags_watcher_signals_on_its_two_bits() {
         // Rage: `UNIT_FIELD_BYTES_0` byte 3 is 1.
         let mut mob = ObjectFields::from_pairs(&[(36, 1 << 24)]).into_created(ObjectType::Unit);
         assert_eq!(
             block(&mut mob, Some(ME), MOB, &[(143, 0x20)]),
-            [signal(MOB, 16), signal(MOB, 18), bridge(MOB, 137)]
+            [
+                signal(MOB, 16),
+                signal(MOB, 18),
+                FieldNotice::AutoMoveStop,
+                bridge(MOB, 137)
+            ]
         );
         assert_eq!(
             block(&mut mob, Some(ME), MOB, &[(143, 0x24)]),
@@ -1967,7 +1995,13 @@ mod tests {
         let mut mob = ObjectFields::from_pairs(&[(36, 1 << 24)]).into_created(ObjectType::Unit);
         assert_eq!(
             block(&mut mob, Some(ME), MOB, &[(143, 0x21)]),
-            [looting, signal(MOB, 16), signal(MOB, 18), bridge(MOB, 137)]
+            [
+                looting,
+                signal(MOB, 16),
+                signal(MOB, 18),
+                FieldNotice::AutoMoveStop,
+                bridge(MOB, 137)
+            ]
         );
         assert_eq!(
             block(&mut mob, Some(ME), MOB, &[(143, 0x20)]),
