@@ -60,8 +60,9 @@ pub(crate) struct FollowState {
     pub(crate) name: String,
     /// The band's latch: the synthesized forward input is held.
     moving: bool,
-    /// A packet's auto-move stop owes its forward release (`0x60e7f0`): the synthesized forward
-    /// and autorun (`0x514630`), dropped at the frame's steer ([`steer_follow`]).
+    /// A packet's auto-move stop owes its forward release (`0x60e7f0`): it cleared autorun inside
+    /// its handler (`0x514630`, [`super::press::CallAutorun::clear`]), and the frame's steer
+    /// ([`steer_follow`]) applies the bit the calls left before the controller's step.
     release_owed: bool,
     /// `WOW_FOLLOW_TRACE` bookkeeping: the last trace line's time and position.
     traced_at: f64,
@@ -81,6 +82,12 @@ impl FollowState {
     /// Owe the forward release of an auto-move a packet stopped ([`super::end_auto_move`]).
     pub(crate) fn owe_release(&mut self) {
         self.release_owed = true;
+    }
+
+    /// Whether a stop owes the frame its release, for a test.
+    #[cfg(test)]
+    pub(crate) fn owes_release(&self) -> bool {
+        self.release_owed
     }
 
     /// Stop following; `true` if we were.
@@ -265,9 +272,10 @@ pub(super) fn steer_follow(
     transforms: Query<&Transform>,
     input: FollowInput,
     mut lane: Option<ResMut<crate::field_watch::NoticeLane>>,
+    called: Option<Res<super::press::CallAutorun>>,
 ) {
     player.auto_forward = false;
-    release_owed(&mut follow, &mut player);
+    release_owed(&mut follow, &mut player, called.as_deref());
     if follow.guid.is_none() {
         return;
     }
@@ -334,11 +342,16 @@ pub(super) fn steer_follow(
     player.auto_forward = moving;
 }
 
-/// The forward release a packet's stop owed (`0x60e7f0`): autorun clears (`0x514630`); the
-/// synthesized forward is already down for the frame.
-fn release_owed(follow: &mut FollowState, player: &mut Player) {
+/// The forward release a stop owed (`0x60e7f0`): autorun as the calls left it after the stop's
+/// clear (`0x514630`), clear with no store for it (a harness). The synthesized forward is the
+/// steer's own, rewritten each frame.
+pub(super) fn release_owed(
+    follow: &mut FollowState,
+    player: &mut Player,
+    called: Option<&super::press::CallAutorun>,
+) {
     if std::mem::take(&mut follow.release_owed) {
-        player.autorun = false;
+        player.autorun = called.is_some_and(|c| c.bit(false));
     }
 }
 
@@ -346,9 +359,13 @@ fn release_owed(follow: &mut FollowState, player: &mut Player) {
 #[cfg(test)]
 pub(crate) fn release_owed_for_test(world: &mut World) {
     world.resource_scope(|world, mut follow: Mut<FollowState>| {
-        let mut player = world.resource_mut::<Player>();
-        player.auto_forward = false;
-        release_owed(&mut follow, &mut player);
+        world.resource_scope(|world, mut player: Mut<Player>| {
+            release_owed(
+                &mut follow,
+                &mut player,
+                world.get_resource::<super::press::CallAutorun>(),
+            );
+        });
     });
 }
 

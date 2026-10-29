@@ -190,6 +190,7 @@ pub(crate) struct AutoMoveStop<'w> {
     claim: Option<Res<'w, crate::net::MoverClaim>>,
     follow: Option<ResMut<'w, FollowState>>,
     approach: Option<ResMut<'w, Approach>>,
+    autorun: Option<ResMut<'w, super::press::CallAutorun>>,
 }
 
 impl AutoMoveStop<'_> {
@@ -229,6 +230,7 @@ impl AutoMoveStop<'_> {
         end_auto_move(
             self.follow.as_deref_mut(),
             self.approach.as_deref_mut(),
+            self.autorun.as_deref_mut(),
             lane,
         )
     }
@@ -241,17 +243,18 @@ impl AutoMoveStop<'_> {
 /// The release lets go of the move, turn and pitch commands (`0x60fc05`-`0x60fc18`). For modes 3
 /// to 10, whose row's first byte is set (`0x860a58`, filled at `0x60e5b2`-`0x60e65c`), the forward
 /// release `0x60e7f0` queues a move stop (`MoveStop 0x60dc90`) and clears autorun (`0x514630`)
-/// while the input owns the mover (`0x5144e0`): here the release is owed to the frame's steer
-/// ([`FollowState::owe_release`]), which drops the synthesized forward and autorun ahead of the
-/// controller, whose step sends the stop, as the reference's mover update sends the one it queued.
-/// Where the precondition fails (a death, far sight, a server spline) the tick clears autorun
-/// itself (`0x514748`). The `face` leg (`0x60fb92`-`0x60fbe8`) turns no unit: it keeps the target's
+/// while the input owns the mover (`0x5144e0`), and where it fails (a death, far sight, a server
+/// spline) the tick clears autorun itself (`0x514748`). Here autorun clears inside the handler
+/// ([`super::press::CallAutorun::clear`]), so a call after the stop reads it clear, and the
+/// frame's steer applies it ([`FollowState::owe_release`]) ahead of the controller, whose step
+/// sends the stop, as the reference's mover update sends the one it queued. The `face` leg (`0x60fb92`-`0x60fbe8`) turns no unit: it keeps the target's
 /// heading at `0xc4d8c4` for the camera (`0x60e8f0`; its readers `0x510904` and `0x510ef6`, through
 /// `0x611660`) and presses command 0x800000, which the release lets go of in the same call
 /// (`0x60fc10`). The canceller itself sends nothing.
 pub(crate) fn end_auto_move(
     follow: Option<&mut FollowState>,
     approach: Option<&mut Approach>,
+    autorun: Option<&mut super::press::CallAutorun>,
     lane: Option<&mut crate::field_watch::NoticeLane>,
 ) -> bool {
     // Mode 2, the facing turn, has no forward release.
@@ -266,6 +269,9 @@ pub(crate) fn end_auto_move(
     let followed = super::follow::end(follow, lane);
     if followed || (walked && !faced) {
         follow.owe_release();
+        if let Some(autorun) = autorun {
+            autorun.clear();
+        }
     }
     walked || followed
 }

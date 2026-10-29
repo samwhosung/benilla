@@ -188,6 +188,25 @@ pub(super) fn press_tick(
 #[derive(Resource, Default)]
 pub(crate) struct CallAutorun(Option<bool>);
 
+impl CallAutorun {
+    /// An auto-move stop's forward release clears `0x1000` inside its handler (`0x514630` at
+    /// `0x60e83f`): the calls after it read the bit clear, and the frame's latch takes it.
+    pub(crate) fn clear(&mut self) {
+        self.0 = Some(false);
+    }
+
+    /// The bit as the frame's calls left it, `latched` when none touched it.
+    pub(super) fn bit(&self, latched: bool) -> bool {
+        self.0.unwrap_or(latched)
+    }
+
+    /// What the frame's calls left, for a test.
+    #[cfg(test)]
+    pub(crate) fn called(&self) -> Option<bool> {
+        self.0
+    }
+}
+
 /// A binding call inside its verb's call ([`benilla_ui::script::ScriptCall::Input`]): the bit
 /// set or cleared through `SetCommands` (`0x515090` → `0x514840`, `0x514b70`), and for a press
 /// that changed a bit the cast cancel's verdict (`0x5150ce`-`0x515193`), before the call returns.

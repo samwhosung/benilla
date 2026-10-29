@@ -706,13 +706,13 @@ impl Player {
         self.modes.rooted = true;
     }
 
-    /// The synthesized forward and autorun, for a test to hold and read.
+    /// Autorun, for a test to hold and read.
     #[cfg(test)]
-    pub(crate) fn forward_for_test(&mut self, held: Option<bool>) -> (bool, bool) {
+    pub(crate) fn autorun_for_test(&mut self, held: Option<bool>) -> bool {
         if let Some(held) = held {
-            (self.auto_forward, self.autorun) = (held, held);
+            self.autorun = held;
         }
-        (self.auto_forward, self.autorun)
+        self.autorun
     }
 }
 

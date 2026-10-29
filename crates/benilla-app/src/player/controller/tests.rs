@@ -732,6 +732,34 @@ fn following(client: &mut Client) -> bool {
         .is_some()
 }
 
+/// A stun that lands before its root: the stun's tick finds the mover free to translate, and the
+/// root's ack runs the tick again (`0x60e33d` → `0x60e347`), which now takes the teardown leg
+/// (`0x5146d6`): the follow ends and autorun clears at the ack.
+#[test]
+fn a_root_ack_after_a_stun_ends_the_follow_at_the_ack() {
+    use benilla_protocol::field::{FIELD_UNIT_FLAGS, FIELD_UNIT_HEALTH};
+    let mut client = Client::new(Body::Own, |_| {});
+    let world = client.app.world_mut();
+    let me = world.resource::<GuidIndex>().0[&ME];
+    world.entity_mut(me).insert(crate::net::ObjectStore(
+        benilla_protocol::ObjectFields::from_pairs(&[
+            (FIELD_UNIT_HEALTH, 100),
+            (FIELD_UNIT_FLAGS, crate::player::UNIT_FLAG_STUNNED),
+        ]),
+    ));
+    follow(&mut client);
+    client.frame(vec![], vec![]);
+    assert!(
+        following(&mut client),
+        "a stun alone leaves the mover free to translate"
+    );
+    client.player().autorun = true;
+    root(client.app.world_mut());
+    client.frame(vec![], vec![]);
+    assert!(!following(&mut client), "the root's ack ends it");
+    assert!(!client.player().autorun, "and releases autorun at once");
+}
+
 /// `ToggleAutoRun`'s on press starts the move through `0x60dc60`, whose guard `0x60e990` ends a
 /// follow; its off press stops through `0x60dc90`, which has no guard, so the follow goes on.
 #[test]

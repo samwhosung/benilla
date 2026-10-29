@@ -97,6 +97,9 @@ pub(super) struct ServerMoves {
     pub(super) speed_acks: Vec<SpeedChangeMessage>,
     /// An ack went out that ends the mover's precast ([`ack_ends_precast`]).
     pub(super) precast_ended: bool,
+    /// A root or unroot ack went out, which runs the mover's input tick after its send
+    /// (`0x60e33d` → `0x60e347`, for 0xe9 and 0xeb).
+    pub(super) input_ticked: bool,
 }
 
 /// Whether a mode's ack ends the mover's precast: the water-walk and hover acks go out through
@@ -284,6 +287,7 @@ pub(super) fn apply_server_moves(
     // clears the direction bits and stops the fall (`0x7c6290`); moving bits beside ROOT freeze
     // the reference and raise vmangos's `CHEAT_TYPE_ROOT_MOVE`. Turn bits are not moving bits.
     let mut precast_ended = false;
+    let mut input_ticked = false;
     for m in mode_msgs.read() {
         player.modes.set(m.mode, m.apply);
         if m.mode == MoveMode::Root && m.apply {
@@ -312,6 +316,7 @@ pub(super) fn apply_server_moves(
             orientation: facing,
         });
         precast_ended |= ack_ends_precast(m.mode);
+        input_ticked |= m.mode == MoveMode::Root;
         info!(
             "mover mode {:?} {} (acked)",
             m.mode,
@@ -430,6 +435,7 @@ pub(super) fn apply_server_moves(
     ServerMoves {
         speed_acks,
         precast_ended,
+        input_ticked,
     }
 }
 

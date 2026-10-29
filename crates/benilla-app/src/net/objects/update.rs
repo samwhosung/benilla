@@ -833,6 +833,7 @@ fn deactivate(sc: &mut Scene, guid: u64, script: Option<&UiScript>) {
         sc.mover.as_deref(),
         sc.follow.as_deref_mut(),
         sc.approach.as_deref_mut(),
+        sc.call_autorun.as_deref_mut(),
         &mut sc.field_notices,
         guid,
     );
@@ -873,11 +874,12 @@ pub(super) fn stop_auto_move(
     mover: Option<&crate::net::MoverClaim>,
     follow: Option<&mut crate::player::FollowState>,
     approach: Option<&mut crate::player::Approach>,
+    autorun: Option<&mut crate::player::CallAutorun>,
     lane: &mut crate::field_watch::NoticeLane,
     guid: u64,
 ) {
     if mover.is_some_and(|m| m.holds(guid)) {
-        crate::player::end_auto_move(follow, approach, Some(lane));
+        crate::player::end_auto_move(follow, approach, autorun, Some(lane));
     }
 }
 
@@ -1165,6 +1167,7 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
                     sc.mover.as_deref(),
                     sc.follow.as_deref_mut(),
                     sc.approach.as_deref_mut(),
+                    sc.call_autorun.as_deref_mut(),
                     &mut sc.field_notices,
                     guid,
                 );
@@ -1176,22 +1179,43 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
                         sc.mover.as_deref(),
                         sc.follow.as_deref_mut(),
                         sc.approach.as_deref_mut(),
+                        sc.call_autorun.as_deref_mut(),
                         &mut sc.field_notices,
                         guid,
                     );
                 }
             }
-            // A far sight on a held object (`0x5ee39c` on, past the unresolved return).
+            // A far sight on a held object (`0x5ee39c` on, past the unresolved return). A unit we
+            // control takes the active mover (`0x5ee45d` → `0x5ee477`), whose switch stops the
+            // outgoing one's auto-move (`0x600742`) and is a no-op when it already holds it
+            // (`0x6006fb`); the switch itself is possession's control update's. Any other object
+            // runs the mover's tick (`0x5ee4a2`), which the view's going out tears down.
             crate::field_watch::Step::Notice(crate::field_watch::FieldNotice::FarSightStop {
                 object,
             }) => {
-                if sc.index.0.contains_key(&object) {
+                if !sc.index.0.contains_key(&object) {
+                    continue;
+                }
+                let active = sc.mover.as_deref().and_then(crate::net::MoverClaim::get);
+                // `IsClientControlled` (`0x5fa5f0`): our own control, or the unit we drive.
+                let controlled = if object == guid {
+                    !sc.own_control_lost.as_deref().is_some_and(|l| l.0)
+                } else {
+                    active == Some(object)
+                };
+                let stops = if controlled {
+                    active.filter(|&m| m != object)
+                } else {
+                    Some(guid)
+                };
+                if let Some(mover) = stops {
                     stop_auto_move(
                         sc.mover.as_deref(),
                         sc.follow.as_deref_mut(),
                         sc.approach.as_deref_mut(),
+                        sc.call_autorun.as_deref_mut(),
                         &mut sc.field_notices,
-                        guid,
+                        mover,
                     );
                 }
             }

@@ -111,7 +111,7 @@ pub(crate) use approach::{
 };
 /// `SetStandState` run inside a script call.
 pub(crate) use posture::{stand_up_for_attack, stand_up_refused, StandSetter};
-pub(crate) use press::CommandSteps;
+pub(crate) use press::{CallAutorun, CommandSteps};
 pub(crate) use state::{
     view_is_out, MoverInput, MoverLock, OwnControlLost, Player, PlayerCapsule, StandPending,
     CAPSULE_HEIGHT, CAPSULE_RADIUS, CREATURE_STEP_UP_HEIGHT, DEFAULT_COLLISION_HEIGHT,

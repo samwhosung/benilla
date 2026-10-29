@@ -335,14 +335,6 @@ fn log_teardown(view_log: Option<ResMut<crate::ui_unit::views::ViewLog>>, b: &Br
     }
 }
 
-/// What a forced move's handler ends: the mover's auto-move, its `AUTOFOLLOW_END` on the notice
-/// lane.
-type TeleportStop<'w> = (
-    Option<ResMut<'w, crate::player::FollowState>>,
-    Option<ResMut<'w, crate::player::Approach>>,
-    Option<ResMut<'w, crate::field_watch::NoticeLane>>,
-);
-
 /// Teleport and knockback, forwarded unjudged to the controller, which applies and answers them.
 /// A near teleport runs the movement guard first inside the packet (`OnForcedTeleport 0x602fb0`
 /// → `0x60e990(1, 0)` at `0x60300e`, [`MoveInput`]), before the move is queued (`0x603029`); the
@@ -390,21 +382,14 @@ fn on_mover_edge(
 /// movement start (`0x60e9c1`-`0x60e9dd`).
 #[derive(bevy::ecs::system::SystemParam)]
 struct MoveInput<'w, 's> {
-    mover: Option<Res<'w, super::MoverClaim>>,
-    stop: TeleportStop<'w>,
+    auto_move: crate::player::AutoMoveStop<'w>,
+    lane: Option<ResMut<'w, crate::field_watch::NoticeLane>>,
     loot: crate::ui_loot::MoveStartClose<'w, 's>,
 }
 
 impl MoveInput<'_, '_> {
     fn stop(&mut self, guid: u64, me: Option<u64>) {
-        if self.mover.as_deref().is_some_and(|m| m.holds(guid)) {
-            let (follow, approach, lane) = &mut self.stop;
-            crate::player::end_auto_move(
-                follow.as_deref_mut(),
-                approach.as_deref_mut(),
-                lane.as_deref_mut(),
-            );
-        }
+        self.auto_move.stop(guid, self.lane.as_deref_mut());
         if me == Some(guid) {
             self.loot.close();
         }

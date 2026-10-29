@@ -336,6 +336,13 @@ pub(super) fn control(
         // Who we drive and whether we may.
         ResMut<super::MoverLock>,
     ),
+    // The auto-move a root ack's tick stops, its release, and where its `AUTOFOLLOW_END` goes.
+    mut auto_move: (
+        Option<ResMut<super::FollowState>>,
+        Option<ResMut<super::Approach>>,
+        Option<ResMut<super::press::CallAutorun>>,
+        Option<ResMut<crate::field_watch::NoticeLane>>,
+    ),
 ) {
     let (world, transports, child_of) = (&world_q.0, &world_q.1, &world_q.2);
     let Ok((mut cam_t, mut cam)) = cameras.single_mut() else {
@@ -485,6 +492,21 @@ pub(super) fn control(
         self_seat(&world_q.4),
     );
     let speed_acks = server_moves.speed_acks;
+    // The root and unroot acks' input tick (`0x60e347`): a mover that may now neither translate
+    // nor turn takes its teardown leg (`0x5146d6`), so a stun before its root stops the auto-move
+    // here, at the root's ack. The steer ran ahead of this, so the release applies at once.
+    if server_moves.input_ticked && mover.torn_down(player.modes.rooted, stunned) {
+        let (follow, approach, autorun, lane) = &mut auto_move;
+        super::end_auto_move(
+            follow.as_deref_mut(),
+            approach.as_deref_mut(),
+            autorun.as_deref_mut(),
+            lane.as_deref_mut(),
+        );
+        if let Some(follow) = follow.as_deref_mut() {
+            super::follow::release_owed(follow, &mut player, autorun.as_deref());
+        }
+    }
     // A command press's message that ended the precast ([`super::press`]), with the acks'.
     let press_precast = std::mem::take(&mut player.press_ended_precast);
     if let (true, Ok((e, ..))) = (server_moves.precast_ended || press_precast, body.single()) {

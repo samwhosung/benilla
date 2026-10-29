@@ -141,6 +141,9 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // (`0x60fb84`).
     "::player::approach::Approach",
     "::player::follow::FollowState",
+    // Quiet: the autorun bit as the frame's calls leave it, read and written inside each call
+    // (`0x513de7`), which an auto-move's stop clears in place (`0x514630`).
+    "::player::press::CallAutorun",
     // Quiet: the cast ladder's per-call state, which the cast result's, the loot response's and the
     // go's handlers hold with the ladder and never write. A press holds the first and its call resumes it before it returns
     // (`0x6e4efb`), each call sets and puts back the second, and the pet press applies the third
@@ -1215,6 +1218,11 @@ const AT_THEIR_OWN_PLACE: &[(&str, &str)] = &[
         "::ui_chat::channels::auto_join_zone_channels",
         "world entry only arms the zone-channel walk, an engine turn that runs no Lua: its one \
          push is a walk's refusal onto the ui-error lane",
+    ),
+    (
+        "::player::controller::control",
+        "the mover's queue sends the root and unroot acks at its frame update (`0x616438`, \
+         `0x6164a9`), and their input tick stops an auto-move there (`0x60e33d` → `0x60e347`)",
     ),
     (
         "::ui_chat::channels::end_session_channels_on_disconnect",

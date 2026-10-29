@@ -34,6 +34,7 @@ fn following() -> App {
             f:RegisterEvent("UNIT_AURA")
             f:RegisterEvent("PLAYER_TARGET_CHANGED")
             f:RegisterEvent("PLAYER_FARSIGHT_FOCUS_CHANGED")
+            f:RegisterEvent("PLAYER_DEAD")
             f:SetScript("OnEvent", function() table.insert(Seen, event) end)
             "#,
         )
@@ -144,18 +145,25 @@ fn the_movers_release_ends_the_follow_at_its_packet() {
 }
 
 /// Our death ends the follow inside the health's packet, through the health watcher's input
-/// tick (`0x60479c` → `0x5146d6`) ahead of `OnDied` (`0x6047a3`): `AUTOFOLLOW_END` before our
-/// death's target clear (`0x5e9a45`) signals `PLAYER_TARGET_CHANGED`.
+/// tick (`0x60479c` → `0x5146d6`) ahead of `OnDied` (`0x6047a3`): `AUTOFOLLOW_END`, then our
+/// death's target clear (`0x5e9a45`) signals `PLAYER_TARGET_CHANGED`, then `PLAYER_DEAD`.
 #[test]
 fn our_death_ends_the_follow_at_its_packet() {
     let mut app = following();
+    app.world_mut()
+        .resource_mut::<crate::net::NetStatus>()
+        .connected = true;
     let died = values(ME, &health(0));
     let seen = frame(&mut app, vec![fall(5), died, fall(5)]);
     ends_between_the_falls(&seen);
-    let at = |e: &str| seen.iter().position(|s| s == e);
-    let cleared = at("PLAYER_TARGET_CHANGED");
-    assert!(
-        cleared.is_some() && at("AUTOFOLLOW_END") < cleared,
+    let ours: Vec<&str> = seen
+        .iter()
+        .map(String::as_str)
+        .filter(|e| ["AUTOFOLLOW_END", "PLAYER_TARGET_CHANGED", "PLAYER_DEAD"].contains(e))
+        .collect();
+    assert_eq!(
+        ours,
+        ["AUTOFOLLOW_END", "PLAYER_TARGET_CHANGED", "PLAYER_DEAD"],
         "{seen:?}"
     );
 }
@@ -249,24 +257,72 @@ fn the_follows_arm_reads_the_follow_an_earlier_packet_ended() {
     );
 }
 
-/// A stop that ends a follow owes its forward release (`0x60fc05` → `0x60e7f0`): the frame's steer
-/// drops the synthesized forward and autorun (`0x514630`) ahead of the controller's step, which
-/// stops the move.
-#[test]
-fn the_stop_releases_the_forward_and_autorun() {
+/// [`following`] with autorun held and the frame's call store, the stop's forward release
+/// (`0x60fc05` → `0x60e7f0`) to watch.
+fn autorunning() -> App {
     let mut app = following();
     let world = app.world_mut();
+    world.init_resource::<crate::player::CallAutorun>();
     world.init_resource::<crate::player::Player>();
-    world
-        .resource_mut::<crate::player::Player>()
-        .forward_for_test(Some(true));
+    let mut player = world.resource_mut::<crate::player::Player>();
+    player.active = true;
+    player.autorun_for_test(Some(true));
+    app
+}
+
+/// A stop that ends a follow owes its forward release: autorun clears inside the handler
+/// (`0x514630` at `0x60e83f`), and the frame's steer applies it ahead of the controller's step,
+/// which stops the move. A second stop finds no auto-move (`0x6103a0`) and owes nothing.
+#[test]
+fn the_stop_owes_its_autorun_release() {
+    let mut app = autorunning();
     frame(&mut app, vec![our_swing()]);
     let world = app.world_mut();
+    assert!(world
+        .resource::<crate::player::FollowState>()
+        .owes_release());
+    assert_eq!(
+        world.resource::<crate::player::CallAutorun>().called(),
+        Some(false)
+    );
     crate::player::release_owed_for_test(world);
-    let held = world
+    let mut player = world.resource_mut::<crate::player::Player>();
+    assert!(!player.autorun_for_test(None));
+    player.autorun_for_test(Some(true));
+    frame(&mut app, vec![our_swing()]);
+    let world = app.world_mut();
+    assert!(!world
+        .resource::<crate::player::FollowState>()
+        .owes_release());
+    crate::player::release_owed_for_test(world);
+    assert!(world
         .resource_mut::<crate::player::Player>()
-        .forward_for_test(None);
-    assert_eq!(held, (false, false));
+        .autorun_for_test(None));
+}
+
+/// A `ToggleAutoRun` after the stop, before the frame's latch, reads the bit the stop cleared, so
+/// it presses autorun on (`0x513de7`), as the stop's clear ran inside its handler (`0x514630`).
+#[test]
+fn a_toggle_after_the_stop_reads_autorun_clear() {
+    use bevy::ecs::system::RunSystemOnce;
+    let mut app = autorunning();
+    app.world_mut()
+        .resource_mut::<crate::bindings::BindingsState>()
+        .open_for_test();
+    let seen = frame(&mut app, vec![our_swing()]);
+    assert!(seen.iter().any(|e| e == "AUTOFOLLOW_END"), "{seen:?}");
+    let world = app.world_mut();
+    world
+        .run_system_once(|mut steps: crate::player::CommandSteps| {
+            steps.call(benilla_ui::script::BindingInput::Fire(
+                benilla_ui::script::FiredInput::ToggleAutoRun,
+            ))
+        })
+        .unwrap();
+    assert_eq!(
+        world.resource::<crate::player::CallAutorun>().called(),
+        Some(true)
+    );
 }
 
 /// [`following`] with the boar's loot window open, its own events taken, and a spy on its close.
@@ -357,12 +413,9 @@ fn a_stun_on_a_rooted_mover_ends_the_follow_at_its_packet() {
     ends_between_the_falls(&frame(&mut app, vec![fall(5), stun, fall(5)]));
 }
 
-/// A server path on our mover runs its tick (`0x602053`), whose precondition the spline fails:
-/// the follow ends inside the move's packet.
-#[test]
-fn a_monster_move_on_us_ends_the_follow_at_its_packet() {
-    let mut app = following();
-    let path = SessionEvent::MonsterMove {
+/// A server path on our mover.
+fn monster_path() -> SessionEvent {
+    SessionEvent::MonsterMove {
         guid: ME,
         transport: None,
         start: [0.0; 3],
@@ -373,28 +426,86 @@ fn a_monster_move_on_us_ends_the_follow_at_its_packet() {
         duration_ms: 1000,
         flying: false,
         run_mode: true,
-    };
+    }
+}
+
+/// A server path on our mover runs its tick (`0x602053`), whose precondition the spline fails:
+/// the follow ends inside the move's packet.
+#[test]
+fn a_monster_move_on_us_ends_the_follow_at_its_packet() {
+    let mut app = following();
+    let path = monster_path();
     ends_between_the_falls(&frame(&mut app, vec![fall(5), path, fall(5)]));
+}
+
+/// A rooted mover starts no server path (`0x6187c2`-`0x6187c7` returns 0 on the root bit), so
+/// `0x601fee` skips the tick and the follow goes on.
+#[test]
+fn a_monster_move_on_a_rooted_mover_keeps_the_follow() {
+    let mut app = following();
+    let world = app.world_mut();
+    world.init_resource::<crate::player::Player>();
+    world
+        .resource_mut::<crate::player::Player>()
+        .root_for_test();
+    let seen = frame(&mut app, vec![monster_path()]);
+    assert!(!seen.iter().any(|e| e == "AUTOFOLLOW_END"), "{seen:?}");
+    assert_eq!(
+        app.world().resource::<crate::player::FollowState>().guid,
+        Some(LEADER)
+    );
 }
 
 /// Far sight on a held object stops the mover's auto-move inside the field watcher
 /// (`0x5de0d0` → `0x5ee4a2`), ahead of its `PLAYER_FARSIGHT_FOCUS_CHANGED` (`0x5de167`).
 #[test]
 fn far_sight_ends_the_follow_ahead_of_its_focus_change() {
-    /// `PLAYER_FARSIGHT` (`+0x830` of the player section).
-    const FIELD_PLAYER_FARSIGHT: u16 = 712;
     let mut app = following();
-    let eye = values(
-        ME,
-        &[
-            (FIELD_PLAYER_FARSIGHT, BOAR as u32),
-            (FIELD_PLAYER_FARSIGHT + 1, (BOAR >> 32) as u32),
-        ],
-    );
-    let seen = frame(&mut app, vec![fall(5), eye, fall(5)]);
+    let seen = frame(&mut app, vec![fall(5), far_sight(BOAR), fall(5)]);
     assert_eq!(
         past_the_falls(&seen),
         ["AUTOFOLLOW_END", "PLAYER_FARSIGHT_FOCUS_CHANGED"],
         "{seen:?}"
+    );
+}
+
+/// Our `PLAYER_FARSIGHT` set to `object`.
+fn far_sight(object: u64) -> SessionEvent {
+    /// `PLAYER_FARSIGHT` (`+0x830` of the player section).
+    const FIELD_PLAYER_FARSIGHT: u16 = 712;
+    values(
+        ME,
+        &[
+            (FIELD_PLAYER_FARSIGHT, object as u32),
+            (FIELD_PLAYER_FARSIGHT + 1, (object >> 32) as u32),
+        ],
+    )
+}
+
+/// Far sight on a unit we control takes the active mover (`0x5ee45d` → `0x5ee477`): the switch
+/// stops the outgoing mover's auto-move (`0x600742`), and when the unit already is the mover it
+/// switches nothing (`0x6006fb`) and runs no tick, so the follow goes on.
+#[test]
+fn far_sight_on_a_unit_we_control_stops_only_the_mover_it_switches_from() {
+    let ends = |mover: u64, object: u64| {
+        let mut app = following();
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let net = crate::net::NetCommands(tx);
+        app.world_mut()
+            .resource_mut::<crate::net::MoverClaim>()
+            .claim(mover, &net);
+        let seen = frame(&mut app, vec![far_sight(object)]);
+        seen.iter().filter(|e| *e == "AUTOFOLLOW_END").count()
+    };
+    assert_eq!(
+        ends(BOAR, BOAR),
+        0,
+        "the possessed boar already is the mover"
+    );
+    assert_eq!(ends(ME, ME), 0, "our own body already is the mover");
+    assert_eq!(
+        ends(BOAR, ME),
+        1,
+        "our own body takes the mover from the boar"
     );
 }

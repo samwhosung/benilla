@@ -15,7 +15,6 @@ use crate::net::ClientCommand;
 /// What the arrival writes past the streamed world; each absent in a harness without it.
 #[derive(SystemParam)]
 pub(super) struct Arrival<'w> {
-    own_control: Option<ResMut<'w, crate::player::OwnControlLost>>,
     actions: Option<ResMut<'w, crate::ui_action::PlayerActions>>,
     spells: Option<Res<'w, crate::ui_action::Spells>>,
     reactive: Option<ResMut<'w, crate::ui_action::ReactiveSpells>>,
@@ -42,7 +41,7 @@ pub(super) fn arrive(sc: &mut Scene, arrival: &mut Arrival, guid: u64) {
     // constructor (`0x4650e7`) is its only store, so it is clear at every create.
     let control_gained = crate::player::regain_control_on_arrival(
         sc.mover_lock.as_deref_mut(),
-        arrival.own_control.as_deref_mut(),
+        sc.own_control_lost.as_deref_mut(),
     );
     // `0x4958a0` (`0x5deb5b`) claims our own mover through `SetActiveMover` (`0x6006e0`), which
     // sends `CMSG_SET_ACTIVE_MOVER` only when the mover changes ([`crate::net::MoverClaim`]).
