@@ -860,8 +860,9 @@ fn deactivate(sc: &mut Scene, guid: u64, script: Option<&UiScript>) {
 }
 
 /// Whether the mover's input tick takes its teardown leg (`0x5146c1`-`0x5146ce`): it may neither
-/// translate (`0x514560`) nor turn (`0x5145b0`), off its health, the far-sight latch, the root and
-/// the stun its new flags hold ([`crate::player::MoverInput`]).
+/// translate (`0x514560`) nor turn (`0x5145b0`), off its health, the far-sight latch as the packet
+/// leaves it (`[mover+0x1c70] & 1`, `0x514540`, past the active-player test `0x514537`), the root
+/// and the stun its new flags hold ([`crate::player::MoverInput`]).
 fn tick_tears_down(sc: &Scene, fields: &ObjectFields) -> bool {
     let driving_own_body = sc
         .mover_lock
@@ -871,9 +872,9 @@ fn tick_tears_down(sc: &Scene, fields: &ObjectFields) -> bool {
         dead: fields.unit_is_dead(),
         view_is_out: crate::player::view_is_out(
             driving_own_body,
-            sc.view_subject
+            sc.far_sight
                 .as_deref()
-                .is_some_and(|v| v.remote.is_some()),
+                .is_some_and(crate::player::FarSight::on),
         ),
     };
     let rooted = sc

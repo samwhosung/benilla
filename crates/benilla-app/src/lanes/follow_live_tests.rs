@@ -566,3 +566,18 @@ fn far_sight_on_a_unit_we_control_stops_only_the_mover_it_switches_from() {
         "an uncontrolled unit runs the tick"
     );
 }
+
+/// The stun's tick reads the far-sight latch as the packets left it (`[mover+0x1c70] & 1`,
+/// `0x514540`): far sight on our own body sets it at its packet and stops nothing (`0x6006fb`), so
+/// a stun later in the same frame finds the view out and its tick tears the follow down, unrooted.
+#[test]
+fn a_stun_after_far_sight_in_one_frame_reads_the_latch_its_packet_set() {
+    let mut app = following();
+    let stun = values(ME, &[(FIELD_UNIT_FLAGS, crate::player::UNIT_FLAG_STUNNED)]);
+    let seen = frame(&mut app, vec![far_sight(ME), stun]);
+    assert_eq!(
+        seen.iter().filter(|e| *e == "AUTOFOLLOW_END").count(),
+        1,
+        "{seen:?}"
+    );
+}

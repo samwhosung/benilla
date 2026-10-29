@@ -159,9 +159,8 @@ pub(crate) struct Scene<'w, 's> {
     place: crate::ui_party::net::SnapshotPlace<'w, 's>,
     /// The active mover, which its unit's release and destroy zero.
     mover: Option<ResMut<'w, super::MoverClaim>>,
-    /// The far-sight subject, whose view-out term the stun's tick reads.
-    view_subject: Option<Res<'w, crate::player::ViewSubject>>,
-    /// The far-sight machine the field's change starts or ends (`0x5de0d0`).
+    /// The far-sight machine the field's change starts or ends (`0x5de0d0`) and an arrival
+    /// starts, and whose latch the stun's tick reads (`0x514540`).
     far_sight: Option<Res<'w, crate::player::FarSight>>,
     /// The active mover's auto-move, which its release and the watchers' stops end.
     follow: Option<ResMut<'w, crate::player::FollowState>>,

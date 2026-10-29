@@ -224,8 +224,8 @@ pub(crate) struct MoverInput {
     pub(crate) dead: bool,
     /// The far-sight term, held true while our view is out on a far-sight object and we drive our
     /// own body: `[mover+0x1c70] & 1`, read only when the mover is the active player (`0x514537`).
-    /// The latch sets only once the subject resolves (`0x5ee3f6`), so this follows the resolved
-    /// [`super::view_subject::ViewSubject`], not the raw `PLAYER_FARSIGHT` field.
+    /// It is the latch ([`super::view_subject::FarSight::on`]), not the raw `PLAYER_FARSIGHT`
+    /// field: it sets only once the subject resolves (`0x5ee3f6`).
     pub(crate) view_is_out: bool,
 }
 

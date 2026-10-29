@@ -482,9 +482,6 @@ pub(super) const READ_ONLY_TO_HANDLERS: &[&str] = &[
     // The active mover, which the handlers that end an auto-move test (`0x6103a0`); our own
     // create's arrival claims it (`0x4958a0`).
     "::net::MoverClaim",
-    // The far-sight subject, whose view-out term the stun's tick reads (`0x514537`); the frame's
-    // far-sight machine publishes it.
-    "::player::view_subject::ViewSubject",
     "::player::state::StandPending",
     // The page cache the host's page turns read.
     "::ui_item_text::PageTexts",
