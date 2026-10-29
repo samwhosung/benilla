@@ -13,9 +13,12 @@
 //!
 //! The marker clears on whichever comes first:
 //! - 480 seconds after `set_blip` (`0x429580` is a cached `time()`, in seconds);
-//! - arriving strictly inside 10 yd (`minimap_update` `0x6d93a0`, `(player - marker)^2 < 100`);
+//! - arriving strictly inside 10 yd (`minimap_update` `0x6d93a0`, `(player - marker)^2 < 100`),
+//!   tested only in an update whose player position or map moved (`0x6d9459` → `0x6d95c4`);
 //! - the next set of directions, which overwrites the one slot;
-//! - world entry (`zone_rebuild`), here a worldport or a logout.
+//! - the world-enter cascade, at each arrival and each `/reload` (`0x49096f` → `0x4ed9d0` →
+//!   `0x6d8e10`, whose `0x6d8fb0` zeroes the record). It leaves the deadline `0xceaaa4` set, so
+//!   the deadline still clears and re-selects the map once, its signal included.
 //!
 //! The wire has no map; the record takes the current map, as the reference does at `set_blip`
 //! (`+0x1c ContinentID <- [0x86f694]`).
@@ -26,7 +29,6 @@ use bevy::time::Real;
 
 use benilla_assets::coords::bevy_to_wow;
 
-use crate::net::{LoggedOutMessage, WorldportMessage};
 use crate::player::Player;
 
 /// The arrival radius squared, `0x806b10` = 100 yd^2, compared strictly.
@@ -40,8 +42,14 @@ const MARKER_TTL_SECS: f64 = 480.0;
 pub(crate) struct PoiMarker {
     /// Its z is 0: the wire carries x/y only, and the reference leaves `+0x18 Z` unwritten.
     pub(crate) poi: Option<AreaPoi>,
-    /// `Time<Real>` seconds at which the marker expires.
-    expires_at: f64,
+    /// `Time<Real>` seconds at which the marker expires, `0xceaaa4`: set by `set_blip`
+    /// (`0x6dac86`), cleared only by the two clears of the minimap's update (`0x6d93fb`,
+    /// `0x6d9a3a`).
+    expires_at: Option<f64>,
+    /// The player's x, y and map as the minimap's last moved update cached them (`0xceaa7c`,
+    /// `0xceaa80`, `0x86f694`, stored at `0x6d948e`); `None` after the cascade resets the cache
+    /// (`0x490a99` → `0x6d92c0`).
+    seen: Option<(f32, f32, u32)>,
 }
 
 impl PoiMarker {
@@ -52,7 +60,7 @@ impl PoiMarker {
         map_id: u32,
         now_secs: f64,
     ) {
-        self.expires_at = now_secs + MARKER_TTL_SECS;
+        self.expires_at = Some(now_secs + MARKER_TTL_SECS);
         self.poi = Some(AreaPoi {
             // The rank key is the packet's `data` (`0x6dac4e` writes `+0x04 Importance`); shipped
             // rows send 0, the first rank band.
@@ -81,10 +89,15 @@ impl PoiMarker {
 pub(crate) fn expire_marker(
     mut marker: ParamSet<(ResMut<PoiMarker>, crate::ui_world_map::LandmarkReads)>,
     mut lane: Option<ResMut<crate::ui_world_map::LandmarkLane>>,
+    map: Option<Res<benilla_world::world_map::CurrentMap>>,
     player: Res<Player>,
     time: Res<Time<Real>>,
 ) {
-    if !clear_if_due(&mut marker.p0(), &player, time.elapsed_secs_f64()) {
+    let map = map.as_ref().map_or(0, |m| m.0);
+    if !marker
+        .p0()
+        .clear_if_due(&player, map, time.elapsed_secs_f64())
+    {
         return;
     }
     if let Some(lane) = lane.as_deref_mut() {
@@ -92,35 +105,55 @@ pub(crate) fn expire_marker(
     }
 }
 
-/// [`expire_marker`]'s two clears; whether it cleared.
-fn clear_if_due(marker: &mut PoiMarker, player: &Player, now_secs: f64) -> bool {
-    let Some(poi) = &marker.poi else {
-        return false;
-    };
-    if now_secs >= marker.expires_at {
-        debug!("poi: \"{}\" expired — clearing the marker", poi.name);
-        marker.poi = None;
-        return true;
+impl PoiMarker {
+    /// The minimap update's two clears (`0x6d93b9`-`0x6d9411`, `0x6d99aa`-`0x6d9a4c`), each a
+    /// re-select of the map; whether one ran (the deadline's leaves no marker to arrive at). The
+    /// deadline is tested whether or not the record still
+    /// holds a marker, as a world entry zeroes the record alone. Arrival is tested only when the
+    /// deadline fired or the player's x, y or map moved since the cached update
+    /// (`0x6d9419`-`0x6d9459`, `[ebp-1]` at `0x6d95bf`), the comparison unordered for a NaN.
+    fn clear_if_due(&mut self, player: &Player, map: u32, now_secs: f64) -> bool {
+        let mut cleared = false;
+        let mut moved = false;
+        if self.expires_at.is_some_and(|at| now_secs >= at) {
+            if let Some(poi) = &self.poi {
+                debug!("poi: \"{}\" expired — clearing the marker", poi.name);
+            }
+            self.poi = None;
+            self.expires_at = None;
+            cleared = true;
+            moved = true;
+        }
+        let w = bevy_to_wow(player.pos);
+        let at = (w[0], w[1], map);
+        if self.seen != Some(at) {
+            self.seen = Some(at);
+            moved = true;
+        }
+        if !moved {
+            return cleared;
+        }
+        let Some(poi) = &self.poi else {
+            return cleared;
+        };
+        let d2 = (poi.pos[0] - w[0]).powi(2) + (poi.pos[1] - w[1]).powi(2);
+        if d2 < ARRIVE_CLEAR_YD_SQ {
+            debug!("poi: arrived at \"{}\" — clearing the marker", poi.name);
+            self.poi = None;
+            self.expires_at = None;
+            cleared = true;
+        }
+        cleared
     }
-    let w = bevy_to_wow(player.pos);
-    let d2 = (poi.pos[0] - w[0]).powi(2) + (poi.pos[1] - w[1]).powi(2);
-    if d2 < ARRIVE_CLEAR_YD_SQ {
-        debug!("poi: arrived at \"{}\" — clearing the marker", poi.name);
-        marker.poi = None;
-        return true;
-    }
-    false
 }
 
-/// World entry clears the slot (`zone_rebuild`): a worldport or a logout.
-pub(crate) fn clear_on_world_entry(
-    mut marker: ResMut<PoiMarker>,
-    mut worldports: MessageReader<WorldportMessage>,
-    mut logged_out: MessageReader<LoggedOutMessage>,
-) {
-    if worldports.read().next().is_some() || logged_out.read().next().is_some() {
-        marker.poi = None;
-    }
+/// The world-enter cascade's minimap leg (`0x49096f` → `0x4ed9d0` → `0x6d8e10`): `0x6d8fb0`
+/// zeroes the static records, the marker's among them, with no re-select and no signal, and keeps
+/// the deadline; the cascade's later `0x490a99` → `0x6d92c0` resets the update's cached position,
+/// so the next update counts as moved.
+pub(crate) fn clear_at_world_enter(mut marker: ResMut<PoiMarker>) {
+    marker.poi = None;
+    marker.seen = None;
 }
 
 /// The handler `0x4e2840`: the marker's set (`0x4e28aa` → `0x6dac10`), whose re-select of the
@@ -172,13 +205,12 @@ impl Plugin for PoiMarkerPlugin {
         app.init_resource::<PoiMarker>().add_systems(
             Update,
             (
-                // Both before the lanes, whose world-state firing rebuilds the landmarks off the
-                // marker; the expiry after the net drain, as the minimap's update runs from its
-                // draw (`0x4ec950` → `0x6d93a0`), past the frame's packets.
+                // Before the lanes, whose world-state firing rebuilds the landmarks off the marker,
+                // and after the net drain, as the minimap's update runs from its draw (`0x4ec950`
+                // → `0x6d93a0`), past the frame's packets.
                 expire_marker
                     .after(crate::player::ControlRestore)
                     .before(crate::lanes::UiLanes),
-                clear_on_world_entry.before(crate::lanes::UiLanes),
             ),
         );
     }
@@ -236,14 +268,14 @@ mod tests {
         let poi = m.poi.as_ref().expect("a marker");
         assert_eq!(poi.name, "The Inn");
         assert_eq!(poi.pos, [-8800.0, 500.0, 0.0]);
-        assert_eq!(m.expires_at, 100.0 + MARKER_TTL_SECS);
+        assert_eq!(m.expires_at, Some(100.0 + MARKER_TTL_SECS));
     }
 
     #[test]
     fn the_deadline_is_eight_minutes_from_when_it_was_given() {
         let mut m = PoiMarker::default();
         m.set(&wire("The Inn", 0.0, 0.0), 0, 12.5);
-        assert_eq!(m.expires_at, 492.5);
+        assert_eq!(m.expires_at, Some(492.5));
     }
 
     #[test]

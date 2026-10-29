@@ -693,9 +693,9 @@ pub(super) fn item_link_name(link: Option<&str>) -> String {
         .unwrap_or_default()
 }
 
-/// The sell fork's clear, `SetCursorItem(0, …)` with a zero guid, so its inner `ClearCursor(0,1)`
-/// alone (`0x4fb7ac`, `0x5df5fc`): `PickupMerchantItem` (`0x4fb760`) and the interact ladder's
-/// vendor arm (`0x5df5d0`). Unlike [`clear_cursor`] it lifts no lock, so the source slot stays
+/// The sell fork's clear, `ClearCursor(0,1)`: `PickupMerchantItem`'s own (`0x4fb7b3`) and the
+/// interact ladder's vendor arm's, inside `SetCursorItem(0, …)` with a zero guid (`0x5df5fc`),
+/// past that setter's control gate ([`super::UiScript::take_cursor_item_for_sale`]). Unlike [`clear_cursor`] it lifts no lock, so the source slot stays
 /// grey until the server removes the item. Any other payload is no sale and stays held
 /// (`GetCursorItem`, `0x494c60`).
 pub(crate) fn take_cursor_item_for_sale(model: &mut Model) -> Option<CursorItem> {
@@ -1079,10 +1079,15 @@ impl super::UiScript {
         hooked
     }
 
-    /// [`take_cursor_item_for_sale`], for the app's interact ladder: its `ClearCursor(0, 1)`
-    /// signals before the call returns, inside the click, as `0x5df600` → `0x494b60` →
-    /// `0x495190` signals in the vendor arm.
+    /// [`take_cursor_item_for_sale`], for the app's interact ladder: the vendor arm's
+    /// `SetCursorItem(0, …)` (`0x5df600` → `0x494b60`), whose `ClearCursor(0, 1)` (`0x494bb6`)
+    /// signals before the call returns, inside the click. Without control of the character and off
+    /// a taxi the setter returns before its clear (`0x494b8d`-`0x494ba9`): the item stays held and
+    /// nothing is taken.
     pub fn take_cursor_item_for_sale(&mut self) -> Option<CursorItem> {
+        if !equip::has_cursor_control(&self.lua, &self.model_ref()) {
+            return None;
+        }
         super::tick::verb(&self.lua, take_cursor_item_for_sale)
     }
 
@@ -1403,6 +1408,33 @@ mod tests {
             num_slots: 16,
             slots,
         }
+    }
+
+    /// The vendor arm's `SetCursorItem(0, …)` returns before its clear without control of the
+    /// character and off a taxi (`0x494b8d`-`0x494ba9`): the sold item stays held and nothing
+    /// signals; with control back the same call clears it.
+    #[test]
+    fn the_sell_clear_waits_for_control() {
+        let mut s = UiScript::new().unwrap();
+        s.set_container(0, Some(one_item_backpack()));
+        s.eval::<()>("PickupContainerItem(0, 1)").unwrap();
+        s.run(
+            r#"heard = 0
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("CURSOR_UPDATE")
+            f:SetScript("OnEvent", function() heard = heard + 1 end)"#,
+        )
+        .unwrap();
+        s.set_player_control(false);
+        assert!(
+            s.take_cursor_item_for_sale().is_none(),
+            "no control, no clear"
+        );
+        assert!(s.cursor_item().is_some(), "the item stays held");
+        assert_eq!(s.eval::<i64>("return heard").unwrap(), 0);
+        s.set_player_control(true);
+        assert!(s.take_cursor_item_for_sale().is_some());
+        assert_eq!(s.eval::<i64>("return heard").unwrap(), 1);
     }
 
     /// `SetCursorItem(0, …)` (`0x494b60`) skips `ClearCursor`'s unlock (`0x495420`) and takes only

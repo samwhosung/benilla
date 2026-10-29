@@ -1788,8 +1788,9 @@ pub(super) const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("chat setup arrivals", &["ui_chat::edit::ChannelState"]),
     // Our arrival's legs read and reset what later packets of its frame write, as the frame left
     // it: the book the replay learns, the battlefield and stone it resets and asks again for, the
-    // corpse-range latch its corpse ask lowers, and the class family it sets.
-    ("arrival", &["chat_bubble::BubbleConfig", "death::DeathLatches",
+    // corpse-range latch its corpse ask lowers, the class family it sets, and the gossip marker
+    // its minimap leg zeroes.
+    ("arrival", &["chat_bubble::BubbleConfig", "death::DeathLatches", "poi_marker::PoiMarker",
         "spell::mods::SpellModifiers",
         "ui_action::PlayerActions", "ui_battlefield::Battlefield",
         "ui_dialog_verbs::MeetingStone"]),

@@ -10,11 +10,9 @@
 //! cells, rebuilds the landmark list for the new map, then fires `WORLD_MAP_UPDATE` before it
 //! returns (`0x4a6ce4`), so `WorldMapFrame`'s OnShow repaints the map before its first draw.
 //!
-//! Deviation: the engine's own pushes (the world-enter sync, the explored areas, the landmark
-//! sources, the catalog) queue `WORLD_MAP_UPDATE` for the next frame's tick and fire only on a
-//! change, where the reference fires in place from the handler that moved the data: the app's
-//! feeds run after the frame's tick. A world-state packet's signal is the exception, which the
-//! world-state lane fires at the packet's place.
+//! Deviation: the engine's own push (the world-enter sync) queues `WORLD_MAP_UPDATE` for the next
+//! frame's tick and fires only on a change, where the reference fires in place from the handler
+//! that moved the data: the app's feeds run after the frame's tick.
 
 use mlua::{Lua, MultiValue, Value};
 

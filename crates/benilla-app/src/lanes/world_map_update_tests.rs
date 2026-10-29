@@ -205,6 +205,11 @@ fn landmark_client() -> App {
     let world = app.world_mut();
     world.insert_resource(benilla_world::world_map::CurrentMap(0));
     world.init_resource::<crate::player::Player>();
+    let start = std::time::Instant::now();
+    let mut clock = Time::<bevy::time::Real>::new(start);
+    clock.update_with_instant(start);
+    world.insert_resource(clock);
+    world.insert_resource(ClockStart(start));
     world.insert_resource(crate::area::AreaTableRes(
         benilla_formats::AreaTableCatalog::from_rows(Vec::new()),
     ));
@@ -224,6 +229,25 @@ fn landmark_client() -> App {
         )
         .unwrap();
     app
+}
+
+/// The hand-driven clock's start.
+#[derive(Resource)]
+struct ClockStart(std::time::Instant);
+
+/// The real clock `secs` past its start.
+fn clock_at(app: &mut App, secs: u64) {
+    let start = app.world().resource::<ClockStart>().0;
+    app.world_mut()
+        .resource_mut::<Time<bevy::time::Real>>()
+        .update_with_instant(start + std::time::Duration::from_secs(secs));
+}
+
+fn marker_held(app: &App) -> bool {
+    app.world()
+        .resource::<crate::poi_marker::PoiMarker>()
+        .poi
+        .is_some()
 }
 
 /// [`frame`] with the minimap's update between the packets and the drain, as the frame runs it:
@@ -283,5 +307,90 @@ fn arriving_at_the_marker_signals_the_map_in_its_frame() {
         frame_with_minimap(&mut app, [combo(0)]),
         ["PLAYER_COMBO_POINTS"],
         "the clear signalled once"
+    );
+}
+
+/// The deadline, 480 seconds past the set (`0x6dac7e`), clears the marker in the minimap's update
+/// and re-selects the map (`0x6d93d0`-`0x6d9411`): one signal in that frame, after its packets'
+/// events, the player never having moved.
+#[test]
+fn the_deadline_signals_the_map_in_its_frame() {
+    let mut app = landmark_client();
+    frame_with_minimap(&mut app, [directions(MARKER)]);
+    clock_at(&mut app, 479);
+    assert_eq!(
+        frame_with_minimap(&mut app, [combo(2)]),
+        ["PLAYER_COMBO_POINTS"],
+        "control: a second short of the deadline"
+    );
+    clock_at(&mut app, 480);
+    assert_eq!(
+        frame_with_minimap(&mut app, [combo(0)]),
+        ["PLAYER_COMBO_POINTS", "WORLD_MAP_UPDATE:0", "landmarks:0"]
+    );
+    assert!(!marker_held(&app));
+    assert_eq!(
+        frame_with_minimap(&mut app, [combo(2)]),
+        ["PLAYER_COMBO_POINTS"],
+        "the deadline fired once"
+    );
+}
+
+/// A `/reload` runs the world-enter cascade (`0x490168` → `0x4908c0`), whose minimap leg
+/// (`0x49096f` → `0x4ed9d0` → `0x6d8e10`) zeroes the marker's record (`0x6d8fb0`) with no
+/// signal and leaves its deadline: at the deadline the update still clears and re-selects the
+/// map, one late `WORLD_MAP_UPDATE`.
+#[test]
+fn a_reload_drops_the_marker_and_its_deadline_still_signals() {
+    let mut app = landmark_client();
+    frame_with_minimap(&mut app, [directions(MARKER)]);
+    assert!(marker_held(&app), "control: the marker is set");
+    app.world_mut()
+        .resource_mut::<crate::ui_world_enter::ArrivalLane>()
+        .push(crate::ui_world_enter::Entry::Reload);
+    let heard = frame_with_minimap(&mut app, []);
+    assert!(
+        !heard.iter().any(|e| e.starts_with("WORLD_MAP_UPDATE")),
+        "the cascade's clear signals nothing: {heard:?}"
+    );
+    assert!(!marker_held(&app), "the cascade zeroed the record");
+    assert_eq!(
+        frame_with_minimap(&mut app, [combo(2)]),
+        ["PLAYER_COMBO_POINTS"]
+    );
+    clock_at(&mut app, 480);
+    assert_eq!(
+        frame_with_minimap(&mut app, [combo(0)]),
+        ["PLAYER_COMBO_POINTS", "WORLD_MAP_UPDATE:0", "landmarks:0"],
+        "the kept deadline re-selects the map"
+    );
+}
+
+/// Arrival is tested only in an update whose player position or map moved since the cached one
+/// (`0x6d9419`-`0x6d9459`, `0x6d95c4` → `0x6d9a58`): a marker dropped within 10 yards of a player
+/// standing still stays, and the first step clears it.
+#[test]
+fn arrival_waits_for_an_update_that_moved() {
+    let mut app = landmark_client();
+    let here = [MARKER[0] + 3.0, MARKER[1]];
+    app.world_mut().resource_mut::<crate::player::Player>().pos =
+        benilla_assets::coords::wow_to_bevy([here[0], here[1], 0.0]);
+    frame_with_minimap(&mut app, [combo(2)]);
+    assert_eq!(
+        frame_with_minimap(&mut app, [directions(MARKER)]),
+        ["WORLD_MAP_UPDATE:0", "landmarks:1"],
+        "set beside a player standing still: no arrival"
+    );
+    assert_eq!(
+        frame_with_minimap(&mut app, [combo(0)]),
+        ["PLAYER_COMBO_POINTS"]
+    );
+    assert!(marker_held(&app));
+    app.world_mut().resource_mut::<crate::player::Player>().pos =
+        benilla_assets::coords::wow_to_bevy([here[0] - 1.0, here[1], 0.0]);
+    assert_eq!(
+        frame_with_minimap(&mut app, [combo(2)]),
+        ["PLAYER_COMBO_POINTS", "WORLD_MAP_UPDATE:0", "landmarks:0"],
+        "the step is an arrival"
     );
 }

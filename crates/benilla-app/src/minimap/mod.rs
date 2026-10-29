@@ -1019,7 +1019,7 @@ impl Plugin for MinimapPlugin {
                         .after(crate::ui_chat::ChatDrain)
                         .after(crate::ui_party::drain_party)
                         .after(crate::poi_marker::expire_marker)
-                        .after(crate::poi_marker::clear_on_world_entry)
+                        .after(crate::lanes::UiLanes)
                         .after(feed_minimap_art)
                         .before(crate::ui_script::UiPaint),
                     // After the tick that can set the art, before the emit that draws with it.
