@@ -345,10 +345,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         // `SetCVar` moves it inside its call, and the build reads it as the frame left it.
         "video::Widescreen"]),
 
-    // The group's push, the party and raid getters' no-host fallback: the roster's cells, its
-    // members' names and objects as the frame left them; the tokens read live at the call.
-    ("::ui_party::feed::feed_party", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
-        "ui_party::GroupState"]),
     // The ammo getters' hits fire after the push that carries their record, whenever it runs.
     ("::ui_char::feed_char", &["items::Countdowns", "items::Items", "names::NameCache",
         "net::GuidIndex", "net::ObjectStore", "ui_char::AmmoRecordHits"]),

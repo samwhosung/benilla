@@ -418,14 +418,16 @@ pub(crate) fn chat_world(script: UiScript) -> (World, crossbeam_channel::Receive
 }
 
 /// Run `lua` on `world`'s VM with a host lent that applies the chat calls through [`ChatSender`]
-/// off `world`, as the call host does inside each verb.
+/// off `world`, as the call host does inside each verb, and answers the group getters' questions
+/// off `world`'s roster ([`crate::ui_party::RosterLive`], none in a world without one).
 #[cfg(test)]
 pub(crate) fn run_chat(world: &mut World, lua: &str) -> benilla_ui::mlua::Result<()> {
-    let mut state = bevy::ecs::system::SystemState::<ChatSender>::new(world);
+    let mut state =
+        bevy::ecs::system::SystemState::<(ChatSender, crate::ui_party::RosterLive)>::new(world);
     let mut script = world.remove_non_send_resource::<UiScript>().expect("a VM");
     let r = {
-        let mut sender = state.get_mut(world);
-        let mut host = crate::script_calls::FnHost(|script: &mut UiScript, call| match call {
+        let (mut sender, roster) = state.get_mut(world);
+        let apply = |script: &mut UiScript, call| match call {
             benilla_ui::script::ScriptCall::SendChat(send) => sender.send_chat(script, send),
             benilla_ui::script::ScriptCall::RandomRoll { min, max } => {
                 sender.random_roll(min, max);
@@ -439,7 +441,8 @@ pub(crate) fn run_chat(world: &mut World, lua: &str) -> benilla_ui::mlua::Result
             benilla_ui::script::ScriptCall::RequestTimePlayed => sender.request_time_played(),
             benilla_ui::script::ScriptCall::AddonMessage(send) => sender.addon_message(send),
             other => panic!("not a chat call: {other:?}"),
-        });
+        };
+        let mut host = crate::script_calls::FnHostReading(apply, roster);
         script.hosted(&mut host, |s| s.run(lua))
     };
     state.apply(world);

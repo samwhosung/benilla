@@ -214,7 +214,8 @@ fn client() -> Client {
 /// Wherever the frame's snapshots are current, every getter answers the same off the live object
 /// as off the snapshot: the object's fields the snapshot holds are the ones it reads
 /// ([`crate::ui_unit::unit_object`]), with nothing a token's own build changes after. The group's
-/// and the pet's tokens have no snapshot, and every token names its unit live.
+/// and the pet's tokens have no snapshot, nor has the roster, whose leader cell
+/// `UnitIsPartyLeader` reads at the call (`0x516210`), and every token names its unit live.
 #[test]
 fn every_getter_answers_the_same_live_as_off_the_snapshot() {
     let mut c = client();
@@ -242,10 +243,15 @@ fn every_getter_answers_the_same_live_as_off_the_snapshot() {
             .iter()
             .any(|t| line.starts_with(t))
     };
+    assert!(
+        live.iter().any(|l| l == "player UnitIsPartyLeader true,1"),
+        "we lead, read off the roster: {live:?}"
+    );
+    let roster = |line: &str| line.contains(" UnitIsPartyLeader ");
     let differ: Vec<(&String, &String)> = snapshot
         .iter()
         .zip(&live)
-        .filter(|(s, l)| seated(s) && s != l)
+        .filter(|(s, l)| seated(s) && !roster(s) && s != l)
         .collect();
     assert!(differ.is_empty(), "snapshot vs live: {differ:?}");
 }

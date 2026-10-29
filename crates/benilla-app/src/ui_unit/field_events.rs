@@ -1504,19 +1504,11 @@ mod tests {
     #[test]
     fn the_field_event_pushes_run_ahead_of_the_drain() {
         let mut headless = crate::game_plugins::schedule_tests::headless_client();
-        let ahead = [
-            crate::test_support::runs_before(
-                &mut headless,
-                crate::ui_char::feed_char,
-                crate::lanes::fire_in_order,
-            ),
-            crate::test_support::runs_before(
-                &mut headless,
-                crate::ui_party::feed_party,
-                crate::lanes::fire_in_order,
-            ),
-        ];
-        assert_eq!(ahead, [true; 2], "char, party");
+        assert!(crate::test_support::runs_before(
+            &mut headless,
+            crate::ui_char::feed_char,
+            crate::lanes::fire_in_order,
+        ));
     }
 
     /// The active player's arrival runs its ghost state (`0x5dea50` → `0x5deb2a` → `0x5de9c0`)

@@ -110,20 +110,17 @@ fn all_zero(app: &mut App) {
         .apply_list(0, 0, vec![], 0, None, Some(ME));
 }
 
-/// `GetNumRaidMembers()`, the rows the VM reads.
+/// `GetNumRaidMembers()`, the rows the getter reads at the call.
 fn rows(app: &mut App) -> f64 {
-    let script = app.world_mut().non_send_resource::<UiScript>();
-    script.eval("return GetNumRaidMembers()").unwrap()
+    lent(app, "GetNumRaidMembers()")
 }
 
 /// `GetRaidRosterInfo`'s second return for row `row`.
 fn rank(app: &mut App, row: u32) -> f64 {
-    let script = app.world_mut().non_send_resource::<UiScript>();
-    script
-        .eval(&format!(
-            "local _, rank = GetRaidRosterInfo({row}) return rank"
-        ))
-        .unwrap()
+    lent(
+        app,
+        &format!("(function() local _, rank = GetRaidRosterInfo({row}) return rank end)()"),
+    )
 }
 
 /// `GetRaidRosterInfo`'s ninth return for row `row`.
@@ -147,7 +144,7 @@ fn a_raid_list_that_moves_only_a_members_dead_bit_fires_raid_roster_update() {
     let mut app = app();
     watch(&mut app);
     raid(&mut app, &[ON, ON]);
-    assert_eq!(fired(&mut app), 1, "the first look answers the list");
+    assert_eq!(fired(&mut app), 1, "the list");
     assert_eq!(fired(&mut app), 0, "a steady frame is silent");
     assert_eq!(dead(&mut app, 1), None);
 
@@ -253,8 +250,6 @@ fn a_raid_member_whose_name_arrives_after_the_roster_fires_on_the_answer() {
     let mut app = app();
     crate::ui_unit::TestNames::english().insert(&mut app);
     watch_both(&mut app);
-    // Past the VM's first look, which answers what it finds rather than the signals.
-    told(&mut app);
     let class = |app: &mut App| {
         flag(
             app,
@@ -501,25 +496,27 @@ fn in_a_later_group_we_are_the_last_raid_row() {
         Some(ME),
     );
     frame(&mut app);
-    let script = app.world_mut().non_send_resource::<UiScript>();
-    let row = |i: u32| -> (String, f64, f64) {
-        script
-            .eval(&format!(
-                "local name, rank, subgroup = GetRaidRosterInfo({i}) return name, rank, subgroup"
-            ))
-            .unwrap()
+    let row = |app: &mut App, i: u32| -> (String, f64, f64) {
+        lent(
+            app,
+            &format!(
+                "(function() local name, rank, subgroup = GetRaidRosterInfo({i}) \
+                 return name, rank, subgroup end)()"
+            ),
+        )
     };
+    assert_eq!(rows(&mut app), 4.0);
     assert_eq!(
-        script.eval::<f64>("return GetNumRaidMembers()").unwrap(),
-        4.0
-    );
-    assert_eq!(
-        row(1),
+        row(&mut app, 1),
         ("M1".into(), 2.0, 1.0),
         "the first listed, our leader"
     );
-    assert_eq!(row(3), ("M3".into(), 0.0, 2.0));
-    assert_eq!(row(4), ("Me".into(), 0.0, 3.0), "us, last, in group 3");
+    assert_eq!(row(&mut app, 3), ("M3".into(), 0.0, 2.0));
+    assert_eq!(
+        row(&mut app, 4),
+        ("Me".into(), 0.0, 3.0),
+        "us, last, in group 3"
+    );
     for (token, want) in [("raid1", "M1"), ("raid2", "M2"), ("raid4", "Me")] {
         assert_eq!(
             lent::<String>(&mut app, &format!("UnitName({token:?})")),
@@ -542,8 +539,6 @@ fn in_a_later_group_we_are_the_last_raid_row() {
 fn a_raid_of_one_reads_no_rows_and_drops_none() {
     let mut app = app();
     watch(&mut app);
-    // Past the VM's first look, which answers what it finds rather than the lists.
-    fired(&mut app);
     raid(&mut app, &[]);
     assert_eq!(fired(&mut app), 1, "the writer ran");
     assert_eq!(rows(&mut app), 0.0, "not even our own row");
@@ -579,28 +574,29 @@ fn a_worldport_in_a_raid_fires_no_raid_roster_update() {
     assert_eq!(rows(&mut app), 3.0);
 }
 
-/// A VM minted after the lists landed was told of none: the raid it finds gets its one catch-up,
-/// never the history, and a player who holds no raid gets nothing, however many lists ended raids
-/// before.
+/// A VM born after raid lists landed hears none of them, only the lists after its birth
+/// ([`seed_vm_party`]), and reads the raid at the call; a VM up through a raid that a party list
+/// ended hears both lists' roster updates, the second for the roster it dropped (`0x4ba57b`).
 #[test]
-fn a_fresh_vm_finds_a_raid_once_and_a_party_not_at_all() {
+fn a_vm_born_after_raid_lists_hears_only_the_lists_after_it() {
     let mut app = app();
-    watch(&mut app);
     raid(&mut app, &[ON, ON]);
     raid(&mut app, &[DEAD, ON]);
+    let mut born = UiScript::new().unwrap();
+    seed_vm_party(app.world_mut(), &mut born, false);
+    born.run("SEEN = {}").unwrap();
+    app.insert_non_send_resource(born);
+    watch(&mut app);
+    assert_eq!(fired(&mut app), 0, "the lists before the birth");
+    assert_eq!(rows(&mut app), 3.0, "the raid, read at the call");
     raid(&mut app, &[DEAD, DEAD]);
-    assert_eq!(fired(&mut app), 1);
-    assert_eq!(fired(&mut app), 0);
+    assert_eq!(fired(&mut app), 1, "a list after it");
 
     let mut ended = self::app();
     watch(&mut ended);
     raid(&mut ended, &[ON, ON]);
     party(&mut ended, &[ON, ON]);
-    assert_eq!(fired(&mut ended), 0, "the raid ended before the first look");
-
-    let mut solo = self::app();
-    watch(&mut solo);
-    assert_eq!(fired(&mut solo), 0);
+    assert_eq!(fired(&mut ended), 2, "the raid's list, then the drop");
 }
 
 /// One drain's packets signal in wire order, each inside its own handler: a raid list, the leader
@@ -638,8 +634,6 @@ fn one_drains_packets_signal_in_wire_order() {
             "#,
         )
         .unwrap();
-    // Past the VM's first look, which answers what it finds rather than the signals.
-    told(&mut app);
     let list = |leader| SessionEvent::GroupList {
         group_type: GROUPTYPE_RAID,
         own_flags: 0,
@@ -748,10 +742,10 @@ fn the_stock_raid_ui_repaints_a_member_who_dies_out_of_view() {
     // handler runs with `this` set, opens the group's pullout (`Blizzard_RaidUI.xml:172`).
     raid(&mut app, &[ON, ON]);
     frame(&mut app);
-    app.world_mut()
-        .non_send_resource_mut::<UiScript>()
-        .run("this = RaidGroup1Label RaidPullout_GenerateGroupFrame()")
-        .unwrap();
+    crate::ui_unit::live::with_lent_objects(app.world_mut(), |s| {
+        s.run("this = RaidGroup1Label RaidPullout_GenerateGroupFrame()")
+    })
+    .unwrap();
     assert_eq!(text_colour(&mut app), warrior, "the grid's row");
     assert_eq!(pullout_colour(&mut app), warrior, "the pullout's row");
 

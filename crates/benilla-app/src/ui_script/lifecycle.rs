@@ -523,7 +523,7 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
     // The item locks before any file or event runs: a `/reload`'s survive, as on the reference's
     // item objects.
     crate::ui_items::locks::seed_vm_item_locks(world, &mut script, seat == LoadSeat::Live);
-    crate::ui_party::seed_vm_ready_check(world, &mut script, seat == LoadSeat::Live);
+    crate::ui_party::seed_vm_party(world, &mut script, seat == LoadSeat::Live);
     crate::ui_guild::seed_vm_guild(world, &mut script, seat == LoadSeat::Live);
     // The realm before the load, since addons read `GetRealmName()` at file scope; the roster
     // carries the realm-list entry this session connected to.
@@ -574,11 +574,8 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
             }
         }
     }
-    // A reload's group, before any file reads it: the reference's frames load over the engine's
-    // roster and hear no group event for it ([`crate::ui_party::seed_reloaded_vm`]).
+    // A reload's bar, which the engine keeps through the reload (`0xbc6980`, `0xbc6390`).
     if seat == LoadSeat::Live {
-        crate::ui_party::seed_reloaded_vm(world, &mut script);
-        // And its bar, which the engine keeps through the reload (`0xbc6980`, `0xbc6390`).
         crate::ui_action::seed_reloaded_vm(world, &mut script);
     }
     // The addon version gate, read from the persisted base the fold above just made current, so a

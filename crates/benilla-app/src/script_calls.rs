@@ -1602,6 +1602,22 @@ impl<F: FnMut(&mut UiScript, ScriptCall)> CallHost for FnHost<F> {
     }
 }
 
+/// [`FnHost`] whose getters' live questions `L` answers, as the app's host's families do.
+#[cfg(test)]
+pub(crate) struct FnHostReading<F, L>(pub(crate) F, pub(crate) L);
+
+#[cfg(test)]
+impl<F: FnMut(&mut UiScript, ScriptCall), L: live::LiveFamily> CallHost for FnHostReading<F, L> {
+    fn apply(&mut self, script: &mut UiScript, call: ScriptCall) -> Option<CallTail> {
+        (self.0)(script, call);
+        None
+    }
+
+    fn read_live(&mut self, ask: &mut benilla_ui::script::live::LiveAsk<'_>) -> bool {
+        self.1.answer(ask)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -25,11 +25,9 @@ mod pets;
 mod records;
 pub(crate) use calls::PartyCalls;
 pub(crate) use cells::{Cells, RaidRow, RosterCells};
-#[cfg(test)]
-pub(crate) use feed::feed_party;
 pub(crate) use feed::{
-    drain_party, fold_dying_vm_ready_check, raid_row_guid, raid_row_guids, seed_reloaded_vm,
-    seed_vm_ready_check, synthetic_raid, synthetic_roster, GROUPTYPE_RAID, GROUP_MEMBER_SUBGROUP,
+    drain_party, fold_dying_vm_ready_check, raid_row_guid, raid_row_guids, seed_vm_party,
+    synthetic_raid, synthetic_roster, GROUPTYPE_RAID, GROUP_MEMBER_SUBGROUP,
 };
 #[cfg(test)]
 pub(crate) use feed::{fire_party_lane, PartyLane};
@@ -60,9 +58,9 @@ impl Plugin for UiPartyPlugin {
             .add_systems(
                 Update,
                 (
-                    // The group tokens read at the call (`crate::ui_unit::live`); the roster
-                    // push is the no-host fallback, and a fresh VM's catch-up is stamped here.
-                    feed::feed_party.in_set(UiFeed),
+                    // The ready check's timeout lines. The getters read the group at the call
+                    // (`live`), and a new VM is seeded at its birth (`feed::seed_vm_party`).
+                    feed::push_ready_check_lines.in_set(UiFeed),
                     feed::drain_party.in_set(crate::ui_script::UiDrain),
                 ),
             );
@@ -92,9 +90,6 @@ pub struct GroupState {
     /// `Group.cpp:1454`), so only a list that lands mid-worldport takes that path, which is not
     /// built.
     pub(crate) raid: Vec<RaidRow>,
-    /// Whether any `SMSG_GROUP_LIST` landed this session, the all-zero one included: what a fresh
-    /// VM's catch-up reads (`feed::catch_up`).
-    pub listed: bool,
     /// The group events the handlers signalled, in the order they signalled them.
     pub(crate) signals: SignalLog,
     /// The name lookups the group's handlers left waiting, in the order they were added: the name
@@ -255,8 +250,8 @@ pub(crate) enum GroupSignal {
 /// among the other lanes' items, once each ([`feed::fire_group_signals`]). Sequence numbers run on
 /// across trims and sessions, so a cursor into the log stays good. An entry lives two ages:
 /// `feed::drain_party` ages the log every frame, and the lane, which fires every frame the
-/// in-game interface is up, fires everything logged before the next age drops it. A frame with
-/// no VM drops what no VM heard; the next VM is a fresh one, and its catch-up stands in.
+/// in-game interface is up, fires everything logged before the next age drops it. A new VM
+/// starts past every entry logged before its birth (`feed::seed_vm_party`).
 #[derive(Default)]
 pub(crate) struct SignalLog {
     /// The sequence number of `entries[0]`.
@@ -415,7 +410,6 @@ impl GroupState {
         cached_name: &dyn Fn(u64) -> Option<String>,
     ) -> ListOutcome {
         let missed = |guid: u64| lookup(guid).is_none();
-        self.listed = true;
         // The entry naming the active player is skipped ahead of the raid arrays and the seats
         // (`0x5e6b77`-`0x5e6b88`); the wire omits the recipient, so it drops nothing there.
         let active = self_guid.unwrap_or(0);
@@ -996,8 +990,7 @@ impl GroupState {
             loot_stored: _,
             // The leader-index cell, which the list's own leader store writes next (`0x5e6c7e`).
             leader_index: _,
-            // Session state the feed fires events off: kept until `clear_session`.
-            listed: _,
+            // The lane's log: kept until `clear_session`.
             signals: _,
             // The name cache's callbacks, which no list ending touches (`0x4ba550`).
             name_waits: _,
@@ -1180,9 +1173,6 @@ mod tests {
 
         g.leave_group();
         assert_eq!(g.signals.take_events(), [], "leaving is not a list");
-        assert!(g.listed);
-        g.clear_session();
-        assert!(!g.listed);
     }
 
     /// One list's signals and lines in the handler's order: the members change (`0x5e6c66`), the

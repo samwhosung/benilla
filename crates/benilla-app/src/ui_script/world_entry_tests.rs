@@ -2688,6 +2688,51 @@ fn a_reload_fires_player_login_once_against_the_live_player() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// The lockouts are the engine's, which a `/reload` keeps: the handler stores the list and its
+/// count (`[0xb6e5e8]`, `0x49e1a2`) before it signals (`0x49e1a7`), and `GetNumSavedInstances`
+/// reads the count at the call (`0x4a18f6`). So the reloaded files read them at file scope, where
+/// the world entry's ran before the list landed.
+#[test]
+fn a_reloads_files_read_the_lockouts_the_engine_holds() {
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (tmp, _c, _h) = hermetic_addon(
+        "lockouts",
+        "LockoutProbe",
+        "## Interface: 11200\nLockoutProbe.lua\n",
+        "local _, id = GetSavedInstanceInfo(1)\nLockoutProbe = GetNumSavedInstances() .. \":\" .. id\n",
+    );
+    let probe = |app: &App| {
+        app.world()
+            .non_send_resource::<benilla_ui::script::UiScript>()
+            .eval::<Option<String>>("return LockoutProbe")
+            .unwrap()
+    };
+    let (mut app, _rx) = hosted_entry_app("Probelock");
+    super::load_ingame_ui_on_world_entry(app.world_mut());
+    spawn_self_player(app.world_mut());
+    fire_lanes(&mut app);
+    crate::net::handlers::dispatch(
+        app.world_mut(),
+        vec![benilla_protocol::SessionEvent::RaidInstanceInfo {
+            entries: vec![benilla_protocol::messages::RaidInstanceEntry {
+                map: 409,
+                reset: 3600,
+                instance: 77,
+            }],
+        }],
+    );
+    fire_lanes(&mut app);
+    assert_eq!(probe(&app).as_deref(), Some("0:0"), "the entry's files");
+
+    reload(app.world_mut(), crate::client_state::ClientState::InWorld);
+    assert_eq!(probe(&app).as_deref(), Some("1:77"), "the reload's");
+
+    drop(app);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 // ───────────────────── The minimap mask is the process's, not the VM's ─────────────────────
 
 /// The default mask and an addon's, as [`crate::minimap::seat_mask_for_test`] takes them.

@@ -89,8 +89,7 @@ fn seat_party_targeting(app: &mut App, pet: u64, target: u64) {
         });
 }
 
-/// One frame: the packets, the unit, party, pet and chain feeds' pushes of the frame's state,
-/// then the lanes' drain; what the spy saw.
+/// One frame: the packets, then the lanes' drain; what the spy saw.
 fn frame(app: &mut App, packets: Vec<SessionEvent>) -> Vec<String> {
     frame_after(app, |_| {}, packets)
 }
@@ -111,9 +110,6 @@ fn frame_after(
     }
     before(world);
     crate::net::handlers::dispatch(world, packets);
-    world
-        .run_system_cached(crate::ui_party::feed_party)
-        .expect("the party feed runs");
     crate::lanes::fire_in_order(world);
     let s = world.non_send_resource_mut::<UiScript>();
     let out = s.eval::<Vec<String>>("return Seen").unwrap();

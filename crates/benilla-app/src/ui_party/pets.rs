@@ -44,8 +44,8 @@ pub(in crate::ui_party) mod tests {
         [(SUMMON, guid as u32), (SUMMON + 1, (guid >> 32) as u32)]
     }
 
-    /// The frames of a group feed running [`super::super::feed::feed_party`] on a VM whose one
-    /// spy frame logs the unit events pets raise, as `"EVENT:token"`.
+    /// The frames of the party lane on a VM whose one spy frame logs the unit events pets raise,
+    /// as `"EVENT:token"`.
     pub(in crate::ui_party) fn app_with(script: UiScript) -> App {
         let mut app = App::new();
         app.add_message::<FieldChanged>()
@@ -78,16 +78,11 @@ pub(in crate::ui_party) mod tests {
             )
             .unwrap();
         app.insert_non_send_resource(script);
-        // The feed, then the party lane, as the lanes' drain follows the feeds.
+        // The party lane with the roster's reads lent, ahead of the drain that ages its log.
         app.init_resource::<crate::ui_party::PartyLane>()
             .add_systems(
                 Update,
-                (
-                    super::super::feed::feed_party,
-                    crate::ui_party::fire_party_lane
-                        .after(super::super::feed::feed_party)
-                        .before(super::super::feed::drain_party),
-                ),
+                crate::ui_party::fire_party_lane.before(super::super::feed::drain_party),
             );
         app
     }
@@ -215,8 +210,8 @@ pub(in crate::ui_party) mod tests {
         crate::ui_unit::live::eval_lent_objects(app.world_mut(), &format!("return {code}")).0
     }
 
-    /// `PARTY_MEMBERS_CHANGED` fired again with the host lent: the stock frames read the group
-    /// at the call, and this harness's party lane fires with none, as a bare world lends none.
+    /// `PARTY_MEMBERS_CHANGED` fired again with the host lent: the stock frames read the unit
+    /// tokens at the call, and this harness's party lane lends the roster's reads alone.
     pub(in crate::ui_party) fn members_changed_lent(app: &mut App) {
         crate::ui_unit::live::with_lent_objects(app.world_mut(), |s| {
             s.fire_event("PARTY_MEMBERS_CHANGED", vec![]);

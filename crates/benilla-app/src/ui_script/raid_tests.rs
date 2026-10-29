@@ -53,7 +53,7 @@ fn row(
     }
 }
 
-/// Pushes a roster and fires its event, as `ui_party`'s `feed_party` does.
+/// Pushes a roster, the getters' no-host fallback, and fires its event, as the party lane does.
 fn push_raid(s: &mut UiScript, raid: Vec<RaidMemberInfo>) {
     // `members` is our own subgroup's slice. We lead: the leader cell holds our guid.
     let members = raid

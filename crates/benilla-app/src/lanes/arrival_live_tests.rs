@@ -245,6 +245,8 @@ fn the_cascade_signals_the_lfg_types_twice_between_its_neighbours() {
 
 /// A player.
 const ALICE: u64 = 0x31;
+/// Another, listed with [`ALICE`].
+const BOB: u64 = 0x32;
 
 /// The display latch tests a line after its sender's name (`0x49d77f` before `0x49db5c`): an
 /// uncached sender's name is asked at the packet, and the held line does not age, so however long
@@ -333,51 +335,58 @@ fn the_latch_holds_a_defence_line_and_drops_a_named_emote() {
     );
 }
 
-/// The party's catch-up for a fresh VM fires after the arrival stamped at our create, as the
-/// group list that follows the create signals after the login events.
+/// A new VM's first frame signals each group list at its packet: the reference's interface is up
+/// before the login goes out (`UI_Init` from `0x46c236`, the send at `0x46c272`), so no list lands
+/// ahead of it, and the list handler signals inside itself (`0x5e6c66`) before the next packet runs
+/// (`0x537ae5`). So after the arrival stamped at our create, each of two lists signals its own
+/// `PARTY_MEMBERS_CHANGED`, ahead of a later packet's line.
 #[test]
-fn a_fresh_vms_party_catch_up_fires_after_entering_the_world() {
-    use benilla_protocol::messages::{member_status, GroupLootInfo, GroupMemberEntry};
+fn a_new_vms_first_lists_signal_at_their_packets() {
+    use benilla_protocol::messages::{member_status, GroupMemberEntry};
     let mut c = client(
         r#"Seen = {}
         local f = CreateFrame("Frame")
-        for _, e in ipairs({"PLAYER_ENTERING_WORLD", "PARTY_MEMBERS_CHANGED"}) do
+        for _, e in ipairs({"PLAYER_ENTERING_WORLD", "PARTY_MEMBERS_CHANGED", "CHAT_MSG_SYSTEM"}) do
             f:RegisterEvent(e)
         end
-        f:SetScript("OnEvent", function() table.insert(Seen, event) end)"#,
+        f:SetScript("OnEvent", function()
+            table.insert(Seen, event .. ":" .. GetNumPartyMembers())
+        end)"#,
     );
-    c.app
-        .world_mut()
-        .resource_mut::<crate::names::NameCache>()
-        .insert_player(ALICE, "Alice".into(), None);
-    c.frame(vec![
-        vec![me()],
-        vec![SessionEvent::GroupList {
-            group_type: 0,
-            own_flags: 0,
-            members: vec![GroupMemberEntry {
-                name: "Alice".into(),
-                guid: ALICE,
+    let list = |guids: &[u64]| SessionEvent::GroupList {
+        group_type: 0,
+        own_flags: 0,
+        members: guids
+            .iter()
+            .map(|&guid| GroupMemberEntry {
+                name: format!("M{guid}"),
+                guid,
                 status: member_status::ONLINE,
                 flags: 0,
-            }],
-            leader: ME,
-            loot: Some(GroupLootInfo {
-                method: 1,
-                master: 0,
-                threshold: 2,
-            }),
-        }],
+            })
+            .collect(),
+        leader: ME,
+        loot: None,
+    };
+    {
+        let mut names = c.app.world_mut().resource_mut::<crate::names::NameCache>();
+        names.insert_player(ALICE, "Alice".into(), None);
+        names.insert_player(BOB, "Bob".into(), None);
+    }
+    c.frame(vec![
+        vec![me()],
+        vec![list(&[ALICE])],
+        vec![list(&[ALICE, BOB])],
+        vec![system_line("after")],
     ]);
-    let seen = c.seen();
     assert_eq!(
-        seen.first().map(String::as_str),
-        Some("PLAYER_ENTERING_WORLD"),
-        "{seen:?}"
-    );
-    assert!(
-        seen.iter().any(|e| e == "PARTY_MEMBERS_CHANGED"),
-        "{seen:?}"
+        c.seen(),
+        [
+            "PLAYER_ENTERING_WORLD:0",
+            "PARTY_MEMBERS_CHANGED:1",
+            "PARTY_MEMBERS_CHANGED:2",
+            "CHAT_MSG_SYSTEM:2"
+        ]
     );
 }
 
