@@ -72,11 +72,6 @@ pub(crate) const RAISES_AT_THEIR_OWN_PLACE: &[Allow] = &[
               `UPDATE_BINDINGS` the copy into the live table signals (`0x4b649d`)",
     },
     Allow {
-        frame: "ui_action::feed::feed_actions",
-        why: "NOT_YET_ON_A_LANE: `::ui_action::ActionSlots`, which it resolves and signals \
-              `ACTIONBAR_SLOT_CHANGED` off",
-    },
-    Allow {
         frame: "capture::fixtures::seed_ui_fixture",
         why: "QUEUED_FOR_THE_TICK: a capture's fixture",
     },
