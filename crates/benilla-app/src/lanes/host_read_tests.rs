@@ -51,7 +51,9 @@ const FRAME_FINAL_INPUTS: usize = 33;
 /// listener's call or a handler reads inside a packet, by its name in the crate, and why: the
 /// host's live reads ([`crate::script_calls::live::LiveReads`]), the rest of the call host's
 /// state, which its verbs read, and what the handlers read without writing
-/// ([`super::guard_tests::READ_ONLY_TO_HANDLERS`]), the queues apart. These are the
+/// ([`super::guard_tests::READ_ONLY_TO_HANDLERS`]), the lanes and the message buffers apart; a
+/// read of what the handlers fill through a shared reference
+/// ([`super::guard_tests::FILLED_THROUGH_A_READ`]) counts as the write it is. These are the
 /// obstacles to the flip, each a write the reference makes inside a packet, or a view pushed in
 /// its place. A listener fired inside the dispatch would read each of these as the frame before
 /// left it. The writers the reference also runs after the packets are
@@ -61,6 +63,10 @@ const FRAME_FINAL_INPUTS: usize = 33;
 /// access does not show; `exclusive` a system whose access Bevy does not report.
 #[rustfmt::skip]
 const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
+    ("::bindings::reread_arrived_bindings", &["account_data::AccountData"],
+        "takes the binding sections a download owes it through `&self` and rereads them after \
+         the dispatch, where the reference runs the reader (`ReadBindingCache` `0x4b6240`) inside \
+         the settle its section's digest or download handler makes (`0x5afaca`, `0x5afd19`)"),
     ("::net::motion::remote::extrapolate_remote_units", &["Commands net::motion::spline::Spline",
         "Transform", "net::motion::remote::RemoteMotion"],
         "the arrival snap `0x7c6420` (`0x618dfc`) is written inside the packet"),
@@ -73,11 +79,15 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
     ("::ui_item_text::apply_reads", &["ui_item_text::ItemTextOpen"],
         "a click's or a bag use's read, queued in its input or its call, which the reference \
          opens inside them (`0x5f58c0`, `0x4e32e0`), ahead of the packets (`0x420d23`)"),
-    ("::ui_macro::load_macros", &["ui_action::ActionSlots"],
-        "the macro reader (`LoadMacroFiles` `0x4f0600`), run as its sections settle, moves a \
-         character's buttons off benilla's older numbering through the bar verbs, a move with no \
-         reference fact; the reference runs the reader inside the account-data settle \
-         (`0x5afaca`, `0x5afd19`)"),
+    ("::ui_layout::load_layout", &["account_data::AccountData"],
+        "takes the layout section a download owes it through `&self` and reads it after the \
+         dispatch, where the reference runs the reader (`LayoutCacheRead` `0x490380`) inside the \
+         settle (`0x5afaca`, `0x5afd19`)"),
+    ("::ui_macro::load_macros", &["account_data::AccountData", "ui_action::ActionSlots"],
+        "the macro reader (`LoadMacroFiles` `0x4f0600`), run as its sections settle, takes the \
+         sections a download owes it through `&self`, and moves a character's buttons off \
+         benilla's older numbering through the bar verbs, a move with no reference fact; the \
+         reference runs the reader inside the account-data settle (`0x5afaca`, `0x5afd19`)"),
 ];
 
 /// The systems between the dispatch and the drain that write what the host's live reads read,
@@ -169,18 +179,23 @@ fn writers_between(app: &mut App) -> Option<BTreeMap<String, BTreeSet<String>>> 
     // What a listener inside the dispatch reads past the live families: every resource and
     // component a call's verbs touch through the host, and what the handlers read without writing
     // ([`super::guard_tests::READ_ONLY_TO_HANDLERS`]), each a read made inside a packet in the
-    // reference. The queues are not state: the lanes, the message buffers and what a handler fills
-    // through a shared reference.
+    // reference, and what the handlers fill through a shared reference, which a system writes
+    // through `&self`. The lanes and the message buffers are not state.
     crate::net::handlers::measure(world);
     let queues: HashSet<ComponentId> = super::guard_tests::lane_types()
         .into_iter()
         .filter_map(|t| world.components().get_resource_id(t))
         .collect();
     let is_state = |world: &World, id: ComponentId| {
-        let n = super::guard_tests::name(world, id);
-        !queues.contains(&id)
-            && !super::guard_tests::is_messages(world, id)
-            && !super::guard_tests::ends_with_any(&n, super::guard_tests::FILLED_THROUGH_A_READ)
+        !queues.contains(&id) && !super::guard_tests::is_messages(world, id)
+    };
+    // What the handlers and the host fill through a shared reference: a system's read of one is
+    // a write, which its access shows as a read.
+    let through_a_read = |world: &World, id: ComponentId| {
+        super::guard_tests::ends_with_any(
+            &super::guard_tests::name(world, id),
+            super::guard_tests::FILLED_THROUGH_A_READ,
+        )
     };
     let handlers = world.resource::<crate::net::handlers::NetHandlers>();
     let mut handler_reads = HashSet::new();
@@ -303,6 +318,7 @@ fn writers_between(app: &mut App) -> Option<BTreeMap<String, BTreeSet<String>>> 
             let a = fa.access();
             writes.extend(
                 a.resource_writes()
+                    .chain(a.resource_reads().filter(|id| through_a_read(world, *id)))
                     .filter(|id| read_resources.contains(id) && Some(*id) != vm)
                     .map(name),
             );

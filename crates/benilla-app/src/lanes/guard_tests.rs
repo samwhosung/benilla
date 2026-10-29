@@ -393,7 +393,8 @@ pub(super) const FILLED_THROUGH_A_READ: &[&str] = &[
 /// [`FILLED_THROUGH_A_READ`]. The list is kept by hand: an entry a handler in fact fills through a
 /// shared reference leaves that queue out of [`handler_queues`], so a feed that takes it and fires
 /// in system order, or a system that pushes onto a lane off it at its own place, passes every
-/// check here unseen.
+/// check here unseen. Each is named by its full path, the crate's own by its path in the crate,
+/// and matched whole ([`names_exactly`]).
 pub(super) const READ_ONLY_TO_HANDLERS: &[&str] = &[
     // `AreaPOI.dbc`, the landmark rows the gossip marker's re-select of the map reads
     // (`0x6dac93` → `0x4a67a0`, its walk at `0x4a6819`).
@@ -432,46 +433,46 @@ pub(super) const READ_ONLY_TO_HANDLERS: &[&str] = &[
     // tooltip lines from.
     "::ui_unit::tooltip_facts::StudyTables",
     // The area names a trainer description's `$z` reads through the host.
-    "::QuestHeaderNamesRes",
-    "::HomeBind",
+    "::ui_quest_log::QuestHeaderNamesRes",
+    "::net::HomeBind",
     "::ui_trainer::TrainerOpen",
     "::ui_stable::StableSlotPrices",
-    "::AreaTableRes",
+    "::area::AreaTableRes",
     // The server clock the quest log getters read in the host.
-    "::ServerWallClock",
+    "::net::ServerWallClock",
     // The page materials the questgiver background getter reads in the host (`0x502230`).
-    "::PageMaterials",
+    "::ui_item_text::PageMaterials",
     // The world map's projections the battleground position getters read in the host, and the
     // stat columns' table the status handler reads (`0x4aa9c3`).
-    "::WorldMapUiData",
-    "::WorldStateUiRes",
-    "::DamageTextGates",
-    "::EnvDamageTable",
-    "::SpellVisuals",
-    "::Creatures",
-    "::ItemDisplays",
+    "::ui_world_map::WorldMapUiData",
+    "::world_state_ui::WorldStateUiRes",
+    "::combat_text::law::DamageTextGates",
+    "::creature_anim::env_damage::EnvDamageTable",
+    "::creature_anim::spell_visual::SpellVisuals",
+    "::entities::Creatures",
+    "::entities::equipment::ItemDisplays",
     // `ItemClass.dbc`, whose names the host's `GetItemInfo` reads.
-    "::ItemClasses",
-    "::GameObjectTemplates",
-    "::Enchants",
-    "::Items",
-    "::RandomProperties",
-    "::ChrClassTable",
-    "::ChrRaceTable",
-    "::RacePvpTeams",
-    "::NameCache",
+    "::ui_items::ItemClasses",
+    "::go_templates::GameObjectTemplates",
+    "::items::Enchants",
+    "::items::Items",
+    "::items::RandomProperties",
+    "::chr_classes::ChrClassTable",
+    "::chr_classes::ChrRaceTable",
+    "::chr_classes::RacePvpTeams",
+    "::names::NameCache",
     // The Video menu's list the host's multisample verbs read (`0x48c3e0`).
-    "::view::MsaaFormats",
+    "benilla_world::view::MsaaFormats",
     // A capture run, which parks the camera the view verbs would move.
     "::run_mode::CaptureMode",
-    "::ServerTime",
-    "::GuidIndex",
+    "::net::game_time::ServerTime",
+    "::net::GuidIndex",
     // The bag cache the open-container handler numbers its `BAG_OPEN`s from.
-    "::BagCache",
-    "::NetCommands",
-    "::SelfGuid",
-    "::OwnControlLost",
-    "::Player",
+    "::item_watch::BagCache",
+    "::net::NetCommands",
+    "::net::SelfGuid",
+    "::player::state::OwnControlLost",
+    "::player::state::Player",
     // The request ladder's tests, which its status reads (`0x4bf793`, `0x4bf7a5`, `0x4bf7bc`).
     "::cinematic::Cinematic",
     "::ui_auction::AuctionOpen",
@@ -488,70 +489,70 @@ pub(super) const READ_ONLY_TO_HANDLERS: &[&str] = &[
     // The page cache the host's page turns read.
     "::ui_item_text::PageTexts",
     // The streamed terrain the host's minimap ground cast traces.
-    "::terrain_stream::TerrainStreamer",
-    "::Assets<benilla_assets::adt::AdtTile>",
+    "benilla_world::terrain_stream::TerrainStreamer",
+    "bevy_asset::assets::Assets<benilla_assets::adt::AdtTile>",
     // The pet trainer's latch, which the host's `ConfirmPetUnlearn` reads.
     "::ui_dialog_verbs::PetUnlearnState",
-    "::BarUnitOutdoors",
-    "::PlayerOutdoors",
-    "::EmoteSounds",
-    "::ExplorationSounds",
-    "::AutoSelfCast",
-    "::GroupRoster",
-    "::ActiveChannel",
-    "::SpellModifiers",
-    "::AssistAttack",
-    "::Hovered",
-    "::HoveredObject",
-    "::Factions",
-    "::CreatureTypes",
-    "::LastEnemy",
-    "::Selection",
-    "::TextFilter",
-    "::TextFilterSwitches",
-    "::PlayerActions",
-    "::SpellMechanics",
-    "::Spells",
-    "::CombatLogRanges",
-    "::LogPeriodicSpells",
-    "::GuildMemberNotify",
-    "::PetitionRecords",
-    "::ItemSubClasses",
+    "::player::world_focus::BarUnitOutdoors",
+    "::player::world_focus::PlayerOutdoors",
+    "::sound::emote::EmoteSounds",
+    "::sound::zone::ExplorationSounds",
+    "::spell::cast_target::AutoSelfCast",
+    "::spell::group_relation::GroupRoster",
+    "::spell::inflight::ActiveChannel",
+    "::spell::mods::SpellModifiers",
+    "::target::AssistAttack",
+    "::target::Hovered",
+    "::target::HoveredObject",
+    "::target::ring::Factions",
+    "::target::scan::CreatureTypes",
+    "::target::scan::LastEnemy",
+    "::target::Selection",
+    "::text_filter::TextFilter",
+    "::text_filter::TextFilterSwitches",
+    "::ui_action::PlayerActions",
+    "::ui_action::SpellMechanics",
+    "::ui_action::Spells",
+    "::ui_chat::combat::CombatLogRanges",
+    "::ui_chat::combat::LogPeriodicSpells",
+    "::ui_guild::GuildMemberNotify",
+    "::ui_petition::PetitionRecords",
+    "::ui_items::ItemSubClasses",
     // `showLootSpam`, which the roll handlers read as their lines compose (`0x61ba3a`,
     // `0x61bafe`, `0x61c0b9`); a listener's `SetCVar` writes it inside its call.
-    "::LootConfig",
-    "::LootKneel",
-    "::MailOpen",
-    "::Stationery",
+    "::ui_loot::LootConfig",
+    "::ui_loot::LootKneel",
+    "::ui_mail::MailOpen",
+    "::ui_mail::Stationery",
     // The tables and the world states the host's mail getters read a row off (`0x4aee11`,
     // `0x4af229`, `0x4aec87`, the body's `$` expansion `0x506f70`).
-    "::AuctionHouses",
-    "::MailTemplates",
+    "::ui_auction::AuctionHouses",
+    "::ui_mail::MailTemplates",
     "::ui_mail::Packages",
     "::world_state::WorldStates",
     // The repair discounts and the taxi graph the host's merchant and taxi verbs consult.
-    "::RepairTables",
-    "::TaxiCatalogs",
+    "::ui_merchant::RepairTables",
+    "::ui_taxi::routing::TaxiCatalogs",
     // The bank's prices and the dialogs' states the host's bank, battleground, death, duel,
     // innkeeper and summon verbs consult.
-    "::BankPrices",
+    "::ui_bank::BankPrices",
     "::ui_battlefield::Battlefield",
-    "::MapCatalogRes",
-    "::BinderState",
-    "::BattlefieldQueue",
-    "::DuelState",
-    "::SummonState",
+    "benilla_assets::MapCatalogRes",
+    "::ui_binder::BinderState",
+    "::ui_dialog_verbs::BattlefieldQueue",
+    "::ui_duel::DuelState",
+    "::ui_summon::SummonState",
     // The dialogs' state the call host's getters read (`0x48b620`, `0x4ca570`, `0x495c90`).
-    "::InstanceBoot",
-    "::MeetingStone",
-    "::InstanceState",
-    "::UiClock",
-    "::SkillLines",
+    "::ui_dialog_verbs::InstanceBoot",
+    "::ui_dialog_verbs::MeetingStone",
+    "::ui_instance::InstanceState",
+    "::ui_script::UiClock",
+    "::ui_spellbook::SkillLines",
     // The talent catalog, which the host's talent getters read.
     "::ui_talent::Talents",
-    "::SpellFocus",
-    "::FrameStep",
-    "::CurrentMap",
+    "::ui_tradeskill::SpellFocus",
+    "benilla_world::frame_pace::FrameStep",
+    "benilla_world::world_map::CurrentMap",
     "bevy_time::time::Time",
     "bevy_time::time::Time<bevy_time::real::Real>",
     // The stores as of the drain's place, which the call host's token lookups read.
@@ -561,7 +562,7 @@ pub(super) const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::ui_unit::LanguagesRes",
     "::ui_unit::DefaultLanguagesRes",
     // The area under the player, which the host's raid rows read for our own zone (`0xb4e314`).
-    "::CurrentArea",
+    "benilla_world::terrain_stream::queries::CurrentArea",
     // The interface clock's pair as the last tick left it, which the call host's buff timers
     // map each duration stamp through (`0x4e4450`); only the tick's copy and a new VM's seed
     // write it.
@@ -575,8 +576,8 @@ pub(super) const READ_ONLY_TO_HANDLERS: &[&str] = &[
     // The proficiency masks the call host's requirement getters read (`0x5ea930`).
     "::net::Proficiencies",
     // `ItemSet.dbc` and the item-name cache the call host's set block reads (`0x52df5a`).
-    "::ItemSets",
-    "::ItemNames",
+    "::ui_items::ItemSets",
+    "::item_names::ItemNames",
     // What the world click's legs read in the call (`0x481f60`): the lock tables an object's
     // open gates on, the cover and the inspector that refuse an arm, the frame's motion its drag
     // test reads, and Shift for `SetAutoLoot`.
@@ -876,11 +877,10 @@ fn every_resource_a_handler_reads_is_a_known_queue_or_read_only() {
         eprintln!("skipped: this build carries no type names");
         return;
     }
+    let read_only = |n: &str| READ_ONLY_TO_HANDLERS.iter().any(|e| names_exactly(n, e));
     let unknown: Vec<&String> = reads
         .iter()
-        .filter(|n| {
-            !ends_with_any(n, FILLED_THROUGH_A_READ) && !ends_with_any(n, READ_ONLY_TO_HANDLERS)
-        })
+        .filter(|n| !ends_with_any(n, FILLED_THROUGH_A_READ) && !read_only(n))
         .collect();
     assert!(
         unknown.is_empty(),
@@ -892,13 +892,25 @@ fn every_resource_a_handler_reads_is_a_known_queue_or_read_only() {
             .collect::<Vec<_>>()
             .join("\n  ")
     );
-    let stale: Vec<&str> = READ_ONLY_TO_HANDLERS
+    let mut stale: Vec<&str> = READ_ONLY_TO_HANDLERS
         .iter()
-        .chain(FILLED_THROUGH_A_READ)
-        .filter(|s| !reads.iter().any(|n| n.ends_with(*s)))
+        .filter(|e| !reads.iter().any(|n| names_exactly(n, e)))
         .copied()
         .collect();
+    stale.extend(
+        FILLED_THROUGH_A_READ
+            .iter()
+            .filter(|s| !reads.iter().any(|n| n.ends_with(*s)))
+            .copied(),
+    );
     assert!(stale.is_empty(), "stale rows: {stale:?}");
+}
+
+/// Whether `n`, a type's full name, is the type `entry` names: the crate's own by its path in the
+/// crate (`::items::Items`), any other by its full name. Never a suffix, so a new type that shares
+/// a listed one's short name is not taken for it.
+fn names_exactly(n: &str, entry: &str) -> bool {
+    n == entry || n.strip_prefix("benilla_app") == Some(entry)
 }
 
 /// The drain runs once a frame after every feed and before the tick, gated as the feeds of the
@@ -1593,9 +1605,10 @@ pub(super) fn short_name(full: &str) -> String {
     }
 }
 
-/// What the handlers write, as [`READS_FRAME_FINAL`] counts it: each component a handler writes,
-/// and each resource one writes or fills through a shared reference ([`FILLED_THROUGH_A_READ`]),
-/// whose access shows a read, so a feed that reads such a queue's content is an input.
+/// What the handlers write, as [`READS_FRAME_FINAL`] and [`LANE_READS_FRAME_FINAL`] count it:
+/// each component a handler writes, and each resource one writes or fills through a shared
+/// reference ([`FILLED_THROUGH_A_READ`]), whose access shows a read, so a feed or a firing that
+/// reads such a queue is held to it.
 fn handler_written(world: &World) -> (BTreeSet<ComponentId>, BTreeSet<ComponentId>) {
     use bevy::ecs::query::ComponentAccessKind;
     let handlers = world.resource::<crate::net::handlers::NetHandlers>();
@@ -1813,9 +1826,11 @@ pub(super) const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // `SetSelection`.
     ("tutorials", &["names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
         "spell::group_relation::GroupRoster"]),
-    // With the bubble and filter switches, which a listener's `SetCVar` moves inside its call, and
-    // the known spells the language gate folds (`0x5ec720`).
-    ("chat", &["chat_bubble::BubbleConfig", "go_templates::GameObjectTemplates", "items::Items",
+    // With the bubble and filter switches, which a listener's `SetCVar` moves inside its call, the
+    // known spells the language gate folds (`0x5ec720`), and the gestures its lines queue for the
+    // speaker (`0x60bb30`), a fill through `&self` that the count takes for a read.
+    ("chat", &["chat_bubble::BubbleConfig", "creature_anim::gesture::GestureQueue",
+        "go_templates::GameObjectTemplates", "items::Items",
         "names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
         "text_filter::TextFilterSwitches", "ui_action::PlayerActions", "ui_chat::edit::ChannelState",
         "world_state::WorldStates"]),
@@ -1827,24 +1842,9 @@ pub(super) const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
 /// exclusive firing declares them.
 #[test]
 fn every_lane_reads_of_what_a_handler_writes_is_listed() {
-    use bevy::ecs::query::{ComponentAccessKind, FilteredAccess};
+    use bevy::ecs::query::FilteredAccess;
     let mut app = headless_client();
-    let (components, resources) = {
-        let handlers = app.world().resource::<crate::net::handlers::NetHandlers>();
-        let mut components = BTreeSet::new();
-        let mut resources = BTreeSet::new();
-        for (_, access) in handlers.accesses() {
-            let access = access.combined_access();
-            if let Ok(kinds) = access.try_iter_component_access() {
-                components.extend(kinds.filter_map(|k| match k {
-                    ComponentAccessKind::Exclusive(id) => Some(id),
-                    _ => None,
-                }));
-            }
-            resources.extend(access.resource_writes());
-        }
-        (components, resources)
-    };
+    let (components, resources) = handler_written(app.world());
     let world = app.world_mut();
     let vm = world
         .components()
