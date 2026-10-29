@@ -320,6 +320,22 @@ pub(crate) fn flush_unit_edits(queued: Res<UnitEdits>, mut commands: Commands) {
     }
 }
 
+/// The resources the edits write as they apply, beside the units' own components: the loot
+/// closes a precast end's tail owes the active player (`0x60d0ee`-`0x60d10b`), and the cast edges
+/// with their stamps. A handler's edits apply after it in the net drain, by an exclusive system
+/// whose writes Bevy's access does not show, so the lanes' guards count these as what a handler
+/// writes.
+#[cfg(test)]
+pub(crate) fn applied_resources() -> [std::any::TypeId; 4] {
+    use std::any::TypeId;
+    [
+        TypeId::of::<crate::ui_loot::LootMoveStart>(),
+        TypeId::of::<crate::ui_loot::LootCloseAtRest>(),
+        TypeId::of::<PlaySeq>(),
+        TypeId::of::<Messages<CastEvent>>(),
+    ]
+}
+
 fn run_all(world: &mut World, runs: Vec<WorldRun>) {
     for run in runs {
         run(world);
@@ -404,5 +420,111 @@ fn cast_event(world: &mut World, entity: Entity, spell_id: u32, kind: CastEventK
             kind,
             seq,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bevy::ecs::component::ComponentId;
+
+    use super::*;
+
+    /// Every resource an edit writes as it applies is one [`applied_resources`] names, so the
+    /// guards that follow what a handler writes see it: each kind applied to the active player
+    /// with a precast, at rest and moving.
+    #[test]
+    fn the_edits_write_no_resource_but_the_applied_ones() {
+        const SPELL: u32 = 133;
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        let world = app.world_mut();
+        super::super::precast::install_visuals_for_tests(world, &[SPELL], &[]);
+        let me = world.spawn(crate::net::SelfPlayer).id();
+        let declared: Vec<ComponentId> = applied_resources()
+            .into_iter()
+            .filter_map(|t| world.components().get_resource_id(t))
+            .collect();
+        assert_eq!(
+            declared.len(),
+            applied_resources().len(),
+            "the client holds every applied resource"
+        );
+        let edits = [
+            UnitEdit::StartPrecast {
+                entity: me,
+                spell_id: SPELL,
+            },
+            UnitEdit::EndPrecastBusy(me),
+            UnitEdit::EndPrecast {
+                entity: me,
+                spell_id: Some(SPELL),
+                tail: true,
+            },
+            UnitEdit::SendPrecast {
+                entity: me,
+                spell_id: SPELL,
+            },
+            UnitEdit::EndPrecast {
+                entity: me,
+                spell_id: None,
+                tail: true,
+            },
+            UnitEdit::ArmAutoRepeat(me),
+            UnitEdit::StartPrecast {
+                entity: me,
+                spell_id: SPELL,
+            },
+            UnitEdit::ClearAutoRepeat {
+                entity: me,
+                spell_id: SPELL,
+            },
+            UnitEdit::ReapCasting {
+                entity: me,
+                spell_id: SPELL,
+            },
+            UnitEdit::AbortCasting {
+                entity: me,
+                spell_id: SPELL,
+            },
+            UnitEdit::StopSpellKits {
+                entity: me,
+                spell_id: SPELL,
+            },
+            UnitEdit::StartAttack {
+                entity: me,
+                target: 0x2,
+            },
+            UnitEdit::EndAttack(me),
+        ];
+        let mut written = std::collections::BTreeSet::new();
+        let mut owed = std::collections::BTreeSet::new();
+        for flags in [0, crate::creature_anim::move_flags::FORWARD] {
+            world.insert_resource(crate::player::Player::with_move_flags(flags));
+            let last = world.increment_change_tick();
+            for edit in edits {
+                world.resource::<UnitEdits>().push(edit);
+            }
+            apply_unit_edits(world);
+            let now = world.change_tick();
+            let resources: Vec<(ComponentId, String)> = world
+                .iter_resources()
+                .map(|(info, _)| (info.id(), info.name().to_string()))
+                .collect();
+            for (id, name) in resources {
+                let changed = world
+                    .get_resource_change_ticks_by_id(id)
+                    .is_some_and(|t| t.is_changed(last, now));
+                if changed && !declared.contains(&id) {
+                    written.insert(name);
+                } else if changed {
+                    owed.insert(name);
+                }
+            }
+        }
+        assert!(written.is_empty(), "written but not declared: {written:?}");
+        assert_eq!(
+            owed.len(),
+            declared.len(),
+            "each applied resource written: {owed:?}"
+        );
     }
 }
