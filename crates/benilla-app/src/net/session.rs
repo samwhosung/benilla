@@ -335,7 +335,7 @@ fn log_teardown(view_log: Option<ResMut<crate::ui_unit::views::ViewLog>>, b: &Br
     }
 }
 
-/// What a near teleport's handler ends: the mover's auto-move, its `AUTOFOLLOW_END` on the notice
+/// What a forced move's handler ends: the mover's auto-move, its `AUTOFOLLOW_END` on the notice
 /// lane.
 type TeleportStop<'w> = (
     Option<ResMut<'w, crate::player::FollowState>>,
@@ -343,11 +343,16 @@ type TeleportStop<'w> = (
     Option<ResMut<'w, crate::field_watch::NoticeLane>>,
 );
 
-/// Teleport, knockback and client control, forwarded unjudged to the controller, which applies
-/// and answers them. A near teleport of the active mover ends its auto-move inside the packet
-/// (`OnForcedTeleport 0x602fb0` → `0x60e990(1, 0)` at `0x60300e` → `0x60fb60` at `0x60e9b5`),
-/// before the move is queued (`0x603029`); the echo's own stop (`0x60e3b1`) finds none left.
-fn on_mover_edge(In(ev): In<SessionEvent>, mut e: Edges, b: Bridge, stop: TeleportStop) {
+/// Teleport and knockback, forwarded unjudged to the controller, which applies and answers them.
+/// A near teleport runs the movement guard first inside the packet (`OnForcedTeleport 0x602fb0`
+/// → `0x60e990(1, 0)` at `0x60300e`, [`MoveInput`]), before the move is queued (`0x603029`); the
+/// echo's own stop (`0x60e3b1`) finds none left.
+fn on_mover_edge(
+    In(ev): In<SessionEvent>,
+    mut e: Edges,
+    self_guid: Res<SelfGuid>,
+    mut moved: MoveInput,
+) {
     match ev {
         SessionEvent::Teleport {
             guid,
@@ -355,20 +360,13 @@ fn on_mover_edge(In(ev): In<SessionEvent>, mut e: Edges, b: Bridge, stop: Telepo
             position,
             orientation,
         } => {
-            if b.mover.as_deref().is_some_and(|m| m.holds(guid)) {
-                let (mut follow, mut approach, mut lane) = stop;
-                crate::player::end_auto_move(
-                    follow.as_deref_mut(),
-                    approach.as_deref_mut(),
-                    lane.as_deref_mut(),
-                );
-            }
+            moved.stop(guid, self_guid.0);
             teleport(
                 guid,
                 counter,
                 position,
                 orientation,
-                &b.self_guid,
+                &self_guid,
                 &mut e.teleports,
             );
         }
@@ -376,8 +374,35 @@ fn on_mover_edge(In(ev): In<SessionEvent>, mut e: Edges, b: Bridge, stop: Telepo
             guid,
             counter,
             launch,
-        } => knock_back(guid, counter, launch, &b.self_guid, &mut e.knockbacks),
+        } => knock_back(guid, counter, launch, &self_guid, &mut e.knockbacks),
         _ => {}
+    }
+}
+
+/// The movement guard `CGUnit_C::OnMoveInput(1, 0)` (`0x60e990`) where a forced move's handler runs
+/// it on its unit: the active mover's auto-move stops (`0x60e99d`-`0x60e9b5`), the follow's
+/// `AUTOFOLLOW_END` on the notice lane, then the active player's loot window closes as on a
+/// movement start (`0x60e9c1`-`0x60e9dd`).
+#[derive(bevy::ecs::system::SystemParam)]
+struct MoveInput<'w, 's> {
+    mover: Option<Res<'w, super::MoverClaim>>,
+    stop: TeleportStop<'w>,
+    loot: crate::ui_loot::MoveStartClose<'w, 's>,
+}
+
+impl MoveInput<'_, '_> {
+    fn stop(&mut self, guid: u64, me: Option<u64>) {
+        if self.mover.as_deref().is_some_and(|m| m.holds(guid)) {
+            let (follow, approach, lane) = &mut self.stop;
+            crate::player::end_auto_move(
+                follow.as_deref_mut(),
+                approach.as_deref_mut(),
+                lane.as_deref_mut(),
+            );
+        }
+        if me == Some(guid) {
+            self.loot.close();
+        }
     }
 }
 

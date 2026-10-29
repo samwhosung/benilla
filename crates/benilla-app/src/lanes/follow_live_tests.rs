@@ -267,3 +267,53 @@ fn the_stop_releases_the_forward_and_autorun() {
         .forward_for_test(None);
     assert_eq!(held, (false, false));
 }
+
+/// [`following`] with the boar's loot window open, its own events taken, and a spy on its close.
+fn looting() -> App {
+    let mut app = following();
+    let world = app.world_mut();
+    world
+        .resource_mut::<crate::ui_loot::LootState>()
+        .open(BOAR, 1, 0, Vec::new());
+    world.resource_mut::<crate::ui_loot::LootLatch>().0 = Some(BOAR);
+    world
+        .non_send_resource_mut::<UiScript>()
+        .run(
+            r#"
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("LOOT_CLOSED")
+            f:SetScript("OnEvent", function() table.insert(Seen, event) end)
+            "#,
+        )
+        .unwrap();
+    frame(&mut app, vec![]);
+    app
+}
+
+/// `seen`'s events between the two falls, in order.
+fn past_the_falls(seen: &[String]) -> Vec<&str> {
+    let falls: Vec<usize> = (0..seen.len())
+        .filter(|&i| seen[i].starts_with("UNIT_COMBAT:player:"))
+        .collect();
+    seen[falls[0] + 1..falls[1]]
+        .iter()
+        .map(String::as_str)
+        .filter(|e| !e.starts_with("UNIT_HEALTH"))
+        .collect()
+}
+
+/// A near teleport's movement guard (`0x60e990(1, 0)` at `0x60300e`) ends the follow, then closes
+/// the active player's loot window as a movement start does (`0x60e9dd` → `0x48f200(1, 1, 0)`).
+#[test]
+fn a_near_teleport_closes_the_loot_window_after_the_follow() {
+    let mut app = looting();
+    let teleport = SessionEvent::Teleport {
+        guid: ME,
+        counter: 1,
+        position: [1.0, 2.0, 3.0],
+        orientation: 0.0,
+    };
+    let seen = frame(&mut app, vec![fall(5), teleport, fall(5)]);
+    ends_between_the_falls(&seen);
+    assert_eq!(past_the_falls(&seen), ["AUTOFOLLOW_END", "LOOT_CLOSED"]);
+}

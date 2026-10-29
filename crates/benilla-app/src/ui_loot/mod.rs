@@ -1920,6 +1920,30 @@ fn close_on_move_start(
     move_start_close(loot, latch, commands, Unlocks::OnTheLane)
 }
 
+/// The move-start close where a packet's handler runs it, the movement guard `0x60e990` with
+/// `keepsLoot` clear (`0x60e9ba`-`0x60e9dd`): [`close_on_move_start`] and its dead source's
+/// deselect, the engine half at the handler, `LOOT_CLOSED` on the loot lane at its place.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct MoveStartClose<'w, 's> {
+    /// Absent in a harness without the loot window, which closes nothing.
+    loot: Option<ResMut<'w, LootState>>,
+    latch: Option<ResMut<'w, LootLatch>>,
+    net: Res<'w, NetCommands>,
+    dead: DeadUnitDeselect<'w, 's>,
+}
+
+impl MoveStartClose<'_, '_> {
+    /// `0x48f200(1, 1, 0)` (`0x60e9dd`); nothing with no loot target latched (`0x6126b0`).
+    pub(crate) fn close(&mut self) {
+        let (Some(loot), Some(latch)) = (self.loot.as_deref_mut(), self.latch.as_deref_mut())
+        else {
+            return;
+        };
+        let closed = close_on_move_start(loot, latch, &self.net);
+        self.dead.after_close(closed);
+    }
+}
+
 /// [`close_on_move_start`], its teardown's signals on the lane or in place by `unlocks`.
 fn move_start_close(
     loot: &mut LootState,
