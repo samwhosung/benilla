@@ -493,8 +493,6 @@ impl Plugin for VideoPlugin {
                         .chain()
                         .in_set(crate::ui_script::UiDrain)
                         .after(crate::cvars::sync_cvars),
-                    // A push the tick may read (`GetScreenResolutions`): the feed phase.
-                    publish_display_modes.in_set(crate::ui_script::UiFeed),
                 ),
             );
     }
@@ -615,42 +613,13 @@ fn offered_modes<'a>(
     offered
 }
 
-/// The list [`publish_display_modes`] last pushed and the current entry.
-type PublishedModes = Option<(Vec<ScreenResolution>, Option<ScreenResolution>)>;
-
 /// The host half of `GetScreenResolutions` / `GetCurrentResolution`: the monitors' mode sizes and
-/// full sizes through [`offerable`], else [`SCREEN_FALLBACK`]; a pick sets the windowed size,
-/// `gxResolution`. The engine adds the live window size when missing, which `CT_Viewport.lua:201`
-/// needs. Deviation: sizes are logical px, because the windowed `gxResolution` is a logical inner
-/// size here.
-/// The list is recomputed on change; the reference builds its list once and never invalidates it.
-fn publish_display_modes(
-    // `widescreen` is a CVar knob, which the call host's callbacks write.
-    mut vm: crate::script_calls::VmWith<Option<Res<'static, Widescreen>>>,
-    windows: Query<&Window, With<PrimaryWindow>>,
-    monitors: Query<&bevy::window::Monitor>,
-    mut last: Local<crate::ui_script::VmMemo<PublishedModes>>,
-) {
-    let widescreen = vm.own().is_none_or(|w| w.0);
-    vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        let Ok(window) = windows.single() else {
-            return;
-        };
-        let (offered, current) = display_modes(window, monitors.iter(), widescreen);
-        // Keyed by VM: a `ReloadUI` VM has been pushed nothing, so a plain `Local` would skip it.
-        let memo = last.get(script);
-        if memo.as_ref() == Some(&(offered.clone(), current)) {
-            return;
-        }
-        *memo = Some((offered.clone(), current));
-        script.set_screen_resolutions(offered, current);
-    })
-}
-
-/// The list [`publish_display_modes`] pushes and the live window size as its current entry.
+/// full sizes through [`offerable`], else [`SCREEN_FALLBACK`], with the live window size as the
+/// current entry; a pick sets the windowed size, `gxResolution`. The engine adds the live window
+/// size when missing, which `CT_Viewport.lua:201` needs. Deviation: sizes are logical px, because
+/// the windowed `gxResolution` is a logical inner size here. Read at each verb ([`DisplayLive`]),
+/// so the list follows the display and `widescreen`; the reference builds its list once and never
+/// invalidates it.
 fn display_modes<'a>(
     window: &Window,
     monitors: impl IntoIterator<Item = &'a Monitor>,
@@ -668,8 +637,10 @@ fn display_modes<'a>(
 /// The resolution list read at the call, the call host's half of
 /// [`benilla_ui::script::ScreenModesQuery`]: the reference builds it on the first use of any
 /// resolution verb (`0x48bc90`), so a file-scope `GetScreenResolutions()` during the UI load
-/// answers the full list, from the same source as [`publish_display_modes`]; the multisample list
-/// likewise ([`benilla_ui::script::MultisampleFormatsQuery`]).
+/// answers the full list ([`display_modes`]), and a listener's `SetCVar("widescreen")` filters the
+/// next verb's (`0x48bcac`); the multisample list likewise
+/// ([`benilla_ui::script::MultisampleFormatsQuery`]). Nothing pushes the VM a copy: each verb seats
+/// what it read, and the VM's own list stands only where no host is lent.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct DisplayLive<'w, 's> {
     windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,

@@ -354,9 +354,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_items::locks::forget_gone_item_locks", &["net::GuidIndex"]),
     ("::ui_items::feed::feed_item_stats", &["items::Items", "net::HomeBind", "net::ObjectStore",
         "spell::mods::SpellModifiers"]),
-    // The resolution list's `widescreen` filter (`0x48bcac`), which a listener's `SetCVar` moves
-    // inside its call; the reference builds the list at the first resolution verb (`0x48bc90`).
-    ("::video::publish_display_modes", &["video::Widescreen"]),
 ];
 
 /// The view pushes [`READS_FRAME_FINAL`]'s test finds whose build the reference too makes outside
