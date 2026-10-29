@@ -519,15 +519,12 @@ fn cast_stops(_: In<SessionEvent>, mut reports: ResMut<crate::ui_cast::CastRepor
     reports.bar(crate::ui_cast::CastBarEdge::Stop);
 }
 
-/// A client with the cast reports' lane too, and what their readying reads.
+/// A client with the cast reports' lane too.
 fn cast_client(handlers: impl FnOnce(&mut App)) -> App {
-    let mut app = client(|app| {
+    client(|app| {
         app.add_plugins(crate::ui_cast::UiCastPlugin);
         handlers(app);
-    });
-    app.world_mut()
-        .init_resource::<crate::ui_action::CastFailRedisplays>();
-    app
+    })
 }
 
 /// A cast's report fires inside its packet's handler (`SPELLCAST_STOP` from `SMSG_CAST_RESULT`,

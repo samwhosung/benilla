@@ -459,3 +459,81 @@ fn a_failed_results_gcd_clear_reads_the_targeting_word_still_up() {
         "{seen:?}"
     );
 }
+
+/// A reagent the refusal below names, whose record the item cache lacks until its answer.
+const SHARD: u32 = 6265;
+
+/// [`client`] with the reagent line's strings and a spy on the lines, each `UI_ERROR_MESSAGE` as
+/// `LINE:<text>`; then our cast refused for [`SHARD`], which the cache lacks: the reporter's lookup
+/// asks for it and leaves past the line and its log line (`0x6e1ea4`, `0x6e1eab`).
+fn refused_for_a_reagent() -> Client {
+    let mut c = client();
+    c.eval::<()>(
+        false,
+        r#"SPELL_FAILED_REAGENTS = "Missing reagent: %s"
+        ERR_SPELL_FAILED_REAGENTS = "%s"
+        local g = CreateFrame("Frame")
+        g:RegisterEvent("UI_ERROR_MESSAGE")
+        g:SetScript("OnEvent", function() table.insert(Seen, "LINE:" .. arg1) end)"#,
+    );
+    c.frame(vec![vec![SessionEvent::CastResult {
+        spell_id: HEAL,
+        success: false,
+        reason: Some(0x5c),
+        arg: Some(SHARD),
+    }]]);
+    assert!(
+        c.seen(&["LINE"]).is_empty(),
+        "no line while the record is asked"
+    );
+    c
+}
+
+/// The answer for [`SHARD`]: its record, or the server's refusal.
+fn shard_answer(name: Option<&str>) -> SessionEvent {
+    SessionEvent::ItemTemplate {
+        entry: SHARD,
+        info: name.map(|n| Box::new(crate::items::test_template(n))),
+    }
+}
+
+/// The record's answer runs the refusal's callback (`ShowItemCastFailure 0x6e29b0`) inside its
+/// packet (`ItemCacheReceive 0x55bdb0`): the line fires between the power packets around it.
+#[test]
+fn a_reagent_line_shows_at_its_records_answer() {
+    let mut c = refused_for_a_reagent();
+    c.frame(vec![
+        vec![values(ME, &[(MANA, 90)])],
+        vec![shard_answer(Some("Soul Shard"))],
+        vec![values(ME, &[(MANA, 80)])],
+    ]);
+    assert_eq!(
+        c.seen(&["UNIT_MANA", "LINE"]),
+        [
+            "UNIT_MANA:nil:nil",
+            "LINE:Missing reagent: Soul Shard",
+            "UNIT_MANA:nil:nil",
+        ]
+    );
+    c.frame(vec![]);
+    assert!(c.seen(&["LINE"]).is_empty(), "the callback ran once");
+}
+
+/// A refusal runs the callback too, whose lookup finds no record: `UNKNOWN` (`0x6e2a49`).
+#[test]
+fn a_refused_reagent_record_shows_unknown_at_its_answer() {
+    let mut c = refused_for_a_reagent();
+    c.frame(vec![
+        vec![values(ME, &[(MANA, 90)])],
+        vec![shard_answer(None)],
+        vec![values(ME, &[(MANA, 80)])],
+    ]);
+    assert_eq!(
+        c.seen(&["UNIT_MANA", "LINE"]),
+        [
+            "UNIT_MANA:nil:nil",
+            "LINE:Missing reagent: UNKNOWN",
+            "UNIT_MANA:nil:nil",
+        ]
+    );
+}

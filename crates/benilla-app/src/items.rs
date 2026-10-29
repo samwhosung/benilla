@@ -613,6 +613,10 @@ pub(crate) enum RecordCallback {
     /// The action bar's, asked by an item slot's icon, count and spell lookups (`0x4e6b10`,
     /// `0x4e6d69`, `0x4e5b30` with `0x4e5b80`), deduped.
     ActionSlots,
+    /// A refused cast's reagent or tool line whose item was not cached (`0x6e1ea4` with
+    /// `ShowItemCastFailure 0x6e29b0` and the reason), one per refusal; the spell picks the
+    /// line's message as its first pass would.
+    CastFailure { spell: u32, reason: u8 },
 }
 
 impl Items {
@@ -864,9 +868,8 @@ impl Items {
         self.templates.answered(entry)
     }
 
-    /// Whether the server refused `entry`, not still pending; the cast-fail redisplay then shows
-    /// the reference's `"UNKNOWN"` instead of waiting (`0x6e29b0` runs on the status-0 callback and
-    /// finds no record, `0x6e2a49`).
+    /// Whether the server refused `entry` and nothing has asked since, not still pending: the
+    /// status-0 answer its waiters were told.
     pub(crate) fn template_answered_unknown(&self, entry: u32) -> bool {
         self.templates.answered_unknown(entry)
     }
@@ -884,7 +887,7 @@ impl Items {
                 self.templates.insert(entry, info);
             }
             // A refusal moves the generation too: "still asking" to "unknown" is a display
-            // transition for the cast-fail redisplay.
+            // transition.
             None => {
                 if self.templates.refuse(entry) == crate::query_cache::Refused::Record {
                     self.note_change(entry, false);
@@ -939,8 +942,7 @@ impl Items {
         self.templates.clear();
     }
 
-    /// Bumped by every landed answer, for consumers besides the drain; the stand-in for the
-    /// reference's `DBCACHECALLBACK` redisplay (`0x6e29b0`).
+    /// Bumped by every landed answer, for consumers besides the drain.
     pub(crate) fn template_epoch(&self) -> u64 {
         self.templates.generation()
     }

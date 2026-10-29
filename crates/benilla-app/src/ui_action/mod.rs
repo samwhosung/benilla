@@ -15,7 +15,7 @@ use benilla_assets::{AssetSet, LockRecover, WorldAssets};
 
 mod cast_fail;
 mod cast_lines;
-pub(crate) use cast_lines::{CastFailLines, CastFailRedisplays};
+pub(crate) use cast_lines::CastFailLines;
 mod drain;
 // A `UseAction` press, applied in call order by `crate::script_calls`.
 pub(crate) use drain::{
@@ -522,7 +522,6 @@ impl Plugin for UiActionPlugin {
             .init_resource::<ReactiveSpells>()
             .init_resource::<ActionSlots>()
             .init_resource::<LearnedAbilities>()
-            .init_resource::<CastFailRedisplays>()
             .init_resource::<ClickCasts>()
             .add_systems(Startup, load_spells.after(AssetSet::Open))
             .add_systems(Startup, load_spell_mechanics.after(AssetSet::Open))

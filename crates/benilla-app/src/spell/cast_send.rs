@@ -223,7 +223,8 @@ pub(crate) fn reaches_tail(
         fail.arg,
         spells.and_then(|s| s.catalog.get(fail.spell_id)),
         spells.map(|s| &s.forms),
-        // The lookup with the callback `0x6e29b0` (`0x6e1ea4`).
+        // The lookup (`0x6e1ea4`), asking on a miss; the line's own registers the callback
+        // `0x6e29b0` ([`crate::ui_action::CastFailLines`]).
         |item| items.template(item, 0, Ask::Event(net)).is_some(),
     )
 }
@@ -2336,7 +2337,6 @@ mod tests {
                 crate::ui_cast::CastReport::TradeSkillDisarm => "DISARM",
                 crate::ui_cast::CastReport::AutoRepeat(true) => "START_AUTOREPEAT",
                 crate::ui_cast::CastReport::AutoRepeat(false) => "STOP_AUTOREPEAT",
-                crate::ui_cast::CastReport::Redisplay => "REDISPLAY",
                 crate::ui_cast::CastReport::Line(e) => e.key,
             })
             .collect()

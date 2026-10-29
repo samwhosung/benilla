@@ -1146,7 +1146,8 @@ fn cast_result(
             arg,
             spells.and_then(|s| s.catalog.get(spell_id)),
             spells.map(|s| &s.forms),
-            // The packet's lookup with the callback `0x6e29b0` (`0x6e1ea4`).
+            // The packet's lookup (`0x6e1ea4`), asking on a miss; the line's own registers the
+            // callback `0x6e29b0` ([`crate::ui_action::CastFailLines`]).
             |item| items.is_some_and(|i| i.template(item, 0, Ask::Event(net)).is_some()),
         );
         // The line, then the tail: the spell in flight popped with its failed flag and no packet

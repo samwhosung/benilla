@@ -75,11 +75,10 @@ pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
         "::items::Items",
         "the record answers' callbacks still run off the frame's records rather than in the \
          answer's list (`ItemCacheReceive` `0x55bdb0`, `0x55bf12`-`0x55bf39`): the \
-         dress-up's (`0x504ba0`), the cast failure's redisplay (`0x6e29b0`, `0x6e2a90`), the \
-         equipment display's (`0x5ed880`), and the lock-key tooltip's (`0x52ad10`), which \
-         `drive_mouseover_tooltip` rebuilds each frame; and the combat log's (`0x6294b0`) and the \
-         auction lists' (`0x4cca10`, `0x4ccc60`, `0x4cceb0`), which `run_answer_tail` runs after \
-         the answer's list rather than in it",
+         dress-up's (`0x504ba0`), the equipment display's (`0x5ed880`), and the lock-key \
+         tooltip's (`0x52ad10`), which `drive_mouseover_tooltip` rebuilds each frame; and the \
+         combat log's (`0x6294b0`) and the auction lists' (`0x4cca10`, `0x4ccc60`, `0x4cceb0`), \
+         which `run_answer_tail` runs after the answer's list rather than in it",
     ),
 ];
 
@@ -360,10 +359,9 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_aura::feed_unit_guids", &["net::GuidIndex", "net::ObjectStore", "target::Selection",
         "ui_party::GroupState"]),
     ("::ui_macro::load_macros", &["ui_action::ActionSlots"]),
-    ("::ui_cast::feed_cast_reports", &["items::Countdowns", "items::Items", "net::GuidIndex",
-        "net::ObjectStore", "spell::inflight::AutoRepeatActive", "spell::inflight::PendingCast",
-        "spell::inflight::QueuedMeleeSpell", "spell::targeting::SpellTargeting",
-        "ui_action::cast_lines::CastFailRedisplays"]),
+    ("::ui_cast::feed_cast_reports", &["net::GuidIndex", "net::ObjectStore",
+        "spell::inflight::AutoRepeatActive", "spell::inflight::PendingCast",
+        "spell::inflight::QueuedMeleeSpell", "spell::targeting::SpellTargeting"]),
     // The locks of the objects that went, forgotten as the frame left the index.
     ("::ui_items::locks::forget_gone_item_locks", &["net::GuidIndex"]),
     ("::ui_items::feed::feed_item_stats", &["items::Items", "net::HomeBind", "net::ObjectStore",
@@ -1783,8 +1781,7 @@ pub(super) const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // tokens' live reads; it reads the index and the selection as the frame left them (#2217).
     ("unit views", &["net::GuidIndex", "net::ObjectStore", "target::Selection",
         "ui_party::GroupState"]),
-    ("cast reports", &["items::Countdowns", "items::Items", "net::GuidIndex", "net::ObjectStore",
-        "ui_action::cast_lines::CastFailRedisplays"]),
+    ("cast reports", &["items::Countdowns", "items::Items", "net::GuidIndex", "net::ObjectStore"]),
     ("item watchers", &["items::Countdowns", "items::Items", "names::NameCache", "net::GuidIndex",
         "net::ObjectStore", "ui_trade::TradeSession"]),
     ("auction house", &["items::Items", "names::NameCache", "net::SelfGuid",

@@ -830,7 +830,6 @@ mod tests {
                 .add_message::<crate::net::FieldChanged>()
                 .init_resource::<CastReports>()
                 .init_resource::<crate::items::Items>()
-                .init_resource::<crate::ui_action::CastFailRedisplays>()
                 .init_resource::<crate::ui_chat::ChatLog>()
                 .init_resource::<crate::sound::MessageSounds>()
                 .init_resource::<PendingCast>()

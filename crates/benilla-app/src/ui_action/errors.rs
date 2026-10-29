@@ -83,11 +83,12 @@ impl CastFail {
         }
     }
 
-    /// The same entry, marked as a [`Self::redisplay`].
-    pub(crate) const fn requeued(self) -> Self {
+    /// The item-cache callback's retry of our refused line whose item had no record
+    /// (`ShowItemCastFailure 0x6e29b0`), naming the item, marked as a [`Self::redisplay`].
+    pub(crate) const fn item_redisplay(spell_id: u32, reason: u8, item: u32) -> Self {
         Self {
             redisplay: true,
-            ..self
+            ..Self::local_arg(spell_id, reason, item)
         }
     }
 }
