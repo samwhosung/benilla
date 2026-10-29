@@ -3,9 +3,10 @@
 //! - [`seed_world_map_catalog`], at world entry: the static catalog from `WorldMapArea`,
 //!   `AreaTable`, `WorldMapContinent`, `Map` and the `.zmp` bitmaps, built as the reference's
 //!   `0x4a5d00` builds it, with the instance maps no continent owns beside it.
-//! - [`feed_world_map`], every frame: the player's selection (`0x4a6650`) and the blips projected
-//!   onto the displayed map. The explored bits are read once, silently, and kept by the field
-//!   notice of their watcher (`0x4a6460`).
+//! - [`feed_world_map`], every frame: the player's selection (`0x4a6650`), and its own position
+//!   and the corpse's projected onto the displayed map, which the arrows draw. The explored bits
+//!   are read once, silently, and kept by the field notice of their watcher (`0x4a6460`).
+//! - [`MapPositionLive`]: the unit `GetPlayerMapPosition` projects, read at the call (`0x4a7870`).
 //! - [`feed_landmarks`] and [`LandmarkLane`]: the landmark sources the setter `0x4a67a0` builds
 //!   its list from, rebuilt and signalled where each input moves.
 //! - [`dev_map_jump`]: Alt+click the map to go there.
@@ -518,6 +519,74 @@ struct FeedMemos {
     projector: bool,
 }
 
+/// `GetPlayerMapPosition`'s read of a unit at the call, the host's half of
+/// [`benilla_ui::script::UnitMapPositionQuery`] (`0x4a7870`): the objects and the group's records
+/// as of the drain's place, each position where it stands now.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct MapPositionLive<'w, 's> {
+    index: Option<Res<'w, crate::net::GuidIndex>>,
+    stores: crate::ui_unit::views::ViewStores<'w, 's>,
+    me: Query<'w, 's, Entity, With<SelfPlayer>>,
+    /// Our own position, which the arrow's projection reads too.
+    player: Option<Res<'w, Player>>,
+    /// Each unit's position as of here, composed through its parents on demand.
+    transforms: bevy::transform::helper::TransformHelper<'w, 's>,
+    map: Option<Res<'w, CurrentMap>>,
+    group: Option<Res<'w, crate::ui_party::GroupState>>,
+    areas: Option<Res<'w, crate::area::AreaTableRes>>,
+}
+
+impl MapPositionLive<'_, '_> {
+    /// `0x4a7870` on `guid`: a player object the manager holds (`0x4a78ae`, typemask 0x10) at its
+    /// position (`0x4a78c1`) under our map (`0x4a78e2` → `0x5ea700`); else its group record
+    /// (`0x4a78fd` → `0x496400`), unless the status has bit 0x20 (`0x4a7906`), at the record's
+    /// position words (`0x4a7929`, `0x4a792d`) under the map of its zone's `AreaTable` row
+    /// (`0x4a790c`-`0x4a7934`); a zone with no row is neither (`0x4a7927`).
+    fn position(&self, guid: u64) -> Option<benilla_ui::script::UnitMapPosition> {
+        use benilla_protocol::messages::ObjectType;
+        let entity = self.index.as_deref().and_then(|i| i.0.get(&guid).copied());
+        let held = self
+            .stores
+            .at(guid, entity)
+            .is_some_and(|s| s.0.object_type() == Some(ObjectType::Player));
+        if held {
+            let entity = entity?;
+            let at = if self.me.single().ok() == Some(entity) {
+                self.player.as_deref()?.pos
+            } else {
+                self.transforms
+                    .compute_global_transform(entity)
+                    .ok()?
+                    .translation()
+            };
+            let wow = bevy_to_wow(at);
+            return Some(benilla_ui::script::UnitMapPosition {
+                map: self.map.as_deref()?.0,
+                x: wow[0],
+                y: wow[1],
+            });
+        }
+        let group = self.group.as_deref()?;
+        let record = self.stores.records(&group.stats).get(&guid)?;
+        if record.status.unwrap_or(0) & 0x20 != 0 {
+            return None;
+        }
+        let row = self.areas.as_deref()?.0.get(u32::from(record.zone?))?;
+        let (x, y) = record.position?;
+        Some(benilla_ui::script::UnitMapPosition {
+            map: row.map_id,
+            x: f32::from(x),
+            y: f32::from(y),
+        })
+    }
+}
+
+impl crate::script_calls::live::LiveFamily for MapPositionLive<'_, '_> {
+    fn answer(&mut self, ask: &mut benilla_ui::script::live::LiveAsk<'_>) -> bool {
+        ask.answer(|q: &benilla_ui::script::UnitMapPositionQuery| Some(self.position(q.0)))
+    }
+}
+
 /// What the landmark sources are a function of, as a system reads them.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct LandmarkReads<'w, 's> {
@@ -734,9 +803,6 @@ fn feed_world_map(
     world: benilla_world::world_point::WorldPoint,
     self_q: Query<(Entity, &ObjectStore), With<SelfPlayer>>,
     areas: Option<Res<crate::area::AreaTableRes>>,
-    group: Res<crate::ui_party::GroupState>,
-    guids: Res<crate::net::GuidIndex>,
-    unit_pos: Query<&GlobalTransform, With<crate::net::NetEntity>>,
     mut memo: Local<crate::ui_script::VmMemo<FeedMemos>>,
 ) {
     let corpse = vm.own().corpse;
@@ -799,45 +865,7 @@ fn feed_world_map(
             )
         });
 
-        // The `party1..4` blips: a streamed member's transform, else the `i16` position from
-        // `SMSG_PARTY_MEMBER_STATS`. That packet carries a zone, not a map, so the map is the
-        // continent owning that zone, else ours.
-        let member_uv = |guid: u64| {
-            let (px, py) = crate::minimap::party_member_pos(guid, &group, &guids, &unit_pos)?;
-            let member_map = group
-                .stats
-                .get(&guid)
-                .and_then(|st| st.zone)
-                .and_then(|zone| {
-                    data.continents
-                        .iter()
-                        .find(|cont| cont.zones.iter().any(|z| z.area_id == u32::from(zone)))
-                        .map(|cont| cont.map_id)
-                })
-                .unwrap_or(map.0);
-            project(member_map, px, py).filter(|uv| *uv != (0.0, 0.0))
-        };
-        let party_uv: Vec<(u64, Option<(f32, f32)>)> = group
-            .party_slots()
-            .map(|m| (m.guid, member_uv(m.guid)))
-            .collect();
-
-        // The raid rows' members, our own row at our position; the stock map skips our own slot
-        // by `UnitIsUnit` (`WorldMapFrame.lua:381`).
-        let raid_uv: Vec<(u64, Option<(f32, f32)>)> = group
-            .raid
-            .iter()
-            .map(|row| (row.guid, if row.own { uv } else { member_uv(row.guid) }))
-            .collect();
-
-        script.set_world_map_feed(
-            player_sel.zone,
-            uv,
-            player.facing(),
-            corpse_uv,
-            party_uv,
-            raid_uv,
-        );
+        script.set_world_map_feed(player_sel.zone, uv, player.facing(), corpse_uv);
         // The instance-map leg for `SetMapToCurrentZone`, which the battlefield minimap calls on
         // `PLAYER_ENTERING_WORLD` (`Blizzard_BattlefieldMinimap.lua:58-62`).
         script.set_world_map_player_direct_area(player_sel.direct);

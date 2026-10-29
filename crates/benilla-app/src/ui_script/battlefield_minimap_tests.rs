@@ -104,14 +104,7 @@ fn catalog() -> Vec<WorldMapContinentView> {
 fn open(s: &mut UiScript) {
     s.set_world_map_catalog(catalog());
     s.set_world_map_explored(vec![0b110; 64]);
-    s.set_world_map_feed(
-        Some((1, 1)),
-        Some((0.5, 0.5)),
-        0.0,
-        None,
-        Vec::new(),
-        Vec::new(),
-    );
+    s.set_world_map_feed(Some((1, 1)), Some((0.5, 0.5)), 0.0, None);
     s.set_world_state_ui(vec![WorldStateUiView {
         ui_state: 1,
         text: "Flags captured: 2".into(),
@@ -526,15 +519,13 @@ fn the_battleground_blips_and_the_flag_follow_the_position_family() {
         party: [0x11, 0x12, 0, 0],
         ..Default::default()
     });
-    s.set_world_map_feed(
-        Some((1, 1)),
-        Some((0.5, 0.25)),
-        0.0,
-        None,
-        vec![(0x11, Some((0.1, 0.2))), (0x12, None)],
-        Vec::new(),
-    );
-    update(&mut s, 0.1);
+    s.set_world_map_feed(Some((1, 1)), Some((0.5, 0.25)), 0.0, None);
+    // Each blip's position as `GetPlayerMapPosition` reads it at the call, already map UV under an
+    // identity projection: us and the one placed party member; the second has none.
+    s.set_world_loc_projector(Box::new(|_, _, x, y| Some((x, y))));
+    let mut host =
+        super::world_map_tests::MapPositions([(0x5E1F, (0.5, 0.25)), (0x11, (0.1, 0.2))].into());
+    s.hosted(&mut host, |s| update(s, 0.1));
 
     assert!(
         shown(&s, "BattlefieldMinimapRaid1"),
@@ -567,7 +558,7 @@ fn the_battleground_blips_and_the_flag_follow_the_position_family() {
         "…and so does every slot past the roster"
     );
 
-    // The party arm reads `GetPlayerMapPosition("party"..i)`, the world map's own feed.
+    // The party arm reads `GetPlayerMapPosition("party"..i)`, each position read at the call.
     assert!(shown(&s, "BattlefieldMinimapParty1"));
     benilla_ui::assert_near!(
         s.eval::<(f64, f64)>(
@@ -610,7 +601,7 @@ fn the_battleground_blips_and_the_flag_follow_the_position_family() {
     // `BattlefieldMinimapParty1..4` and `BattlefieldMinimapRaid1..40`.
     s.run("BattlefieldMinimapOptions.showPlayers = false")
         .unwrap();
-    update(&mut s, 0.1);
+    s.hosted(&mut host, |s| update(s, 0.1));
     for f in ["BattlefieldMinimapRaid1", "BattlefieldMinimapParty1"] {
         assert!(!shown(&s, f), "{f} hides while teammates are switched off");
     }
@@ -621,10 +612,10 @@ fn the_battleground_blips_and_the_flag_follow_the_position_family() {
 
     s.run("BattlefieldMinimapOptions.showPlayers = true")
         .unwrap();
-    update(&mut s, 0.1);
+    s.hosted(&mut host, |s| update(s, 0.1));
     assert!(shown(&s, "BattlefieldMinimapRaid1"));
     s.set_battlefield_positions(Vec::new(), None, 1.0);
-    update(&mut s, 0.1);
+    s.hosted(&mut host, |s| update(s, 0.1));
     assert!(
         !shown(&s, "BattlefieldMinimapRaid1") && !shown(&s, "BattlefieldMinimapFlag1"),
         "leaving the battleground takes the blips with it"
@@ -655,14 +646,7 @@ fn the_player_arrow_is_the_minis_own_singleton_seated_by_the_update() {
         "exactly one arrow pane, parented to the battle map"
     );
 
-    s.set_world_map_feed(
-        Some((1, 1)),
-        Some((0.25, 0.75)),
-        1.25,
-        None,
-        Vec::new(),
-        Vec::new(),
-    );
+    s.set_world_map_feed(Some((1, 1)), Some((0.25, 0.75)), 1.25, None);
     update(&mut s, 0.1);
 
     let seat = s
@@ -718,7 +702,7 @@ fn the_player_arrow_is_the_minis_own_singleton_seated_by_the_update() {
     );
 
     // Off the displayed map, `(0, 0)` calls `ShowMiniWorldMapArrowFrame(nil)`.
-    s.set_world_map_feed(Some((1, 1)), None, 0.0, None, Vec::new(), Vec::new());
+    s.set_world_map_feed(Some((1, 1)), None, 0.0, None);
     update(&mut s, 0.1);
     s.resolve();
     // The Minimap's own player arrow shares the file; this is the battle map's pane alone.

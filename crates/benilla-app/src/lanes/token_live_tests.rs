@@ -26,6 +26,11 @@ const MATE: u64 = 0x22;
 const MATE_PET: u64 = 0xF140_0000_0046_0003;
 /// A raid member out of view, and the pet its record names.
 const FAR: u64 = 0x23;
+/// A member who joins mid-frame, out of view.
+const NEW: u64 = 0x24;
+/// `AreaTable.dbc` zones: one on our map, 0, and one on an instance's, 36.
+const ELWYNN: u16 = 12;
+const DEADMINES: u16 = 1581;
 const FAR_PET: u64 = 0xF140_0000_0048_0005;
 /// A creature beside the wolf.
 const BOAR: u64 = 0xF130_0000_0047_0004;
@@ -561,6 +566,115 @@ fn a_listeners_friend_test_reads_its_own_lists_slots() {
     let mut seen: Vec<String> = c.eval(false, "return Friends");
     seen.dedup();
     assert_eq!(seen, ["1,1", "nil,nil"]);
+}
+
+/// The world map's inputs for the map position tests: our map 0, the two zones' `AreaTable` rows,
+/// and a projection that reads a position on map 0 as its thousandths and any other map as off
+/// the displayed one (`0x4a7437`); and a spy noting `GetPlayerMapPosition(token)` at each of
+/// `token`'s `UNIT_HEALTH`s.
+fn map_spy(c: &mut Client, token: &str) {
+    let row = |map_id| benilla_formats::AreaTableRow {
+        map_id,
+        zone_id: 0,
+        explore_flag: 0,
+        flags: 0,
+        faction_group_mask: 0,
+        exploration_level: -1,
+        name: String::new(),
+    };
+    c.app.insert_resource(crate::area::AreaTableRes(
+        benilla_formats::AreaTableCatalog::from_rows(vec![
+            (u32::from(ELWYNN), row(0)),
+            (u32::from(DEADMINES), row(36)),
+        ]),
+    ));
+    c.app
+        .insert_resource(benilla_world::world_map::CurrentMap(0));
+    let script = &mut *c.app.world_mut().non_send_resource_mut::<UiScript>();
+    script.set_world_loc_projector(Box::new(|_, map, x, y| {
+        (map == 0).then_some((x / 1000.0, y / 1000.0))
+    }));
+    c.eval::<()>(
+        true,
+        &format!(
+            r#"Maps = {{}}
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("UNIT_HEALTH")
+            f:SetScript("OnEvent", function()
+                if arg1 == "{token}" then
+                    local x, y = GetPlayerMapPosition(arg1)
+                    table.insert(Maps, string.format("%.1f,%.1f", x, y))
+                end
+            end)"#
+        ),
+    );
+}
+
+/// `SMSG_PARTY_MEMBER_STATS` for `guid`, online, at `hp` health in `zone` at `at`.
+fn member_at(guid: u64, hp: u16, zone: u16, at: (i16, i16)) -> SessionEvent {
+    SessionEvent::PartyMemberStats {
+        guid,
+        full: true,
+        info: Box::new(PartyMemberStatsInfo {
+            status: Some(member_status::ONLINE),
+            cur_hp: Some(hp),
+            max_hp: Some(100),
+            zone: Some(zone),
+            position: Some(at),
+            ..Default::default()
+        }),
+    }
+}
+
+/// A member who joins and moves inside one frame: each stats packet's listener reads `party3`'s
+/// map position off the record that packet wrote, as `0x4a7870` reads the record at the call
+/// (`0x4a78fd`, its position words at `0x4a7929` and `0x4a792d`), not the frame before's, which
+/// held no such member.
+#[test]
+fn a_member_who_joins_mid_frame_reads_its_packets_map_position() {
+    let mut c = client();
+    map_spy(&mut c, "party3");
+    c.frame(vec![
+        vec![raid_of(&[MATE, FAR, NEW])],
+        vec![member_at(NEW, 50, ELWYNN, (100, 200))],
+        vec![member_at(NEW, 40, ELWYNN, (300, 400))],
+    ]);
+    let seen: Vec<String> = c.eval(false, "return Maps");
+    assert_eq!(seen, ["0.1,0.2", "0.3,0.4"]);
+}
+
+/// A member in an instance whose position falls inside our map's rect reads (0, 0): `0x4a7870`
+/// projects a record under the map its zone's `AreaTable` row names (`0x4a790c`-`0x4a7934`), which
+/// is not the displayed one (`0x4a7437`), never under ours.
+#[test]
+fn a_member_in_an_instance_reads_no_map_position() {
+    let mut c = client();
+    map_spy(&mut c, "party2");
+    c.frame(vec![
+        vec![member_at(FAR, 20, ELWYNN, (100, 200))],
+        vec![member_at(FAR, 10, DEADMINES, (100, 200))],
+    ]);
+    let seen: Vec<String> = c.eval(false, "return Maps");
+    assert_eq!(seen, ["0.1,0.2", "0.0,0.0"]);
+}
+
+/// A member in view reads its object's position under our map whatever its record's zone:
+/// `0x4a7870` takes a held player object first (`0x4a78ae`, typemask 0x10) and projects it under
+/// the active player's map (`0x4a78e2` → `0x5ea700`), never reaching the record (`0x4a78fd`).
+#[test]
+fn a_member_in_view_reads_its_objects_map_position() {
+    let mut c = client();
+    map_spy(&mut c, "party1");
+    let mate = c.app.world().resource::<crate::net::GuidIndex>().0[&MATE];
+    c.app
+        .world_mut()
+        .entity_mut(mate)
+        .insert(Transform::from_translation(
+            benilla_assets::coords::wow_to_bevy([500.0, 600.0, 0.0]),
+        ));
+    c.frame(vec![vec![member_at(MATE, 20, DEADMINES, (100, 200))]]);
+    let seen: Vec<String> = c.eval(false, "return Maps");
+    assert_eq!(seen, ["0.5,0.6"]);
 }
 
 /// The resolver's per-call cost with the host lent and off the snapshots: 10k calls of a getter

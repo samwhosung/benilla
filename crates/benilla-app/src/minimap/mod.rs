@@ -11,8 +11,6 @@
 //! - North up: screen up is world +X, screen left world +Y.
 
 pub(crate) mod blips;
-/// Where a party member is, shared with the world map so the two surfaces never disagree.
-pub(crate) use blips::party_member_pos;
 mod composite;
 mod interior;
 /// The minimap ping, engine-owned and pinned to a world point.

@@ -453,7 +453,7 @@ fn corpse_map_position_binding() {
         .eval::<(f64, f64)>("return GetCorpseMapPosition()")
         .unwrap();
     assert_eq!((x, y), (0.0, 0.0), "no corpse ⇒ the (0,0) hide sentinel");
-    s.set_world_map_feed(None, None, 0.0, Some((0.25, 0.75)), Vec::new(), Vec::new());
+    s.set_world_map_feed(None, None, 0.0, Some((0.25, 0.75)));
     let (x, y) = s
         .eval::<(f64, f64)>("return GetCorpseMapPosition()")
         .unwrap();

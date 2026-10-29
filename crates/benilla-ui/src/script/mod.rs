@@ -517,8 +517,9 @@ pub use use_gates::ControlBypassQuery;
 pub use weapon_enchant::WeaponEnchant;
 pub use who_sort::{WhoSortChain, WhoSortKey};
 pub use worldmap::{
-    WorldMapContinentView, WorldMapLandmarkSource, WorldMapLandmarkView, WorldMapLevel,
-    WorldMapOverlayView, WorldMapSheetRow, WorldMapState, WorldMapZoneView,
+    UnitMapPosition, UnitMapPositionQuery, WorldMapContinentView, WorldMapLandmarkSource,
+    WorldMapLandmarkView, WorldMapLevel, WorldMapOverlayView, WorldMapSheetRow, WorldMapState,
+    WorldMapZoneView,
 };
 pub use worldstate::WorldStateUiView;
 pub use worn_display::{WornDisplay, WornDisplaySet};

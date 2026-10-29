@@ -269,6 +269,27 @@ fn next_pow2(n: i64) -> i64 {
     p
 }
 
+/// `GetPlayerMapPosition`'s read of the unit it projects (`0x4a7870`), by guid, through the lent
+/// host as of the call: a player object the manager holds (`0x4a78ae`, typemask 0x10) at its
+/// position (`0x4a78c1`) under the active player's map (`0x4a78e2` → `0x5ea700`); else the group's
+/// record of it (`0x4a78fd` → `0x496400`), unless its status has bit 0x20 (`0x4a7906`), at its
+/// position words (`0x4a7929`, `0x4a792d`) under the map its zone's `AreaTable` row names
+/// (`0x4a790c`-`0x4a7934`). `None` for neither, whose position is (0, 0).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnitMapPositionQuery(pub u64);
+
+/// A unit's world position and the map id `0x4a7360` projects it under.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UnitMapPosition {
+    pub map: u32,
+    pub x: f32,
+    pub y: f32,
+}
+
+impl super::live::LiveQuery for UnitMapPositionQuery {
+    type Answer = Option<UnitMapPosition>;
+}
+
 /// The engine-side world-map state: the pushed catalog and feed, and the selection.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct WorldMapState {
@@ -288,16 +309,12 @@ pub struct WorldMapState {
     /// The resolver's orphan leg, the `WorldMapArea` row id on the player's map. `0x4a6650`
     /// reaches it only when its continent loop misses (`0x4a66c3`), so at most one is set.
     pub player_direct_area: Option<u32>,
-    /// `GetPlayerMapPosition("player")` on the displayed map; `None` is off it.
+    /// The player's position on the displayed map as the frame's projection left it, which the
+    /// arrows draw at; `None` is off it. `GetPlayerMapPosition` reads it only with no host to ask.
     pub player_uv: Option<(f32, f32)>,
     /// The arrow frames' wrapper ids, built once per session; `None` until created.
     pub arrow_world: Option<u32>,
     pub arrow_mini: Option<u32>,
-    /// Each party slot's member by guid with its position, as the frame's projection left it;
-    /// `None` or missing answers `(0, 0)`.
-    pub party_uv: Vec<(u64, Option<(f32, f32)>)>,
-    /// Each raid row's member by guid, fed like [`Self::party_uv`].
-    pub raid_uv: Vec<(u64, Option<(f32, f32)>)>,
     /// Radians, 0 north, counterclockwise-positive; `UpdateWorldMapArrowFrames` turns the arrows.
     pub player_facing: f32,
     /// `GetCorpseMapPosition()` on the displayed map; `None` is no corpse or off the map.
@@ -632,23 +649,20 @@ impl super::UiScript {
         model.worldmap.landmarks = build_landmarks(&model);
     }
 
-    /// Pushes the per-frame feed: the player's zone, the projected positions and the facing.
+    /// Pushes the per-frame feed: the player's zone, its projected position and facing, which the
+    /// arrows draw, and the corpse's.
     pub fn set_world_map_feed(
         &mut self,
         player_zone: Option<(u32, u32)>,
         player_uv: Option<(f32, f32)>,
         player_facing: f32,
         corpse_uv: Option<(f32, f32)>,
-        party_uv: Vec<(u64, Option<(f32, f32)>)>,
-        raid_uv: Vec<(u64, Option<(f32, f32)>)>,
     ) {
         let mut model = self.model_mut();
         model.worldmap.player_zone = player_zone;
         model.worldmap.player_uv = player_uv;
         model.worldmap.player_facing = player_facing;
         model.worldmap.corpse_uv = corpse_uv;
-        model.worldmap.party_uv = party_uv;
-        model.worldmap.raid_uv = raid_uv;
     }
 
     /// The selection's three cells, which the app reads each frame to project the feed: continent,
@@ -960,10 +974,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // GetPlayerMapPosition(unit) → map UV, or (0, 0) off the map (`0x4a8610`): a string or number
     // else the usage line (`0x4a861e`, `0x4a8627`), the token's guid through `GetGUIDFromName`
-    // (`0x4a8658` → `0x515970`: any case, the `target` hops, "Unknown unit name" raised), and the
-    // position by guid (`0x4a8698` → `0x4a7870`) only for the player (`0x4a8668`), a party member
-    // (`0x4a8675` → `0x4e7f70`) or a raid member (`0x4a8681` → `0x4baee0`), each tested at the call
-    // through the lent host; anyone else leaves (0, 0).
+    // (`0x4a8658` → `0x515970`: any case, the `target` hops, "Unknown unit name" raised), and,
+    // only for the player (`0x4a8668`), a party member (`0x4a8675` → `0x4e7f70`) or a raid member
+    // (`0x4a8681` → `0x4baee0`), the unit's position read at the call (`0x4a8698` → `0x4a7870`,
+    // [`UnitMapPositionQuery`]) projected onto the displayed map (`0x4a7360`); anyone else leaves
+    // (0, 0). With no host to ask, the player reads the frame's projection and a member (0, 0).
     g.set(
         "GetPlayerMapPosition",
         lua.create_function(|lua, unit: Value| {
@@ -976,15 +991,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 Some(m) => m.party || m.raid,
                 None => guids.party.contains(&guid) || guids.raid.contains(&guid),
             };
-            let at = |uv: &[(u64, Option<(f32, f32)>)]| {
-                uv.iter().find(|(g, _)| *g == guid).and_then(|(_, uv)| *uv)
-            };
-            let (x, y) = if guid == 0 {
-                None
-            } else if guid == guids.player {
-                wm.player_uv
-            } else if member() {
-                at(&wm.party_uv).or_else(|| at(&wm.raid_uv))
+            let selection = (wm.selection.0, wm.selection.1, wm.direct_area);
+            let (x, y) = if guid != 0 && (guid == guids.player || member()) {
+                match super::live::ask(lua, &UnitMapPositionQuery(guid)) {
+                    Some(at) => at.and_then(|at| {
+                        let project = model.world_loc_projector.as_ref()?;
+                        project(selection, at.map, at.x, at.y)
+                    }),
+                    None => wm.player_uv.filter(|_| guid == guids.player),
+                }
             } else {
                 None
             }

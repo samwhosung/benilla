@@ -99,6 +99,8 @@ live_reads! {
         book: crate::ui_spellbook::BookLive<'static, 'static>,
         /// The battleground queue slots, list, board and positions.
         battlefield: crate::ui_battlefield::BattlefieldLive<'static, 'static>,
+        /// A unit's position for the world map, as `GetPlayerMapPosition` reads it.
+        world_map: crate::ui_world_map::MapPositionLive<'static, 'static>,
         /// The friend list, its selections and the `/who` array.
         social: crate::ui_social::SocialLive<'static>,
         /// The stance bar's form list and its entries; absent in a harness without the relations'

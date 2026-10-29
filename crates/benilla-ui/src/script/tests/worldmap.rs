@@ -160,7 +160,7 @@ fn a_direct_area_is_the_third_selection_state() {
 
     // In Warsong Gulch `0x4a6650`'s continent loop misses (map 489 is no continent's) and the
     // orphan loop selects the row's own id.
-    s.set_world_map_feed(None, Some((0.5, 0.5)), 0.0, None, Vec::new(), Vec::new());
+    s.set_world_map_feed(None, Some((0.5, 0.5)), 0.0, None);
     s.set_world_map_player_direct_area(Some(443));
     s.run("SetMapToCurrentZone()").unwrap();
 
@@ -357,10 +357,53 @@ fn get_map_info_answers_the_texture_height_and_its_power_of_two_round() {
 /// `GetPlayerMapPosition` for the player, `party1..4` and the raid rows, by the token's guid
 /// (`0x4a8658` → `0x515970`): any case, a `target` that names a member, and "Unknown unit name"
 /// for a token the resolver does not know. A string or number is required (`0x4a861e`).
+/// A host answering `GetPlayerMapPosition`'s read of a unit (`0x4a7870`) from `at`, and, while
+/// `party1` names one, the group's first party row and membership.
+#[derive(Default)]
+struct Lent {
+    at: std::collections::HashMap<u64, UnitMapPosition>,
+    party1: Option<u64>,
+}
+
+impl CallHost for Lent {
+    fn apply(&mut self, _: &mut UiScript, _: ScriptCall) -> Option<CallTail> {
+        None
+    }
+    fn read_live(&mut self, ask: &mut crate::script::live::LiveAsk<'_>) -> bool {
+        let party1 = self.party1;
+        ask.answer(|q: &UnitMapPositionQuery| Some(self.at.get(&q.0).copied()))
+            || ask.answer(|q: &RowQuery| {
+                let member = party1.filter(|_| q.0 == UnitBase::Party(0))?;
+                Some(GroupRow {
+                    member,
+                    pet_record: 0,
+                })
+            })
+            || ask.answer(|q: &MemberQuery| {
+                party1.map(|m| Membership {
+                    party: q.0 == m,
+                    raid: false,
+                    rank: None,
+                })
+            })
+    }
+}
+
+/// A world position on map 0, which the test projection below reads as its own UV.
+fn on_ours(x: f32, y: f32) -> UnitMapPosition {
+    UnitMapPosition { map: 0, x, y }
+}
+
+/// A projection that reads a position on map 0 as its own UV and is off the map elsewhere.
+fn project_map_zero(s: &mut UiScript) {
+    s.set_world_loc_projector(Box::new(|_, map, x, y| (map == 0).then_some((x, y))));
+}
+
 #[test]
 fn worldmap_current_zone_and_player_feed() {
     let mut s = script();
     push_catalog(&mut s);
+    project_map_zero(&mut s);
     s.set_unit_guids(&crate::script::UnitGuids {
         player: 1,
         target: 10,
@@ -369,39 +412,62 @@ fn worldmap_current_zone_and_player_feed() {
         ..Default::default()
     });
 
-    s.set_world_map_feed(
-        Some((1, 2)),
-        Some((0.25, 0.75)),
-        1.5,
-        None,
-        vec![(10, Some((0.1, 0.2))), (11, None)],
-        vec![(20, Some((0.3, 0.4))), (1, Some((0.25, 0.75)))],
-    );
+    s.set_world_map_feed(Some((1, 2)), Some((0.25, 0.75)), 1.5, None);
     s.run("SetMapToCurrentZone()").unwrap();
     assert_eq!(
         s.eval::<(i64, i64)>("return GetCurrentMapContinent(), GetCurrentMapZone()")
             .unwrap(),
         (1, 2)
     );
-    let near = |token: &str, want: (f64, f64)| {
-        let (x, y) = s
-            .eval::<(f64, f64)>(&format!(r#"return GetPlayerMapPosition("{token}")"#))
-            .unwrap();
-        assert!(
-            (x - want.0).abs() < 1e-6 && (y - want.1).abs() < 1e-6,
-            "{token}: {x},{y}"
-        );
+    let mut host = Lent {
+        at: [
+            (1, on_ours(0.25, 0.75)),
+            (10, on_ours(0.1, 0.2)),
+            (20, on_ours(0.3, 0.4)),
+            // A member on another map, as off the displayed one as nobody.
+            (
+                11,
+                UnitMapPosition {
+                    map: 1,
+                    x: 0.5,
+                    y: 0.5,
+                },
+            ),
+        ]
+        .into(),
+        party1: None,
     };
-    near("player", (0.25, 0.75));
-    near("Player", (0.25, 0.75));
-    near("party1", (0.1, 0.2));
-    near("PARTY1", (0.1, 0.2));
-    near("target", (0.1, 0.2));
-    near("raid1", (0.3, 0.4));
-    near("raid2", (0.25, 0.75));
-    for token in ["party2", "party5", "party0", "raid3", "pet", "mouseover"] {
-        near(token, (0.0, 0.0));
-    }
+    s.hosted(&mut host, |s| {
+        let near = |token: &str, want: (f64, f64)| {
+            let (x, y) = s
+                .eval::<(f64, f64)>(&format!(r#"return GetPlayerMapPosition("{token}")"#))
+                .unwrap();
+            assert!(
+                (x - want.0).abs() < 1e-6 && (y - want.1).abs() < 1e-6,
+                "{token}: {x},{y}"
+            );
+        };
+        near("player", (0.25, 0.75));
+        near("Player", (0.25, 0.75));
+        near("party1", (0.1, 0.2));
+        near("PARTY1", (0.1, 0.2));
+        near("target", (0.1, 0.2));
+        near("raid1", (0.3, 0.4));
+        near("raid2", (0.25, 0.75));
+        for token in ["party2", "party5", "party0", "raid3", "pet", "mouseover"] {
+            near(token, (0.0, 0.0));
+        }
+    });
+    // With no host to ask, the player reads the frame's projection and a member nothing.
+    assert_eq!(
+        s.eval::<(f64, f64, f64, f64)>(
+            r#"local x, y = GetPlayerMapPosition("player")
+            local px, py = GetPlayerMapPosition("party1")
+            return x, y, px, py"#
+        )
+        .unwrap(),
+        (0.25, 0.75, 0.0, 0.0)
+    );
     for (call, want) in [
         (
             r#"GetPlayerMapPosition("nonsense")"#,
@@ -421,7 +487,7 @@ fn worldmap_current_zone_and_player_feed() {
     }
 
     // No feed → the world sheet (never an error).
-    s.set_world_map_feed(None, None, 0.0, None, Vec::new(), Vec::new());
+    s.set_world_map_feed(None, None, 0.0, None);
     s.run("SetMapToCurrentZone()").unwrap();
     assert_eq!(s.eval::<i64>("return GetCurrentMapContinent()").unwrap(), 0);
 }
@@ -431,42 +497,20 @@ fn worldmap_current_zone_and_player_feed() {
 /// member a list just seated, whom the stand-in's party table does not hold.
 #[test]
 fn a_member_the_live_roster_holds_reads_its_position_by_guid() {
-    struct Roster;
-    impl CallHost for Roster {
-        fn apply(&mut self, _: &mut UiScript, _: ScriptCall) -> Option<CallTail> {
-            None
-        }
-        fn read_live(&mut self, ask: &mut crate::script::live::LiveAsk<'_>) -> bool {
-            ask.answer(|q: &RowQuery| {
-                (q.0 == UnitBase::Party(0)).then_some(GroupRow {
-                    member: 12,
-                    pet_record: 0,
-                })
-            }) || ask.answer(|q: &MemberQuery| {
-                Some(Membership {
-                    party: q.0 == 12,
-                    raid: false,
-                    rank: None,
-                })
-            })
-        }
-    }
     let mut s = script();
     push_catalog(&mut s);
+    project_map_zero(&mut s);
     s.set_unit_guids(&crate::script::UnitGuids {
         player: 1,
         party: [10, 0, 0, 0],
         ..Default::default()
     });
-    s.set_world_map_feed(
-        Some((1, 2)),
-        Some((0.25, 0.75)),
-        0.0,
-        None,
-        vec![(10, Some((0.1, 0.2))), (12, Some((0.6, 0.7)))],
-        Vec::new(),
-    );
-    let (x, y) = s.hosted(&mut Roster, |s| {
+    s.set_world_map_feed(Some((1, 2)), Some((0.25, 0.75)), 0.0, None);
+    let mut host = Lent {
+        at: [(10, on_ours(0.1, 0.2)), (12, on_ours(0.6, 0.7))].into(),
+        party1: Some(12),
+    };
+    let (x, y) = s.hosted(&mut host, |s| {
         s.eval::<(f64, f64)>(r#"return GetPlayerMapPosition("party1")"#)
             .unwrap()
     });
@@ -779,7 +823,7 @@ fn worldmap_zone_level_hover_names_without_highlight() {
 fn worldmap_update_fires_inside_the_verb_that_moves_the_selection() {
     let mut s = script();
     push_catalog(&mut s);
-    s.set_world_map_feed(Some((2, 1)), None, 0.0, None, Vec::new(), Vec::new());
+    s.set_world_map_feed(Some((2, 1)), None, 0.0, None);
     // Drain the catalog push's own queued event first.
     s.tick(0.01);
     s.run(
