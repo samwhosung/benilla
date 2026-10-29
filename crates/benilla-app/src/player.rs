@@ -332,6 +332,7 @@ impl Plugin for PlayerPlugin {
         app.init_resource::<OwnControlLost>();
         app.init_resource::<MoverLock>();
         app.init_resource::<StandPending>();
+        app.init_resource::<press::CallAutorun>();
         app.init_resource::<camera_dynamics::CameraOptions>();
         // Far sight resolves `PLAYER_FARSIGHT` to a pose before `control` seats the camera: a
         // separate system, as `control` holds our `Transform` mutably and cannot read another's.

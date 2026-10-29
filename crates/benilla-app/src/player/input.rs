@@ -109,7 +109,17 @@ pub(super) struct MoveAxes {
 /// releases it when set (`0x514b70`), whatever drives the body. Whether this frame's press set it:
 /// the on edge, a press in the cancel mask. The window-deactivate handler (`0x514490`, called only
 /// from the WM_ACTIVATE slot at `0x493058`) releases every direction bit and keeps `0x1000`.
-pub(super) fn toggle_autorun(binds: &crate::bindings::BindingsState, player: &mut Player) -> bool {
+pub(super) fn toggle_autorun(
+    binds: &crate::bindings::BindingsState,
+    called: Option<bool>,
+    player: &mut Player,
+) -> bool {
+    // The calls that moved the bit inside them ([`super::press::CommandSteps`]) decided their
+    // cancels there: the latch takes what they left.
+    if let Some(bit) = called {
+        player.autorun = bit;
+        return false;
+    }
     if !binds.fired(crate::bindings::Input::ToggleAutoRun) {
         return false;
     }
@@ -142,10 +152,15 @@ pub(super) fn move_axes(
     //   `control` clears the bit on that path, which never reaches here.
     // A jump, a chat EditBox taking focus and a zone change leave it set; mounting is untraced and
     // leaves it set here. A focused chat box releases nothing, so W held through ENTER still runs.
-    let both_buttons_engaged = both_engaged(binds, rig, both_buttons);
+    // A press made inside its call cleared the bit there, in its order with the toggles
+    // ([`super::press::CommandSteps`]).
+    use crate::bindings::Input;
+    let called = binds.settled(Input::TurnOrAction) || binds.settled(Input::CameraOrSelectOrMove);
+    let both_buttons_engaged = !called && both_engaged(binds, rig, both_buttons);
+    let pressed = |i| binds.just_pressed(i) && !binds.settled(i);
     if state::autorun_cancelled(
-        binds.just_pressed(crate::bindings::Input::MoveForward),
-        binds.just_pressed(crate::bindings::Input::MoveBackward),
+        pressed(Input::MoveForward),
+        pressed(Input::MoveBackward),
         both_buttons_engaged,
         !may_translate,
     ) {
@@ -260,7 +275,7 @@ mod tests {
     ) -> bool {
         let binds = BindingsState::after_calls(earlier, now);
         let rig = CameraControl::default();
-        let autorun_on = toggle_autorun(&binds, player);
+        let autorun_on = toggle_autorun(&binds, None, player);
         let both = both_engaged(&binds, &rig, binds.steering());
         move_axes(&binds, player, &rig, binds.steering(), !rooted, true);
         cancels_cast(&binds, autorun_on, both, true)
