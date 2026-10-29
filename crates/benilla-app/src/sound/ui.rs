@@ -24,7 +24,7 @@ use super::{SoundConfig, SoundOutput};
 use crate::query_cache::Ask;
 
 /// Drain the VM's queued `PlaySound` intents into the kit player; drained even with no catalog,
-/// so the queue cannot grow unbounded.
+/// so the queue cannot grow unbounded. Left at the frame: no script reads what a play does.
 fn drain_ui_sounds(
     // With the volumes, a CVar knob the call host's callbacks write; the drain runs no Lua.
     mut vm: crate::script_calls::VmWith<Res<'static, SoundConfig>>,

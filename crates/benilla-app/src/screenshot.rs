@@ -95,7 +95,8 @@ impl ScreenshotState {
 
 /// Captures each `Screenshot()` one frame after the call. Spawn last frame's asks before draining
 /// this frame's: that order is the one-frame hold (module doc). While a movie plays the frame pass
-/// skips its present block, the capture in it (`0x44267c`), so the asks wait for its end.
+/// skips its present block, the capture in it (`0x44267c`), so the asks wait for its end. Not a
+/// call's: the verb only arms the request (`0x4893d0`, `0x442a10`), which the frame pass takes.
 fn ask_for_captures(
     mut commands: Commands,
     mut hosted_vm: crate::script_calls::HostedVm,

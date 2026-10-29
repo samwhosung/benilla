@@ -792,7 +792,8 @@ fn forget_dead_vm_tiles(
 }
 
 /// The per-frame pass: feed the engine the facts it asked for, keep one tile per visible pane,
-/// pack the atlas, place every tile at its cell and its play head, and aim the camera.
+/// pack the atlas, place every tile at its cell and its play head, and aim the camera. Not a
+/// call's: a tile is the pane's draw, which no getter reads.
 #[allow(clippy::type_complexity)] // a Bevy system's full input set
 fn sync_tiles(
     mut vm: crate::script_calls::VmWith<(

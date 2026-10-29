@@ -288,8 +288,8 @@ fn watch_layout(mut hosted_vm: crate::script_calls::HostedVm, mut file: ResMut<L
     })
 }
 
-/// The autosave: dirty and one quiet second rewrite the file atomically. Every orderly end is
-/// [`save_now`]'s.
+/// The autosave: dirty and one quiet second rewrite the file atomically, at the frame, as no
+/// script reads the file before the next load. Every orderly end is [`save_now`]'s.
 fn save_layout(mut hosted_vm: crate::script_calls::HostedVm, mut file: ResMut<LayoutFile>) {
     hosted_vm.run(|script| {
         let Some(script) = script else { return };

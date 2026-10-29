@@ -974,7 +974,8 @@ fn fade_out_ambience(zone: &mut ZoneAudio, fade_ms: u64) {
 }
 
 /// The Lua music slot: this frame's queued verbs, the loop, the slider and the watch.
-/// Unconditional: the stream is the caller's, not the world soundscape's.
+/// Unconditional: the stream is the caller's, not the world soundscape's. Left at the frame: no
+/// script reads what `PlayMusic` or `StopMusic` does.
 fn lua_music(
     // With the volumes, a CVar knob the call host's callbacks write; the slot runs no Lua.
     mut vm: crate::script_calls::VmWith<Res<'static, SoundConfig>>,

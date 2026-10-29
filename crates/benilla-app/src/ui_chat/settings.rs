@@ -638,7 +638,8 @@ fn flush(
     *file.dirty.get(script) = false;
 }
 
-/// The debounced save, and the `AppExit` flush.
+/// The debounced save, and the `AppExit` flush, at the frame: no script reads the file before the
+/// next load.
 fn save_chat_looks(
     // The slots beside the VM: the save runs no Lua.
     mut vm: crate::script_calls::VmWith<Res<'static, super::edit::ChannelState>>,

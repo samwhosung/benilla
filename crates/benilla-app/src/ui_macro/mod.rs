@@ -240,7 +240,8 @@ fn migrate_character_bar(
 }
 
 /// Persist on the engine's dirty edge. The verbs signal `UPDATE_MACROS` themselves, inside their
-/// calls.
+/// calls. Left at the frame: the file is read only at the next load, so no script sees when it
+/// is written.
 fn save_dirty_macros(
     mut hosted_vm: crate::script_calls::HostedVm,
     mut files: ResMut<MacroFiles>,
