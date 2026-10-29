@@ -93,11 +93,8 @@ pub(crate) use scan::{fire_owed_selects_lane, take_owed_deselects, LastEnemy};
 pub(crate) use scan::{
     Acquire, AttackNearestRequest, AttackPick, CreatureTypes, Owed, OwedSelect, OwedSelects,
 };
-// The chat layer's by-name asks (`/target`, `/assist`), and the typemask `TargetByName`'s
-// candidate feed shares.
-pub(crate) use by_name::{
-    assistable_alive, AssistRequest, Candidacy, NameSearch, PlayerLookup, TargetByNameRequest,
-};
+// The typemask `TargetByName`'s candidate feed shares.
+pub(crate) use by_name::{assistable_alive, Candidacy, NameSearch, PlayerLookup};
 // The one SetSelection path, for the loot response's select (`0x48f3a0`), and what a selecting
 // call owes after its signals.
 pub(crate) use by_name::{SelectCommit, SelectDebt};
@@ -328,8 +325,6 @@ impl Plugin for TargetPlugin {
             .init_resource::<scan::TabHistory>()
             .init_resource::<scan::LastEnemy>()
             .add_message::<AttackNearestRequest>()
-            .add_message::<TargetByNameRequest>()
-            .add_message::<AssistRequest>()
             .add_message::<click::PlateRightClick>()
             .add_message::<Interact>()
             .add_systems(
@@ -398,14 +393,6 @@ impl Plugin for TargetPlugin {
                         click::act_on_arrival,
                         crate::script_calls::bind_arrival_picks,
                         crate::ui_action::drain_arrival_casts,
-                    )
-                        .chain(),
-                    // The chat layer's by-name asks: `/target` and `/assist` commit through
-                    // `scan::commit`; `/follow` hands its subject to `crate::player`.
-                    (
-                        by_name::target_by_name_requests,
-                        by_name::assist_requests,
-                        by_name::follow_requests,
                     )
                         .chain(),
                     // The melee probe's press, the player's Attack; the TAB keys and ATTACKTARGET

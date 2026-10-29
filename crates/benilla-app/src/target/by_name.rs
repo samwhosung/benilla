@@ -80,19 +80,6 @@ impl NameSearch {
     }
 }
 
-/// `/target <name>`: resolve and select (`TargetByName`).
-#[derive(bevy::ecs::message::Message, Clone, Debug)]
-pub(crate) struct TargetByNameRequest {
-    pub(crate) name: String,
-}
-
-/// `/assist [name]`: select the basis unit's target (`AssistByName`, or bare
-/// `AssistUnit("target")`, whose basis is the current selection).
-#[derive(bevy::ecs::message::Message, Clone, Debug)]
-pub(crate) struct AssistRequest {
-    pub(crate) name: Option<String>,
-}
-
 /// The follow start gate's refusals with lines (`0x60fed0`'s mode-3 chain, after its silent arms)
 /// as a pure function, its order pinned by test; "we" are the active mover:
 ///
@@ -425,7 +412,7 @@ impl PlayerLookup<'_, '_> {
     }
 }
 
-/// `/target <name>` and the Lua `TargetByName(name, exactMatch)` through [`scan::commit_owing`], the
+/// `TargetByName(name, exactMatch)`, the stock `/target`'s, through [`scan::commit_owing`], the
 /// stop, select, re-swing path a click takes. `exact` is the Lua second argument, which `0x489d8e`
 /// reads with default 0 as the resolver's exact-only flag (consumed at `0x493cab`). The pick goes
 /// to `SetSelection` as it is (`0x489daa`), so a party member out of range is selected by guid. A
@@ -467,7 +454,7 @@ fn missing_line(name: &str) -> &'static str {
     }
 }
 
-/// `AssistByName(name)` (`0x489c40`) and `/assist [name]`: the basis is the player a nonempty name
+/// `AssistByName(name)` (`0x489c40`), the stock `/assist`'s: the basis is the player a nonempty name
 /// resolves to (typemask 0x10, mode 0, `0x489c82`), else the selection (`0x489c89`), looked up as a
 /// unit (`0x489c9b`, typemask 8); [`SelectCommit::assist`] then selects its target. A basis the
 /// object manager does not hold, a party member out of range included, shows
@@ -499,59 +486,6 @@ pub(super) fn assist_named(
     commit.assist(basis, how);
 }
 
-/// What the chat layer's `/target` and `/assist` asks read and write.
-type ByNameAsk = (
-    ByNameScan<'static, 'static>,
-    SelectCommit<'static, 'static>,
-    Res<'static, crate::ui_action::UiErrorKeys>,
-);
-
-/// One by-name ask committed through the one SetSelection path, its signals in place with the
-/// host lent, as the binding's `SetSelection` signals inside the call (`0x49389c`), then what it
-/// owes past them.
-fn ask_by_name(
-    vm: &mut crate::script_calls::VmWith<ByNameAsk>,
-    step: impl FnOnce(&ByNameScan, &mut SelectCommit, &crate::ui_action::UiErrorKeys),
-) {
-    let select = {
-        let (scan_params, mut commit, errors) = vm.own();
-        let before = super::click::Standing::of(&commit.selection, &commit.seam);
-        let owed = commit.owing(|commit| step(&scan_params, commit, &errors));
-        before.owing_debt(owed)
-    };
-    vm.engine_select(select, |(_, mut commit, _), owed| commit.pay_now(owed));
-}
-
-/// Drain the chat layer's `/target <name>` asks.
-pub(super) fn target_by_name_requests(
-    mut requests: MessageReader<TargetByNameRequest>,
-    mut vm: crate::script_calls::VmWith<ByNameAsk>,
-) {
-    for request in requests.read() {
-        ask_by_name(&mut vm, |scan_params, commit, errors| {
-            target_named(scan_params, commit, errors, &request.name, false);
-        });
-    }
-}
-
-/// Drain the chat layer's `/assist [name]` asks.
-pub(super) fn assist_requests(
-    mut requests: MessageReader<AssistRequest>,
-    mut vm: crate::script_calls::VmWith<ByNameAsk>,
-) {
-    for request in requests.read() {
-        ask_by_name(&mut vm, |scan_params, commit, errors| {
-            assist_named(
-                scan_params,
-                commit,
-                errors,
-                request.name.as_deref().unwrap_or_default(),
-                "/assist",
-            );
-        });
-    }
-}
-
 /// What a follow request comes to at the start gate (`0x60fed0`).
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum FollowStart {
@@ -563,8 +497,8 @@ pub(crate) enum FollowStart {
     Started { name: String },
 }
 
-/// The follow's start, from the chat layer's `/follow` and from `FollowUnit` and `FollowByName`
-/// inside their calls ([`crate::script_calls::ScriptCallHost`]); follow sends nothing on the wire.
+/// The follow's start, from `FollowUnit` and `FollowByName`, the stock `/follow`'s, inside their
+/// calls ([`crate::script_calls::ScriptCallHost`]); follow sends nothing on the wire.
 #[derive(SystemParam)]
 pub(crate) struct FollowSteps<'w, 's> {
     scan_params: ByNameScan<'w, 's>,
@@ -651,20 +585,6 @@ impl FollowSteps<'_, '_> {
                 }
                 FollowStart::Started { name }
             }
-        }
-    }
-}
-
-/// Drain the chat layer's `/follow [name]` into [`crate::player`]: a refusal's line through the
-/// action feed, the signals from [`crate::ui_follow`]'s transitions.
-pub(super) fn follow_requests(
-    mut requests: MessageReader<crate::player::FollowRequest>,
-    mut steps: FollowSteps,
-    errors: Res<crate::ui_action::UiErrorKeys>,
-) {
-    for request in requests.read() {
-        if let FollowStart::Refused(key) = steps.start(request) {
-            errors.push(crate::ui_action::UiError::key(key));
         }
     }
 }
@@ -840,7 +760,8 @@ impl SelectCommit<'_, '_> {
         SelectDebt::default()
     }
 
-    /// Pay all of `debt` now, for a writer whose signals have no listeners to run first.
+    /// Pay all of `debt` now, for a test's writer whose signals have no listeners to run first.
+    #[cfg(test)]
     pub(crate) fn pay_now(&mut self, mut debt: SelectDebt) {
         while debt != SelectDebt::default() {
             debt = self.pay(debt);
@@ -1260,7 +1181,6 @@ mod tests {
         world.init_resource::<crate::ui_action::UiErrorKeys>();
         world.init_resource::<crate::player::FollowState>();
         world.init_resource::<crate::player::Approach>();
-        world.init_resource::<Messages<crate::player::FollowRequest>>();
         let mut names = NameCache::default();
         names.insert_player(ME, "Me".into(), None);
         names.insert_player(them.guid, "Them".into(), None);
@@ -1320,21 +1240,20 @@ mod tests {
         selection.guid = target.map(|(_, g)| g);
     }
 
-    /// One request through the follow drain: the error lines it queued, and whom we follow after.
+    /// One request through the follow's start, as `FollowUnit`'s or `FollowByName`'s call makes
+    /// it: the line its refusal shows, and whom we follow after.
     fn drain(
         world: &mut World,
         request: crate::player::FollowRequest,
     ) -> (Vec<&'static str>, Option<u64>) {
-        world.write_message(request);
-        world
-            .run_system_cached(follow_requests)
-            .expect("the drain runs");
-        let keys = world
-            .resource_mut::<crate::ui_action::UiErrorKeys>()
-            .take()
-            .into_iter()
-            .map(|e| e.key)
-            .collect();
+        use bevy::ecs::system::RunSystemOnce;
+        let start = world
+            .run_system_once(move |mut steps: FollowSteps| steps.start(&request))
+            .expect("the start runs");
+        let keys = match start {
+            FollowStart::Refused(key) => vec![key],
+            _ => Vec::new(),
+        };
         (keys, world.resource::<crate::player::FollowState>().guid)
     }
 

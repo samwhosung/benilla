@@ -15,9 +15,8 @@ use bevy::ecs::system::RunSystemOnce;
 use bevy::prelude::*;
 
 use super::front_tests::{fix, Fix, ME, MOB, OLD};
-use super::{by_name, click, cursor_mode, Hovered, PickOcclusion, PressPick};
+use super::{click, cursor_mode, Hovered, PickOcclusion, PressPick};
 use crate::net::{ClientCommand, GuidIndex, ObjectStore};
-use crate::target::TargetByNameRequest;
 use crate::ui_action::UiErrorKeys;
 use crate::vplates::PlateClicks;
 
@@ -637,45 +636,6 @@ fn a_right_press_with_a_payload_is_consumed_before_the_world_sees_it() {
             assert!(f.held(), "{what}: the payload stays");
         }
     }
-}
-
-/// `TargetByName` (`0x489d60`) leaves the target alone on a miss and shows message `0x127`
-/// (`ERR_UNIT_NOT_FOUND`) for a name given (`0x489dbd`, tested on the raw string's first byte, so
-/// blanks count) or `0xb8` (`ERR_GENERIC_NO_TARGET`) for an empty one (`0x489dcf`); the chat
-/// layer's `/target` request is the binding's body. A hit shows nothing. The Lua binding's miss is
-/// pinned in `script_calls`, whose call host fires the lines inside the call.
-#[test]
-fn a_target_name_that_finds_nobody_shows_the_references_line() {
-    let request = |f: &mut Fix, name: &str| {
-        f.app
-            .world_mut()
-            .resource_mut::<Messages<TargetByNameRequest>>()
-            .write(TargetByNameRequest { name: name.into() });
-        f.app
-            .world_mut()
-            .run_system_once(by_name::target_by_name_requests)
-            .expect("the drain runs");
-    };
-    for (name, line) in [
-        ("Nobody", "ERR_UNIT_NOT_FOUND"),
-        ("   ", "ERR_UNIT_NOT_FOUND"),
-        ("", "ERR_GENERIC_NO_TARGET"),
-    ] {
-        let mut f = fix(false);
-        request(&mut f, name);
-        assert_eq!(f.errors(), [line], "{name:?}");
-        assert_eq!(f.selected(), Some(OLD), "{name:?}: the target stays");
-        assert!(f.sent().is_empty(), "{name:?}");
-    }
-
-    let mut f = fix(false);
-    f.app
-        .world_mut()
-        .resource_mut::<crate::names::NameCache>()
-        .insert_player(MOB, "Mob".into(), None);
-    request(&mut f, "Mob");
-    assert!(f.errors().is_empty(), "{:?}", f.errors());
-    assert_eq!(f.selected(), Some(MOB));
 }
 
 /// Talking to an NPC in reach whose dialog status is 1, unavailable, triggers Unavailable Quest

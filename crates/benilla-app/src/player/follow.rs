@@ -73,9 +73,9 @@ impl FollowState {
     }
 }
 
-/// A start-following request: the chat input's `/follow`, or the UI's `FollowUnit`/`FollowByName`.
-/// A name finds players only; the start gate refuses a creature either way.
-#[derive(bevy::ecs::message::Message, Clone, Debug)]
+/// A start-following request: `FollowUnit` or `FollowByName`. A name finds players only; the start
+/// gate refuses a creature either way.
+#[derive(Clone, Debug)]
 pub(crate) enum FollowRequest {
     /// `FollowUnit(unit)`; a bare `/follow` is `FollowUnit("target")`.
     Unit(String),
@@ -301,10 +301,9 @@ fn follow_trace_on() -> bool {
     *ON.get_or_init(|| std::env::var_os("WOW_FOLLOW_TRACE").is_some())
 }
 
-/// Register the follow state and its request message.
+/// Register the follow state.
 pub(super) fn plugin(app: &mut App) {
-    app.init_resource::<FollowState>()
-        .add_message::<FollowRequest>();
+    app.init_resource::<FollowState>();
 }
 
 #[cfg(test)]
