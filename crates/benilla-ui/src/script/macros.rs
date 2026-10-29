@@ -88,14 +88,6 @@ impl MacroBinding {
     }
 }
 
-/// The derivations a load owes: the load derives every record (`0x4f0a55` into `0x4f0ca0`), each
-/// new with its selector clear (`0x4f1ca0`). The app makes them once the VM holds the book.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct MacroDerives {
-    /// The table was loaded since the last take.
-    pub loaded: bool,
-}
-
 /// A record and the scope it belongs to (`rec+0x1c`).
 #[derive(Clone, Debug, PartialEq)]
 struct Record {
@@ -305,13 +297,7 @@ impl super::UiScript {
         model.macros = state;
         model.macros_dirty = false;
         model.macros_generation += 1;
-        model.macro_derives = MacroDerives { loaded: true };
         model.macro_bindings.clear();
-    }
-
-    /// Take the derivations owed since the last take ([`MacroDerives`]).
-    pub fn take_macro_derives(&mut self) -> MacroDerives {
-        std::mem::take(&mut self.model_mut().macro_derives)
     }
 
     /// The live table, for the app's save.
@@ -327,6 +313,16 @@ impl super::UiScript {
     /// Each macro's cached cast by id; a record with none is bound to nothing.
     pub fn macro_bindings(&self) -> std::collections::HashMap<u32, MacroBinding> {
         self.model_ref().macro_bindings.clone()
+    }
+
+    /// The cached cast of macro `id` (`[rec+0x564]`, `[rec+0x568]`, read by `0x4e5ba0`), `None`
+    /// while no macro holds the id (`0x4e5030`): what an action slot's macro word resolves to.
+    pub fn macro_binding(&self, id: u32) -> Option<MacroBinding> {
+        let model = self.model_ref();
+        model
+            .macros
+            .by_id(id)
+            .map(|_| model.macro_bindings.get(&id).copied().unwrap_or_default())
     }
 
     /// Derive again (`0x4efe00`) each record `pick` names by its id and its cast now, against the

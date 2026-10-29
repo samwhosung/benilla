@@ -306,10 +306,9 @@ pub(crate) struct ActionStates<'w, 's> {
     /// The slots as the calls so far left them.
     slots: Res<'w, ActionSlots>,
     spells: Option<Res<'w, Spells>>,
-    // Macro bindings, spell mods, the control flag and the skill lines. The range compare reads
+    // Spell mods, the control flag and the skill lines. The range compare reads
     // the caster and the target through the targeting's context.
     cast_state: (
-        Res<'w, crate::ui_macro::MacroBoundSpells>,
         Res<'w, crate::spell::SpellModifiers>,
         // `[0xb4b3e4]`, which the usable walk reads.
         Option<Res<'w, crate::player::OwnControlLost>>,
@@ -547,7 +546,15 @@ impl ActionStates<'_, '_> {
             ..
         } = &mut **memory;
         let memory = vm.get_leaving_reset(script);
-        let (bound, spell_mods, own_control, skill_lines) = &*cast_state;
+        let (spell_mods, own_control, skill_lines) = &*cast_state;
+        // The bar's macro slots' records, as the VM holds them (`0x4e5ba0`).
+        let bound = &crate::ui_macro::MacroBoundSpells::of(
+            script,
+            slots
+                .buttons
+                .values()
+                .filter_map(|b| macro_slot_id(b.kind, b.action)),
+        );
         let skill_catalog = skill_lines.as_deref().map(|s| &s.catalog);
         let sub_classes = sub_classes.as_deref().map(|s| &s.0);
         // The player and the target as the usable walk reads them, as of the drain's place: a

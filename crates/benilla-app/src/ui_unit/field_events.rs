@@ -135,6 +135,10 @@ impl NoticeFiring<'_, '_> {
             script.rebuild_trade_skill(&mut |t| self.reband(t));
             return false;
         }
+        if notice == FieldNotice::PetMacros {
+            crate::ui_macro::derive_pet_followers(script);
+            return false;
+        }
         if notice == FieldNotice::Shapeshift {
             // `0x5de016` → `0x4b3250`: `0x4e5bf0`'s event, then its own (`0x4b325a`).
             script.fire_event("ACTIONBAR_UPDATE_STATE", vec![]);
@@ -596,6 +600,7 @@ pub(crate) fn fire(
         | FieldNotice::SkillValue { .. }
         | FieldNotice::Professions
         | FieldNotice::PortraitMark { .. }
+        | FieldNotice::PetMacros
         | FieldNotice::PetGuidSet { .. } => {}
         // Put on the trainer lane by the packet's handler ([`crate::ui_trainer::TrainerPasses`]).
         FieldNotice::TrainerPass => {}

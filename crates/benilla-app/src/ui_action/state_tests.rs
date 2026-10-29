@@ -160,7 +160,7 @@ fn a_macro_slot_resolves_through_its_bound_spell() {
 
 #[test]
 fn the_feed_pushes_a_bare_macro_as_usable() {
-    use crate::ui_macro::{BoundSpell, MacroBoundSpells};
+    use crate::ui_macro::BoundSpell;
     use benilla_protocol::messages::{ActionButton, ACTION_KIND_MACRO};
 
     let (tx, _rx) = crossbeam_channel::unbounded();
@@ -177,12 +177,16 @@ fn the_feed_pushes_a_bare_macro_as_usable() {
         );
     }
     // Macro 1 is `.spawn 16032`, 2 an unknown `/cast Pyroblast`, and 3 does not exist.
-    let mut bound = MacroBoundSpells::default();
-    bound.0.insert(1, BoundSpell::None.into());
-    bound.0.insert(2, BoundSpell::Unresolved.into());
+    let mut script = UiScript::new().unwrap();
+    crate::ui_macro::bind_for_test(
+        &mut script,
+        &[
+            (1, BoundSpell::None.into()),
+            (2, BoundSpell::Unresolved.into()),
+        ],
+    );
     app.insert_resource(PlayerActions::default())
         .insert_resource(slots)
-        .insert_resource(bound)
         .init_resource::<Cooldowns>()
         .init_resource::<crate::spell::SpellModifiers>()
         .init_resource::<crate::ui_script::UiClock>()
@@ -200,7 +204,7 @@ fn the_feed_pushes_a_bare_macro_as_usable() {
         .init_resource::<Items>()
         .insert_resource(NetCommands(tx));
     feed_inputs(&mut app);
-    app.insert_non_send_resource(UiScript::new().unwrap());
+    app.insert_non_send_resource(script);
     add_action_feed(&mut app);
     app.update();
 
@@ -267,7 +271,6 @@ fn a_ranged_button_pads_its_range_by_the_selected_target_alone() {
         };
         app.insert_resource(PlayerActions::default())
             .insert_resource(slots)
-            .insert_resource(crate::ui_macro::MacroBoundSpells::default())
             .insert_resource(Spells {
                 catalog: benilla_formats::SpellCatalog::from_displays(
                     [(FIREBALL, fireball)].into_iter().collect(),
@@ -381,7 +384,6 @@ fn a_melee_button_reaches_the_moving_bonus_while_both_units_run() {
         };
         app.insert_resource(PlayerActions::default())
             .insert_resource(slots)
-            .insert_resource(crate::ui_macro::MacroBoundSpells::default())
             .insert_resource(Spells {
                 catalog: benilla_formats::SpellCatalog::from_displays(
                     [(
@@ -532,7 +534,6 @@ fn food_on_the_bar_greys_while_the_player_is_in_combat() {
         };
         app.insert_resource(PlayerActions::default())
             .insert_resource(slots)
-            .insert_resource(crate::ui_macro::MacroBoundSpells::default())
             .insert_resource(Spells {
                 catalog: benilla_formats::SpellCatalog::from_displays(
                     [(FOOD_SPELL, food)].into_iter().collect(),
@@ -638,7 +639,6 @@ fn an_item_slot_is_held_by_its_stored_count_not_the_bags() {
         items.insert_template(ITEM, Some(crate::items::test_template("Rough Arrow")));
         app.insert_resource(PlayerActions::default())
             .insert_resource(slots)
-            .insert_resource(crate::ui_macro::MacroBoundSpells::default())
             .insert_resource(Spells::empty_for_tests())
             .init_resource::<Cooldowns>()
             .init_resource::<crate::spell::SpellModifiers>()
@@ -725,7 +725,6 @@ fn a_broken_worn_weapon_draws_no_equipped_border() {
         items.insert_template(SWORD, Some(crate::items::test_template("Sword")));
         app.insert_resource(PlayerActions::default())
             .insert_resource(slots)
-            .insert_resource(crate::ui_macro::MacroBoundSpells::default())
             .insert_resource(Spells::empty_for_tests())
             .init_resource::<Cooldowns>()
             .init_resource::<crate::spell::SpellModifiers>()
@@ -901,11 +900,8 @@ fn lost_control_greys_the_bar_but_the_immunity_spell() {
             .buttons
             .insert(slot, ActionButton { slot, action, kind });
     }
-    let mut bound = crate::ui_macro::MacroBoundSpells::default();
-    bound.0.insert(1, crate::ui_macro::BoundSpell::None.into());
     app.insert_resource(PlayerActions::default())
         .insert_resource(slots)
-        .insert_resource(bound)
         .insert_resource(Spells {
             catalog: benilla_formats::SpellCatalog::from_displays(
                 [
@@ -947,7 +943,11 @@ fn lost_control_greys_the_bar_but_the_immunity_spell() {
             (47, FEAR_AURA),
         ])),
     ));
-    let script = UiScript::new().unwrap();
+    let mut script = UiScript::new().unwrap();
+    crate::ui_macro::bind_for_test(
+        &mut script,
+        &[(1, crate::ui_macro::BoundSpell::None.into())],
+    );
     script
         .run(
             r#"
@@ -1029,7 +1029,6 @@ fn a_held_action_polls_answer_their_own_now() {
     );
     app.insert_resource(PlayerActions::default())
         .insert_resource(slots)
-        .insert_resource(crate::ui_macro::MacroBoundSpells::default())
         .insert_resource(Spells {
             catalog: benilla_formats::SpellCatalog::from_displays(
                 [(STEALTH, stealth())].into_iter().collect(),
@@ -1107,7 +1106,6 @@ fn feed_app(buttons: &[(u8, u32, u8)], spells: Spells, x: f32) -> App {
     app.insert_resource(PlayerActions::default())
         .insert_resource(slots)
         .insert_resource(spells)
-        .init_resource::<crate::ui_macro::MacroBoundSpells>()
         .init_resource::<Cooldowns>()
         .init_resource::<crate::spell::SpellModifiers>()
         .init_resource::<crate::ui_script::UiClock>()
@@ -1321,10 +1319,13 @@ fn get_action_cooldown_enables_only_the_slots_that_reach_a_query() {
         catalog(vec![(133, SpellDisplay::default())], &[]),
         5.0,
     );
-    let mut bound = crate::ui_macro::MacroBoundSpells::default();
-    bound.0.insert(1, BoundSpell::None.into());
-    bound.0.insert(2, BoundSpell::Unresolved.into());
-    app.insert_resource(bound);
+    crate::ui_macro::bind_for_test(
+        &mut app.world_mut().non_send_resource_mut::<UiScript>(),
+        &[
+            (1, BoundSpell::None.into()),
+            (2, BoundSpell::Unresolved.into()),
+        ],
+    );
     let mut items = app.world_mut().resource_mut::<Items>();
     items.insert_template(
         HEARTHSTONE,
@@ -2083,7 +2084,7 @@ fn an_arrival_skips_a_spell_the_player_does_not_know() {
 /// pet's history (`0x6e2ea0` with the pet selector), and no range at all (`0x4e5759`, `0x4e584d`).
 #[test]
 fn a_macro_bound_to_a_pet_spell_reads_the_pets_gate_power_and_history() {
-    use crate::ui_macro::{Bound, BoundSpell, MacroBoundSpells};
+    use crate::ui_macro::{Bound, BoundSpell};
     use crate::ui_pet::PetBar;
     use benilla_protocol::ObjectFields;
 
@@ -2117,12 +2118,15 @@ fn a_macro_bound_to_a_pet_spell_reads_the_pets_gate_power_and_history() {
             catalog(vec![(SPELL_LOCK, lock())], &[(4, 0.0, 35.0)]),
             10.0,
         );
-        app.world_mut().resource_mut::<MacroBoundSpells>().0.insert(
-            1,
-            Bound {
-                spell: BoundSpell::Spell(SPELL_LOCK),
-                pet_book: true,
-            },
+        crate::ui_macro::bind_for_test(
+            &mut app.world_mut().non_send_resource_mut::<UiScript>(),
+            &[(
+                1,
+                Bound {
+                    spell: BoundSpell::Spell(SPELL_LOCK),
+                    pet_book: true,
+                },
+            )],
         );
         let pet = app
             .world_mut()
@@ -2187,7 +2191,6 @@ fn the_feed_signals_no_auto_repeat_edge_of_its_own() {
     let mut app = App::new();
     app.insert_resource(PlayerActions::default())
         .init_resource::<crate::ui_action::ActionSlots>()
-        .insert_resource(crate::ui_macro::MacroBoundSpells::default())
         .init_resource::<Cooldowns>()
         .init_resource::<crate::spell::SpellModifiers>()
         .init_resource::<crate::ui_script::UiClock>()

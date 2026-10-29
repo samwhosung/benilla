@@ -161,7 +161,7 @@ fn arrival(world: &mut World, control_gained: bool) {
     replay_book(world);
     // `0x5deac2` → `0x4b2fd0(1, 0)`: the book sorted, `SPELLS_CHANGED` (`0x4b302a`).
     signal(world, Signal::SpellsChanged);
-    leg(world, crate::ui_macro::derive_on_arrival);
+    leg(world, crate::ui_macro::derive_every);
     // `0x5dead1`: the slot pass with the manager's `+0xc8` clear, as at every create.
     leg(world, crate::ui_action::recount::arrival_slot_pass);
     ghost_state(world);
@@ -483,7 +483,7 @@ fn reads(world: &mut World) -> FilteredAccessSet {
             .to_vec();
     let legs = [
         system_access(world, seat_player),
-        system_access(world, crate::ui_macro::derive_on_arrival),
+        system_access(world, crate::ui_macro::derive_every),
         system_access(world, crate::ui_action::recount::arrival_slot_pass),
         system_access(world, control_rose),
         system_access(world, open_cascade),

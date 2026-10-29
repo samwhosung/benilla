@@ -63,6 +63,8 @@ fn on_spells(
         lane.write(crate::field_watch::FieldNotice::Global {
             id: crate::field_watch::id::SPELLS_CHANGED,
         });
+        // Then the macros that follow the pet's book derived again (`0x4bdae0` → `0x4f0ce0`).
+        lane.write(crate::field_watch::FieldNotice::PetMacros);
         // `SetPetGuid`'s signals at the packet's place (`0x4bdaf0` → `0x4bc7e0`): the pet frame's
         // `UnitExists("pet")` reads our summon field as this packet left it.
         lane.write(crate::field_watch::FieldNotice::PetGuidSet {
@@ -145,7 +147,6 @@ fn pet_spells(
             debug!("net: pet bar torn down");
         }
         bar.clear();
-        bar.book_sorts = bar.book_sorts.wrapping_add(1);
         return new_pet;
     }
     debug!(
@@ -210,8 +211,6 @@ fn pet_spells(
             .seed_pet(cd, display, mods.unwrap_or(&no_mods), pad, now);
     }
     bar.spells = spells;
-    // The book's sort (`0x4bdadb`) and the macro derivation after it (`0x4bdae0`), every packet.
-    bar.book_sorts = bar.book_sorts.wrapping_add(1);
     new_pet
 }
 

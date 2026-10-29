@@ -16,14 +16,12 @@ use crate::field_watch::{FieldNotice, NoticeLane};
 use crate::items::Items;
 use crate::net::{ClientCommand, NetCommands, ObjectStore, Objects, SelfPlayer};
 use crate::query_cache::Ask;
-use crate::ui_macro::{BoundSpell, MacroBoundSpells};
 
-/// What the bar's legs of a spell packet's handler write and read: the slots, the macros' bound
-/// spells, the VM's copies of both, and what a spell slot's icon resolves through.
+/// What the bar's legs of a spell packet's handler write and read: the slots, the VM's copy of
+/// them and its macro records, and what a spell slot's icon resolves through.
 #[derive(SystemParam)]
 pub(crate) struct SpellSlots<'w, 's> {
     slots: ResMut<'w, ActionSlots>,
-    bound: ResMut<'w, MacroBoundSpells>,
     items: Res<'w, Items>,
     net: Res<'w, NetCommands>,
     script: Option<NonSendMut<'w, UiScript>>,
@@ -104,12 +102,11 @@ impl SpellSlots<'_, '_> {
         if let (true, Some(records), Some(script)) = (rebound, records, self.script.as_deref_mut())
         {
             script.set_macro_bindings(records);
-            crate::ui_macro::copy_bound(script, &mut self.bound);
         }
     }
 
     /// The VM's macro records, the reference's own (`[rec+0x564]`); `None` with no VM, whose
-    /// interface holds no macro table, where the action bar's copy stands in.
+    /// interface holds no macro table.
     fn macro_records(
         &self,
     ) -> Option<std::collections::HashMap<u32, benilla_ui::script::MacroBinding>> {
@@ -136,13 +133,7 @@ impl SpellSlots<'_, '_> {
                 .map(|u| u.spell_id),
             kind => {
                 let id = macro_slot_id(kind, b.action)?;
-                match records {
-                    Some(records) => u32::try_from(records.get(&id)?.spell).ok(),
-                    None => match self.bound.0.get(&id)?.spell {
-                        BoundSpell::Spell(s) => Some(s),
-                        _ => None,
-                    },
-                }
+                u32::try_from(records.as_ref()?.get(&id)?.spell).ok()
             }
         }
     }
@@ -206,7 +197,7 @@ impl SpellSlots<'_, '_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui_macro::Bound;
+    use crate::ui_macro::{Bound, BoundSpell};
     use benilla_protocol::messages::{ItemUseSpell, ACTION_KIND_MACRO};
     use bevy::ecs::system::RunSystemOnce;
 
@@ -233,15 +224,20 @@ mod tests {
                 .buttons
                 .insert(slot, ActionButton { slot, action, kind });
         }
-        let mut bound = MacroBoundSpells::default();
-        bound.0.insert(1, Bound::from(BoundSpell::Spell(FIREBALL)));
-        bound.0.insert(2, Bound::from(BoundSpell::Spell(FROSTBOLT)));
-        bound.0.insert(
-            3,
-            Bound {
-                spell: BoundSpell::Spell(FIREBALL),
-                pet_book: true,
-            },
+        let mut script = UiScript::new().unwrap();
+        crate::ui_macro::bind_for_test(
+            &mut script,
+            &[
+                (1, Bound::from(BoundSpell::Spell(FIREBALL))),
+                (2, Bound::from(BoundSpell::Spell(FROSTBOLT))),
+                (
+                    3,
+                    Bound {
+                        spell: BoundSpell::Spell(FIREBALL),
+                        pet_book: true,
+                    },
+                ),
+            ],
         );
         let mut items = Items::default();
         items.insert_template(
@@ -258,7 +254,7 @@ mod tests {
         );
         let mut world = World::new();
         world.insert_resource(slots);
-        world.insert_resource(bound);
+        world.insert_non_send_resource(script);
         world.insert_resource(items);
         world.insert_resource(NetCommands(tx));
         world.init_resource::<crate::net::GuidIndex>();

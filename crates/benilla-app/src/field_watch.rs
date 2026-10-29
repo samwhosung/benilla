@@ -91,6 +91,10 @@ pub(crate) enum FieldNotice {
     /// (`0x4bc872`) and, for a player or our hunter's pet, `PET_UI_CLOSE` (`0x4bc907`); then
     /// `PET_BAR_UPDATE` every time (`0x4bc90c`).
     PetGuidSet { changed: bool, guid: u64 },
+    /// `SMSG_PET_SPELLS`' derivation after its book's sort (`0x4bdae0` →
+    /// `DeriveUnresolvedBoundSpells 0x4f0ce0`): the macros that follow the pet's book bound again,
+    /// with nothing signalled ([`crate::ui_macro::derive_pet_followers`]).
+    PetMacros,
     /// `SMSG_LEVELUP_INFO`'s arm of the notice handler `0x5e38c0`: `PLAYER_LEVEL_UP` with the
     /// message's level, health, first power, `level >= 10` and five stats (`0x5e413e`).
     LevelUp(benilla_protocol::messages::LevelUpInfo),

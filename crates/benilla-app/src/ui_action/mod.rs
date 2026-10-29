@@ -484,11 +484,9 @@ impl Plugin for UiActionPlugin {
                     feed::feed_actions.in_set(UnitFeed),
                     // A seat: the world-enter events' handlers read the slots' state, which the
                     // reference's arrival stores before its enter cascade (`0x5deafc`, `0x5deb60`).
-                    // After the macros' bound spells, which a macro slot resolves through.
                     state::feed_action_state
                         .in_set(UnitFeed)
                         .after(crate::player::ControlRestore)
-                        .after(crate::ui_macro::MacroBindings)
                         .after(feed::feed_actions),
                     // Ahead of the events its producers precede: the select's `PLAYER_TARGET_CHANGED` and the
                     // combo points' event (the unit events), the watched fields' own events (the

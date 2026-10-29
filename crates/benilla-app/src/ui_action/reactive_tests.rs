@@ -43,7 +43,6 @@ fn app() -> App {
     actions.spells.extend([REVENGE, REVENGE_2, FIREBALL]);
     app.insert_resource(actions)
         .init_resource::<crate::ui_action::ActionSlots>()
-        .insert_resource(crate::ui_macro::MacroBoundSpells::default())
         .insert_resource(Spells {
             catalog: benilla_formats::SpellCatalog::from_displays(
                 [

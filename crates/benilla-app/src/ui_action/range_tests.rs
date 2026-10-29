@@ -40,7 +40,6 @@ fn range_answers(
     };
     app.insert_resource(PlayerActions::default())
         .insert_resource(slots)
-        .insert_resource(crate::ui_macro::MacroBoundSpells::default())
         .insert_resource(Spells {
             catalog: benilla_formats::SpellCatalog::from_displays(
                 [(BOLT, bolt)].into_iter().collect(),
