@@ -1375,7 +1375,8 @@ fn mirror_guild(sc: &mut Scene) {
 /// The create hook of an object not yet shown (the table `0x465e78`), which alone asks the
 /// object's record: an item's record set-up (`0x5d8400` → `0x5d8300`); a unit's `PostInit`
 /// (`0x5fb880`), whose display resolve asks a creature's record (`0x60afb0`, at `0x60b15b`) and
-/// whose end is the far-sight arrival ([`far_sight_arrives`]); a player's (`0x5debe0`), the unit's
+/// which starts far sight late, ahead of its tail (`0x60c520`, `0x606fe0`, `0x607710`,
+/// `0x5ff130`, `0x612a30`; [`far_sight_arrives`]); a player's (`0x5debe0`), the unit's
 /// first (`0x5dec09`), then its name (`0x5dec12` → `0x609210`) and guild tag (`0x5dec19`) ahead of
 /// another player's party record (`0x5dec5f`, the active player skipped at `0x5dec48`-`0x5dec5b`),
 /// and for the active player its arrival last (`0x5dec7b`, [`super::arrival`]); a game object's
@@ -1438,7 +1439,8 @@ fn create_hook(
                 sc.bag_cache.seat(&fields, &lookup);
             }
             resolve_display_records(sc, guid, &fields);
-            // The unit's `PostInit` (`0x5dec09` → `0x5fb880`) ends in the far-sight arrival.
+            // The unit's `PostInit` (`0x5dec09` → `0x5fb880`): its far-sight arrival, ahead of
+            // its tail (`0x60c520`, `0x606fe0`, `0x607710`, `0x5ff130`, `0x612a30`).
             far_sight_arrives(sc, guid);
             sc.names.lookup_fields(guid, &fields, &sc.net);
             sc.field_notices
