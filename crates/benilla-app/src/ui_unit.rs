@@ -520,7 +520,7 @@ impl UnitTokens<'_, '_> {
             pet: pet_token_guid(held(me)),
             target: selection.guid.unwrap_or(0),
             mouseover: reach::mouseover_unit(published, held),
-            npc: self.interact.as_ref().and_then(|i| i.1).unwrap_or(0),
+            npc: self.interact.as_ref().and_then(|l| l.guid()).unwrap_or(0),
             held,
         })
     }

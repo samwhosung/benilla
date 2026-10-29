@@ -259,7 +259,8 @@ pub(crate) fn mark_frame_start(
             stores.entry(hop).or_insert_with(|| (e, store(e)));
         }
     }
-    if let Some((guid, entity)) = interact.and_then(|l| l.guid()).map(|g| (g, by_guid(g))) {
+    let npc = interact.and_then(|l| l.guid());
+    if let Some((guid, entity)) = npc.map(|g| (g, by_guid(g))) {
         stores
             .entry(guid)
             .or_insert_with(|| (entity, store(entity)));
@@ -275,7 +276,7 @@ pub(crate) fn mark_frame_start(
             script.as_deref().and_then(UiScript::world_mouseover),
             held,
         ),
-        npc: interact.as_deref().and_then(|i| i.1).unwrap_or(0),
+        npc: npc.unwrap_or(0),
         held,
     });
     for &guid in reached.held.keys() {

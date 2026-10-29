@@ -357,10 +357,9 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_items::feed::feed_item_stats", &["items::Items", "net::HomeBind", "net::ObjectStore",
         "spell::mods::SpellModifiers"]),
     // Found once the scan took every system that writes the VM, not only the `UiFeed` phase's.
-    // The world map's feed, after the tick: our position, explored bits and corpse and the party's
-    // positions, which `GetPlayerMapPosition` (`0x4a8610`) and the setter read at the call.
-    ("::ui_world_map::feed_world_map", &["death::DeathNet", "net::GuidIndex", "net::ObjectStore",
-        "ui_party::GroupState"]),
+    // The world map's feed, after the tick: our position, explored bits and corpse, which
+    // `GetPlayerMapPosition` (`0x4a8610`) and the setter read at the call.
+    ("::ui_world_map::feed_world_map", &["death::DeathNet", "net::ObjectStore"]),
     // The landmark sources, after the tick, which the reference reads at the setter's next run
     // (`0x4a67a0`).
     ("::ui_world_map::feed_landmarks", &["net::ObjectStore", "poi_marker::PoiMarker",
@@ -441,7 +440,8 @@ pub(super) const BUILT_OUTSIDE_THE_PACKETS_IN_THE_REFERENCE: &[(&str, &[&str], &
         "net::GuidIndex", "net::ObjectStore", "net::UnitSpeeds", "net::motion::modes::UnitMoveModes",
         "net::motion::remote::RemoteMotion", "net::reputations::Reputations",
         "spell::group_relation::GroupRoster", "spell::mods::SpellModifiers",
-        "spell::targeting::SpellTargeting", "ui_party::GroupState", "ui_session::latch::InteractLatch"],
+        "spell::targeting::SpellTargeting", "target::Selection", "ui_party::GroupState",
+        "ui_session::latch::InteractLatch"],
         "the word as the frame began, for the input records' reads with no host to ask; a call's \
          reads go live through the host (`SpellIsTargeting` `0x6e6cd0`)"),
     ("::ui_script::extract::tick_script", &["ui_script::UiScaleCvar", "video::Widescreen"],
