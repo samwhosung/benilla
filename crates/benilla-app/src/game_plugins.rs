@@ -1382,7 +1382,6 @@ pub(crate) mod schedule_tests {
             "::player::controller::control",
             // The drain, which fires the notices the restore signals.
             "::lanes::fire_in_order",
-            "::player::camera_saved::load_camera_pose",
             "::tutorial::watch_self",
             "::poi_marker::expire_marker",
             "::glue_session::logout_smoke::debug_logout_smoke",
@@ -1390,6 +1389,18 @@ pub(crate) mod schedule_tests {
             assert!(
                 after_restore.contains(&one(reader)),
                 "`{reader}` runs after the control restore"
+            );
+        }
+        // The camera pose loads ahead of the frame's input records and packets, as the reference
+        // reads its file at the interface load (`0x481b4e` → `0x50c0e0`), before any listener.
+        let pose = reach(one("::player::camera_saved::load_camera_pose"));
+        for later in [
+            "::ui_script::input::dispatch_input_records",
+            "::net::apply::apply_net_updates",
+        ] {
+            assert!(
+                pose.contains(&one(later)),
+                "the camera pose loads ahead of `{later}`"
             );
         }
     }

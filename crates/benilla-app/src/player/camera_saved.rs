@@ -183,14 +183,14 @@ pub(super) fn plugin(app: &mut App) {
     app.init_resource::<CameraPoseFile>()
         .add_systems(
             Update,
-            // Before the controller, so the first in-world frame renders the restored pose. A
-            // capture resolves no state path, so this is inert there.
+            // Ahead of the frame's input records and packets: the reference reads the file as the
+            // world frame constructs its camera at the interface load (`0x481b4e` → `0x50c0e0`,
+            // `LoadSettings 0x50c5a0` at `0x50c3ea`), before any listener, and `SaveView` reads
+            // what it restores inside its call (`0x50fa30`). A capture resolves no state path, so
+            // this is inert there.
             load_camera_pose
-                .after(super::ControlRestore)
+                .before(crate::ui_script::UiInput)
                 .before(super::control)
-                // And before the script calls after the packets, which read the player it
-                // restores; the restore follows the create, a packet.
-                .before(crate::vm_pass::VmPass::Resume)
                 .in_set(InWorldGated),
         )
         .add_systems(OnExit(ClientState::InWorld), save_on_session_end);
