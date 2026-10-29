@@ -227,6 +227,9 @@ pub trait SelfRead {
     fn combo_target(&self) -> u64;
     /// `PLAYER_FIELD_BYTES` byte 2 (`+0x102a`), `GetActionBarToggles`' (`0x4e768c`).
     fn action_bar_toggles(&self) -> u8;
+    /// `UNIT_FIELD_FLAGS` bit 20 (`+0xa0`, `UNIT_FLAG_TAXI_FLIGHT`), which the cursor setter's
+    /// control gate reads off the object at the call (`0x494b97`-`0x494ba6`).
+    fn on_taxi(&self) -> bool;
     /// Whether an active player is held (`0x468550` → `0x468460`), `CanReadUnitInventory`'s
     /// first test (`0x4944c9`); only [`NoPlayer`] holds none.
     fn held(&self) -> bool {
@@ -283,6 +286,9 @@ impl SelfRead for NoPlayer {
     fn action_bar_toggles(&self) -> u8 {
         0
     }
+    fn on_taxi(&self) -> bool {
+        false
+    }
     fn held(&self) -> bool {
         false
     }
@@ -331,6 +337,9 @@ impl SelfRead for Model {
     }
     fn action_bar_toggles(&self) -> u8 {
         self.action_bar_toggles.unwrap_or(0)
+    }
+    fn on_taxi(&self) -> bool {
+        self.taxi_riding
     }
 }
 

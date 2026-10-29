@@ -77,7 +77,7 @@ pub(super) fn doll_click(
 ) -> DollClick {
     // Without control and off a taxi the click ends before the cursor is read
     // (`0x4c7345`-`0x4c7360`).
-    if !super::equip::has_cursor_control(model) {
+    if !super::equip::has_cursor_control(lua, model) {
         return DollClick::Done(false);
     }
     // Lua 0, the 0-based slot -1, is the ammo leg (`0x4c73a6`).

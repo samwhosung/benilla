@@ -112,15 +112,12 @@ impl super::UiScript {
         self.model_mut().taxi = state;
     }
 
-    /// Whether the player is riding a taxi (`UNIT_FLAG_TAXI_FLIGHT`), for the equip control gate
-    /// (`0x494ba6`); `UnitOnTaxi` reads the flag off the unit itself.
+    /// Seat the VM's copy of the active player's taxi flag (`UNIT_FLAG_TAXI_FLIGHT`), which the
+    /// cursor control gate reads with no host to ask (`0x494ba6`): the app seats it off our
+    /// object before a call's apply reaches the gate, and with the host lent the gate reads the
+    /// object itself.
     pub fn set_on_taxi(&mut self, riding: bool) {
         self.model_mut().taxi_riding = riding;
-    }
-
-    /// What [`Self::set_on_taxi`] last pushed.
-    pub fn on_taxi(&self) -> bool {
-        self.model_ref().taxi_riding
     }
 
     /// The taxi calls a harness's VM kept ([`Self::keep_calls`]), in call order.

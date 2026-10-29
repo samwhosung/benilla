@@ -160,10 +160,15 @@ impl RequirementsLive<'_, '_> {
         Some(player_req_state(store, &inputs))
     }
 
-    /// Seat the requirement state and the known spells in `script`, where the app's own reads
-    /// inside a call's apply, with no host to ask, find them: the item use's requirement gate
-    /// (`0x5d8e0e`) and the bar's equip question (`0x5e1650`).
+    /// Seat the requirement state, the known spells and our taxi flag in `script`, where the
+    /// app's own reads inside a call's apply, with no host to ask, find them: the item use's
+    /// requirement gate (`0x5d8e0e`), the bar's equip question (`0x5e1650`) and the cursor
+    /// setter's control gate, which reads the flag off our object (`0x494b97`-`0x494ba6`).
     pub(crate) fn seat(&mut self, script: &mut benilla_ui::script::UiScript) {
+        script.set_on_taxi(
+            self.player()
+                .is_some_and(|s| s.0.unit_flags() & crate::player::UNIT_FLAG_TAXI_FLIGHT != 0),
+        );
         script.set_player_req_state(self.req().unwrap_or_default());
         if let Some(actions) = self.actions.as_deref() {
             script.set_known_spells(actions.spells.iter().copied().collect());

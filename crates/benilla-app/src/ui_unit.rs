@@ -995,6 +995,9 @@ impl benilla_ui::script::SelfRead for StoreObject<'_> {
     fn action_bar_toggles(&self) -> u8 {
         self.0 .0.player_action_bar_toggles().unwrap_or(0)
     }
+    fn on_taxi(&self) -> bool {
+        self.0 .0.unit_flags() & crate::player::UNIT_FLAG_TAXI_FLIGHT != 0
+    }
 }
 
 /// `PLAYER_FLAGS` bit 7, free-for-all PvP (vmangos `Player.h:322`).

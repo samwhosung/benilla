@@ -548,9 +548,9 @@ impl Setter {
     }
 
     /// Whether the setter runs, by the player-control flag `[0xb4b3e4]`.
-    fn admits(self, model: &Model) -> bool {
+    fn admits(self, lua: &Lua, model: &Model) -> bool {
         match self {
-            Setter::Item => equip::has_cursor_control(model),
+            Setter::Item => equip::has_cursor_control(lua, model),
             Setter::Controlled => model.player_control,
             Setter::Free => true,
         }
@@ -571,7 +571,7 @@ pub(crate) fn set_cursor(
     payload: impl FnOnce(&Model) -> Option<CursorPayload>,
 ) -> bool {
     let admitted = verb(lua, |model| {
-        if !setter.admits(model) {
+        if !setter.admits(lua, model) {
             return false;
         }
         clear(
@@ -801,7 +801,7 @@ pub(crate) fn split_container_item(
     let item = {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
         // Without control and off a taxi the split ends first (`0x4f9fdb`-`0x4f9ff7`).
-        if !equip::has_cursor_control(&model) {
+        if !equip::has_cursor_control(lua, &model) {
             return Ok(false);
         }
         // The slot resolver (`0x4fa00a`), through the bag lookup `0x4f93e0`.

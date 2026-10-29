@@ -279,6 +279,11 @@ fn answer_pending_equip(
         // item, then the equip goes out ahead of its clear. A slot emptied under the dialog sends
         // nothing (`0x5e18da`).
         PendingEquip::AutoEquip { bag, slot, .. } => {
+            // The setter's control gate reads our taxi flag off the object (`0x494ba6`), here
+            // with the host out applying the accept.
+            script.set_on_taxi(
+                store.is_some_and(|s| s.0.unit_flags() & crate::player::UNIT_FLAG_TAXI_FLIGHT != 0),
+            );
             script.auto_equip_slot(bag, slot, true);
         }
     }

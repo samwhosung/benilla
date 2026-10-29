@@ -235,11 +235,18 @@ pub(crate) fn auto_equip_cursor_item(lua: &Lua, model: &mut Model) -> bool {
 
 /// `SetCursorItem`'s control gate (`0x494b8d`): without control of the character
 /// (`[0xb4b3e4]`, `SMSG_CLIENT_CONTROL_UPDATE`) the set returns before its clear, unless the
-/// player is on a taxi (`UNIT_FLAG_TAXI_FLIGHT`). The UseContainerItem equip arm
-/// (`0x4fa3ce`-`0x4fa3ec`), `PickupContainerItem` (`0x4f9b87`-`0x4f9ba3`) and
+/// player is on a taxi (`UNIT_FLAG_TAXI_FLIGHT`), read off the active player's object at the call
+/// (`0x494b97`-`0x494ba6`) through the lent host, else off `model`'s copy. The UseContainerItem
+/// equip arm (`0x4fa3ce`-`0x4fa3ec`), `PickupContainerItem` (`0x4f9b87`-`0x4f9ba3`) and
 /// `PickupInventoryItem` (`0x4c7345`-`0x4c7360`) test the same pair first.
-pub(crate) fn has_cursor_control(model: &Model) -> bool {
-    model.player_control || model.taxi_riding
+pub(crate) fn has_cursor_control(lua: &Lua, model: &Model) -> bool {
+    use crate::script::SelfRead;
+    if model.player_control {
+        return true;
+    }
+    let mut live = None;
+    crate::script::host::read_host(lua, |h| h.read_self(&mut |own| live = Some(own.on_taxi())));
+    live.unwrap_or_else(|| model.on_taxi())
 }
 
 /// `0x5e1840`: `SetCursorItem(1, …)` puts the item on the cursor, its inner clear dropping and

@@ -403,7 +403,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_items::locks::forget_gone_item_locks", &["net::GuidIndex"]),
     ("::ui_items::feed::feed_item_stats", &["items::Items", "net::HomeBind", "net::ObjectStore",
         "spell::mods::SpellModifiers"]),
-    ("::ui_taxi::feed_on_taxi", &["net::ObjectStore"]),
     // The getters' item callbacks, kept inside their calls, are spent as the frame left them.
     ("::ui_tradeskill::feed_trade_skill", &["items::Countdowns", "items::Items", "net::GuidIndex",
         "net::ObjectStore", "spell::cooldowns::Cooldowns", "ui_action::PlayerActions",
