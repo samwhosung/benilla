@@ -1,11 +1,15 @@
-//! The death packet handlers filling [`DeathNet`], the movement-mode forward for our own mover,
-//! and the corpse-guid latch's hooks on the object lifecycle, called from the drain's object arms.
+//! The death packet handlers filling [`DeathNet`], each signal they raise on the dialogs' lane at
+//! the packet's place, the movement-mode forward for our own mover, and the corpse-guid latch's
+//! hooks on the object lifecycle, called from the drain's object arms.
 
 use benilla_protocol::{EntityKind, MoveMode, ObjectFields, SessionEvent, SessionEventKind};
+use benilla_ui::script::ScriptValue;
 use bevy::prelude::*;
 
-use super::{CorpsePoint, DeathNet, ResurrectOffer};
-use crate::net::{MoveModeMessage, NetHandlerApp, SelfGuid};
+use super::{CorpsePoint, DeathLatches, DeathNet, ResurrectOffer};
+use crate::net::{MoveModeMessage, NetHandlerApp, ObjectStore, SelfGuid, SelfPlayer};
+use crate::query_cache::Ask;
+use crate::ui_dialog_verbs::DialogLane;
 
 /// Register the death handlers and the session-end listener.
 pub(super) fn register(app: &mut App) {
@@ -19,7 +23,15 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::Disconnected, on_session_end);
 }
 
-fn on_corpse_query(In(ev): In<SessionEvent>, mut death_net: ResMut<DeathNet>) {
+/// `MSG_CORPSE_QUERY`'s two arms of `0x48f690`: a found corpse fills the cache
+/// (`0x48f7d1` → `0x492010`); a not-found resets it (`0x48f800`) and lowers the range latch
+/// (`0x48f807` → `0x4920f0(0)`), whose `CORPSE_OUT_OF_RANGE` signals at the packet when it was set.
+fn on_corpse_query(
+    In(ev): In<SessionEvent>,
+    mut death_net: ResMut<DeathNet>,
+    mut latches: ResMut<DeathLatches>,
+    mut lane: ResMut<DialogLane>,
+) {
     if let SessionEvent::CorpseQuery {
         found,
         display_map,
@@ -28,20 +40,43 @@ fn on_corpse_query(In(ev): In<SessionEvent>, mut death_net: ResMut<DeathNet>) {
     } = ev
     {
         corpse_query(found, display_map, position, corpse_map, &mut death_net);
+        if !found {
+            if let Some(signal) = latches.set_in_range(false, None) {
+                signal.queue(&mut lane);
+            }
+        }
     }
 }
 
+/// `SMSG_CORPSE_RECLAIM_DELAY` (`0x48f828` → `SetCorpseReclaimDelay 0x4962d0`): the delay stored,
+/// then the in-range event again while the latch is set (`0x4962ec`-`0x49630d`), at the packet, so
+/// `RECOVER_CORPSE` re-shows over the new delay.
 fn on_corpse_reclaim_delay(
     In(ev): In<SessionEvent>,
     mut death_net: ResMut<DeathNet>,
+    latches: Res<DeathLatches>,
+    mut lane: ResMut<DialogLane>,
     real_clock: Res<Time<Real>>,
 ) {
     if let SessionEvent::CorpseReclaimDelay { delay_ms } = ev {
         corpse_reclaim_delay(delay_ms, real_clock.elapsed_secs_f64(), &mut death_net);
+        if latches.corpse_in_range {
+            super::CorpseSignal::in_range(death_net.corpse.as_ref()).queue(&mut lane);
+        }
     }
 }
 
-fn on_resurrect_request(In(ev): In<SessionEvent>, mut death_net: ResMut<DeathNet>) {
+/// `ReadResurrectRequest 0x5e7bc0`: the offer stored (`0x5e7c13`-`0x5e7c2d`); with the active
+/// player held (`0x5e7c4a`), a name on the wire shows it at once (`0x5e7c56`), else the caster's
+/// name is looked up with the callback `0x5e7ca0` (`0x5e7c82`), a cached one showing it at once.
+fn on_resurrect_request(
+    In(ev): In<SessionEvent>,
+    mut death_net: ResMut<DeathNet>,
+    names: Res<crate::names::NameCache>,
+    net: Res<crate::net::NetCommands>,
+    me: Query<&ObjectStore, With<SelfPlayer>>,
+    mut lane: ResMut<DialogLane>,
+) {
     if let SessionEvent::ResurrectRequest {
         caster,
         name,
@@ -49,13 +84,79 @@ fn on_resurrect_request(In(ev): In<SessionEvent>, mut death_net: ResMut<DeathNet
         has_timer,
     } = ev
     {
-        resurrect_request(caster, name, sickness, has_timer, &mut death_net);
+        resurrect_request(caster, name.clone(), sickness, has_timer, &mut death_net);
+        let Ok(me) = me.single() else {
+            return;
+        };
+        let name = if name.is_empty() {
+            names
+                .resolve_player(caster, Ask::Event(&net))
+                .map(str::to_owned)
+        } else {
+            Some(name)
+        };
+        match name {
+            Some(name) => show_resurrect_request(&me.0, &name, &mut lane),
+            None => {
+                if let Some(offer) = death_net.resurrect.as_mut() {
+                    offer.waits_name = true;
+                }
+            }
+        }
     }
 }
 
-fn on_spirit_healer_confirm(In(ev): In<SessionEvent>, mut death_net: ResMut<DeathNet>) {
+/// The callback `0x5e7ca0` for `guid`'s answer, the offer's caster whose name it waited on: a found
+/// name shows the offer while the active player is held (`0x5e7d02` → `0x5e7d09`), a refused one
+/// forgets it (`0x5e7d19`-`0x5e7d2b`).
+pub(crate) fn resurrecter_named(
+    death_net: &mut DeathNet,
+    me: Option<&ObjectStore>,
+    lane: &mut DialogLane,
+    guid: u64,
+    name: Option<&str>,
+) {
+    let Some(offer) = death_net
+        .resurrect
+        .as_mut()
+        .filter(|o| o.waits_name && o.caster == guid)
+    else {
+        return;
+    };
+    offer.waits_name = false;
+    match name.filter(|n| !n.is_empty()) {
+        Some(name) => {
+            if let Some(me) = me {
+                show_resurrect_request(&me.0, name, lane);
+            }
+        }
+        None => death_net.resurrect = None,
+    }
+}
+
+/// `ShowResurrectRequest 0x5ded50`: `RESURRECT_REQUEST` with a non-empty `name` (`0x5ded5b`)
+/// while the active player is dead or a ghost (`0x5ded60` → `0x605f30`).
+fn show_resurrect_request(me: &ObjectFields, name: &str, lane: &mut DialogLane) {
+    if !name.is_empty() && me.is_dead_or_ghost() {
+        lane.event(
+            "RESURRECT_REQUEST",
+            vec![ScriptValue::Str(name.to_string())],
+        );
+    }
+}
+
+/// `SMSG_SPIRIT_HEALER_CONFIRM`'s arm of the notice handler (`0x5e38c0` → `0x5df730`): the
+/// healer's gossip re-sends it on every ask, and each that passes the ask's gates signals at its
+/// packet.
+fn on_spirit_healer_confirm(
+    In(ev): In<SessionEvent>,
+    mut ask: super::SpiritHealerAsk,
+    mut lane: ResMut<DialogLane>,
+) {
     if let SessionEvent::SpiritHealerConfirm { npc } = ev {
-        spirit_healer_confirm(npc, &mut death_net);
+        if let Some(cost) = ask.ask(npc) {
+            lane.event("CONFIRM_XP_LOSS", vec![ScriptValue::Int(cost)]);
+        }
     }
 }
 
@@ -90,9 +191,15 @@ fn on_move_mode(
     }
 }
 
-/// The death stores are session-scoped; a reconnect while dead re-sends the reclaim delay.
-fn on_session_end(In(_): In<SessionEvent>, mut death_net: ResMut<DeathNet>) {
+/// The death stores and latches are session-scoped; a reconnect while dead re-sends the reclaim
+/// delay, and a relog as a ghost must find no mirror, or the corpse query is never re-sent.
+pub(super) fn on_session_end(
+    In(_): In<SessionEvent>,
+    mut death_net: ResMut<DeathNet>,
+    mut latches: ResMut<DeathLatches>,
+) {
     *death_net = DeathNet::default();
+    *latches = DeathLatches::default();
 }
 
 /// Our corpse streaming in: latch its guid for the reclaim send. The reference's latch
@@ -161,11 +268,9 @@ fn corpse_query(
     });
 }
 
-/// `SMSG_CORPSE_RECLAIM_DELAY`, anchored at arrival on the clock the feed reads. The 1.12 client
-/// re-fires the corpse-range events on each (`0x4962d0`), hence the generation bump.
+/// `SMSG_CORPSE_RECLAIM_DELAY`, anchored at arrival on the clock the getters read.
 fn corpse_reclaim_delay(delay_ms: u32, now_secs: f64, death_net: &mut DeathNet) {
     death_net.reclaim_at = Some(now_secs + f64::from(delay_ms) / 1000.0);
-    death_net.reclaim_generation = death_net.reclaim_generation.wrapping_add(1);
 }
 
 /// `SMSG_RESURRECT_REQUEST`, the RESURRECT popup's data.
@@ -181,20 +286,8 @@ fn resurrect_request(
         name,
         sickness,
         has_timer,
+        waits_name: false,
     });
-    death_net.resurrect_generation = death_net.resurrect_generation.wrapping_add(1);
-}
-
-/// A player caster's offer, its name empty on the wire, as [`resurrect_request`] records it.
-#[cfg(test)]
-pub(super) fn resurrect_request_for_tests(caster: u64, death_net: &mut DeathNet) {
-    resurrect_request(caster, String::new(), false, true, death_net);
-}
-
-/// `SMSG_SPIRIT_HEALER_CONFIRM`: the healer's gossip re-sends it on every ask, and the reference
-/// fires `CONFIRM_XP_LOSS` per arrival.
-fn spirit_healer_confirm(npc: u64, death_net: &mut DeathNet) {
-    death_net.ask_spirit_healer(npc);
 }
 
 /// `SMSG_DURABILITY_DAMAGE_DEATH`, the 10% death durability loss: a combat-log line at chat type

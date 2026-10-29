@@ -211,7 +211,7 @@ pub(super) struct Died<'w, 's> {
     seam: AttackSeam<'w, 's>,
     /// The release timer our own death arms.
     death: ResMut<'w, crate::death::DeathNet>,
-    /// The real clock the release timer counts on, as the death feed reads it.
+    /// The real clock the release timer counts on, as the death getters read it.
     time: Res<'w, Time<Real>>,
     group: Res<'w, crate::ui_party::GroupState>,
     names: Res<'w, crate::names::NameCache>,
@@ -631,9 +631,11 @@ mod tests {
             let bit = |set: bool| u32::from(set) * 0x8;
             c.values(ME, &[(FIELD_UNIT_HEALTH, 0), (BYTES, bit(armed))]);
             c.values(ME, &[(BYTES, bit(!armed))]);
-            crate::death::run_feed_death_once(c.world());
-            let left: f64 =
-                crate::script_calls::eval_in_vm(c.world(), "return GetReleaseTimeRemaining()");
+            let left: f64 = crate::script_calls::with_hosted_vm(c.world(), |s| {
+                s.expect("a VM")
+                    .eval("return GetReleaseTimeRemaining()")
+                    .expect("runs")
+            });
             let at_death = dead_reads(&mut c);
             assert_eq!(at_death.len(), 1, "armed {armed}: {at_death:?}");
             for read in [left, at_death[0]] {
@@ -648,9 +650,8 @@ mod tests {
 
     /// Our own death's `PresentUnitDeath` (`0x6058ae`) ends in `SignalDeathState` for the active
     /// player (`0x5fa6d0` at `0x6251c2`, `0x6251cc` → `0x495850`): `PLAYER_DEAD` inside the death's
-    /// packet, after `0x5e99b0` armed the timer, so its handlers read the whole window, and the
-    /// frame's feed signals it no second time. A second death past the first window reads a fresh
-    /// one.
+    /// packet, after `0x5e99b0` armed the timer, so its handlers read the whole window, and
+    /// nothing signals it a second time. A second death past the first window reads a fresh one.
     #[test]
     fn our_own_death_signals_player_dead_in_its_packet_over_the_timer_it_armed() {
         let mut c = dying_client();
@@ -658,15 +659,8 @@ mod tests {
         let first = dead_reads(&mut c);
         assert_eq!(first.len(), 1, "PLAYER_DEAD in the packet: {first:?}");
         assert!(first[0] > 359.0, "the whole window: {first:?}");
-        crate::death::run_feed_death_once(c.world());
-        assert_eq!(
-            dead_reads(&mut c).len(),
-            1,
-            "the feed signals it no second time"
-        );
 
         c.values(ME, &[(FIELD_UNIT_HEALTH, 100)]);
-        crate::death::run_feed_death_once(c.world());
         c.world()
             .resource_mut::<Time<bevy::time::Real>>()
             .update_with_duration(std::time::Duration::from_secs(400));
@@ -674,8 +668,6 @@ mod tests {
         let second = dead_reads(&mut c);
         assert_eq!(second.len(), 2, "{second:?}");
         assert!(second[1] > 359.0, "a fresh window: {second:?}");
-        crate::death::run_feed_death_once(c.world());
-        assert_eq!(dead_reads(&mut c).len(), 2);
     }
 
     /// `SignalDeathState` clears the cursor after `PLAYER_DEAD` (`ClearCursor(1, 1)`, `0x495889`

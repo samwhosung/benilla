@@ -1796,10 +1796,10 @@ pub(crate) mod schedule_tests {
          "the drag probe: dev-only (`WOW_PROBE_DRAG`), it starts past `WOW_PROBE_DRAG_AT` with the \
           player's body in the world, and its `.drain(..)` is of the VM's own script errors, \
           raised by the gesture it just made"),
-        ("death/mod.rs", "feed_death", Because::MemoLatched,
-         "`feed.vm: VmMemo<DeathAnnounced>`: a fresh memo takes the first snapshot as no edge and re-announces a held offer, confirm and corpse range, and skips the edges of our create's frame, whose arrival item signals the state itself"),
-        ("death/mod.rs", "signal", Because::MemoLatched,
-         "the death state's signal: our death's leg (`signal_death`), run in its packet with the VM deferred, its `PLAYER_DEAD` parked for the deaths lane, whose drain runs only with the interface up (`ingame_ui_up`); and an arrival's, run by the arrival lane's firing inside the lanes' drain, which runs only with the interface up (`ingame_ui_up`). Its memo is `feed.vm`, a `VmMemo<DeathAnnounced>`"),
+        ("death/mod.rs", "signal", Because::Deliberate,
+         "the death state's signal: our death's leg (`signal_death`), run in its packet with the VM deferred, its `PLAYER_DEAD` parked for the deaths lane, whose drain runs only with the interface up (`ingame_ui_up`); and an arrival's, run by the arrival lane's firing inside the lanes' drain, which runs only with the interface up (`ingame_ui_up`)"),
+        ("death/mod.rs", "ask_spirit_healer", Because::Deliberate,
+         "no system: the spirit healer click's world edit runs it, inside the input pass's click legs, with the interface up"),
         ("death/mod.rs", "query_corpse_on_world_enter", Because::Deliberate,
          "no system: a leg the arrival lane's firing runs, inside the drain, which runs only with the interface up; its take is the range latch, which it zeroes into the live VM"),
         ("net/objects/update.rs", "on_update_end", Because::Deliberate,

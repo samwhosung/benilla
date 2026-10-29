@@ -4750,14 +4750,14 @@ mod tests {
         );
         let (writers, unhosted) = vm_writers_and_the_unhosted(&mut app);
         // The census reads the client's systems: a hundred writers at least in either build, and
-        // where the build carries type names, a feed, a death feed and a frame poll among them.
+        // where the build carries type names, a feed and two frame polls among them.
         assert!(
             writers.len() >= 100,
             "the census reads the client's VM writers: {} read",
             writers.len()
         );
         if writers.iter().any(|w| w.contains("benilla_app::")) {
-            for name in ["feed_framerate", "feed_death", "poll_area_spirit_healer"] {
+            for name in ["feed_framerate", "poll_corpse", "poll_area_spirit_healer"] {
                 assert!(
                     writers.iter().any(|w| w.contains(name)),
                     "the census reads the client's VM writers, `{name}` among them"

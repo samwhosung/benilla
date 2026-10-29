@@ -958,7 +958,7 @@ fn the_cascades_corpse_step_signals_the_range_latch_out() {
     );
     c.app
         .world_mut()
-        .resource_mut::<crate::death::DeathFeedState>()
+        .resource_mut::<crate::death::DeathLatches>()
         .latch_corpse_in_range_for_test();
     c.frame(vec![vec![me()]]);
     c.frame(vec![]);

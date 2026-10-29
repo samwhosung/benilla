@@ -182,6 +182,10 @@ pub(crate) enum FieldNotice {
     /// VM's statics store the point, then `MINIMAP_PING` with the token the packet resolved
     /// (`0x4ee48d`).
     MinimapPing(crate::minimap::MemberPing),
+    /// The health watcher's revive arm on the active player (`0x6047ee` → `0x5fef70`): every item
+    /// unlocked with its one `ITEM_LOCK_CHANGED` (`0x5fefae` → `0x495460`), then `PLAYER_ALIVE`
+    /// (274, `0x5fefb8`).
+    Revived,
     /// A packet handler's `DisplayError(id)` (`0x496720`): the message row's line, by its
     /// `GlobalStrings` key, shown at once.
     Line { key: &'static str },
@@ -794,6 +798,17 @@ pub(crate) fn placed_values(
 
     // The unit type watchers (`0x6041f0`), on every unit.
     let mine = around.me == Some(guid);
+    // The health watcher's revive arm (`0x6047ee`-`0x6047f4`, a health of 0 or less rising above
+    // it) for the active player (`0x5fef9f`): `0x5fef70`'s unlock and `PLAYER_ALIVE`, ahead of the
+    // watcher's usable refresh.
+    if let Some(at) = at(UNIT_SECTION, HEALTH, List::Type).filter(|_| mine) {
+        let rose = block
+            .edge(UNIT_SECTION + HEALTH.0 / 4)
+            .is_some_and(|(old, new)| old as i32 <= 0 && new as i32 > 0);
+        if rose {
+            pass.push(at, FieldNotice::Revived);
+        }
+    }
     // The health's and the powers' for the active player (`0x60483c`, `0x604868`), the aura
     // state's for it or the target (`0x604898`-`0x6048b4`).
     for (range, runs) in [
@@ -2441,8 +2456,13 @@ mod tests {
         let mut me = player();
         assert_eq!(
             block(&mut me, Some(ME), ME, &[(22, 90)]),
+            [FieldNotice::Revived, R, bridge(ME, 16)],
+            "the health, out of none: the revive arm runs first (`0x6047ee`)"
+        );
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(22, 80)]),
             [R, bridge(ME, 16)],
-            "the health"
+            "the health, alive"
         );
         assert_eq!(
             block(&mut me, Some(ME), ME, &[(23, 480)]),

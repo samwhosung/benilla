@@ -319,7 +319,7 @@ pub use cvars::{
     CVAR_WORLD_DETAIL, IN_WORLD_READ_ONLY_CVARS, LUA_CVAR_LIMIT, VIDEO_DEFAULT_CVARS,
     WORLD_DETAIL_STOPS,
 };
-pub use death::{DeathAction, DeathUiState};
+pub use death::{DeathAction, DeathQuery, DeathUiState, ResSicknessLevelQuery};
 pub use dialog_live::{
     meeting_stone_text, AreaSpiritHealerSecsQuery, BinderPendingQuery, CanResetInstancesQuery,
     InstanceBootSecsQuery, InstanceTypeQuery, MeetingStoneQuery, MeetingStoneStatus,

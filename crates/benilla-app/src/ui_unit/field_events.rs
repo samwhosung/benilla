@@ -623,6 +623,10 @@ pub(crate) fn fire(
             vec![ScriptValue::Int(i64::from(free_repop))],
         ),
         FieldNotice::MinimapPing(ping) => ping.fire(script),
+        FieldNotice::Revived => {
+            script.unlock_all_items();
+            script.fire_event("PLAYER_ALIVE", vec![]);
+        }
         FieldNotice::Line { key } => {
             if let Some(line) = crate::ui_action::keyed_line(script, key) {
                 crate::ui_action::show_now(script, sink, "ui_unit", line);

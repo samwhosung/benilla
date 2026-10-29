@@ -146,6 +146,9 @@ live_reads! {
         loot: crate::ui_loot::LootLive<'static, 'static>,
         /// The listed group loot rolls, their items' records and the clock their bars read.
         loot_rolls: crate::ui_loot_roll::LootRollLive<'static>,
+        /// The death stores' timers, the offer, the healer's range and the self-res; absent in a
+        /// harness without the death stores.
+        death: Option<crate::death::DeathView<'static, 'static>>,
         /// The game clock's hour and minute.
         game_time: crate::net::GameTimeLive<'static>,
         /// The joined-channel slot array.

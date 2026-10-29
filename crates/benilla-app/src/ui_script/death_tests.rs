@@ -1,5 +1,5 @@
 //! The stock death popups (`StaticPopup.lua`): release, self-resurrect, resurrect offers, the
-//! spirit healer's confirm and the corpse run, driven as the app's death feed drives them.
+//! spirit healer's confirm and the corpse run, driven over the VM's copy of the death state.
 
 use benilla_ui::script::{DeathAction, DeathUiState, ScriptValue, UiScript};
 
@@ -495,7 +495,10 @@ fn the_death_timers_answer_whole_seconds() {
         1.0
     );
     // No timer: `0x4962a0` answers -1000 ms, which the signed divide keeps as -1.
-    s.set_death(DeathUiState::default());
+    s.set_death(DeathUiState {
+        release_remaining: None,
+        ..Default::default()
+    });
     assert_eq!(
         s.eval::<f64>("return GetReleaseTimeRemaining()").unwrap(),
         -1.0

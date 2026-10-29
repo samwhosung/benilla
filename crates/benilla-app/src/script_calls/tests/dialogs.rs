@@ -269,6 +269,7 @@ fn the_death_verbs_send_inside_their_calls() {
                 name: "Priest".into(),
                 sickness: false,
                 has_timer: false,
+                waits_name: false,
             });
         }
         eval::<()>(
@@ -303,7 +304,7 @@ fn accept_xp_loss_sends_inside_its_call_within_range() {
         unit_at(&mut app, HEALER, yards);
         app.world_mut()
             .resource_mut::<crate::death::DeathNet>()
-            .ask_spirit_healer(HEALER);
+            .spirit_healer = Some(HEALER);
         eval::<()>(&mut app, "AcceptXPLoss() RandomRoll(1, 2) AcceptXPLoss()");
         let expected: &[&str] = if sends {
             &[

@@ -527,14 +527,18 @@ fn stone_notice(
 /// it (`0x55f426`): each meeting-stone member line waiting on the name (`0x4ca510`), which a
 /// refusal spends silently, and the duel's held challenge ([`crate::ui_duel`]).
 #[derive(bevy::ecs::system::SystemParam)]
-pub(crate) struct DialogNameAnswers<'w> {
+pub(crate) struct DialogNameAnswers<'w, 's> {
     /// Each absent in a harness without the dialogs.
     lane: Option<ResMut<'w, DialogLane>>,
     stone: Option<ResMut<'w, MeetingStone>>,
     duel: Option<ResMut<'w, crate::ui_duel::DuelState>>,
+    /// The resurrect offer whose caster's name it waited on, and the active player its show
+    /// tests.
+    death: Option<ResMut<'w, crate::death::DeathNet>>,
+    me: Query<'w, 's, &'static ObjectStore, With<crate::net::SelfPlayer>>,
 }
 
-impl DialogNameAnswers<'_> {
+impl DialogNameAnswers<'_, '_> {
     /// `guid`'s answer just filed in `names`.
     pub(crate) fn answered(&mut self, guid: u64, names: &NameCache) {
         let Some(lane) = self.lane.as_deref_mut() else {
@@ -553,6 +557,9 @@ impl DialogNameAnswers<'_> {
         }
         if let Some(duel) = self.duel.as_deref_mut() {
             crate::ui_duel::name_answered(duel, lane, guid, name);
+        }
+        if let Some(death) = self.death.as_deref_mut() {
+            crate::death::net::resurrecter_named(death, self.me.single().ok(), lane, guid, name);
         }
     }
 }

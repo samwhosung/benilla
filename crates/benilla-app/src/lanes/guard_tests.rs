@@ -98,11 +98,6 @@ pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (
         Row::HostHeld,
-        "::death::DeathNet",
-        "the death stores, which `feed_death` fires the offers and the corpse range from; the death verbs, acting in their calls, hold them in the host",
-    ),
-    (
-        Row::HostHeld,
         "::items::Items",
         "the record answers' callbacks still run off the frame's records rather than in the \
          answer's list (`ItemCacheReceive` `0x55bdb0`, `0x55bf12`-`0x55bf39`): the action bar's \
@@ -304,6 +299,15 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // the logout bytes through the host in their calls, and quiet: the replies' handlers signal on
     // the notice lane at their packets.
     "::ui_logout::LogoutState",
+    // Quiet: the connection's state, which the session's handlers write and the death getters'
+    // body test reads through the host; no feed fires off it.
+    "::net::NetStatus",
+    // Moved here from `NOT_YET_ON_A_LANE`, so neither list grew: the death getters read the stores
+    // through the host and the death verbs hold them in their calls, and quiet: the offers and the
+    // corpse-range signals packets raise go on the dialogs' lane at their handlers, the revive's
+    // on the notice lane, and the corpse poll runs in the world frame's update, after the packets
+    // (`0x4818c5`).
+    "::death::DeathNet",
     // Read through the host by the taxi getters, and quiet: its events fire on the taxi lane at
     // their handlers.
     "::ui_taxi::TaxiState",
@@ -358,9 +362,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         // `SetCVar` moves it inside its call, and the build reads it as the frame left it.
         "video::Widescreen"]),
 
-    ("::death::feed_death", &["Transform", "death::DeathNet", "items::Countdowns", "items::Items",
-        "names::NameCache", "net::GuidIndex", "net::NetStatus", "net::ObjectStore",
-        "net::SelfGuid"]),
     // The group's push, the party and raid getters' no-host fallback: the roster's cells, its
     // members' names and objects as the frame left them; the tokens read live at the call.
     ("::ui_party::feed::feed_party", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
@@ -468,6 +469,13 @@ pub(super) const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::ui_items::ItemBagFamilies",
     // `AuctionHouse.dbc`, whose deposit rate the hello's show hands the VM.
     "::ui_auction::AuctionHouses",
+    // The corpse-range latch, which the reclaim delay's handler tests to signal again
+    // (`0x4962ec`); the corpse query's not-found handler and the corpse poll write it through
+    // their own `ResMut`.
+    "::death::DeathLatches",
+    // The connection's state, which the death getters' body test reads through the host; the
+    // socket's handlers write it through their own `ResMut`.
+    "::net::NetStatus",
     // The login pick, which names the character the account-data sections belong to.
     "::glue_session::roster::Roster",
     // `0xb4e314`, which the party snapshot reads; only the zone feed commits it.
@@ -1772,9 +1780,9 @@ pub(super) const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("chat setup arrivals", &["ui_chat::edit::ChannelState"]),
     // Our arrival's legs read and reset what later packets of its frame write, as the frame left
     // it: the book the replay learns, the battlefield and stone it resets and asks again for, the
-    // death stores its death state reads and its corpse ask resets, the class family it sets and
-    // the connection the clock resync asks through.
-    ("arrival", &["chat_bubble::BubbleConfig", "death::DeathNet", "net::NetStatus",
+    // corpse-range latch its corpse ask lowers, the class family it sets and the connection the
+    // clock resync asks through.
+    ("arrival", &["chat_bubble::BubbleConfig", "death::DeathLatches", "net::NetStatus",
         "spell::mods::SpellModifiers",
         "ui_action::PlayerActions", "ui_battlefield::Battlefield",
         "ui_dialog_verbs::MeetingStone"]),

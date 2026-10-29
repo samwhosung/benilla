@@ -308,7 +308,6 @@ fn click_select(
 pub(crate) struct ServiceArms<'w> {
     /// The last `SMSG_QUESTGIVER_STATUS` per guid (`[unit+0xcb8]`), read by bit 1's `0x5df490`.
     pub(crate) quest: Res<'w, crate::ui_quest::QuestGiver>,
-    pub(crate) death: ResMut<'w, crate::death::DeathNet>,
     /// Bit 6 sends through the cache the proximity poll writes, so the two agree on the healer.
     pub(crate) spirit: ResMut<'w, crate::ui_dialog_verbs::AreaSpiritHealer>,
     /// The NPC whose window is open (`[0xb4e2d0]`), checked before the ladder.
@@ -1148,7 +1147,12 @@ impl Dispatch<'_, '_> {
                 debug!(
                     "right-click interact: {guid:#x} (spirit healer — CONFIRM_XP_LOSS, no packet)"
                 );
-                self.service.death.ask_spirit_healer(guid);
+                // `0x5df730` with the guid, its gates and its signal, with the world in hand.
+                self.feedback
+                    .edits
+                    .push_world(Box::new(move |world: &mut World| {
+                        let _ = world.run_system_cached_with(crate::death::ask_spirit_healer, guid);
+                    }));
             }
             ServiceAction::AcquireSpiritGuide => {
                 debug!("right-click interact: {guid:#x} (spirit guide — adopting, 0x2E2)");
