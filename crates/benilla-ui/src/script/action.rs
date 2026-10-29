@@ -116,8 +116,8 @@ pub struct ActionState {
 
 /// The state getters' question to the lent host, which reads the slot as of the call: the
 /// reference's `Is*Action` and `GetActionCooldown` resolve the slot (`0x4e5a50`) and test the live
-/// player, cast state, range and cooldown list inside the call, and `IsUsableAction` reads the
-/// bar's cache as it stands (`0x4e5230`). The answer is `None` for an empty slot.
+/// player, cast state, range and cooldown list inside the call. `IsUsableAction` asks
+/// [`ActionUsableNow`] instead. The answer is `None` for an empty slot.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ActionStateNow {
     /// The 1-based Lua action id.

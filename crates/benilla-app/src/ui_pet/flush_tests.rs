@@ -556,6 +556,48 @@ fn an_insert_sweeps_nothing_from_the_pets_list() {
     );
 }
 
+/// The go's sweep, due at the session's first go, runs over the pet's list too (`0x6e8606`-
+/// `0x6e862b` sweeps `0xcecaec` and `0xcecb04`): the forty run-out GCDs go, while Growl's running
+/// recovery, inserted by the same go, and the parked record stay and read as before.
+#[test]
+fn the_gos_sweep_frees_the_pets_run_out_records() {
+    let mut rig = rig(
+        vec![(CLAW, brisk_claw()), (GROWL, growl()), (PARKED, parked())],
+        &[CLAW, GROWL, PARKED],
+        Some(summoned_pet()),
+    );
+    rig.receive(vec![SessionEvent::SpellCooldowns {
+        caster: PET,
+        cooldowns: vec![(PARKED, 10)],
+    }]);
+    for _ in 0..40 {
+        rig.press(1);
+    }
+    rig.frame();
+    let parked_read = rig.cooldown(3);
+    assert!(
+        parked_read.1 > 0.0 && parked_read.2 == 0,
+        "the parked record shows disabled: {parked_read:?}"
+    );
+    let_the_gcds_run_out();
+    assert_eq!(rig.record_count(), 41, "the parked record and forty GCDs");
+
+    rig.receive(vec![go(PET, GROWL)]);
+
+    assert!(
+        !rig.elapsed_pending(Instant::now()),
+        "the go swept the pet's list"
+    );
+    assert_eq!(
+        rig.record_count(),
+        2,
+        "Growl's recovery and the parked record"
+    );
+    rig.frame();
+    assert_eq!(rig.cooldown(2).1, 5.0, "Growl sweeps its 5 s");
+    assert_eq!(rig.cooldown(3), parked_read, "the parked record");
+}
+
 /// The reference flushes no event for a cooldown's end: the insert is the list's one mutation, so
 /// the frame fires the flush once, for it, and nothing else. An insert that arms nothing changes
 /// nothing.

@@ -622,8 +622,8 @@ impl ActionStates<'_, '_> {
     }
 
     /// One slot's state as of here, for a getter's live read ([`ActionStateNow`]): its word's, a
-    /// macro word's through the VM's record the getter hands over, with the pair the bar's usable
-    /// cache holds (`0x4e5230`); `None` for an empty slot.
+    /// macro word's through the VM's record the getter hands over; `None` for an empty slot. Its
+    /// usable pair is unread: `IsUsableAction` asks [`ActionUsableNow`].
     fn state_now(&mut self, q: &ActionStateNow) -> Option<ActionState> {
         let slot = u8::try_from(q.action.checked_sub(1)?).ok()?;
         let button = self.slots.buttons.get(&slot)?;
@@ -645,9 +645,7 @@ impl ActionStates<'_, '_> {
             trace_cd: false,
             refresh: false,
         };
-        let mut st = self.slot_states(walk).0.remove(&q.action)?;
-        (st.usable, st.not_enough_mana) = self.memory.cache.pair(q.action);
-        Some(st)
+        self.slot_states(walk).0.remove(&q.action)
     }
 
     /// `IsUsableAction`'s pair for `action` as the bar's cache holds it (`0x4e5230`), an empty
