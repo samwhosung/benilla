@@ -146,9 +146,9 @@ fn returns(lua: &Lua, a: &AuraState, with_dispel_type: bool) -> mlua::Result<Mul
     Ok(MultiValue::from_vec(out))
 }
 
-/// The list of the unit `token` names off the snapshots, for a reader outside any call: the pushed
-/// resolver inputs (`0x515970`, which `UnitBuff` calls at `0x519542`), the player's by slot as any
-/// unit's; `None` for nobody, a unit with no list, and a token the resolver does not recognise.
+/// The list of the unit `token` names off the snapshots, for a reader outside any call: the
+/// resolver's stand-in (`0x515970`, which `UnitBuff` calls at `0x519542`), the player's by slot as
+/// any unit's; `None` for nobody, a unit with no list, and a token the resolver does not recognise.
 pub(crate) fn auras_of<'m>(model: &'m Model, token: &str) -> Option<&'m UnitAuraList> {
     model
         .unit_guids

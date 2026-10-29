@@ -523,7 +523,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                         at.party && guid != own
                     }
                 };
-                // The pets the last push resolved for the rows, else the owner's.
+                // With no host to ask, the stand-in's row pets, else the owner's.
                 let pets = if raid {
                     &model.unit_guids.raid_pets[..]
                 } else {

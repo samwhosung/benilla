@@ -2421,7 +2421,7 @@ mod tests {
             .collect()
     }
 
-    /// The token resolver's guids as `ui_unit`'s feed pushes them: us, and the party slots.
+    /// The token resolver's stand-in: us, and the party slots.
     fn resolve_party(app: &mut App, party: [u64; 4]) {
         app.world_mut()
             .non_send_resource_mut::<UiScript>()
