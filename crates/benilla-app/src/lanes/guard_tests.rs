@@ -1778,7 +1778,7 @@ pub(super) const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // tokens' live reads; it reads the index and the selection as the frame left them (#2217).
     ("unit views", &["net::GuidIndex", "net::ObjectStore", "target::Selection",
         "ui_party::GroupState"]),
-    ("cast reports", &["items::Countdowns", "items::Items", "net::GuidIndex", "net::ObjectStore"]),
+    ("cast reports", &["items::Items", "net::ObjectStore"]),
     ("item watchers", &["items::Countdowns", "items::Items", "names::NameCache", "net::GuidIndex",
         "net::ObjectStore", "ui_trade::TradeSession"]),
     ("auction house", &["items::Items", "names::NameCache", "net::SelfGuid",

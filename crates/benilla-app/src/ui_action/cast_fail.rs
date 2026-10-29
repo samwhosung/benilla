@@ -436,6 +436,16 @@ pub(super) fn cast_fail_text(
     // player's chain and its `_PET` flag are skipped (`0x6e1a7c`), and the pet's handler leaves
     // (`0x6e8f04`).
     let (mut error, pet_text) = match (caster, spell) {
+        // The item-cache callback `0x6e29b0` picks its id off the reason alone, `0xd2` for `0x5c`
+        // and `0xd1` for `0x78`, reading no spell record (`0x6e29fe`-`0x6e2a0d`).
+        (Caster::Player, _) if args.redisplay => (
+            match reason {
+                0x5C => Some("ERR_SPELL_FAILED_REAGENTS"),
+                0x78 => Some("ERR_SPELL_FAILED_TOTEMS"),
+                _ => None,
+            },
+            false,
+        ),
         (Caster::Player, Some(d)) => (
             player_error_key(reason, d),
             !args.redisplay && trains_pet(d),

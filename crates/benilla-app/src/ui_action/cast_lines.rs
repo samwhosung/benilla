@@ -16,7 +16,6 @@ use crate::query_cache::Ask;
 use crate::ui_chat::combat::PendingCombat;
 
 use super::cast_fail::{self, CastFailLine};
-use super::errors::{first_missing_totem, first_short_reagent};
 use super::{CastFail, Caster, Shown, Spells};
 
 /// The DBC name tables the cast-fail argument arms read; each is absent without game data. The
@@ -59,7 +58,6 @@ pub(crate) struct CastFailLines<'w, 's> {
     sub_classes: Option<Res<'w, crate::ui_items::ItemSubClasses>>,
     names: FailNameTables<'w>,
     self_q: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
-    objects: crate::net::Objects<'w, 's>,
     items: Res<'w, Items>,
     commands: Res<'w, NetCommands>,
 }
@@ -127,23 +125,13 @@ impl CastFailLines<'_, '_> {
                     .requirement_display_name(ITEM_CLASS_PROJECTILE, 1u32 << (arg & 31))
             }),
             // `0x78` and `0x5c` (`0x6e1e7f`), the player's arms only (the pet's table sends both to
-            // its generic arm): the name of argument 1's item, the entry `0x6e4000` found; a
-            // word-less refusal names the failing slot as the pre-send check finds it.
+            // its generic arm): the name of argument 1's item, the entry `0x6e4000` found, read
+            // with no spell record. The server's refusal carries no word for either (vmangos
+            // `Spell.cpp:4407-4431`), which reads -1 (`0x6e736e`): its lookup asks for an entry
+            // whose refusal no node matches (`0x55bdf7`, `0x55be5d`), so neither line nor log ever
+            // shows; a word of 0 asks nothing and shows nothing (`0x55ba42`).
             0x78 | 0x5c if !pet => {
-                let d = d?;
-                let self_store = self.self_q.iter().next();
-                let failing = fail.arg.or_else(|| {
-                    if reason == 0x78 {
-                        self_store
-                            .and_then(|s| first_missing_totem(d, s, &self.objects))
-                            // No self store yet: name the first tool.
-                            .or_else(|| d.totems.iter().copied().find(|&t| t != 0))
-                    } else {
-                        self_store
-                            .and_then(|s| first_short_reagent(d, s, &self.objects))
-                            .or_else(|| d.reagents.iter().map(|&(id, _)| id).find(|&id| id != 0))
-                    }
-                })?;
+                let failing = fail.arg.filter(|&entry| entry != 0)?;
                 // The callback `0x6e29b0` looks the record up again with no callback of its own
                 // (`0x6e2a27`), a refusal's finding none: the literal `UNKNOWN` (`0x6e2a49`).
                 if fail.redisplay {
