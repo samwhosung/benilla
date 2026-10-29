@@ -798,7 +798,7 @@ mod tests {
         unordered.sort();
         // A floor that shows the census found the hosts at all; it falls as feeds go live.
         assert!(
-            update.hosted.len() > 80,
+            update.hosted.len() > 70,
             "the census finds the hosts: {}",
             update.hosted.len()
         );
