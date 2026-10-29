@@ -250,11 +250,15 @@ fn on_ready_check_request(
     In(ev): In<SessionEvent>,
     mut group: ResMut<GroupState>,
     self_guid: Res<SelfGuid>,
+    names: Res<NameCache>,
 ) {
     if let SessionEvent::ReadyCheckRequest = ev {
         // We lead when our guid is the leader's, the reference's test at `0x4ba3a0`.
         let we_lead = self_guid.0 == Some(group.leader);
-        group.apply_ready_check_request(we_lead);
+        // The leader's line reads the cache with no callback (`0x4ba50f`).
+        group.apply_ready_check_request(we_lead, &|guid| {
+            names.resolve_player(guid, Ask::Read).map(str::to_string)
+        });
     }
 }
 
@@ -1302,6 +1306,43 @@ mod tests {
         assert_eq!(shown(&mut app), [], "Fen's name is still to come");
         name_event(&mut app, f, "Fen");
         assert_eq!(shown(&mut app), [], "and its answer shows nothing");
+    }
+
+    /// The open ready check reads its leader's name from the cache with no callback (`0x4ba50f`):
+    /// a roster that holds the name is not the cache, so the line waits on the cache, queries
+    /// nothing, and `READY_CHECK` fires either way.
+    #[test]
+    fn a_ready_check_line_follows_the_name_cache_not_the_roster() {
+        use bevy::ecs::system::RunSystemOnce;
+        const ME: u64 = 0x10;
+        let (mut app, rx) = handler_app(ME);
+        let a = 0x21;
+        list_event(&mut app, 0, vec![member(a, "Aldwyn")], a);
+        rx.try_iter().for_each(drop);
+        shown(&mut app);
+        let check = |app: &mut App| {
+            app.world_mut()
+                .run_system_once_with(on_ready_check_request, SessionEvent::ReadyCheckRequest)
+                .expect("the ready-check handler");
+            app.world_mut().resource_mut::<GroupState>().signals.take()
+        };
+        assert!(
+            !check(&mut app)
+                .iter()
+                .any(|s| matches!(s, GroupSignal::Line(_))),
+            "the leader is on the roster and not in the cache"
+        );
+        assert_eq!(rx.try_iter().count(), 0, "and the miss asks nothing");
+        app.world_mut()
+            .resource_mut::<NameCache>()
+            .insert_player(a, "Aldwyn".into(), None);
+        let signals = check(&mut app);
+        let at = |f: &dyn Fn(&GroupSignal) -> bool| signals.iter().position(f);
+        let line = at(
+            &|s| matches!(s, GroupSignal::Line(l) if l.key == "ERR_RAID_LEADER_READY_CHECK_START_S"),
+        );
+        let popup = at(&|s| matches!(s, GroupSignal::ReadyCheck));
+        assert!(line.is_some() && line < popup, "the line, then READY_CHECK");
     }
 
     /// The raid roster writer ends with `MSG_RAID_TARGET_UPDATE` 0xff, the request for every

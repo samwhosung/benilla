@@ -1048,22 +1048,23 @@ impl GroupState {
 
     /// `MSG_RAID_READY_CHECK`, open form, echoed to the whole group: `0x4ba360` splits on the
     /// leader guid, and only a non-leader prints the leader's line (`0x4ba51e`), then gets the
-    /// popup (`0x4ba53a`). Both arms arm the engine's side first.
-    pub fn apply_ready_check_request(&mut self, we_lead: bool) -> Vec<UiError> {
+    /// popup (`0x4ba53a`). Both arms arm the engine's side first. The line's name is the name
+    /// cache's record for the leader, read with no callback (`cached_name`, `0x4ba50f` →
+    /// `0x55f080`): a miss prints nothing and queries nothing (`0x4ba514`-`0x4ba516`, `0x55f120`),
+    /// and the deadline and `READY_CHECK` follow either way (`0x4ba535`, `0x4ba53a`).
+    pub fn apply_ready_check_request(
+        &mut self,
+        we_lead: bool,
+        cached_name: &dyn Fn(u64) -> Option<String>,
+    ) -> Vec<UiError> {
         self.signal(GroupSignal::ReadyCheckRequest { we_lead });
         if we_lead {
             return Vec::new();
         }
-        // The reference prints its name cache's entry for the leader; the roster holds the same.
-        let leader = self
-            .members
-            .iter()
-            .find(|m| m.guid == self.leader)
-            .map(|m| m.name.clone())
-            .unwrap_or_default();
-        let line = self.show(UiError::s("ERR_RAID_LEADER_READY_CHECK_START_S", leader));
+        let line = cached_name(self.leader)
+            .map(|name| self.show(UiError::s("ERR_RAID_LEADER_READY_CHECK_START_S", name)));
         self.signal(GroupSignal::ReadyCheck);
-        vec![line]
+        line.into_iter().collect()
     }
 
     /// `MSG_RAID_READY_CHECK`, answer form: one member's answer, forwarded to the leader alone.
@@ -1596,7 +1597,7 @@ mod tests {
             ..Default::default()
         };
         g.raid_targets[0] = 0xA11CE;
-        g.apply_ready_check_request(false);
+        g.apply_ready_check_request(false, &|_| None);
         g.apply_raid_instance_info(Vec::new());
         g.apply_raid_instance_info(vec![lockout]);
         assert_eq!(
@@ -1630,6 +1631,50 @@ mod tests {
         assert!(g.saved_instances.is_empty());
     }
 
+    /// The leader's line is the name cache's record for the leader, read with no callback
+    /// (`0x4ba50f` → `0x55f080`), not the roster's row: a cached leader prints it ahead of
+    /// `READY_CHECK`, spelt as the cache has it.
+    #[test]
+    fn a_cached_leader_prints_the_ready_check_line_before_the_popup() {
+        let mut g = GroupState {
+            leader: 0xA11CE,
+            members: vec![member("Roster", 0xA11CE)],
+            ..Default::default()
+        };
+        let line = UiError::s("ERR_RAID_LEADER_READY_CHECK_START_S", "Cached");
+        assert_eq!(
+            g.apply_ready_check_request(false, &|guid| (guid == 0xA11CE).then(|| "Cached".into())),
+            vec![line.clone()]
+        );
+        assert_eq!(
+            g.signals.take(),
+            [
+                GroupSignal::ReadyCheckRequest { we_lead: false },
+                GroupSignal::Line(line),
+                GroupSignal::ReadyCheck
+            ]
+        );
+    }
+
+    /// A leader the cache lacks prints nothing, even with the roster holding the name, and
+    /// the deadline and `READY_CHECK` follow all the same (`0x4ba514`-`0x4ba53a`).
+    #[test]
+    fn an_uncached_leader_prints_no_ready_check_line_but_the_popup_fires() {
+        let mut g = GroupState {
+            leader: 0xA11CE,
+            members: vec![member("Alice", 0xA11CE)],
+            ..Default::default()
+        };
+        assert!(g.apply_ready_check_request(false, &|_| None).is_empty());
+        assert_eq!(
+            g.signals.take_events(),
+            [
+                GroupSignal::ReadyCheckRequest { we_lead: false },
+                GroupSignal::ReadyCheck
+            ]
+        );
+    }
+
     #[test]
     fn the_open_form_pops_for_a_member_and_stays_quiet_for_the_leader() {
         let mut g = GroupState {
@@ -1640,7 +1685,7 @@ mod tests {
         g.apply_ready_check_answer(0xB0B, true);
 
         assert_eq!(
-            g.apply_ready_check_request(false),
+            g.apply_ready_check_request(false, &|_| Some("Alice".into())),
             vec![UiError::s("ERR_RAID_LEADER_READY_CHECK_START_S", "Alice")]
         );
         assert_eq!(
@@ -1657,7 +1702,8 @@ mod tests {
         );
 
         assert!(
-            g.apply_ready_check_request(true).is_empty(),
+            g.apply_ready_check_request(true, &|_| Some("Alice".into()))
+                .is_empty(),
             "the leader's echo"
         );
         assert_eq!(
@@ -2463,7 +2509,7 @@ mod tests {
         lines.extend(g.apply_destroyed());
         lines.extend(g.apply_uninvited());
         g.leader = 1;
-        lines.extend(g.apply_ready_check_request(false));
+        lines.extend(g.apply_ready_check_request(false, &|_| Some("Alice".into())));
         lines.extend(g.apply_list(0, 0, Vec::new(), 0, None, None).lines);
 
         let mut keys: Vec<&str> = lines.iter().map(|m| m.key).collect();

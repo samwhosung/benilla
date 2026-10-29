@@ -288,12 +288,30 @@ fn a_guild_event_shows_its_line_ahead_of_its_roster_update() {
     );
 }
 
-/// A ready check another leads shows the leader's line (`0x4ba51e`), then `READY_CHECK`
-/// (`0x4ba53a`).
+/// A ready check another leads shows the leader's line (`0x4ba51e`) when the name cache holds the
+/// leader (`0x4ba50f`, no callback), then `READY_CHECK` (`0x4ba53a`); with the name still to
+/// come the line is skipped and `READY_CHECK` fires all the same (`0x4ba514`-`0x4ba53a`).
 #[test]
 fn a_ready_check_shows_its_line_ahead_of_its_popup() {
     let mut c = client();
     grouped(&mut c, MATE);
+    assert_eq!(
+        between(&mut c, SessionEvent::ReadyCheckRequest),
+        [
+            "CHAT_MSG_MONSTER_SAY:a",
+            "READY_CHECK",
+            "CHAT_MSG_MONSTER_SAY:b",
+        ],
+        "the leader's name is not cached"
+    );
+    c.frame(vec![vec![SessionEvent::PlayerName {
+        guid: MATE,
+        name: "Dorn".into(),
+        race: 1,
+        gender: 0,
+        class: 1,
+    }]]);
+    c.seen();
     assert_eq!(
         between(&mut c, SessionEvent::ReadyCheckRequest),
         [

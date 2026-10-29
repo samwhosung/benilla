@@ -994,7 +994,7 @@ fn apply_test_intent(group: &mut GroupState, req: &PartyRequest, self_guid: Opti
         PartyRequest::ReadyCheckStart => {
             // The server's echo to the whole raid, us included. Only the leader has the button,
             // and the leader's echo takes the collection arm: no popup for the presser.
-            group.apply_ready_check_request(true);
+            group.apply_ready_check_request(true, &|_| None);
             true
         }
         PartyRequest::RequestRaidInfo => {
@@ -2875,7 +2875,7 @@ mod tests {
         let _ = app
             .world_mut()
             .resource_mut::<GroupState>()
-            .apply_ready_check_request(false);
+            .apply_ready_check_request(false, &|_| None);
         frame(&mut app);
         assert_eq!(
             app.world_mut()
