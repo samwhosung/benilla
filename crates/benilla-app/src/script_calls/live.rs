@@ -122,6 +122,10 @@ live_reads! {
         /// The open profession book as a build reads it, a recipe's reagents, tools and icon, and
         /// its line's rank; absent in a harness without the window.
         trade_skill: Option<crate::ui_tradeskill::TradeSkillLive<'static, 'static>>,
+        /// The open craft type's book as a build reads it, a recipe's reagents, tools, cost, level
+        /// and description, the effect slot's name and the display line; absent in a harness
+        /// without the window.
+        craft: Option<crate::ui_craft::CraftLive<'static, 'static>>,
         /// The tabard designer's guild record and save latch.
         tabard: crate::ui_tabard::TabardLive<'static, 'static>,
         /// The stable's records, counts and the summoned pet's display.

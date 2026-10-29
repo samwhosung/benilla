@@ -909,14 +909,9 @@ impl TradeSkillSteps<'_, '_> {
         }
         debug!("ui_tradeskill: the opener opens the CraftFrame (line {line}, type {craft_type})");
         (open.line, open.craft_type) = (Some(line), craft_type);
-        // With no list to build (`0x4f60e3`, `0x4f6109`), the build leaves before its signal.
-        if let Some(fresh) = self
-            .craft
-            .as_ref()
-            .and_then(|c| c.state(script, line, craft_type))
-        {
-            script.set_craft(Some(fresh));
-            script.craft_opened();
+        // With no player to build for (`0x4f6109`), the build leaves before its signal.
+        let fresh = self.craft.as_ref().and_then(|c| c.state(line, craft_type));
+        if script.open_craft(craft_type, fresh) {
             script.fire_event("CRAFT_UPDATE", vec![]);
         }
         script.fire_event("CRAFT_SHOW", vec![]);

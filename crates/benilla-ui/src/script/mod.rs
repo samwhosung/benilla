@@ -290,7 +290,10 @@ pub use container::{
     PendingWrap, PetitionSlotView, RandomPropertyView, UiCursorMode, UseArm, UseFork,
 };
 pub use cooldown_read::{CooldownQuery, CooldownTriple};
-pub use craft::{CraftCall, CraftDifficulty, CraftReagent, CraftRecipe, CraftState, CraftTooltip};
+pub use craft::{
+    CraftBookQuery, CraftCall, CraftDifficulty, CraftDisplayLineQuery, CraftNameQuery,
+    CraftReagent, CraftRecipe, CraftRecipeQuery, CraftState, CraftTooltip,
+};
 pub use cursor::equip::{AutoEquip, BIND_WHEN_EQUIPPED};
 pub use cursor::money::coin_icon;
 pub use cursor::swap::Swap;

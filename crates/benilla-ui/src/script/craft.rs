@@ -1,7 +1,10 @@
-//! The craft bindings the stock `Blizzard_CraftUI` window calls, over the recipe snapshot the app
-//! pushes ([`UiScript::set_craft`]); `DoCraft` and `CloseCraft` queue intents the app drains. The
-//! window has one action button, `DoCraft(GetCraftSelectionIndex())` (`Blizzard_CraftUI.xml:667`),
-//! and no Create All, so a craft intent is a bare spell id.
+//! The craft bindings the stock `Blizzard_CraftUI` window calls: each build reads the open type's
+//! book from the lent host as it stands ([`CraftBookQuery`]), the getters read what the reference
+//! reads at the call the same way ([`CraftRecipeQuery`], [`CraftNameQuery`],
+//! [`CraftDisplayLineQuery`]), a harness pushes a snapshot ([`UiScript::set_craft`]), and the host
+//! applies the calls `DoCraft` and `CloseCraft` make. The window has one action button,
+//! `DoCraft(GetCraftSelectionIndex())` (`Blizzard_CraftUI.xml:667`), and no Create All, so a craft
+//! intent is a bare spell id.
 //!
 //! The engine owns the row array (`0x4f60c0`): the recipes in the list's learn order, then a
 //! header row per group once there are two, sorted by the craft type's comparator; every Lua
@@ -11,7 +14,56 @@ use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::{self, number_arg};
 use super::item_stats::item_link;
+use super::live::LiveQuery;
 use super::Model;
+use super::TooltipText;
+
+/// The open type's book as the build reads it there (`0x4f60c0`): the player's list of the type
+/// (`0x5ea330`), each spell's ability row and skill total (`0x60c7c0`, `0x5ea520`), the bags
+/// (`0x622130`) and the pet as they stand. The lent host answers `Some(None)` for a build that
+/// finds no player (the lookup `0x468460` at `0x4f60ff`, its miss at `0x4f6109`), which leaves
+/// past its signal (`0x4f661f`); it declines where it lacks the catalogs, and the build keeps the
+/// list the VM holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CraftBookQuery;
+
+impl LiveQuery for CraftBookQuery {
+    type Answer = Option<CraftState>;
+}
+
+/// One recipe of the open type as its getters read it at the call: the reagents' carried counts
+/// (`0x4f76b2`), the totems held (`0x4f7a3c`), the names and icons off the item cache as it
+/// stands (`0x4f75f2`, `0x4f7a0a`), none asked, the pet bar unit's cost and level
+/// (`0x4f6fe6`-`0x4f7093`) and the description's parts (`0x4f7b53`, `0x4f7be6`), whose templates
+/// the getter reads from the VM's strings. `None` declines, where the getter reads the row the
+/// last build left.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CraftRecipeQuery(pub u32);
+
+impl LiveQuery for CraftRecipeQuery {
+    type Answer = CraftRecipe;
+}
+
+/// `GetCraftName` at the call (`0x4f6c10`): the name of the spell the player stores in the effect
+/// slot of craft type `.0` (`0x5ea360` at `0x4f6c3b`, `+0x1e0` at `0x4f6c5f`); `None`, the nil,
+/// with no player (`0x4f6c30`), no such slot or no such spell (`0x4f6c42`-`0x4f6c57`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CraftNameQuery(pub u32);
+
+impl LiveQuery for CraftNameQuery {
+    type Answer = Option<String>;
+}
+
+/// `GetCraftDisplaySkillLine` at the call past its type test (`0x4f6ce3`): the line of the first
+/// spell of the player's type-3 list (`0x4f6cf4`-`0x4f6d21`), its name, and the slot's rank and
+/// maximum with the permanent bonus (`0x4f6d52`-`0x4f6e17`); `None`, the failure triple
+/// (`0x4f6e40`), with no player, an empty list, no ability row or no `SkillLine` row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CraftDisplayLineQuery;
+
+impl LiveQuery for CraftDisplayLineQuery {
+    type Answer = Option<(String, u32, u32)>;
+}
 
 /// One reagent a recipe consumes (`GetCraftReagentInfo`); name and icon are `None` until the item
 /// template answer lands.
@@ -109,9 +161,10 @@ pub struct CraftRecipe {
     /// `numAvailable`: the least `floor(have / need)` over the reagents.
     pub num_available: u32,
     pub icon: Option<String>,
-    /// `GetCraftDescription`, `$`-tokens substituted by the app; `None` paints a blank line
-    /// (`Blizzard_CraftUI.lua:316`).
-    pub description: Option<String>,
+    /// `GetCraftDescription`'s text, its `$`-tokens expanded by the app and each `GlobalStrings`
+    /// template they name read from the VM at the call (`0x4f7b53`, `0x4f7be6`); `None` paints a
+    /// blank line (`Blizzard_CraftUI.lua:316`).
+    pub description: Option<TooltipText>,
     /// An `ENCHANT_ITEM` effect (`TARGET_FLAG_ITEM`, `TARGET_FLAG_TRADE_ITEM`): `DoCraft` then arms
     /// an app-side item pick. No Lua getter reads it.
     pub needs_item_target: bool,
@@ -137,7 +190,7 @@ pub struct CraftRecipe {
     pub tools_pending: Vec<u32>,
 }
 
-/// The open craft window, pushed whole by the app.
+/// The open craft window's book as a build reads it ([`CraftBookQuery`]), or a harness's push.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CraftState {
     /// The window's identity for the app's open detection; `GetCraftName` reads the effect slot
@@ -277,7 +330,22 @@ pub(crate) fn build(model: &mut Model) {
     recount(model);
 }
 
-/// The counts a closed window's build zeroes ahead of its open check (`0x4f60d1`-`0x4f60e3`).
+/// Seat `s` as the list the build refills its rows from, and read the reagent templates the link
+/// getter reads off the cache: it passes no callback (`0x4f780a`).
+fn seat(model: &mut Model, s: CraftState) {
+    for id in s
+        .recipes
+        .iter()
+        .flat_map(|r| r.reagents.iter().map(|re| re.item))
+    {
+        if id != 0 && !model.item_templates.contains_key(&id) {
+            model.item_stat_reads.insert(id);
+        }
+    }
+    model.craft = Some(s);
+}
+
+/// The counts a build zeroes ahead of its open and player checks (`0x4f60d1`-`0x4f60e3`).
 fn clear(model: &mut Model) {
     model.craft_rows.clear();
     model.craft_headers.clear();
@@ -381,14 +449,47 @@ impl super::UiScript {
         let mut model = self.model_mut();
         model.craft_open = state.is_some();
         if let Some(s) = state {
-            model.craft = Some(s);
+            seat(&mut model, s);
             build(&mut model);
         }
     }
 
-    /// Push the names of the spells in the player's four effect slots (`CGPlayer_C+0x1d10`),
+    /// `ToggleCraftWindow`'s open of `craft_type` (`0x4f601c`-`0x4f6036`): the type stored, the
+    /// selection cleared and every group expanded, then the build over `state`, the open type's
+    /// book as the build reads it. With none, as a build that finds no player, the counts are
+    /// zeroed and it leaves before its signal (`0x4f60d1`-`0x4f60e3`, `0x4f6109`). Whether its
+    /// `CRAFT_UPDATE` follows (`0x4f661a`).
+    pub fn open_craft(&mut self, craft_type: u32, state: Option<CraftState>) -> bool {
+        let mut model = self.model_mut();
+        model.craft_open = true;
+        model.craft_selection = 0;
+        model.craft_fold_mask = u32::MAX;
+        match state {
+            Some(s) => {
+                seat(&mut model, s);
+                build(&mut model);
+                true
+            }
+            None => {
+                let c = model.craft.get_or_insert_with(|| CraftState {
+                    name: String::new(),
+                    display_line: None,
+                    rank: 0,
+                    max_rank: 0,
+                    craft_type,
+                    recipes: Vec::new(),
+                });
+                c.craft_type = craft_type;
+                clear(&mut model);
+                false
+            }
+        }
+    }
+
+    /// A harness's names of the spells in the player's four effect slots (`CGPlayer_C+0x1d10`),
     /// which a learn writes by the spell's misc value (`0x5e9e1c`-`0x5e9e36`); `GetCraftName`
-    /// answers the one at the open craft type, slot 0 while none is open.
+    /// answers the one at the open craft type, slot 0 while none is open, when no host answers
+    /// [`CraftNameQuery`].
     pub fn set_craft_slot_names(&mut self, names: [Option<String>; 4]) {
         let mut model = self.model_mut();
         if model.craft_slot_names != names {
@@ -396,28 +497,30 @@ impl super::UiScript {
         }
     }
 
-    /// The open's resets (`0x4f601c`-`0x4f602c`): the selection cleared and every group expanded,
-    /// then the build (`0x4f6036`).
-    pub fn craft_opened(&mut self) {
-        let mut model = self.model_mut();
-        model.craft_selection = 0;
-        model.craft_fold_mask = u32::MAX;
-        build(&mut model);
-    }
-
     /// A rebuild of the craft list (`0x4f60c0`), as the bag and item watchers run one on each of
-    /// their runs: while a craft window is open, the state read again where `refresh` brings the
-    /// watcher's change in, and the rows built again. Whether the window is open, for the caller's
-    /// `CRAFT_UPDATE` (`0x4f661a`), signalled whether or not anything changed; a closed window
-    /// zeroes the counts and builds nothing (`0x4f60d1`-`0x4f60e3`).
+    /// their runs: the counts zeroed (`0x4f60d1`-`0x4f60dd`), then while a craft window is open the
+    /// book read again as it stands ([`CraftBookQuery`]; with no host to ask, the VM's copy where
+    /// `refresh` brings the caller's change in) and the rows built again. Whether its
+    /// `CRAFT_UPDATE` follows (`0x4f661a`), signalled whether or not anything changed: a closed
+    /// window (`0x4f60e3`) and a build that finds no player (`0x4f6109`) leave before it.
     pub fn rebuild_craft(&mut self, refresh: &mut dyn FnMut(&mut CraftState)) -> bool {
-        let mut model = self.model_mut();
-        if !model.craft_open {
-            clear(&mut model);
+        if !self.model_ref().craft_open {
+            clear(&mut self.model_mut());
             return false;
         }
-        if let Some(c) = model.craft.as_mut() {
-            refresh(c);
+        let fresh = super::live::ask(&self.lua, &CraftBookQuery);
+        let mut model = self.model_mut();
+        match fresh {
+            Some(Some(s)) => seat(&mut model, s),
+            Some(None) => {
+                clear(&mut model);
+                return false;
+            }
+            None => {
+                if let Some(c) = model.craft.as_mut() {
+                    refresh(c);
+                }
+            }
         }
         build(&mut model);
         true
@@ -461,6 +564,17 @@ pub(crate) fn recipe(model: &Model, index: usize) -> Option<&CraftRecipe> {
         Row::Recipe(i) => model.craft.as_ref()?.recipes.get(*i),
         Row::Header { .. } => None,
     }
+}
+
+/// The recipe at the 1-based `index` of the last build's rows, its reagents, tools, cost, level
+/// and description read as they stand at the call ([`CraftRecipeQuery`]); with no host to ask,
+/// the row's copy. `None` on a header or past the rows.
+fn recipe_now(lua: &Lua, index: usize) -> Option<CraftRecipe> {
+    let held = {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        recipe(&model, index)?.clone()
+    };
+    Some(super::live::ask(lua, &CraftRecipeQuery(held.spell_id)).unwrap_or(held))
 }
 
 /// Whether a 1-based index names a row, a header included (`0xbdcfc0`).
@@ -509,17 +623,23 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // GetCraftName() (`0x4f6c10`) → the name of the player's effect-slot spell for the open craft
     // type (`GetEffectSlotSpell 0x5ea360`, the marker `[0xbdcfb8]`, set at `0x4f601c`), type 0 with
-    // no window open; nil with no player, no such slot or no such spell (`0x4f6c74`).
+    // no window open; nil with no player, no such slot or no such spell (`0x4f6c74`). It reads the
+    // player at the call ([`CraftNameQuery`]); with no host to ask, the names a harness pushed.
     g.set(
         "GetCraftName",
         lua.create_function(|lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let marker = model.open_professions().craft.unwrap_or(0);
-            let name = usize::try_from(marker)
-                .ok()
-                .and_then(|m| model.craft_slot_names.get(m))
-                .and_then(|n| n.as_deref());
-            opt_str(lua, name.map(str::to_string).as_ref())
+            let marker = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                model.open_professions().craft.unwrap_or(0)
+            };
+            let name = super::live::ask(lua, &CraftNameQuery(marker)).unwrap_or_else(|| {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                usize::try_from(marker)
+                    .ok()
+                    .and_then(|m| model.craft_slot_names.get(m))
+                    .and_then(|n| n.clone())
+            });
+            opt_str(lua, name.as_ref())
         })?,
     )?;
 
@@ -539,17 +659,29 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // GetCraftDisplaySkillLine() (`0x4f6cb0`) → name, rank, maxRank, only while the open craft
     // type is 3, Enchanting (`0x4f6ce3`); any other type, a closed window or a line the first
     // spell lacks answers nil, 0, 0 (`0x4f6e40`), and the nil hides the stock rank bar
-    // (`Blizzard_CraftUI.lua:108-122`).
+    // (`Blizzard_CraftUI.lua:108-122`). The line and the slot are read at the call
+    // ([`CraftDisplayLineQuery`]); with no host to ask, the snapshot's.
     g.set(
         "GetCraftDisplaySkillLine",
         lua.create_function(|lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let enchanting = model.open_professions().craft == Some(CRAFT_TYPE_ENCHANTING);
-            let (name, rank, max_rank) = match &model.craft {
-                Some(c) if enchanting && c.display_line.is_some() => {
-                    (c.display_line.clone(), c.rank, c.max_rank)
-                }
-                _ => (None, 0, 0),
+            let enchanting = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                model.open_professions().craft == Some(CRAFT_TYPE_ENCHANTING)
+            };
+            let line = enchanting
+                .then(|| {
+                    super::live::ask(lua, &CraftDisplayLineQuery).unwrap_or_else(|| {
+                        let model = lua.app_data_ref::<Model>().expect("model app_data");
+                        model
+                            .craft
+                            .as_ref()
+                            .and_then(|c| c.display_line.clone().map(|n| (n, c.rank, c.max_rank)))
+                    })
+                })
+                .flatten();
+            let (name, rank, max_rank) = match line {
+                Some((n, r, m)) => (Some(n), r, m),
+                None => (None, 0, 0),
             };
             Ok(MultiValue::from_vec(vec![
                 opt_str(lua, name.as_ref())?,
@@ -622,7 +754,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // A header row answers its line's name, nil, `header`, 0, 1 while its mask bit by its place
     // in the sorted header array is set or nil while clear (`0x4f6f4f` → `0x4f6b80`, `0x4f6bc1`),
     // not the collapse word the recount stored before the sort, then 0, 0; a recipe's
-    // `isExpanded` is nil. The cost and the level are the app's, read off the pet bar's unit
+    // `isExpanded` is nil. The name, rank text, bucket and count are the row's (`0x4f6f9b`-
+    // `0x4f6fcf`); the cost and the level are read at the call off the pet bar's unit
     // (`0xb714a0`) for the spell a pet-learn effect teaches (`0x4f6fe6`-`0x4f7093`).
     g.set(
         "GetCraftInfo",
@@ -651,7 +784,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     Value::Integer(0),
                 ]));
             }
-            let Some(r) = recipe(&model, index) else {
+            let Some(r) = recipe(&model, index).cloned() else {
                 // `0x4f70a4`: nil, nil, nil, 0, nil, 0, 0, a header with no `SkillLine.dbc` row
                 // included (`0x4f6f1a`).
                 return Ok(binding_abi::tuple(&[
@@ -664,14 +797,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     Some(0),
                 ]));
             };
+            drop(model);
+            let (cost, level) = super::live::ask(lua, &CraftRecipeQuery(r.spell_id))
+                .map_or((r.training_point_cost, r.required_level), |now| {
+                    (now.training_point_cost, now.required_level)
+                });
             Ok(MultiValue::from_vec(vec![
                 Value::String(lua.create_string(&r.name)?),
                 Value::String(lua.create_string(&r.sub_name)?),
                 Value::String(lua.create_string(r.difficulty.as_str())?),
                 Value::Integer(i64::from(r.num_available)),
                 Value::Nil,
-                Value::Integer(i64::from(r.training_point_cost)),
-                Value::Integer(i64::from(r.required_level)),
+                Value::Integer(i64::from(cost)),
+                Value::Integer(i64::from(level)),
             ]))
         })?,
     )?;
@@ -689,17 +827,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // GetCraftDescription(index) → the description or nil, which the stock window tests before
-    // painting (`Blizzard_CraftUI.lua:312`).
+    // painting (`Blizzard_CraftUI.lua:312`). The host expands the tokens as they stand at the call
+    // ([`CraftRecipeQuery`]); each template they name is read from the VM's strings here, as the
+    // expander reads them (`0x5075f0`).
     g.set(
         "GetCraftDescription",
         lua.create_function(|lua, index: Value| {
             // `is-number` else `Usage: GetCraftDescription(index)` (`0x84d500`, `0x4f7aac`).
             let index = binding_abi::index_arg(lua, index, "Usage: GetCraftDescription(index)")?;
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            opt_str(
-                lua,
-                recipe(&model, index).and_then(|r| r.description.as_ref()),
-            )
+            let text = recipe_now(lua, index)
+                .and_then(|r| r.description)
+                .map(|t| t.text(crate::strings::Strings::Vm(lua)));
+            opt_str(lua, text.as_ref())
         })?,
     )?;
 
@@ -731,13 +870,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 reagent_index,
                 "Usage: GetCraftReagentInfo(index, reagentIndex)",
             )?;
-            let reagent = {
-                let model = lua.app_data_ref::<Model>().expect("model app_data");
-                recipe(&model, index).and_then(|r| {
-                    let n = reagent_index.checked_sub(1)?;
-                    Some((r.reagents.get(n)?.clone(), r.spell_id))
-                })
-            };
+            // The name and icon off the item cache and the carried count, read at the call
+            // (`0x4f75f2`, `0x4f76b2`).
+            let reagent = recipe_now(lua, index).and_then(|r| {
+                let n = reagent_index.checked_sub(1)?;
+                Some((r.reagents.get(n)?.clone(), r.spell_id))
+            });
             let Some((reagent, spell_id)) = reagent else {
                 return Ok(binding_abi::tuple(&[None; 4]));
             };
@@ -761,12 +899,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, index: Value| {
             // `is-number` else `Usage: GetCraftSpellFocus(index)` (`0x84d4dc`, `0x4f78db`).
             let index = binding_abi::index_arg(lua, index, "Usage: GetCraftSpellFocus(index)")?;
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let Some(r) = recipe(&model, index) else {
+            // The totems' names off the item cache and whether the bags hold each, read at the
+            // call (`0x4f7a0a`, `0x4f7a3c`).
+            let Some(r) = recipe_now(lua, index) else {
                 return Ok(MultiValue::new());
             };
-            let (tools, pending, spell_id) = (r.tools.clone(), r.tools_pending.clone(), r.spell_id);
-            drop(model);
+            let (tools, pending, spell_id) = (r.tools, r.tools_pending, r.spell_id);
             // Each totem in flight is asked with the callback `0x4f7710` inside the call
             // (`0x4f79f2`).
             for entry in pending {
@@ -932,7 +1070,7 @@ mod tests {
             difficulty,
             num_available,
             icon: Some(format!("Interface\\Icons\\Spell_{spell_id}")),
-            description: Some(format!("{name} description.")),
+            description: Some(format!("{name} description.").into()),
             needs_item_target: true,
             reagents: vec![CraftReagent {
                 item: 10940,
@@ -1358,7 +1496,8 @@ mod tests {
         assert_eq!(heard::take(&s), ["CRAFT_UPDATE 6"]);
         s.run("CollapseCraftSkillLine(0)").unwrap();
         assert_eq!(heard::take(&s), ["CRAFT_UPDATE 2"]);
-        s.craft_opened();
+        let held = s.model_ref().craft.clone();
+        assert!(s.open_craft(CRAFT_TYPE_BEAST_TRAINING, held));
         assert_eq!(s.eval::<i64>("return GetNumCrafts()").unwrap(), 6);
         s.run("CollapseCraftSkillLine(-1) ExpandCraftSkillLine(0)")
             .unwrap();

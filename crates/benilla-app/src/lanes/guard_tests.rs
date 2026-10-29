@@ -190,8 +190,8 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // Quiet: the craft and profession windows' open type and line, which an opener's cast
     // toggles and signals inside its call (`0x4fc910`, `0x4f6000`), the closes zero in theirs, and
     // the disconnect handlers (`ui_craft::on_session_end`, `ui_tradeskill::on_session_end`) clear
-    // without a signal; the profession builds read the line through the host at their places,
-    // and the craft feed pushes its list off the type, silently.
+    // without a signal; the profession and craft builds and getters read the line and the type
+    // through the host at their places.
     "::ui_craft::CraftOpen",
     "::ui_tradeskill::TradeSkillOpen",
     // Quiet: the profession openers a cast intercepted (`0x6e4bd7`), which the call host toggles
@@ -379,12 +379,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_items::locks::forget_gone_item_locks", &["net::GuidIndex"]),
     ("::ui_items::feed::feed_item_stats", &["items::Items", "net::HomeBind", "net::ObjectStore",
         "spell::mods::SpellModifiers"]),
-    // Beast Training reads the pet off its bar and its family off the creature record as the frame
-    // left them (#2217).
-    ("::ui_craft::feed_craft", &["items::Countdowns", "items::Items", "names::NameCache",
-        "net::GuidIndex", "net::ObjectStore", "spell::mods::SpellModifiers",
-        "ui_action::PlayerActions", "ui_craft::CraftOpen",
-        "ui_pet::PetBar"]),
     // The resolution list's `widescreen` filter (`0x48bcac`), which a listener's `SetCVar` moves
     // inside its call; the reference builds the list at the first resolution verb (`0x48bc90`).
     ("::video::publish_display_modes", &["video::Widescreen"]),

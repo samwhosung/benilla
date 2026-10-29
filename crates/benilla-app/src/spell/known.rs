@@ -5,8 +5,6 @@
 
 use bevy::prelude::*;
 
-use crate::net::Objects;
-
 /// A unit as `0x468460` finds it by guid with type mask 8: its guid, and its creature family's two
 /// skill lines when its creature record names a family row.
 pub(crate) struct PetUnit {
@@ -83,7 +81,11 @@ impl<'a> PetView<'a> {
     }
 
     /// The unit behind `guid`, when it is a streamed unit.
-    pub(crate) fn unit(&self, objects: &Objects, guid: u64) -> Option<PetUnit> {
+    pub(crate) fn unit(
+        &self,
+        objects: &(impl crate::ui_items::ItemObjects + ?Sized),
+        guid: u64,
+    ) -> Option<PetUnit> {
         let fields = objects.object(guid).filter(|_| guid != 0)?;
         if !matches!(
             fields.object_type(),

@@ -1,29 +1,32 @@
-//! The Craft window feed: the client-built book of a craft type (Enchanting, Beast Training),
-//! opened by its opener spell with no packet. Reagents and tools come off `Spell.dbc`, and the
-//! description's `$` tokens resolve as a tooltip's do. An enchant is an item-targeted cast
-//! (`Targets = 0x10`) whose pick is the ordinary targeting cursor ([`crate::spell::targeting`]).
+//! The Craft window: the client-built book of a craft type (Enchanting, Beast Training), opened by
+//! its opener spell with no packet, whose builds and getters read it here as it stands
+//! ([`CraftLive`]). Reagents and tools come off `Spell.dbc`, and the description's `$` tokens
+//! resolve as a tooltip's do. An enchant is an item-targeted cast (`Targets = 0x10`) whose pick is
+//! the ordinary targeting cursor ([`crate::spell::targeting`]).
 
 use bevy::prelude::*;
 
 use benilla_formats::{
-    SPELL_ATTR_IS_TRADESKILL, SPELL_EFFECT_CREATE_ITEM, SPELL_EFFECT_ENCHANT_ITEM,
-    SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY, SPELL_EFFECT_LEARN_PET_SPELL, SPELL_EFFECT_LEARN_SPELL,
+    substitute_parts, ExpandAt, TokenContext, SPELL_ATTR_IS_TRADESKILL, SPELL_EFFECT_CREATE_ITEM,
+    SPELL_EFFECT_ENCHANT_ITEM, SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY, SPELL_EFFECT_LEARN_PET_SPELL,
+    SPELL_EFFECT_LEARN_SPELL,
 };
 use benilla_protocol::messages::PLAYER_SKILL_SLOTS;
 use benilla_protocol::{SessionEvent, SessionEventKind};
-use benilla_ui::script::{CraftDifficulty, CraftReagent, CraftRecipe, CraftState, CraftTooltip};
+use benilla_ui::script::{
+    CraftDifficulty, CraftReagent, CraftRecipe, CraftState, CraftTooltip, TooltipText,
+};
 
 use crate::entities::ItemDisplays;
 use crate::items::Items;
-use crate::net::{NetCommands, NetHandlerApp, ObjectStore, Objects, SelfPlayer};
+use crate::net::{NetCommands, NetHandlerApp, ObjectStore, Objects};
 use crate::query_cache::Ask;
 use crate::spell::known::{PetReads, PetView};
 use crate::spell::CastCommit;
 use crate::ui_action::{PlayerActions, Spells};
-use crate::ui_items::{count_of, item_icon, InventoryScope};
+use crate::ui_items::{count_of, item_icon, InventoryScope, ItemObjects};
 use crate::ui_spellbook::SkillLines;
 use crate::ui_tradeskill::SpellFocus;
-use crate::ui_unit::UnitFeed;
 
 /// The open Craft window, client-local. A nonzero opener `EffectMiscValue[0]` routes here
 /// (`Spell_C::TryCast` `0x6e4b60`) and is the craft type (1 Beast Training, 3 Enchanting) the
@@ -54,8 +57,7 @@ pub(crate) struct UiCraftPlugin;
 impl Plugin for UiCraftPlugin {
     fn build(&self, app: &mut App) {
         app.net_handler(SessionEventKind::Disconnected, on_session_end);
-        app.init_resource::<CraftOpen>()
-            .add_systems(Update, feed_craft.in_set(UnitFeed));
+        app.init_resource::<CraftOpen>();
     }
 }
 
@@ -89,7 +91,7 @@ fn skill_total(store: &ObjectStore, skill_id: u32) -> i32 {
 fn cost_and_level(
     pet: &PetView,
     d: &benilla_formats::SpellDisplay,
-    objects: &Objects,
+    objects: &impl ItemObjects,
 ) -> (u32, i32) {
     let Some(unit) = pet.unit(objects, pet.bar_guid) else {
         return (0, 0);
@@ -128,7 +130,7 @@ fn craft_bucket(
     store: &ObjectStore,
     known: &std::collections::BTreeSet<u32>,
     pet: Option<&PetView>,
-    objects: &Objects,
+    objects: &impl ItemObjects,
 ) -> CraftDifficulty {
     if let Some(sla) = sla.filter(|a| a.trivial_high != 0) {
         let high = sla.trivial_high as i32;
@@ -183,10 +185,10 @@ fn skill_slot(
 /// the line of the first spell of the player's type-3 list (`0x4f6d0c`) by its ability row
 /// (`0x4f6d14`, `+0x04`, 0 failing at `0x4f6d26`), named by `SkillLine.dbc` (`0x4f6d61`), with the
 /// slot's rank and maximum, each plus the permanent bonus word when above 0 (`0x4f6d9d`,
-/// `0x4f6e10`). The known spells are a set here, so the first is the lowest id. A player with no
-/// slot for the line gives the slot -1, which the reads do not test (`0x4f6d52`): the words 12
-/// bytes below the first slot, `PLAYER_XP` for the rank and maximum and `PLAYER_NEXT_LEVEL_XP`'s
-/// high word for the bonus.
+/// `0x4f6e10`). The list is in learn order (`0x5e9e0f`), so the first is the first learned. A
+/// player with no slot for the line gives the slot -1, which the reads do not test (`0x4f6d52`):
+/// the words 12 bytes below the first slot, `PLAYER_XP` for the rank and maximum and
+/// `PLAYER_NEXT_LEVEL_XP`'s high word for the bonus.
 fn display_line(
     first: Option<u32>,
     skill_lines: &SkillLines,
@@ -237,8 +239,51 @@ fn craft_tooltip(spell_id: u32, d: &benilla_formats::SpellDisplay) -> CraftToolt
     CraftTooltip::Spell(spell_id)
 }
 
-/// What the craft list's build reads (`0x4f60c0`): the player's known spells, the catalogs, the
-/// player object, the bags, the item cache and the pet.
+/// `GetCraftDescription`'s text (`0x4f7a90`) for a row of `open_type`: the spell's own
+/// description when it is not empty (`0x4f7b21`-`0x4f7b2f`), expanded with the pet flag set for
+/// craft type 1 (`0x4f7b3d`, `0x4f7b53`); else the description of the spell the first
+/// `LEARN_SPELL` or `LEARN_PET_SPELL` effect teaches, when it has a record (`0x4f7b71`-
+/// `0x4f7ba3`), expanded with the pet flag set for 57 (`0x4f7bce`, `0x4f7be6`); else `None`, the
+/// nil (`0x4f7bae`). Each template a token names is left to the getter's read of the VM's
+/// strings; the expansion is the spell tooltip's (level 0, stack 1, `ExpandAt::default`).
+fn craft_description(
+    d: &benilla_formats::SpellDisplay,
+    spells: &benilla_formats::SpellCatalog,
+    open_type: u32,
+    (player, pet): Contexts<'_, '_>,
+) -> Option<TooltipText> {
+    let expand = |text: &str, d: &benilla_formats::SpellDisplay, at_pet: bool| {
+        let ctx = if at_pet { pet } else { player };
+        crate::ui_tooltip::tooltip_text(substitute_parts(text, d, ctx, ExpandAt::default()))
+    };
+    if let Some(text) = d.description.as_deref().filter(|t| !t.is_empty()) {
+        return Some(expand(text, d, open_type == CRAFT_TYPE_BEAST_TRAINING));
+    }
+    (0..3).find_map(|i| {
+        let effect = d.effects[i];
+        if !matches!(
+            effect,
+            SPELL_EFFECT_LEARN_SPELL | SPELL_EFFECT_LEARN_PET_SPELL
+        ) {
+            return None;
+        }
+        let taught = spells.get(d.effect_trigger_spell[i])?;
+        let text = taught.description.as_deref().unwrap_or("");
+        Some(expand(text, taught, effect == SPELL_EFFECT_LEARN_PET_SPELL))
+    })
+}
+
+/// Beast Training's craft type, which sets the expander's pet flag for a row's own text
+/// (`cmp esi,1` at `0x4f7b3d`).
+const CRAFT_TYPE_BEAST_TRAINING: u32 = 1;
+
+/// The `$`-token contexts of the player and of its pet, which the expander's pet flag picks
+/// between ([`CraftReads::with_contexts`]).
+type Contexts<'c, 'a> = (&'c TokenContext<'a>, &'c TokenContext<'a>);
+
+/// What the craft list's build and getters read (`0x4f60c0`, `0x4f6c10`-`0x4f7be6`): the
+/// player's known spells and lists, the catalogs, the player object and the bags as of the drain's
+/// place ([`crate::ui_unit::views::ViewStores`]), the item cache, the pet and the bind point.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct CraftReads<'w, 's> {
     pet: PetReads<'w>,
@@ -248,183 +293,125 @@ pub(crate) struct CraftReads<'w, 's> {
     skill_lines: Option<Res<'w, SkillLines>>,
     focus: Option<Res<'w, SpellFocus>>,
     icons: Option<Res<'w, ItemDisplays>>,
-    self_store: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
+    /// The `$z` token: the bind point's area (`0x5ed420` at `0x507f07`), named through
+    /// `AreaTable` (`0x507f2b`).
+    home_bind: Option<Res<'w, crate::net::HomeBind>>,
+    area_names: Option<Res<'w, crate::ui_quest_log::QuestHeaderNamesRes>>,
     objects: Objects<'w, 's>,
+    stores: crate::ui_unit::views::ViewStores<'w, 's>,
     items: Res<'w, Items>,
 }
 
 impl CraftReads<'_, '_> {
-    /// The names of the spells in the player's four effect slots, `None` with no player.
-    fn slot_names(&self) -> Option<[Option<String>; 4]> {
-        self.self_store.single().ok()?;
-        Some(effect_slot_names(&self.actions, self.spells.as_deref()?))
+    /// The active player's store as of here (`0x468460`).
+    fn player(&self) -> Option<&ObjectStore> {
+        self.objects.player().and_then(|e| self.stores.get(e).ok())
     }
 
-    /// The list of `craft_type`, opened by an opener of `line`, its descriptions expanded against
-    /// `script`'s strings; `None` while a catalog or our player is missing. The list only reads
-    /// the item cache: the build asks nothing (`0x4f60c0`), and a reagent or a totem is asked by
-    /// its getter's call, inside it (`0x4f75f2`, `0x4f7a0a`).
-    pub(crate) fn state(
+    /// The bind point's area name, `None` before it resolves, where `$z` reads `HOME_INN`.
+    fn home_area(&self) -> Option<&str> {
+        self.home_bind
+            .as_deref()
+            .and_then(|b| b.0)
+            .and_then(|id| self.area_names.as_deref()?.0.resolve(id as i32))
+    }
+
+    /// `f` over the `$`-token contexts of the player `store` and of its pet, the two casters the
+    /// expander's pet flag picks between for its level and cost terms (`0x6e3130`, `0x6e31b0`,
+    /// `0x6e3300`): the pet is the charm, else the summon, as of here.
+    fn with_contexts<R>(
         &self,
-        script: &benilla_ui::script::UiScript,
-        line: u32,
-        craft_type: u32,
-    ) -> Option<CraftState> {
-        let spells = self.spells.as_deref()?;
-        let skill_lines = self.skill_lines.as_deref()?;
-        let store = self.self_store.single().ok()?;
-        let name = skill_lines
-            .catalog
-            .line(line)
-            .map(|l| l.name.clone())
-            .unwrap_or_else(|| format!("Skill {line}"));
-        let global = |key: &str| benilla_ui::strings::global(script.lua(), key);
-        // The `$z` token: the bind area the items feed pushed for `GetBindLocation`, so the
-        // two agree (`0x507f07`-`0x507f45`, `0x48dae0`).
-        let bind = script.bind_location();
-        let home_area: Option<&str> = bind.as_deref();
-        // The player's level for a spell and its cost (`0x6e3130`, `0x6e31b0`, `0x6e3300`).
+        spells: &Spells,
+        skill_lines: &SkillLines,
+        store: &ObjectStore,
+        f: impl FnOnce(Contexts<'_, '_>) -> R,
+    ) -> R {
+        let pet = store
+            .0
+            .unit_pet_guid()
+            .and_then(|guid| self.stores.by_guid(guid, self.objects.store(guid)));
+        let home_area = self.home_area();
+        let mods = &*self.spell_mods;
         let skills = crate::spell::PlayerSkills {
             lines: Some(&skill_lines.catalog),
             spells: Some(&spells.catalog),
             items: Some(&self.items),
         };
-        let ctx = benilla_formats::TokenContext {
+        let player_level = |d: &benilla_formats::SpellDisplay| {
+            crate::spell::player_spell_level(Some(store), skills, d)
+        };
+        let player_cost = |d: &benilla_formats::SpellDisplay| {
+            crate::spell::usable::power_cost(d, store, skills, mods)
+        };
+        let player_per_second = |d: &benilla_formats::SpellDisplay| {
+            let level = crate::spell::SpellLevel::Player {
+                me: Some(store),
+                skills,
+            };
+            crate::spell::usable::per_second_cost(d, level)
+        };
+        let pet_skill_level = |d: &benilla_formats::SpellDisplay| {
+            d.skill_level(crate::spell::pet_skill_value(pet.map(|p| &p.0)))
+        };
+        let pet_level =
+            |d: &benilla_formats::SpellDisplay| crate::spell::SpellLevel::Known(pet_skill_level(d));
+        let pet_cost = |d: &benilla_formats::SpellDisplay| {
+            pet.map_or(-1, |p| {
+                crate::spell::usable::power_cost_at(d, &p.0, pet_level(d), mods)
+            })
+        };
+        let pet_per_second = |d: &benilla_formats::SpellDisplay| {
+            crate::spell::usable::per_second_cost(d, pet_level(d))
+        };
+        let player_ctx = TokenContext {
             durations: &spells.durations,
             radii: &spells.radii,
             ranges: Some(&spells.ranges),
-            level: &|d| crate::spell::player_spell_level(Some(store), skills, d),
+            level: &player_level,
             lookup: &|id| spells.catalog.get(id),
-            mods: Some(&*self.spell_mods),
-            power_cost: &|d| crate::spell::usable::power_cost(d, store, skills, &self.spell_mods),
-            power_per_second: &|d| {
-                let level = crate::spell::SpellLevel::Player {
-                    me: Some(store),
-                    skills,
-                };
-                crate::spell::usable::per_second_cost(d, level)
-            },
+            mods: Some(mods),
+            power_cost: &player_cost,
+            power_per_second: &player_per_second,
             unmodified_points: false,
             gender: &|| store.0.unit_gender().unwrap_or(0),
             home_area: &|| home_area,
-            global: &global,
+            // Never read: the parts leave each template to the getter's read of the VM's strings.
+            global: &|_| None,
             printf: &crate::ui_script::token_printf,
         };
-        // Admission (`0x5e9c20`): known, not hidden (`Attributes & 0x20`), and `castUI` equal
-        // to the craft type. The client walks its per-type list (`CGPlayer_C + 0x1cd0 +
-        // 0x10*type`), in learn order (`0x5e9e0f`), and never consults `SkillLineAbility` for
-        // membership.
-        let listed: Vec<u32> = self
-            .actions
-            .craft_order
-            .iter()
-            .copied()
-            .filter(|&s| {
-                spells.catalog.get(s).is_some_and(|d| {
-                    d.cast_ui == craft_type && d.attributes & SPELL_ATTR_IS_TRADESKILL == 0
-                })
-            })
-            .collect();
+        let pet_ctx = TokenContext {
+            level: &pet_skill_level,
+            power_cost: &pet_cost,
+            power_per_second: &pet_per_second,
+            ..player_ctx
+        };
+        f((&player_ctx, &pet_ctx))
+    }
+
+    /// The book of `craft_type`, opened by an opener of `line`, as a build reads it; `None` while
+    /// a catalog or our player is missing. The list only reads the item cache: the build asks
+    /// nothing (`0x4f60c0`), and a reagent or a totem is asked by its getter's call, inside it
+    /// (`0x4f75f2`, `0x4f7a0a`).
+    pub(crate) fn state(&self, line: u32, craft_type: u32) -> Option<CraftState> {
+        let spells = self.spells.as_deref()?;
+        let skill_lines = self.skill_lines.as_deref()?;
+        let store = self.player()?;
+        let name = skill_lines
+            .catalog
+            .line(line)
+            .map(|l| l.name.clone())
+            .unwrap_or_else(|| format!("Skill {line}"));
+        let listed = self.listed(spells, craft_type);
         let (display_line, rank, max_rank) = (craft_type == 3)
             .then(|| display_line(listed.first().copied(), skill_lines, store))
             .flatten()
             .map_or((None, 0, 0), |(n, r, m)| (Some(n), r, m));
-        let pet = self.pet.view(&skill_lines.catalog, &spells.catalog);
-        let recipes: Vec<CraftRecipe> = listed
-            .iter()
-            .filter_map(|&s| {
-                let d = spells.catalog.get(s)?;
-                // A spell with no ability row keeps its row, in group 0 (`0x4f61b6`).
-                let (race, class) = store.race_class();
-                let sla = skill_lines.catalog.ability(s, race, class);
-                let mut reagents = Vec::new();
-                let mut num_available = u32::MAX;
-                for &(entry, need) in d.reagents.iter().filter(|&&(e, n)| e != 0 && n != 0) {
-                    let have = count_of(&store.0, &self.objects, entry, InventoryScope::DEFAULT);
-                    // A reagent's icon is the shared item chain (`0x5d88b0`) through its
-                    // display.
-                    let (name, icon) = match self.items.template(entry, 0, Ask::Read) {
-                        Some(t) => (
-                            Some(t.name.clone()),
-                            item_icon(self.icons.as_deref(), t.display_info_id),
-                        ),
-                        None => (None, None),
-                    };
-                    reagents.push(CraftReagent {
-                        item: entry,
-                        name,
-                        icon,
-                        need,
-                        have,
-                    });
-                    num_available = num_available.min(have / need);
-                }
-                if reagents.is_empty() {
-                    num_available = 0;
-                }
-                // Focus first, then the totems (`0x4ff980`), the list `GetCraftSpellFocus`
-                // (`0x4f78b0`) returns. The focus's flag is a literal `1.0`, never reddened.
-                let mut tools = Vec::new();
-                if d.requires_spell_focus != 0 {
-                    if let Some(n) = self
-                        .focus
-                        .as_deref()
-                        .and_then(|f| f.catalog.name(d.requires_spell_focus))
-                    {
-                        tools.push((n.to_string(), true));
-                    }
-                }
-                let mut tools_pending = Vec::new();
-                for &t in d.totems.iter().filter(|&&t| t != 0) {
-                    let have = count_of(&store.0, &self.objects, t, InventoryScope::DEFAULT) > 0;
-                    match self.items.template(t, 0, Ask::Read) {
-                        Some(info) => tools.push((info.name.clone(), have)),
-                        None => tools_pending.push(t),
-                    }
-                }
-                let needs_item_target = matches!(
-                    d.effects[0],
-                    SPELL_EFFECT_ENCHANT_ITEM | SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY
-                );
-                let icon = craft_icon(d);
-                let (training_point_cost, required_level) = pet
-                    .as_ref()
-                    .map_or((0, 0), |p| cost_and_level(p, d, &self.objects));
-                Some(CraftRecipe {
-                    spell_id: s,
-                    name: d.name.clone(),
-                    sub_name: d.rank.clone().unwrap_or_default(),
-                    difficulty: craft_bucket(
-                        d,
-                        sla,
-                        store,
-                        &self.actions.spells,
-                        pet.as_ref(),
-                        &self.objects,
-                    ),
-                    num_available,
-                    icon,
-                    description: d
-                        .description
-                        .as_deref()
-                        .map(|t| benilla_formats::substitute(t, d, &ctx)),
-                    needs_item_target,
-                    reagents,
-                    tools,
-                    tooltip: craft_tooltip(s, d),
-                    // `spellLevel` at `+0x74` (column 29), not `baseLevel` (column 28).
-                    spell_level: d.spell_level,
-                    // The group key is the ability row's line (`0x4f61b1`), 0 with none.
-                    group: sla.map_or(0, |a| a.skill_id),
-                    skill_line: sla
-                        .and_then(|a| skill_lines.catalog.line(a.skill_id))
-                        .map(|l| l.name.clone()),
-                    training_point_cost,
-                    required_level,
-                    tools_pending,
-                })
-            })
-            .collect();
+        let recipes: Vec<CraftRecipe> = self.with_contexts(spells, skill_lines, store, |ctxs| {
+            listed
+                .iter()
+                .filter_map(|&s| self.recipe(s, spells, skill_lines, store, craft_type, ctxs))
+                .collect()
+        });
         // No sort here: the engine orders the rows by the craft type's own comparator
         // (`benilla_ui::script::craft::recipe_order`).
         Some(CraftState {
@@ -436,62 +423,187 @@ impl CraftReads<'_, '_> {
             recipes,
         })
     }
-}
 
-/// Keep the VM's craft list as the engine holds it, silently; the open and the closes signal in
-/// their calls ([`crate::ui_tradeskill::TradeSkillSteps`]), the rebuilds at their packets.
-fn feed_craft(
-    mut vm: crate::script_calls::VmWith<(CraftReads<'static, 'static>, Res<'static, CraftOpen>)>,
-    mut memo: Local<crate::ui_script::VmMemo<CraftMemo>>,
-) {
-    vm.turn(|script, (reads, open)| {
-        let Some(script) = script else {
-            return;
-        };
-        let memo = memo.get(script);
-        // `GetCraftName` reads the player's effect slot of the open type, 0 when closed (`0x4f6c32`).
-        script.set_craft_slot_names(reads.slot_names().unwrap_or_default());
-        let fresh = open
-            .line
-            .and_then(|line| reads.state(script, line, open.craft_type));
-        // The type stays open while a frame cannot resolve its book (a worldport's purge of our
-        // own player): only a close or the world-enter init ends it (`0x4f5fe0`, `0x4f5ee0`).
-        let fresh = match fresh {
-            None if open.line.is_some() => memo.state.clone(),
-            f => f,
-        };
-        // Every push is silent: the rebuilds signal, and the getters read the state at their call.
-        if fresh != memo.state {
-            script.set_craft(fresh.clone());
-            // The reagent templates `GetCraftReagentItemLink` reads, off the cache: the link
-            // passes no callback (`0x4f780a`).
-            if let Some(f) = &fresh {
-                script.read_item_templates(
-                    f.recipes
-                        .iter()
-                        .flat_map(|r| r.reagents.iter().map(|re| re.item)),
-                );
+    /// The build's book of the open window: `Some(None)` with no type open or no player, as the
+    /// build's leaves (`0x4f60e3`, `0x4f6109`); `None` while a catalog is missing.
+    fn book(&self, open: &CraftOpen) -> Option<Option<CraftState>> {
+        self.spells.as_deref()?;
+        self.skill_lines.as_deref()?;
+        Some(open.line.and_then(|line| self.state(line, open.craft_type)))
+    }
+
+    /// The player's list of `craft_type` (`CGPlayer_C + 0x1cd0 + 0x10*type`, `0x5ea330`), in learn
+    /// order (`0x5e9e0f`): admitted at the learn (`0x5e9c20`) when known, not a profession spell
+    /// (`Attributes & 0x20`) and `castUI` equal to the type; `SkillLineAbility` decides no
+    /// membership.
+    fn listed(&self, spells: &Spells, craft_type: u32) -> Vec<u32> {
+        self.actions
+            .craft_order
+            .iter()
+            .copied()
+            .filter(|&s| {
+                spells.catalog.get(s).is_some_and(|d| {
+                    d.cast_ui == craft_type && d.attributes & SPELL_ATTR_IS_TRADESKILL == 0
+                })
+            })
+            .collect()
+    }
+
+    /// `spell_id`'s row as its getters read it at the call, `open_type` the window's type
+    /// (`[0xbdcfb8]`, 0 while closed) for the description's pet flag; `None` declines, with a
+    /// catalog, our player or the spell's record missing.
+    fn recipe_now(&self, spell_id: u32, open_type: u32) -> Option<CraftRecipe> {
+        let spells = self.spells.as_deref()?;
+        let skill_lines = self.skill_lines.as_deref()?;
+        let store = self.player()?;
+        self.with_contexts(spells, skill_lines, store, |ctxs| {
+            self.recipe(spell_id, spells, skill_lines, store, open_type, ctxs)
+        })
+    }
+
+    /// `GetCraftName`'s answer for `craft_type` (`0x4f6c10`): the name of the spell in the
+    /// player's effect slot of the type (`0x5ea360`), which a learn writes by the spell's misc
+    /// value (`0x5e9e1c`-`0x5e9e36`) and an unlearn leaves; `Some(None)` with no player or no such
+    /// spell, `None` while the spells are missing.
+    fn name_now(&self, craft_type: u32) -> Option<Option<String>> {
+        let spells = self.spells.as_deref()?;
+        Some(self.player().and_then(|_| {
+            let slot = (*self
+                .actions
+                .effect_slots
+                .get(usize::try_from(craft_type).ok()?)?)?;
+            spells.catalog.get(slot).map(|d| d.name.clone())
+        }))
+    }
+
+    /// `GetCraftDisplaySkillLine`'s answer past its type test (`0x4f6ce3`); `Some(None)` with no
+    /// player, `None` while a catalog is missing.
+    fn display_line_now(&self) -> Option<Option<(String, u32, u32)>> {
+        let spells = self.spells.as_deref()?;
+        let skill_lines = self.skill_lines.as_deref()?;
+        Some(self.player().and_then(|store| {
+            display_line(self.listed(spells, 3).first().copied(), skill_lines, store)
+        }))
+    }
+
+    /// One row of the list (`0x4f6146`-`0x4f63cc`) beside what its getters read: the bucket and
+    /// count the build stores, and the reagents, tools, cost, level and description the getters
+    /// read at their calls. `open_type` sets the description's pet flag (`0x4f7b31`).
+    fn recipe(
+        &self,
+        s: u32,
+        spells: &Spells,
+        skill_lines: &SkillLines,
+        store: &ObjectStore,
+        open_type: u32,
+        ctxs: Contexts<'_, '_>,
+    ) -> Option<CraftRecipe> {
+        let d = spells.catalog.get(s)?;
+        let objects = self.stores.item_objects(&self.objects);
+        let pet = self.pet.view(&skill_lines.catalog, &spells.catalog);
+        // A spell with no ability row keeps its row, in group 0 (`0x4f61b6`).
+        let (race, class) = store.race_class();
+        let sla = skill_lines.catalog.ability(s, race, class);
+        let mut reagents = Vec::new();
+        let mut num_available = u32::MAX;
+        for &(entry, need) in d.reagents.iter().filter(|&&(e, n)| e != 0 && n != 0) {
+            let have = count_of(&store.0, &objects, entry, InventoryScope::DEFAULT);
+            // A reagent's icon is the shared item chain (`0x5d88b0`) through its display.
+            let (name, icon) = match self.items.template(entry, 0, Ask::Read) {
+                Some(t) => (
+                    Some(t.name.clone()),
+                    item_icon(self.icons.as_deref(), t.display_info_id),
+                ),
+                None => (None, None),
+            };
+            reagents.push(CraftReagent {
+                item: entry,
+                name,
+                icon,
+                need,
+                have,
+            });
+            num_available = num_available.min(have / need);
+        }
+        if reagents.is_empty() {
+            num_available = 0;
+        }
+        // Focus first, then the totems (`0x4ff980`), the list `GetCraftSpellFocus` (`0x4f78b0`)
+        // returns. The focus's flag is a literal `1.0`, never reddened.
+        let mut tools = Vec::new();
+        if d.requires_spell_focus != 0 {
+            if let Some(n) = self
+                .focus
+                .as_deref()
+                .and_then(|f| f.catalog.name(d.requires_spell_focus))
+            {
+                tools.push((n.to_string(), true));
             }
         }
-        memo.state = fresh;
-    })
+        let mut tools_pending = Vec::new();
+        for &t in d.totems.iter().filter(|&&t| t != 0) {
+            let have = count_of(&store.0, &objects, t, InventoryScope::DEFAULT) > 0;
+            match self.items.template(t, 0, Ask::Read) {
+                Some(info) => tools.push((info.name.clone(), have)),
+                None => tools_pending.push(t),
+            }
+        }
+        let needs_item_target = matches!(
+            d.effects[0],
+            SPELL_EFFECT_ENCHANT_ITEM | SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY
+        );
+        let (training_point_cost, required_level) = pet
+            .as_ref()
+            .map_or((0, 0), |p| cost_and_level(p, d, &objects));
+        Some(CraftRecipe {
+            spell_id: s,
+            name: d.name.clone(),
+            sub_name: d.rank.clone().unwrap_or_default(),
+            difficulty: craft_bucket(d, sla, store, &self.actions.spells, pet.as_ref(), &objects),
+            num_available,
+            icon: craft_icon(d),
+            description: craft_description(d, &spells.catalog, open_type, ctxs),
+            needs_item_target,
+            reagents,
+            tools,
+            tooltip: craft_tooltip(s, d),
+            // `spellLevel` at `+0x74` (column 29), not `baseLevel` (column 28).
+            spell_level: d.spell_level,
+            // The group key is the ability row's line (`0x4f61b1`), 0 with none.
+            group: sla.map_or(0, |a| a.skill_id),
+            skill_line: sla
+                .and_then(|a| skill_lines.catalog.line(a.skill_id))
+                .map(|l| l.name.clone()),
+            training_point_cost,
+            required_level,
+            tools_pending,
+        })
+    }
 }
 
-/// The names of the spells in the player's four effect slots (`CGPlayer_C+0x1d10`, `0x5ea360`),
-/// which `GetCraftName` reads at the open craft type (`0x4f6c32`); a learn writes them
-/// ([`PlayerActions::effect_slots`]), an unlearn leaves them.
-fn effect_slot_names(actions: &PlayerActions, spells: &Spells) -> [Option<String>; 4] {
-    actions.effect_slots.map(|slot| {
-        slot.and_then(|id| spells.catalog.get(id))
-            .map(|d| d.name.clone())
-    })
+/// The craft getters' and builds' reads as they run, the call host's half of
+/// [`benilla_ui::script::CraftBookQuery`], [`benilla_ui::script::CraftRecipeQuery`],
+/// [`benilla_ui::script::CraftNameQuery`] and [`benilla_ui::script::CraftDisplayLineQuery`], over
+/// the open type `[0xbdcfb8]`.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct CraftLive<'w, 's> {
+    open: Res<'w, CraftOpen>,
+    reads: CraftReads<'w, 's>,
 }
 
-/// What [`feed_craft`] remembers from its last frame.
-#[derive(Default)]
-struct CraftMemo {
-    /// The state it last pushed.
-    state: Option<CraftState>,
+impl crate::script_calls::live::LiveFamily for CraftLive<'_, '_> {
+    fn answer(&mut self, ask: &mut benilla_ui::script::live::LiveAsk<'_>) -> bool {
+        use benilla_ui::script::{
+            CraftBookQuery, CraftDisplayLineQuery, CraftNameQuery, CraftRecipeQuery,
+        };
+        let (open, reads) = (&*self.open, &self.reads);
+        // The type a close zeroes (`0x4f5fe0`).
+        let open_type = open.line.map_or(0, |_| open.craft_type);
+        ask.answer(|_: &CraftBookQuery| reads.book(open))
+            || ask.answer(|q: &CraftRecipeQuery| reads.recipe_now(q.0, open_type))
+            || ask.answer(|q: &CraftNameQuery| reads.name_now(q.0))
+            || ask.answer(|_: &CraftDisplayLineQuery| reads.display_line_now())
+    }
 }
 
 /// `DoCraft(index)` past its row (`0x4f7d10`): the row's cast through `CastSpellAsActivePlayer`
@@ -525,12 +637,12 @@ impl CraftSteps<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::SelfPlayer;
     use benilla_formats::SpellDisplay;
     use benilla_ui::script::UiScript;
 
-    /// `CloseCraft` signals `CRAFT_CLOSE` in the verb (`0x4f5fef`), so the feed that finds the
-    /// window closed a frame later signals no second close; the opener's toggle signals its own
-    /// (`0x4f6017`).
+    /// `CloseCraft` signals `CRAFT_CLOSE` in the verb (`0x4f5fef`) and nothing signals a second
+    /// close a frame later; the opener's toggle signals its own (`0x4f6017`).
     #[test]
     fn a_verbs_close_is_signalled_once() {
         let (tx, _rx) = crossbeam_channel::unbounded();
@@ -556,7 +668,6 @@ mod tests {
             )
             .unwrap();
         app.insert_non_send_resource(script);
-        app.add_systems(Update, feed_craft);
         let closes = |app: &App| {
             app.world()
                 .non_send_resource::<UiScript>()
@@ -574,7 +685,7 @@ mod tests {
         // The host's half, which this harness has none of.
         app.world_mut().resource_mut::<CraftOpen>().line = None;
         app.update();
-        assert_eq!(closes(&app), 1, "no second signal from the feed");
+        assert_eq!(closes(&app), 1, "no second signal");
 
         toggle(&mut app, 333, 3);
         app.update();
@@ -710,13 +821,8 @@ mod tests {
             .spawn((SelfPlayer, ObjectStore(Default::default())))
             .id();
         app.insert_non_send_resource(UiScript::new().unwrap());
-        app.add_systems(Update, feed_craft);
-        {
-            let mut open = app.world_mut().resource_mut::<CraftOpen>();
-            open.line = Some(333);
-            open.craft_type = 3;
-        }
-        // Where the dust and the rod sit: player slots, 17 worn, 81 the keyring, 39 the bank.
+        // Where the dust and the rod sit: player slots, 17 worn, 81 the keyring, 39 the bank;
+        // each read opens the window again, whose build counts them.
         let mut read = |dust_slot: u16, rod_slot: u16| -> (i64, bool) {
             let seat = |slot: u16, guid: u64| {
                 let lo = 486 + 2 * slot;
@@ -731,7 +837,7 @@ mod tests {
                     ]
                     .concat(),
                 )));
-            app.update();
+            reopen(&mut app, 333, 3);
             app.world()
                 .non_send_resource::<UiScript>()
                 .eval::<(i64, bool)>(
@@ -796,23 +902,18 @@ mod tests {
         let script = UiScript::new().unwrap();
         script.run("HOME_INN = 'your inn'").unwrap();
         app.insert_non_send_resource(script);
-        app.add_systems(Update, feed_craft);
-        {
-            let mut open = app.world_mut().resource_mut::<CraftOpen>();
-            open.line = Some(333);
-            open.craft_type = 3;
-        }
         let described = |app: &mut App| {
-            app.update();
+            reopen(app, 333, 3);
             app.world()
                 .non_send_resource::<UiScript>()
                 .eval::<String>("return GetCraftDescription(1)")
                 .unwrap()
         };
         assert_eq!(described(&mut app), "Returns you to your inn.");
-        app.world_mut()
-            .non_send_resource_mut::<UiScript>()
-            .set_bind_location(Some("Elwynn Forest"));
+        app.insert_resource(crate::net::HomeBind(Some(12)));
+        app.insert_resource(crate::ui_quest_log::QuestHeaderNamesRes(
+            benilla_formats::QuestHeaderNames::from_zones([(12, "Elwynn Forest")]),
+        ));
         assert_eq!(described(&mut app), "Returns you to Elwynn Forest.");
     }
 
@@ -897,7 +998,8 @@ mod tests {
         }
     }
 
-    /// The feed over `displays`, the player knowing `known`, with no pet; [`seat_pet`] adds one.
+    /// The window's reads over `displays`, the player knowing `known`, with no pet; [`seat_pet`]
+    /// adds one.
     fn craft_feed(
         displays: Vec<(u32, SpellDisplay)>,
         known: &[u32],
@@ -940,7 +1042,6 @@ mod tests {
         let mut script = UiScript::new().unwrap();
         script.keep_calls();
         app.insert_non_send_resource(script);
-        app.add_systems(Update, feed_craft);
         app
     }
 
@@ -965,6 +1066,15 @@ mod tests {
         } else {
             BEAST_TRAINING
         };
+        toggle(app, line, craft_type);
+    }
+
+    /// The window of `craft_type` closed if open and opened again, whose build reads the world as
+    /// it stands.
+    fn reopen(app: &mut App, line: u32, craft_type: u32) {
+        if app.world().resource::<CraftOpen>().line.is_some() {
+            toggle(app, line, craft_type);
+        }
         toggle(app, line, craft_type);
     }
 
@@ -1028,7 +1138,6 @@ mod tests {
 
     /// Each row's `(name rank, craftType, trainingPointCost, requiredLevel)`, in display order.
     fn craft_rows(app: &mut App) -> Vec<(String, String, i64, i64)> {
-        app.update();
         app.world()
             .non_send_resource::<UiScript>()
             .eval::<Vec<Vec<String>>>(
@@ -1167,9 +1276,15 @@ mod tests {
     #[test]
     fn beast_training_rows_read_none_and_used_once_known() {
         let known = [4195, 4196, 9000, 9001];
-        let feed = || {
+        // The window opens over the pet as it stands: the build reads the bucket (`0x4f6369`).
+        let feed = |pet: Option<(u64, u64, &[u32])>| {
             let (displays, catalog) = beast_training();
-            craft_feed_open(displays, &known, catalog, 1, &[])
+            let mut app = craft_feed(displays, &known, catalog, &[]);
+            if let Some((summon, bar, book)) = pet {
+                seat_pet(&mut app, summon, bar, book);
+            }
+            open_type(&mut app, 1);
+            app
         };
         let kinds = |app: &mut App| -> Vec<(String, String)> {
             craft_rows(app)
@@ -1180,7 +1295,7 @@ mod tests {
         };
         let pair = |n: &str, k: &str| (n.to_string(), k.to_string());
 
-        let mut app = feed();
+        let mut app = feed(None);
         assert_eq!(
             kinds(&mut app),
             [
@@ -1191,8 +1306,7 @@ mod tests {
             "no pet: only the player's own learn reads used"
         );
 
-        let mut app = feed();
-        seat_pet(&mut app, PET, PET, &[4187]);
+        let mut app = feed(Some((PET, PET, &[4187])));
         assert_eq!(
             kinds(&mut app),
             [
@@ -1203,8 +1317,7 @@ mod tests {
             "the pet knows rank 1"
         );
 
-        let mut app = feed();
-        seat_pet(&mut app, PET, PET, &[4188]);
+        let mut app = feed(Some((PET, PET, &[4188])));
         assert_eq!(
             kinds(&mut app),
             [
@@ -1215,8 +1328,7 @@ mod tests {
             "rank 2 is a higher rank of rank 1"
         );
 
-        let mut app = feed();
-        seat_pet(&mut app, OTHER_PET, PET, &[4187, 4188]);
+        let mut app = feed(Some((OTHER_PET, PET, &[4187, 4188])));
         assert_eq!(
             kinds(&mut app),
             [
@@ -1237,9 +1349,14 @@ mod tests {
     #[test]
     fn a_pet_learn_row_answers_its_training_point_cost_and_required_level() {
         let known = [4195, 4196, 9000, 9100, 9200, 9300];
-        let feed = || {
+        let feed = |pet: bool| {
             let (displays, catalog) = beast_training();
-            craft_feed_open(displays, &known, catalog, 1, &[])
+            let mut app = craft_feed(displays, &known, catalog, &[]);
+            if pet {
+                seat_pet(&mut app, PET, PET, &[]);
+            }
+            open_type(&mut app, 1);
+            app
         };
         let costs = |app: &mut App| -> Vec<(String, i64, i64)> {
             let mut rows: Vec<_> = craft_rows(app)
@@ -1250,13 +1367,12 @@ mod tests {
             rows
         };
         let row = |n: &str, tp: i64, l: i64| (n.to_string(), tp, l);
-        let mut app = feed();
+        let mut app = feed(false);
         assert!(
             costs(&mut app).iter().all(|r| (r.1, r.2) == (0, 0)),
             "no pet"
         );
-        let mut app = feed();
-        seat_pet(&mut app, PET, PET, &[]);
+        let mut app = feed(true);
         assert_eq!(
             costs(&mut app),
             [
@@ -1292,7 +1408,6 @@ mod tests {
                 .with_line_names([(ENCHANTING, "Enchanting")])
         };
         let triple = |app: &mut App| {
-            app.update();
             app.world()
                 .non_send_resource::<UiScript>()
                 .eval::<(Option<String>, i64, i64)>("return GetCraftDisplaySkillLine()")
@@ -1337,8 +1452,7 @@ mod tests {
             (7420, ability(TAILORING, 1, 70)),
         ])
         .with_line_names([(ENCHANTING, "Enchanting"), (TAILORING, "Tailoring")]);
-        let mut app = craft_feed_open(displays, &[7420, 7418], catalog, 3, &[]);
-        app.update();
+        let app = craft_feed_open(displays, &[7420, 7418], catalog, 3, &[]);
         let name = app
             .world()
             .non_send_resource::<UiScript>()
@@ -1347,10 +1461,58 @@ mod tests {
         assert_eq!(name.as_deref(), Some("Tailoring"));
     }
 
+    /// `GetCraftDescription` (`0x4f7a90`) falls back from an empty text of the row's own
+    /// (`0x4f7b2a`, `0x4f7b2f`) to the text of the spell its first `LEARN_SPELL` or
+    /// `LEARN_PET_SPELL` effect teaches (`0x4f7b71`-`0x4f7ba3`, expanded at `0x4f7be6`), and with
+    /// neither answers nil (`0x4f7bae`).
+    #[test]
+    fn a_craft_description_falls_back_to_the_taught_spells_text() {
+        let displays = vec![
+            (
+                9100,
+                learner("Bond", "Rank 1", 1, [57, 0, 0], [0; 3], [4187, 0, 0]),
+            ),
+            (
+                9000,
+                learner("Track", "Rank 1", 1, [0, 0, 0], [0; 3], [0, 0, 0]),
+            ),
+            (
+                4187,
+                SpellDisplay {
+                    description: Some("Taunts the target.".into()),
+                    ..pet_spell("Great Stamina", 4)
+                },
+            ),
+        ];
+        let catalog = benilla_formats::SkillLineCatalog::from_abilities(
+            [9100, 9000].map(|s| (s, ability(BEAST_TRAINING, 0, 0))),
+        );
+        let app = craft_feed_open(displays, &[9100, 9000], catalog, 1, &[]);
+        let described: Vec<(String, Option<String>)> = app
+            .world()
+            .non_send_resource::<UiScript>()
+            .eval::<Vec<Vec<String>>>(
+                "local t = {} for i = 1, GetNumCrafts() do \
+                 t[i] = { (GetCraftInfo(i)), GetCraftDescription(i) or 'nil' } end return t",
+            )
+            .unwrap()
+            .into_iter()
+            .map(|r| (r[0].clone(), (r[1] != "nil").then(|| r[1].clone())))
+            .collect();
+        assert_eq!(
+            described,
+            [
+                ("Bond".into(), Some("Taunts the target.".into())),
+                ("Track".into(), None),
+            ]
+        );
+    }
+
     /// The window's open runs the build (`0x4f6036` → `0x4f60c0`), whose tail signals
     /// `CRAFT_UPDATE` (`0x4f661a`), then `CRAFT_SHOW` (`0x4f6040`); a change between rebuilds, as a
     /// skill's rank, which no watcher rebuilds the craft list on (`0x5de434` is the profession
-    /// window's alone), signals nothing.
+    /// window's alone), signals nothing, and the row keeps the bucket its build stored
+    /// (`0x4f623f`), which `GetCraftInfo` reads (`0x4f6fbc`).
     #[test]
     fn the_open_signals_update_then_show_and_a_bare_change_signals_nothing() {
         let displays = vec![(
@@ -1394,12 +1556,12 @@ mod tests {
         ]);
         assert!(heard(&mut app).is_empty());
         assert_eq!(
-            app.world()
-                .non_send_resource::<UiScript>()
-                .eval::<String>("local _, _, k = GetCraftInfo(1) return k")
-                .unwrap(),
-            "trivial",
-            "pushed, silently"
+            crate::script_calls::with_hosted_vm(app.world_mut(), |s| s
+                .expect("a VM")
+                .eval::<String>("local _, _, k = GetCraftInfo(1) return k"))
+            .unwrap(),
+            "medium",
+            "the build's bucket, at rank 1 of 1-70"
         );
     }
 
@@ -1565,7 +1727,6 @@ mod tests {
             script
         };
         app.insert_non_send_resource(listening());
-        app.add_systems(Update, feed_craft);
         let world_enter = |app: &mut App| {
             app.world_mut()
                 .run_system_cached(crate::ui_tradeskill::reset_crafts_on_world_enter)
