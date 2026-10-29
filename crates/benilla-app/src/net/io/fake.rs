@@ -681,13 +681,18 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
             let Some(key) = last else {
                 return;
             };
-            // Held and counted before the client can see the session open, so a drop never misses
-            // it and `open` never reads behind the client's authentication.
+            // Held, counted and logged before the client can see the session open, so a drop never
+            // misses it and neither `open` nor `authentications` reads behind its authentication.
             if let Ok(link) = s.try_clone() {
                 link_log.lock().unwrap().push(link);
             }
             let sessions = Arc::clone(&sessions);
             sessions.fetch_add(1, Ordering::SeqCst);
+            let index = {
+                let mut all = session_log.lock().unwrap();
+                all.push(Vec::new());
+                all.len() - 1
+            };
             let mut crypto = HeaderCrypto::from_session_key(key);
             let reply = addon_reply.lock().unwrap().clone();
             if let Some((body, false)) = &reply {
@@ -723,11 +728,6 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
             let refuse_flag = Arc::clone(&refuse_flag);
             let refuse_wait = Arc::clone(&refuse_wait);
             let trailing = Arc::clone(&trailing);
-            let index = {
-                let mut all = session_log.lock().unwrap();
-                all.push(Vec::new());
-                all.len() - 1
-            };
             thread::spawn(move || {
                 while let Some(packet) = recv_packet(&mut s, Some(&mut crypto)) {
                     let op = u16::from_le_bytes([packet[2], packet[3]]);
