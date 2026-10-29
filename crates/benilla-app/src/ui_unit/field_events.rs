@@ -315,7 +315,7 @@ fn fire_lane(vm: &mut NoticeVm, lane: &mut NoticeLane, firing: &mut NoticeFiring
         }
         if let FieldNotice::ActionSlotChanged { action } = notice {
             let ((), moved) = crate::lanes::firing(stamp, || {
-                vm.engine_slot_written();
+                vm.engine_slot_written(action);
                 vm.run(|script| {
                     if let Some(script) = script {
                         script.fire_event(

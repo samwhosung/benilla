@@ -1,4 +1,4 @@
-//! `SPELL_ACTIVE`, the reactive list's word (`0x4b31c0`), off the usable feed.
+//! `SPELL_ACTIVE`, the reactive list's word (`0x4b31c0`), off the usable refreshes.
 
 use bevy::prelude::*;
 
@@ -21,8 +21,8 @@ const AURA_STATE: u16 = 125;
 /// The player's guid.
 const ME: u64 = 0x10;
 
-/// The book holds the three, the bar nothing; the player alive, its aura state 0, the feed's
-/// first frame run.
+/// The book holds the three, registered in learn order, the bar nothing; the player alive, its
+/// aura state 0, the feed's first frame run.
 fn app() -> App {
     let revenge = |id, rank: &str| {
         (
@@ -41,7 +41,9 @@ fn app() -> App {
     let mut app = App::new();
     let mut actions = PlayerActions::default();
     actions.spells.extend([REVENGE, REVENGE_2, FIREBALL]);
+    actions.initial = vec![REVENGE, REVENGE_2, FIREBALL];
     app.insert_resource(actions)
+        .init_resource::<super::ReactiveSpells>()
         .init_resource::<crate::ui_action::ActionSlots>()
         .insert_resource(Spells {
             catalog: benilla_formats::SpellCatalog::from_displays(
@@ -87,6 +89,7 @@ fn app() -> App {
         .init_resource::<crate::spell::AutoSelfCast>()
         .init_resource::<super::state::ActionStateMemory>();
     seat(&mut app);
+    arrive(&mut app);
     app.insert_non_send_resource(listener());
     app.add_systems(Update, super::state::feed_action_state);
     // The VM's first frame, which meets the state as it stands and hears no refresh.
@@ -104,6 +107,20 @@ fn seat(app: &mut App) {
     app.world_mut()
         .resource_mut::<crate::ui_script::LeavingWorldArmed>()
         .arm();
+}
+
+/// Our player's arrival's reset of the list and its registrar run over the initial spells
+/// (`0x5dea86`, `0x5dea96`-`0x5deab9`), as [`crate::net::objects`] runs it.
+fn arrive(app: &mut App) {
+    let world = app.world_mut();
+    let initial = world.resource::<PlayerActions>().initial.clone();
+    world.resource_scope(|world, mut reactive: Mut<super::ReactiveSpells>| {
+        let catalog = &world.resource::<Spells>().catalog;
+        reactive.0.reset();
+        for id in initial {
+            reactive.0.learned(id, catalog);
+        }
+    });
 }
 
 /// A VM that records the reactive word and the spells' usable event.
@@ -208,6 +225,7 @@ fn a_reload_keeps_the_reactive_list_and_an_arrival_empties_it() {
     let me = me.single(app.world()).unwrap();
     app.world_mut().despawn(me);
     seat(&mut app);
+    arrive(&mut app);
     assert_eq!(
         step(&mut app, 0x1),
         ["SPELL_ACTIVE Revenge", "SPELL_UPDATE_USABLE"],
@@ -249,7 +267,7 @@ fn relearning_a_lower_rank_keeps_the_entrys_answer() {
     );
     book(&mut app).spells.retain(|id| *id == FIREBALL);
     assert!(step(&mut app, 0x1).is_empty(), "both ranks unlearned");
-    book(&mut app).spells.insert(REVENGE);
+    learn(&mut app, REVENGE);
     assert_eq!(
         select_step(&mut app, 0x20, 0x1),
         ["SPELL_UPDATE_USABLE"],
@@ -260,6 +278,15 @@ fn relearning_a_lower_rank_keeps_the_entrys_answer() {
 /// The book.
 fn book(app: &mut App) -> Mut<'_, PlayerActions> {
     app.world_mut().resource_mut::<PlayerActions>()
+}
+
+/// A learn of `id`: into the book, and through the registrar's reactive leg (`0x4b2705`).
+fn learn(app: &mut App, id: u32) {
+    let world = app.world_mut();
+    world.resource_mut::<PlayerActions>().spells.insert(id);
+    world.resource_scope(|world, mut reactive: Mut<super::ReactiveSpells>| {
+        reactive.0.learned(id, &world.resource::<Spells>().catalog);
+    });
 }
 
 /// Select `guid` in the frame [`step`] runs at `aura_state`: its usable refresh runs inside the

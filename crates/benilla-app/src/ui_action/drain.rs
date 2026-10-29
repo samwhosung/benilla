@@ -567,7 +567,7 @@ impl ActionBarSteps<'_> {
             }
             ActionBarCall::Set { id, packed } => self.set(id, packed),
             // The host's own, with the action states ([`crate::script_calls`]).
-            ActionBarCall::RefreshUsable => {}
+            ActionBarCall::RefreshUsable | ActionBarCall::Notify { .. } => {}
         }
     }
 

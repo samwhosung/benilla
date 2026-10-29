@@ -3,6 +3,7 @@
 //! the spell it stands for.
 
 use super::*;
+use crate::net::SelfPlayer;
 use crate::spell::AutoRepeatActive;
 use crate::target::Selection;
 use benilla_formats::{SpellDisplay, SpellRange};

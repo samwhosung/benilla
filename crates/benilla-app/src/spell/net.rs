@@ -87,6 +87,8 @@ pub(crate) struct Lifecycle<'w> {
     actions: ResMut<'w, PlayerActions>,
     /// The registrar's and the learn's latches, which the book's handlers write at their packet.
     learned: ResMut<'w, crate::ui_action::LearnedAbilities>,
+    /// The registrar's reactive list; absent in a harness without the action bar.
+    reactive: Option<ResMut<'w, crate::ui_action::ReactiveSpells>>,
     reports: ResMut<'w, CastReports>,
     tutorials: Option<Res<'w, crate::tutorial::Tutorials>>,
     pending: ResMut<'w, PendingCast>,
@@ -155,6 +157,16 @@ fn on_spell_book(In(ev): In<SessionEvent>, mut l: Lifecycle, sc: Scene, mut bar:
     }
 }
 
+impl Lifecycle<'_> {
+    /// The registrar's reactive leg (`0x4b2705`-`0x4b2844`) for a spell a packet registers; the
+    /// initial spells' run at our player's arrival ([`crate::net::objects`]).
+    fn register_reactive(&mut self, spell_id: u32) {
+        if let (Some(reactive), Some(spells)) = (self.reactive.as_mut(), self.spells.as_deref()) {
+            reactive.0.learned(spell_id, &spells.catalog);
+        }
+    }
+}
+
 /// The bar and the rank chains the login's rank pass reads ([`crate::ui_action::normalize_ranks`],
 /// its `Deviation:`).
 #[derive(SystemParam)]
@@ -209,6 +221,7 @@ fn on_spell_learned(In(ev): In<SessionEvent>, mut l: Lifecycle, mut book: BookSi
     if let SessionEvent::SpellLearned { spell_id } = ev {
         let line = learned_spell(spell_id, &mut l.actions, l.spells.as_deref());
         l.learned.registered(spell_id, l.spells.as_deref());
+        l.register_reactive(spell_id);
         l.learned.learned(spell_id, l.spells.as_deref());
         book.entered(
             spell_id,
@@ -281,6 +294,7 @@ fn on_spell_superceded(
         // The book pair's unlearn and registration (`0x4b2f50`), then the player's own unlearn.
         l.learned.unregistered(old_spell_id);
         l.learned.registered(new_spell_id, l.spells.as_deref());
+        l.register_reactive(new_spell_id);
         book.left(
             old_spell_id,
             was_known,

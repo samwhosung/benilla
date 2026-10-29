@@ -487,6 +487,9 @@ fn edit_macro(
             .collect();
         held.sort_unstable();
         for slot in held {
+            model.call_in_verb(crate::script::ScriptCall::ActionBar(
+                crate::script::ActionBarCall::Notify { id: slot },
+            ));
             model.raise(
                 "ACTIONBAR_SLOT_CHANGED",
                 vec![crate::script::ScriptValue::Int(i64::from(slot))],

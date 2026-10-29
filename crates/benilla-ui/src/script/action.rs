@@ -50,6 +50,10 @@ pub enum ActionBarCall {
     /// (`0x4f132e`): every slot's pair recomputed and stored, and `ACTIONBAR_UPDATE_USABLE`
     /// signalled in the call when one changed (`0x4e5c53`).
     RefreshUsable,
+    /// `0x4e58e0` with no send for the 1-based slot `id`, `EditMacro`'s notify of each slot that
+    /// holds the macro (`0x4f1329` → `0x4e5cc0`): the slot's pair stored, ahead of the
+    /// `ACTIONBAR_SLOT_CHANGED` the VM signals after it.
+    Notify { id: u32 },
 }
 
 /// What one action slot shows; the app resolves the icon before pushing.
@@ -342,6 +346,11 @@ impl super::UiScript {
     /// One slot as the VM holds it.
     pub fn action_slot(&self, action: u32) -> Option<ActionSlot> {
         self.model_ref().actions.get(&action).cloned()
+    }
+
+    /// One action's state as the VM holds it, what its getters answer with no host lent.
+    pub fn action_state(&self, action: u32) -> Option<ActionState> {
+        self.model_ref().action_states.get(&action).map(|s| s.state)
     }
 
     /// Push (or clear) one action's state; the cooldown start is already on the `GetTime` clock,

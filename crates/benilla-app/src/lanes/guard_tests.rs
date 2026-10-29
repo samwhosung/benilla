@@ -170,10 +170,18 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // learn, unlearn and supersede handlers write at their packet (`0x4b262c`, `0x5e9e49`,
     // `0x4b2c83`); no feed fires off them.
     "::ui_action::LearnedAbilities",
+    // Quiet: the reactive list, which the learn and supersede handlers' registrar leg grows at
+    // their packet (`0x4b27b3`-`0x4b27c7`) and our create's arrival empties and fills again
+    // (`0x5dea86`); the usable refreshes re-check it in their places, and no feed reads it.
+    "::ui_action::ReactiveSpells",
+    // Quiet: the bar's usable cache, which the game entry's handler zeroes (`0x48f5a4` →
+    // `0x4e4f50`) and the host's slot writes and refreshes store in place (`0x4e590a`,
+    // `0x4e5c00`); the action-state feed pushes its pairs silently.
+    "::ui_action::state::ActionStateMemory",
     // Quiet: the known spells and the book's lists, which the learn, unlearn and supersede handlers
     // write at their packet beside the bar's clears and replaces, whose signals go on the notice
-    // lane there (`0x5ea253`, `0x5e6356`); the feeds that read it push views (`READS_FRAME_FINAL`)
-    // or rebuild the action state's reactive list, and none fires off it.
+    // lane there (`0x5ea253`, `0x5e6356`); the feeds that read it push views (`READS_FRAME_FINAL`),
+    // and none fires off it.
     "::ui_action::PlayerActions",
     // Read through the host by the auction getters, and quiet: the hello's show, the lines, the
     // patches, the removals and the pages fire on the house lane at their handlers.
@@ -353,8 +361,7 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         // moves it inside its call, and the push reads it as the frame left it.
         "spell::cast_target::AutoSelfCast", "spell::cooldowns::Cooldowns",
         "spell::group_relation::GroupRoster", "spell::mods::SpellModifiers", "target::Selection",
-        "ui_action::ActionSlots", "ui_action::PlayerActions", "ui_action::state::ActionStateMemory",
-        "ui_pet::PetBar"]),
+        "ui_action::ActionSlots", "ui_action::state::ActionStateMemory", "ui_pet::PetBar"]),
     // The resolver's guids, pushed before the drain and read with the host lent too: the
     // mouseover, the group rows past a token's own, the pet records and every row of the field
     // events' fan-out, which the `UNIT_HAPPINESS` gate reads. The aura getters walk each unit

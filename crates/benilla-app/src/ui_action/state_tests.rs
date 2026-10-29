@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::creature_anim::Engaged;
+use crate::net::SelfPlayer;
 use crate::spell::AutoRepeatActive;
 use crate::target::Selection;
 use benilla_formats::SpellDisplay;
@@ -198,6 +199,7 @@ fn the_feed_pushes_a_bare_macro_as_usable() {
     feed_inputs(&mut app);
     app.insert_non_send_resource(script);
     add_action_feed(&mut app);
+    write_all(&mut app);
     app.update();
 
     let script = app.world().non_send_resource::<UiScript>();
@@ -589,6 +591,7 @@ fn food_on_the_bar_greys_while_the_player_is_in_combat() {
         );
         app.insert_non_send_resource(script);
         add_action_feed(&mut app);
+        write_all(&mut app);
         app.update();
         app.world()
             .non_send_resource::<UiScript>()
@@ -676,6 +679,7 @@ fn an_item_slot_is_held_by_its_stored_count_not_the_bags() {
         );
         app.insert_non_send_resource(script);
         add_action_feed(&mut app);
+        write_all(&mut app);
         app.update();
         app.world()
             .non_send_resource::<UiScript>()
@@ -1135,6 +1139,7 @@ fn feed_app(buttons: &[(u8, u32, u8)], spells: Spells, x: f32) -> App {
     index.0.insert(OTHER, other);
     app.insert_non_send_resource(UiScript::new().unwrap());
     add_action_feed(&mut app);
+    write_all(&mut app);
     app
 }
 
@@ -1849,6 +1854,7 @@ fn placing_or_clearing_a_slot_stores_its_pair_with_no_usable_event() {
                 kind: ACTION_KIND_SPELL,
             },
         );
+    written(&mut app, 2);
     assert!(frame(&mut app).is_empty(), "a placed spell");
     super::super::run_watcher_refresh_once(app.world_mut());
     assert_eq!(
@@ -1860,6 +1866,7 @@ fn placing_or_clearing_a_slot_stores_its_pair_with_no_usable_event() {
         .resource_mut::<ActionSlots>()
         .buttons
         .remove(&1);
+    written(&mut app, 2);
     assert!(frame(&mut app).is_empty(), "a cleared slot");
 }
 
@@ -1927,7 +1934,7 @@ fn enter_refresh(app: &mut App) -> bool {
         .expect("the refresh runs")
 }
 
-/// Our player created anew with `mana`, whose arrival's slot pass the next feed stores.
+/// Our player created anew with `mana`, and its arrival's slot pass.
 fn arrive(app: &mut App, mana: u32) {
     let old = app.world().resource::<crate::net::GuidIndex>().0[&ME];
     app.world_mut().despawn(old);
@@ -1947,6 +1954,40 @@ fn arrive(app: &mut App, mana: u32) {
         .resource_mut::<crate::net::GuidIndex>()
         .0
         .insert(ME, me);
+    use bevy::ecs::system::RunSystemOnce;
+    app.world_mut()
+        .run_system_once(
+            |mut states: ActionStates, mut script: NonSendMut<UiScript>| {
+                states.arrival_slots(&mut script);
+            },
+        )
+        .expect("the arrival's slot pass runs");
+}
+
+/// `0x4e58e0` for the 1-based `action`: its pair stored, as a write stores it.
+fn written(app: &mut App, action: u32) {
+    use bevy::ecs::system::RunSystemOnce;
+    app.world_mut()
+        .run_system_once(
+            move |mut states: ActionStates, mut script: NonSendMut<UiScript>| {
+                states.slot_written(&mut script, action);
+            },
+        )
+        .expect("the write runs");
+}
+
+/// Each occupied slot written, as the bar's load stores its pairs.
+fn write_all(app: &mut App) {
+    let actions: Vec<u32> = app
+        .world()
+        .resource::<ActionSlots>()
+        .buttons
+        .keys()
+        .map(|&slot| u32::from(slot) + 1)
+        .collect();
+    for action in actions {
+        written(app, action);
+    }
 }
 
 /// The arrival's loop (`0x5deae2`-`0x5deb12`) writes each slot but a spell word the player does
@@ -2024,10 +2065,10 @@ fn a_macro_bound_to_a_pet_spell_reads_the_pets_gate_power_and_history() {
         effect_implicit_target_a: [6, 0, 0],
         ..Default::default()
     };
-    // One fresh client per pet state, read after its first frame, which is a refresh of the usable
-    // cache (`0x4e5c00`, the new VM's). `IsUsableAction` answers that cache (`0x4e7403` into
-    // `0x4e5230`), and the power watch refreshes it only for the active player (`0x60486b`), so
-    // what this asserts is what a refresh finds, not that the button follows the pet's power.
+    // One fresh client per pet state, read after its slot is written, which stores its pair
+    // (`0x4e58e0`). `IsUsableAction` answers that cache (`0x4e7403` into `0x4e5230`), and the
+    // power watch refreshes it only for the active player (`0x60486b`), so what this asserts is
+    // what a write finds, not that the button follows the pet's power.
     let at_a_refresh = |power: u32, flags: u32| {
         let mut app = feed_app(
             &[(0, 1, MACRO_BAR)],
@@ -2063,6 +2104,7 @@ fn a_macro_bound_to_a_pet_spell_reads_the_pets_gate_power_and_history() {
         app.insert_resource(bar);
         // A hostile in range, where a player's own Spell Lock would read a range.
         select(&mut app, Some(OTHER));
+        write_all(&mut app);
         app.update();
         app.world()
             .non_send_resource::<UiScript>()

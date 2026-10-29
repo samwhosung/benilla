@@ -17,12 +17,27 @@ use crate::net::ClientCommand;
 pub(super) struct Arrival<'w> {
     own_control: Option<ResMut<'w, crate::player::OwnControlLost>>,
     actions: Option<ResMut<'w, crate::ui_action::PlayerActions>>,
+    spells: Option<Res<'w, crate::ui_action::Spells>>,
+    reactive: Option<ResMut<'w, crate::ui_action::ReactiveSpells>>,
     lane: Option<ResMut<'w, crate::ui_world_enter::ArrivalLane>>,
     stable: Option<ResMut<'w, crate::ui_stable::StableOpen>>,
 }
 
 /// The arrival's writes, in its order, and its item on the arrival lane, at the create's place.
 pub(super) fn arrive(sc: &mut Scene, arrival: &mut Arrival, guid: u64) {
+    // `ResetSpellBook 0x4b23a0` empties the reactive list (`0x5dea86`), and each initial spell's
+    // `LearnSpell` runs the registrar, whose leg takes it in again in wire order
+    // (`0x5dea96`-`0x5deab9`).
+    if let (Some(actions), Some(spells), Some(reactive)) = (
+        arrival.actions.as_deref(),
+        arrival.spells.as_deref(),
+        arrival.reactive.as_mut(),
+    ) {
+        reactive.0.reset();
+        for &spell_id in &actions.initial {
+            reactive.0.learned(spell_id, &spells.catalog);
+        }
+    }
     // `0x5deb49`: the manager's `+0xc8` gates the restore, the claim and the cascade; its
     // constructor (`0x4650e7`) is its only store, so it is clear at every create.
     let control_gained = crate::player::regain_control_on_arrival(

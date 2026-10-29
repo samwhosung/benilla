@@ -43,12 +43,12 @@ pub(crate) use ranks::normalize_ranks;
 mod cooldown_lane;
 #[cfg(test)]
 pub(crate) use cooldown_lane::fire_cooldown_lane;
-mod reactive;
+pub(crate) mod reactive;
 #[cfg(test)]
 mod reactive_tests;
 pub(crate) mod recount;
 mod state;
-pub(crate) use state::{wears_entry, ActionStates};
+pub(crate) use state::{wears_entry, ActionStateMemory, ActionStates};
 mod spell_slots;
 pub(crate) mod toggle;
 // The bar's legs of the spell packets, run in their handlers.
@@ -176,6 +176,13 @@ impl PlayerActions {
         })
     }
 }
+
+/// `[0xb71148]`: the reactive spells, which the registrar takes in one learn at a time, our
+/// player's arrival empties and takes the initial spells into again, and each usable refresh
+/// re-checks ([`reactive::ReactiveList`]). Apart from [`PlayerActions`], which the refresh's
+/// callers read beside it.
+#[derive(Resource, Default)]
+pub(crate) struct ReactiveSpells(pub(crate) reactive::ReactiveList);
 
 /// The world right-click's casts, queued for the cast ladder later in the frame: the click system
 /// cannot also hold the ladder's resources, and only the ladder sends a cast, so a chest or a body
@@ -452,6 +459,7 @@ impl Plugin for UiActionPlugin {
         app.add_message::<crate::net::FieldChanged>()
             .init_resource::<state::ActionStateMemory>()
             .init_resource::<PlayerActions>()
+            .init_resource::<ReactiveSpells>()
             .init_resource::<ActionSlots>()
             .init_resource::<LearnedAbilities>()
             .init_resource::<CastFailRedisplays>()

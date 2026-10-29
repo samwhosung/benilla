@@ -20,34 +20,39 @@ use crate::ui_items::action_count;
 /// The bar's 120 slots, as Lua action ids.
 const ACTION_SLOTS: std::ops::RangeInclusive<u32> = 1..=120;
 
-/// Our own player's arrival pass over the bar ([`arrival_counts`]), run in the arrival's place
-/// ([`crate::ui_world_enter`]) with the host lent.
+/// Our own player's arrival pass over the bar, run in the arrival's place
+/// ([`crate::ui_world_enter`]): the 120 words written through `0x4e5d60` with no send and quiet
+/// set (`0x5deafc`, `0x5deafe`), so each item word is recounted (`0x4e5d90`, [`arrival_counts`])
+/// and each slot's usable pair stored (`0x4e58e0`), with no signal, then `ACTIONBAR_SLOT_CHANGED`
+/// once with 0 (`0x5deb20`), with the host lent.
 pub(crate) fn arrival_slot_pass(
-    mut hosted_vm: crate::script_calls::HostedVm,
+    mut vm: crate::script_calls::VmWith<()>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     objects: Objects,
     items: Res<Items>,
     commands: Res<NetCommands>,
 ) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        let counter = Counter {
-            store: self_q.iter().next(),
-            objects: &objects,
-            items: &items,
-            commands: &commands,
-        };
-        arrival_counts(script, &counter);
-    })
+    let counter = Counter {
+        store: self_q.iter().next(),
+        objects: &objects,
+        items: &items,
+        commands: &commands,
+    };
+    vm.run(|script| {
+        if let Some(script) = script {
+            arrival_counts(script, &counter);
+        }
+    });
+    vm.engine_arrival_slots();
+    vm.run(|script| {
+        if let Some(script) = script {
+            script.fire_event("ACTIONBAR_SLOT_CHANGED", vec![ScriptValue::Int(0)]);
+        }
+    });
 }
 
-/// Our own player's arrival (`0x5dea50`, its manager flag `+0xc8` always clear) writes the bar's
-/// 120 words through `0x4e5d60` with no send and quiet set (`0x5deafc`, `0x5deafe`), so each item
-/// word is recounted (`0x4e5d90`) with no signal, then signals `ACTIONBAR_SLOT_CHANGED` once with
-/// 0 (`0x5deb20`). Nothing else recounts a worldport: its items are created again before our
-/// player, outside the world latch, and run no record set-up.
+/// The arrival's recount of each item word (`0x4e5d90`). Nothing else recounts a worldport: its
+/// items are created again before our player, outside the world latch, and run no record set-up.
 fn arrival_counts(script: &mut UiScript, counter: &Counter) {
     let mut counts = std::collections::HashMap::new();
     for action in ACTION_SLOTS {
@@ -62,7 +67,6 @@ fn arrival_counts(script: &mut UiScript, counter: &Counter) {
             .or_insert_with(|| counter.count(slot.action));
         script.set_action(action, Some(slot));
     }
-    script.fire_event("ACTIONBAR_SLOT_CHANGED", vec![ScriptValue::Int(0)]);
 }
 
 /// What `0x4e6d20` reads: the active player, the item objects and the template cache.
@@ -108,7 +112,7 @@ pub(crate) fn recount<P: bevy::ecs::system::SystemParam + 'static>(
         if written.is_none() {
             continue;
         }
-        vm.engine_slot_written();
+        vm.engine_slot_written(action);
         vm.run(|script| {
             if let Some(script) = script {
                 script.fire_event(

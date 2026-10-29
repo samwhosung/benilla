@@ -12,12 +12,18 @@ pub(super) fn register(app: &mut App) {
         .net_handler(SessionEventKind::Connected, on_game_entry);
 }
 
-/// The game entry, at the login's handler ahead of the world's first packet: the bar emptied, as
-/// `CGGameUI::InitializeGame` zeroes it (`0x48f5a4` → `ResetActionBarState 0x4e4f50`), so a new
+/// The game entry, at the login's handler ahead of the world's first packet: the bar and its usable
+/// flags emptied, as `CGGameUI::InitializeGame` zeroes them (`0x48f5a4` → `ResetActionBarState
+/// 0x4e4f50`), so a new
 /// character's book and bar never meet the last one's, however that session ended.
-fn on_game_entry(In(ev): In<SessionEvent>, mut slots: ResMut<ActionSlots>) {
+fn on_game_entry(
+    In(ev): In<SessionEvent>,
+    mut slots: ResMut<ActionSlots>,
+    mut states: ResMut<super::ActionStateMemory>,
+) {
     if let SessionEvent::Connected { .. } = ev {
         slots.game_entry();
+        states.game_entry();
     }
 }
 
