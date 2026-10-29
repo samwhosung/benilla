@@ -209,11 +209,14 @@ impl ScriptCallHost<'_, '_> {
     /// `SetSelection` (`0x493540`) signals inside whatever runs it: the teardown's
     /// `PET_BAR_UPDATE` (`0x4bd6b4`) before the store and the send, the change's signals before
     /// the re-swing (`0x4938c8`), each point running its listeners there, and what they left
-    /// applied once the turn ends, with the host lent.
+    /// applied once the turn ends, with the host lent. A unit the writer's select handed the
+    /// targeting cursor (`0x4935d5`), such as the melee probe's nearest-enemy pick (`0x6130bc` →
+    /// `0x4941e6`), is bound first, where its select returned.
     pub(crate) fn engine_select(&mut self, script: &mut UiScript, select: EngineSelect) {
         #[cfg(test)]
         self.census_probe();
         script.host_out(|script| {
+            self.appliers.cursor().bind_parked();
             let mut at = Signalled {
                 selected: select.before,
                 latched: select.latched,

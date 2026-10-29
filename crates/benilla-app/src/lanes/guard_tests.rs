@@ -145,8 +145,8 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // Read through the host by the world click's legs (who we drive, the gathering skills its
     // cursor forks on), and quiet: no feed fires off them.
     "::player::state::MoverLock",
-    // Quiet: the cast ladder's per-call state, which the cast result's handler holds with the
-    // ladder and never writes. A press holds the first and its call resumes it before it returns
+    // Quiet: the cast ladder's per-call state, which the cast result's, the loot response's and the
+    // go's handlers hold with the ladder and never write. A press holds the first and its call resumes it before it returns
     // (`0x6e4efb`), each call sets and puts back the second, and the pet press applies the third
     // in its call; no feed reads them.
     "::spell::cast_send::HeldForPick",
