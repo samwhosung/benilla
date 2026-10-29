@@ -694,6 +694,15 @@ impl Player {
     pub(crate) fn server_riding(&self) -> bool {
         self.server_riding
     }
+
+    /// The synthesized forward and autorun, for a test to hold and read.
+    #[cfg(test)]
+    pub(crate) fn forward_for_test(&mut self, held: Option<bool>) -> (bool, bool) {
+        if let Some(held) = held {
+            (self.auto_forward, self.autorun) = (held, held);
+        }
+        (self.auto_forward, self.autorun)
+    }
 }
 
 /// The forward/back axis, summed as the reference's emitter `0x514da0` sums it: autorun, forward

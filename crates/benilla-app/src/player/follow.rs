@@ -60,6 +60,9 @@ pub(crate) struct FollowState {
     pub(crate) name: String,
     /// The band's latch: the synthesized forward input is held.
     moving: bool,
+    /// A packet's auto-move stop owes its forward release (`0x60e7f0`): the synthesized forward
+    /// and autorun (`0x514630`), dropped at the frame's steer ([`steer_follow`]).
+    release_owed: bool,
     /// `WOW_FOLLOW_TRACE` bookkeeping: the last trace line's time and position.
     traced_at: f64,
     traced_pos: Option<Vec3>,
@@ -73,6 +76,11 @@ impl FollowState {
         self.moving = false;
         self.traced_at = 0.0;
         self.traced_pos = None;
+    }
+
+    /// Owe the forward release of an auto-move a packet stopped ([`super::end_auto_move`]).
+    pub(crate) fn owe_release(&mut self) {
+        self.release_owed = true;
     }
 
     /// Stop following; `true` if we were.
@@ -259,6 +267,7 @@ pub(super) fn steer_follow(
     mut lane: Option<ResMut<crate::field_watch::NoticeLane>>,
 ) {
     player.auto_forward = false;
+    release_owed(&mut follow, &mut player);
     if follow.guid.is_none() {
         return;
     }
@@ -323,6 +332,24 @@ pub(super) fn steer_follow(
     }
     follow.moving = moving;
     player.auto_forward = moving;
+}
+
+/// The forward release a packet's stop owed (`0x60e7f0`): autorun clears (`0x514630`); the
+/// synthesized forward is already down for the frame.
+fn release_owed(follow: &mut FollowState, player: &mut Player) {
+    if std::mem::take(&mut follow.release_owed) {
+        player.autorun = false;
+    }
+}
+
+/// [`steer_follow`]'s release of what a packet's stop owed, for a test.
+#[cfg(test)]
+pub(crate) fn release_owed_for_test(world: &mut World) {
+    world.resource_scope(|world, mut follow: Mut<FollowState>| {
+        let mut player = world.resource_mut::<Player>();
+        player.auto_forward = false;
+        release_owed(&mut follow, &mut player);
+    });
 }
 
 /// Whether `WOW_FOLLOW_TRACE` is set, read once.

@@ -100,6 +100,8 @@ use camera::{model_pivot_height, run_look_session, FlyCam, LookButton};
 use camera_zoom::{apply_zoom_scroll, CAM_DIST_DEFAULT};
 // `/follow`: chat sends the request, `crate::target` resolves the subject into the state, and
 // `follow` owns the motion.
+#[cfg(test)]
+pub(crate) use follow::release_owed_for_test;
 pub(crate) use follow::{FollowRequest, FollowState};
 // Click to Move: `crate::target`'s dispatchers start it and run the verb it owes on arrival.
 pub(crate) use approach::on_cvar as approach_on_cvar;

@@ -247,3 +247,23 @@ fn the_follows_arm_reads_the_follow_an_earlier_packet_ended() {
         Some(LEADER)
     );
 }
+
+/// A stop that ends a follow owes its forward release (`0x60fc05` → `0x60e7f0`): the frame's steer
+/// drops the synthesized forward and autorun (`0x514630`) ahead of the controller's step, which
+/// stops the move.
+#[test]
+fn the_stop_releases_the_forward_and_autorun() {
+    let mut app = following();
+    let world = app.world_mut();
+    world.init_resource::<crate::player::Player>();
+    world
+        .resource_mut::<crate::player::Player>()
+        .forward_for_test(Some(true));
+    frame(&mut app, vec![our_swing()]);
+    let world = app.world_mut();
+    crate::player::release_owed_for_test(world);
+    let held = world
+        .resource_mut::<crate::player::Player>()
+        .forward_for_test(None);
+    assert_eq!(held, (false, false));
+}

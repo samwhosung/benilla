@@ -233,24 +233,39 @@ impl AutoMoveStop<'_> {
     }
 }
 
-/// The canceller past its gate (`0x60fb76` on): a follow signals `AUTOFOLLOW_END` first, on the
-/// notice lane at the caller's place ([`super::follow::end`]), and the mode returns to 12
-/// (`0x60fc30`), so a walk ends too; `true` if either ended. Its release of the move, turn and
-/// pitch commands (`0x60fc05`-`0x60fc18`) needs nothing here: the synthesized forward goes with the
-/// auto-move. Its `face` leg (`0x60fb92`-`0x60fbe8`) turns no unit: it stores the target's heading
-/// for the camera (`0x60e8f0`, read only at `0x510904` through `0x611660`) and presses command
-/// 0x800000, which the release lets go of in the same call (`0x60fc10`). It sends nothing.
+/// The canceller past its gate (`0x60fb76` on), with its release: a follow signals
+/// `AUTOFOLLOW_END` first, on the notice lane at the caller's place ([`super::follow::end`]), and
+/// the mode returns to 12 (`0x60fc30`), so a walk ends too; `true` if either ended.
+///
+/// The release lets go of the move, turn and pitch commands (`0x60fc05`-`0x60fc18`). For modes 3
+/// to 10, whose row's first byte is set (`0x860a58`, filled at `0x60e5b2`-`0x60e65c`), the forward
+/// release `0x60e7f0` queues a move stop (`MoveStop 0x60dc90`) and clears autorun (`0x514630`)
+/// while the input owns the mover (`0x5144e0`): here the release is owed to the frame's steer
+/// ([`FollowState::owe_release`]), which drops the synthesized forward and autorun ahead of the
+/// controller, whose step sends the stop, as the reference's mover update sends the one it queued.
+/// Where the precondition fails (a death, far sight, a server spline) the tick clears autorun
+/// itself (`0x514748`). The `face` leg (`0x60fb92`-`0x60fbe8`) turns no unit: it keeps the target's
+/// heading at `0xc4d8c4` for the camera (`0x60e8f0`; its readers `0x510904` and `0x510ef6`, through
+/// `0x611660`) and presses command 0x800000, which the release lets go of in the same call
+/// (`0x60fc10`). The canceller itself sends nothing.
 pub(crate) fn end_auto_move(
     follow: Option<&mut FollowState>,
     approach: Option<&mut Approach>,
     lane: Option<&mut crate::field_watch::NoticeLane>,
 ) -> bool {
-    let walked = approach.is_some_and(|a| {
-        let active = a.active();
+    // Mode 2, the facing turn, has no forward release.
+    let (walked, faced) = approach.map_or((false, false), |a| {
+        let ended = (a.active(), a.facing());
         a.stop();
-        active
+        ended
     });
-    let followed = follow.is_some_and(|f| super::follow::end(f, lane));
+    let Some(follow) = follow else {
+        return walked;
+    };
+    let followed = super::follow::end(follow, lane);
+    if followed || (walked && !faced) {
+        follow.owe_release();
+    }
     walked || followed
 }
 
