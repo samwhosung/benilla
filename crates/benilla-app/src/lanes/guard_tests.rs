@@ -1780,7 +1780,7 @@ pub(super) const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // The views lane rewinds the stores, records and roster cells as of each packet for the
     // tokens' live reads; it reads the index and the selection as the frame left them (#2217).
     ("unit views", &["net::GuidIndex", "net::ObjectStore", "target::Selection",
-        "ui_party::GroupState"]),
+        "ui_party::GroupState", "ui_session::latch::InteractLatch"]),
     ("cast reports", &["items::Items", "net::ObjectStore"]),
     ("item watchers", &["items::Countdowns", "items::Items", "names::NameCache", "net::GuidIndex",
         "net::ObjectStore", "ui_trade::TradeSession"]),
