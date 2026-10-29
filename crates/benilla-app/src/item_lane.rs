@@ -22,7 +22,6 @@ use benilla_ui::script::UiScript;
 use crate::field_watch::FieldNotice;
 use crate::item_watch::{BagEvent, ItemNotice, Run, TradeTouch, Unlock};
 use crate::lanes::{Stamp, Until};
-use crate::net::{ObjectStore, SelfPlayer};
 
 /// The item watchers' runs, each stamped as its packet's handler readied it
 /// ([`crate::lanes::stamp`]), with the trade half a close may run ahead of the lane
@@ -108,11 +107,10 @@ fn drop_item_runs(mut lane: ResMut<ItemLane>) {
     lane.clear();
 }
 
-/// What a run's firing reads: the active player, and what the trade scan reads, the objects and
-/// the item records the recount counts with among them.
+/// What a run's firing reads: what the trade scan reads, and the message sink. The recount counts
+/// through the host's action states.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct RunReads<'w, 's> {
-    me: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
     trade: crate::ui_trade::TouchReads<'w, 's>,
     sink: crate::ui_action::MessageSink<'w>,
 }
@@ -195,14 +193,8 @@ fn fire_run(vm: &mut RunVm, reads: &mut RunReads, run: Run, touch: Option<TradeT
         true
     });
     if held {
-        let counter = crate::ui_action::recount::Counter {
-            store: reads.me.iter().next(),
-            objects: &reads.trade.objects,
-            items: &reads.trade.items,
-            commands: &reads.trade.commands,
-        };
         for entry in notice.recounts() {
-            crate::ui_action::recount::recount(vm, &counter, entry);
+            crate::ui_action::recount::recount(vm, entry);
         }
     }
     if let Some(touch) = touch {
@@ -253,7 +245,8 @@ fn rebuild_at(notice: &ItemNotice) -> Option<Rebuild> {
         | ItemNotice::Entry { .. }
         | ItemNotice::Enchantment { .. }
         | ItemNotice::TradeRecord { .. }
-        | ItemNotice::TooltipRecord { .. } => None,
+        | ItemNotice::TooltipRecord { .. }
+        | ItemNotice::ActionRecord { .. } => None,
     }
 }
 
@@ -389,8 +382,10 @@ mod tests {
         let mut app = App::new();
         app.insert_resource(crate::net::NetCommands(tx));
         app.insert_non_send_resource(rx);
-        app.world_mut()
-            .spawn((SelfPlayer, ObjectStore(Default::default())));
+        app.world_mut().spawn((
+            crate::net::SelfPlayer,
+            crate::net::ObjectStore(Default::default()),
+        ));
         let mut script = UiScript::new().unwrap();
         script.set_trade_skill(Some(TradeSkillState {
             line: 197,

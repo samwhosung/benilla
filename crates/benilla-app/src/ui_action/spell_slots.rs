@@ -157,7 +157,6 @@ impl SpellSlots<'_, '_> {
                 self.slots.buttons.remove(&slot);
             }
         }
-        self.slots.touch();
         let action = u32::from(slot) + 1;
         let shown = word.map(|w| self.spell_slot(w, spells));
         if let Some(script) = self.script.as_deref_mut() {
@@ -170,8 +169,8 @@ impl SpellSlots<'_, '_> {
         lane.write(FieldNotice::ActionSlotChanged { action });
     }
 
-    /// The VM's copy of a spell word, as the identity feed resolves one
-    /// ([`super::feed::spell_action_icon`]), so the feed's next resolve finds it shown.
+    /// The VM's copy of a spell word, its icon resolved ([`super::feed::spell_action_icon`]) for a
+    /// getter with no host lent; with one, the getter resolves it at the call.
     fn spell_slot(&self, w: ActionButton, spells: Option<&Spells>) -> ActionSlot {
         let texture = spells.and_then(|sp| {
             let d = sp.catalog.get(w.action)?;
@@ -269,7 +268,6 @@ mod tests {
         let mut left: Vec<u8> = slots.buttons.keys().copied().collect();
         left.sort_unstable();
         assert_eq!(left, [1, 3]);
-        assert_eq!(slots.generation(), 4, "the identity feed re-resolves them");
         let sent: Vec<(u8, u32)> = rx
             .try_iter()
             .filter_map(|c| match c {

@@ -79,9 +79,6 @@ pub(crate) const SPELL_ATTACK: u32 = 6603;
 pub(crate) struct ActionSlots {
     /// Wire slot (0-based) to its packed action; the Lua action id is slot + 1.
     pub buttons: HashMap<u8, ActionButton>,
-    /// Moved by every write ([`Self::touch`]); the identity feed re-resolves when it moved past
-    /// the count it last resolved, and writes nothing here.
-    generation: u64,
     /// Whether this login's `SMSG_ACTION_BUTTONS` has come, so the bar is this character's.
     arrived: bool,
 }
@@ -91,7 +88,6 @@ impl ActionSlots {
     pub(crate) fn arrive(&mut self, buttons: impl IntoIterator<Item = ActionButton>) {
         self.buttons = buttons.into_iter().map(|b| (b.slot, b)).collect();
         self.arrived = true;
-        self.touch();
     }
 
     /// Whether this login's bar has come ([`Self::arrive`]).
@@ -104,17 +100,6 @@ impl ActionSlots {
     fn game_entry(&mut self) {
         self.buttons.clear();
         self.arrived = false;
-        self.touch();
-    }
-
-    /// Mark the words written, for the identity feed's next resolve.
-    pub(crate) fn touch(&mut self) {
-        self.generation = self.generation.wrapping_add(1);
-    }
-
-    /// The writes so far, which the identity feed compares with its last resolve's.
-    pub(crate) fn generation(&self) -> u64 {
-        self.generation
     }
 }
 
@@ -315,6 +300,31 @@ impl Spells {
     }
 }
 
+/// The bar's word at the 1-based `action` and the VM's copy of it, as a write leaves both, for a
+/// test that places a slot outside the verbs.
+#[cfg(test)]
+pub(crate) fn hold_for_test(world: &mut World, action: u32, kind: u8, id: u32) {
+    let slot = u8::try_from(action - 1).expect("a bar slot");
+    world.resource_mut::<ActionSlots>().buttons.insert(
+        slot,
+        ActionButton {
+            slot,
+            action: id,
+            kind,
+        },
+    );
+    if let Some(mut script) = world.get_non_send_resource_mut::<benilla_ui::script::UiScript>() {
+        script.set_action(
+            action,
+            Some(benilla_ui::script::ActionSlot {
+                kind,
+                action: id,
+                ..Default::default()
+            }),
+        );
+    }
+}
+
 /// One pass of the action-state feed, for a test that reads a slot's pushed state.
 #[cfg(test)]
 pub(crate) fn run_feed_action_state_once(world: &mut World) {
@@ -470,7 +480,7 @@ impl Plugin for UiActionPlugin {
                 Update,
                 (
                     // The feeds ride with the unit feed, before the VM ticks: the state feed
-                    // after the identity feed, so a slot's first state lands the same frame.
+                    // after the seed, so a new VM's slots have their states the same frame.
                     feed::feed_actions.in_set(UnitFeed),
                     // A seat: the world-enter events' handlers read the slots' state, which the
                     // reference's arrival stores before its enter cascade (`0x5deafc`, `0x5deb60`).

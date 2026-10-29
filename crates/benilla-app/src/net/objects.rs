@@ -405,6 +405,12 @@ fn run_record_callback(
                 id: crate::field_watch::id::UNIT_INVENTORY_CHANGED,
             }),
         Cb::Trade | Cb::Ammo => {}
+        // The bar's recount of the entry, for a ready record only (`0x4e5b86` → `0x4e5c70`).
+        Cb::ActionSlots if answered => sc.item_lane.push(crate::item_watch::Run {
+            notice: Some(crate::item_watch::ItemNotice::ActionRecord { entry }),
+            ..Default::default()
+        }),
+        Cb::ActionSlots => {}
         Cb::Swap
         | Cb::AutoEquip
         | Cb::ItemCooldown

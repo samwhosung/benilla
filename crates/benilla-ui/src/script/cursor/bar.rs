@@ -28,8 +28,14 @@ fn pack(kind: u8, action: u32) -> u32 {
 /// `0x4e6450`), a spell the spell setter's mode 3 (`0x4e6254`, `0x4e6494`), a macro the macro
 /// setter's mode 8 (`0x4e629d`, `0x4e64e2`). `None` is an empty slot; `Some(None)` an action no
 /// setter takes, a macro gone from the list (`0x4e6279`) or an unknown kind (`0x4e626e`): a
-/// pickup then sets nothing, and a place clears the cursor as for an empty slot.
-fn lift(model: &Model, id: u32, book: Option<&SpellBookState>) -> Option<Option<CursorPayload>> {
+/// pickup then sets nothing, and a place clears the cursor as for an empty slot. `face` is the
+/// slot's icon as the call reads it ([`crate::script::action::slot_texture`]).
+fn lift(
+    model: &Model,
+    id: u32,
+    book: Option<&SpellBookState>,
+    face: Option<String>,
+) -> Option<Option<CursorPayload>> {
     let slot = model.actions.get(&id)?;
     if let Some(macro_id) = macro_slot_id(slot.kind, slot.action) {
         return Some(model.macros.by_id(macro_id).map(|m| {
@@ -44,14 +50,14 @@ fn lift(model: &Model, id: u32, book: Option<&SpellBookState>) -> Option<Option<
             src_slot: id,
             kind: slot.kind,
             action: slot.action,
-            texture: slot.texture.clone(),
+            texture: face,
             count: slot.count,
             consumable: slot.consumable,
             state: model.action_states.get(&id).copied(),
         })),
         ACTION_KIND_SPELL => Some(CursorPayload::Spell(CursorSpell {
             spell_id: slot.action,
-            texture: slot.texture.clone(),
+            texture: face,
             // The setter reads the spell's record; the book is where the engine has it.
             passive: book
                 .unwrap_or(&model.spellbook)
@@ -72,8 +78,9 @@ fn lift(model: &Model, id: u32, book: Option<&SpellBookState>) -> Option<Option<
 /// `ClearCursor(1,1)` signals on the empty cursor, then its tail. The slot clears even when no
 /// setter takes the action (`0x4e62ba`). Returns whether to repaint.
 pub(super) fn pickup_action(lua: &Lua, id: u32) -> mlua::Result<bool> {
-    // The book as it stands, through the lent host.
+    // The book as it stands, through the lent host, and the slot's icon.
     let book = crate::script::live::ask(lua, &crate::script::spellbook::BookNow);
+    let face = crate::script::action::slot_texture(lua, id);
     let picked = {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
         if matches!(
@@ -88,7 +95,7 @@ pub(super) fn pickup_action(lua: &Lua, id: u32) -> mlua::Result<bool> {
             None
         } else {
             // An empty slot returns before any setter (`0x4e61a3`).
-            Some(lift(&model, id, book.as_ref()))
+            Some(lift(&model, id, book.as_ref(), face))
         }
     };
     let Some(picked) = picked else {
@@ -162,21 +169,23 @@ pub(crate) fn place_action(lua: &Lua, id: u32) -> mlua::Result<bool> {
         _ => None,
     };
     let book = crate::script::live::ask(lua, &crate::script::spellbook::BookNow);
-    let (placed, displaced) = match verb(lua, |model| plan_place(lua, model, id, book.as_ref())) {
-        Place::Refused => return Ok(false),
-        // The passive spell's line, shown inside the verb (`0x4e63ad` → `0x496720`).
-        Place::Shown(key) => {
-            crate::script::calls::display_error(lua, key)?;
-            return Ok(false);
-        }
-        // The held action is already the slot's: `ClearCursor(1,1)` and no write (`0x4e63d4`,
-        // `0x4e65db`, `0x4e673a`).
-        Place::Same => {
-            verb(lua, clear_cursor);
-            return Ok(false);
-        }
-        Place::Write(placed, displaced) => (placed, displaced),
-    };
+    let face = crate::script::action::slot_texture(lua, id);
+    let (placed, displaced) =
+        match verb(lua, |model| plan_place(lua, model, id, book.as_ref(), face)) {
+            Place::Refused => return Ok(false),
+            // The passive spell's line, shown inside the verb (`0x4e63ad` → `0x496720`).
+            Place::Shown(key) => {
+                crate::script::calls::display_error(lua, key)?;
+                return Ok(false);
+            }
+            // The held action is already the slot's: `ClearCursor(1,1)` and no write (`0x4e63d4`,
+            // `0x4e65db`, `0x4e673a`).
+            Place::Same => {
+                verb(lua, clear_cursor);
+                return Ok(false);
+            }
+            Place::Write(placed, displaced) => (placed, displaced),
+        };
     match displaced {
         Some(Some(displaced)) => {
             set_cursor(lua, true, Setter::of(&displaced), |_| Some(displaced));
@@ -187,7 +196,8 @@ pub(crate) fn place_action(lua: &Lua, id: u32) -> mlua::Result<bool> {
         let (kind, action) = (placed.kind, placed.action);
         model.actions.insert(id, placed);
         // The placed action's own state, a bar item's carried from its source slot; any other
-        // waits for the app's re-feed rather than reading the displaced occupant's.
+        // is the host's write's to store, inside the call (`0x4e5903`), never the displaced
+        // occupant's.
         match state {
             Some(state) => {
                 model.action_states.insert(id, state);
@@ -217,7 +227,13 @@ enum Place {
 
 /// `PlaceAction`'s decision: the accept filters, then whether the held action is the slot's own,
 /// then what the slot takes from the held payload and the occupant that hops.
-fn plan_place(lua: &Lua, model: &mut Model, id: u32, book: Option<&SpellBookState>) -> Place {
+fn plan_place(
+    lua: &Lua,
+    model: &mut Model,
+    id: u32,
+    book: Option<&SpellBookState>,
+    face: Option<String>,
+) -> Place {
     // The two accept filters (`0x4e62e0`) refuse with a bare return: nothing stored or sent, and
     // the payload stays held. An item needs an on-use spell or an equip slot (`0x4e6571`), so a
     // bag is placeable; a passive spell (`Attributes & 0x40`) also raises errorId `0x9e` through
@@ -236,7 +252,7 @@ fn plan_place(lua: &Lua, model: &mut Model, id: u32, book: Option<&SpellBookStat
         action,
         count: 0,
         consumable: false,
-        // The item's ON_USE spell waits for the app's re-feed, which reads the template.
+        // The item's ON_USE spell is the host's write's to fill, off the record (`0x4e66e9`).
         use_spell: None,
     };
     let placed = match held {
@@ -290,7 +306,7 @@ fn plan_place(lua: &Lua, model: &mut Model, id: u32, book: Option<&SpellBookStat
     if same {
         return Place::Same;
     }
-    Place::Write(placed, lift(model, id, book))
+    Place::Write(placed, lift(model, id, book, face))
 }
 
 /// The spell slot `id` resolves to (`0x4e5a50`): a spell slot's own; a macro slot's bound spell

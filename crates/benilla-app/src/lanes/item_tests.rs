@@ -90,6 +90,9 @@ fn client() -> App {
             .resource_mut::<crate::items::Items>()
             .insert_template(entry, Some(crate::items::test_template(name)));
     }
+    for (action, entry) in [(3, HELM_ID), (5, POTION)] {
+        crate::ui_action::hold_for_test(world, action, ACTION_KIND_ITEM, entry);
+    }
     let mut script = UiScript::new().unwrap();
     for (action, entry) in [(3, HELM_ID), (5, POTION)] {
         script.set_action(
@@ -406,6 +409,7 @@ fn a_held_copier_ends_inside_its_packet_before_a_later_close() {
 fn linen_on_the_bar() -> App {
     let mut app = client();
     let world = app.world_mut();
+    crate::ui_action::hold_for_test(world, 7, ACTION_KIND_ITEM, LINEN);
     let mut script = world.non_send_resource_mut::<UiScript>();
     script.set_unit_guids(&benilla_ui::script::UnitGuids {
         player: ME,

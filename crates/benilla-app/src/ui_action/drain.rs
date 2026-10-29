@@ -554,6 +554,12 @@ impl ActionBarSteps<'_> {
         self.slots.iter().flat_map(|s| s.buttons.values())
     }
 
+    /// The word the 1-based `lua_id` holds.
+    pub(crate) fn button(&self, lua_id: u32) -> Option<&ActionButton> {
+        let slot = u8::try_from(lua_id.checked_sub(1)?).ok()?;
+        self.slots.as_deref()?.buttons.get(&slot)
+    }
+
     /// `call` inside its verb.
     pub(crate) fn apply(&mut self, call: benilla_ui::script::ActionBarCall) {
         use benilla_ui::script::ActionBarCall;
@@ -573,7 +579,7 @@ impl ActionBarSteps<'_> {
 
     /// The slot write `0x4e58e0` for the 1-based `lua_id` (`packed == 0` clears), which the VM
     /// already mirrors: `CMSG_SET_ACTION_BUTTON` sent, ahead of the `ACTIONBAR_SLOT_CHANGED` the
-    /// VM signals after it, and the slot stored (`0x4e590a`), marking the bar for the feed.
+    /// VM signals after it, and the slot stored (`0x4e590a`).
     pub(crate) fn set(&mut self, lua_id: u32, packed: u32) {
         let Ok(slot) = u8::try_from(lua_id.saturating_sub(1)) else {
             debug!("ui_action: set_action_button lua id {lua_id} out of range — ignored");
@@ -601,6 +607,5 @@ impl ActionBarSteps<'_> {
                 },
             );
         }
-        slots.touch();
     }
 }

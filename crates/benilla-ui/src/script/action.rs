@@ -56,7 +56,9 @@ pub enum ActionBarCall {
     Notify { id: u32 },
 }
 
-/// What one action slot shows; the app resolves the icon before pushing.
+/// The VM's copy of one action slot, which the app writes where the bar's word is written: with a
+/// host lent, the getters read the icon, the count and the consumable test at the call instead
+/// ([`ActionTextureNow`], [`ActionCountNow`], [`ActionConsumableNow`]).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ActionSlot {
     /// The icon texture path (`Interface\Icons\…`); `None` shows the slot's fallback.
@@ -65,10 +67,11 @@ pub struct ActionSlot {
     pub kind: u8,
     /// The spell, macro or item id (bits 0-23 of the packed slot word).
     pub action: u32,
-    /// `GetActionCount`'s bag count for an item slot, 0 otherwise.
+    /// The bar's count for an item slot (`0xbc6390`), as the last recount or write stored it, 0
+    /// otherwise.
     pub count: u32,
     /// `IsConsumableAction`: `0x4e5250` reads only the slot's item template, so this rides the
-    /// icon's push, not [`ActionState`]'s.
+    /// slot, not [`ActionState`].
     pub consumable: bool,
     /// An item slot's ON_USE spell, the spell `0x4e5a50` resolves it to (`0x4e5ae0`): the
     /// template's first block with a spell and trigger 0. `None` for no such block or another
@@ -148,6 +151,55 @@ pub struct ActionUsableNow(pub u32);
 
 impl super::live::LiveQuery for ActionUsableNow {
     type Answer = (bool, bool);
+}
+
+/// `GetActionTexture`'s question to the lent host for a spell or item slot: `GetActionSlotTexture`
+/// `0x4e6a50` at the call, off the live player, the item cache and the spell's aura; `None` inside
+/// for no icon. A macro slot's icon is the VM's own macro record's (`0x4e6bf9` into `0x4f0fd0`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ActionTextureNow(pub u32);
+
+impl super::live::LiveQuery for ActionTextureNow {
+    type Answer = Option<String>;
+}
+
+/// `GetActionCount`'s question to the lent host: the bar's count `0xbc6390` for an item slot, as
+/// the last recount or write stored it (`0x4e6c70`), else 0.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ActionCountNow(pub u32);
+
+impl super::live::LiveQuery for ActionCountNow {
+    type Answer = u32;
+}
+
+/// `IsConsumableAction`'s question to the lent host: `0x4e5250` on the item slot's record as the
+/// cache holds it at the call, read with no callback (`0x4e528d`-`0x4e52b0`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ActionConsumableNow(pub u32);
+
+impl super::live::LiveQuery for ActionConsumableNow {
+    type Answer = bool;
+}
+
+/// A spell or item slot's icon as the lent host reads it at the call ([`ActionTextureNow`]), a
+/// macro slot's off the VM's macro record; else the VM's copy of the slot; `None` for an empty
+/// slot. The pickup's cursor reads it too.
+pub(super) fn slot_texture(lua: &Lua, action: u32) -> Option<String> {
+    let mirror = {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        let slot = model.actions.get(&action)?;
+        // The arm formats the icon directory and the basename (`0x4f0ffa`) and the binding pushes
+        // the buffer (`0x4e6e42`), so a macro with no icon gives the directory alone.
+        if let Some(id) = macro_slot_id(slot.kind, slot.action) {
+            return model.macros.by_id(id).map(|m| {
+                m.texture
+                    .clone()
+                    .unwrap_or_else(|| MACRO_ICON_DIR.to_string())
+            });
+        }
+        slot.texture.clone()
+    };
+    super::live::ask(lua, &ActionTextureNow(action)).unwrap_or(mirror)
 }
 
 /// `action`'s state as the lent host reads it at the call ([`ActionStateNow`]), else the pushed
@@ -477,25 +529,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, action: Value| {
             // `is-number` else `Usage: GetActionTexture(slot)` (`0x84bf78`, `0x4e6e5a`).
             let action = binding_abi::index_arg32(lua, action, "Usage: GetActionTexture(slot)")?;
-            // A macro slot reads its macro's icon live (`0x4e6bf9` into `0x4f0fd0`), so a handler
-            // of the edit's own slot signal sees the new one. The arm formats the icon directory
-            // and the basename (`0x4f0ffa`) and the binding pushes the buffer (`0x4e6e42`), so a
-            // macro with no icon gives the directory alone.
-            let tex = {
-                let model = lua.app_data_ref::<Model>().expect("model app_data");
-                model
-                    .actions
-                    .get(&action)
-                    .and_then(|s| match macro_slot_id(s.kind, s.action) {
-                        Some(id) => model.macros.by_id(id).map(|m| {
-                            m.texture
-                                .clone()
-                                .unwrap_or_else(|| MACRO_ICON_DIR.to_string())
-                        }),
-                        None => s.texture.clone(),
-                    })
-            };
-            match tex {
+            // Resolved at the call (`0x4e6a50`): a macro slot's icon off its record, so a handler
+            // of the edit's own slot signal sees the new one, and a spell or item slot's off the
+            // live player and item cache.
+            match slot_texture(lua, action) {
                 Some(t) => Ok(Value::String(lua.create_string(&t)?)),
                 None => Ok(Value::Nil),
             }
@@ -575,12 +612,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, action: Value| {
             // `is-number` else `Usage: GetActionCount(slot)` (`0x84bf98`, `0x4e6ebb`).
             let action = binding_abi::index_arg32(lua, action, "Usage: GetActionCount(slot)")?;
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(model
+            // The bar's count cache at the call (`0x4e6c70`), through the lent host.
+            let mirror = lua
+                .app_data_ref::<Model>()
+                .expect("model app_data")
                 .actions
                 .get(&action)
                 .filter(|s| s.kind == ACTION_KIND_ITEM)
-                .map_or(0, |s| s.count))
+                .map_or(0, |s| s.count);
+            Ok(super::live::ask(lua, &ActionCountNow(action)).unwrap_or(mirror))
         })?,
     )?;
 
@@ -705,17 +745,22 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(state_flag(lua, action, |s| s.is_attack))
         })?,
     )?;
-    // From the slot, not the state map: `0x4e5250` depends only on the item template.
+    // From the slot, not the state map: `0x4e5250` depends only on the item template, which the
+    // lent host reads at the call.
     g.set(
         "IsConsumableAction",
         lua.create_function(|lua, action: Value| {
             // `is-number` else `Usage: IsConsumableAction(slot)` (`0x84c10c`, `0x4e74bf`).
             let action = binding_abi::index_arg32(lua, action, "Usage: IsConsumableAction(slot)")?;
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            match model.actions.get(&action) {
-                Some(s) if s.consumable => Ok(Value::Integer(1)),
-                _ => Ok(Value::Nil),
-            }
+            let mirror = lua
+                .app_data_ref::<Model>()
+                .expect("model app_data")
+                .actions
+                .get(&action)
+                .is_some_and(|s| s.consumable);
+            Ok(flag(
+                super::live::ask(lua, &ActionConsumableNow(action)).unwrap_or(mirror),
+            ))
         })?,
     )?;
     g.set(

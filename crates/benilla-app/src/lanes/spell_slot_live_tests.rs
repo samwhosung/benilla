@@ -138,7 +138,6 @@ fn client() -> Client {
                 },
             );
         }
-        slots.touch();
     }
     let mut c = Client { app, inbound, sent };
     c.frame(vec![vec![created(ME, EntityKind::Player, &[])]]);

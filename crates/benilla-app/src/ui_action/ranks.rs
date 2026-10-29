@@ -17,7 +17,8 @@ use super::ActionSlots;
 use crate::net::{ClientCommand, NetCommands};
 
 /// Re-points each spell slot at the highest rank of its chain in `known` and sends the move, so
-/// the server's stored copy is fixed too; a moved word marks the bar for the identity feed. An
+/// the server's stored copy is fixed too; our player's arrival, behind the login's packets, writes
+/// the moved words into the VM's copy (`super::recount::arrival_slot_pass`). An
 /// empty book yields no fixes, so a bar arriving first is harmless.
 pub(crate) fn normalize_ranks(
     slots: &mut ActionSlots,
@@ -47,7 +48,6 @@ pub(crate) fn normalize_ranks(
             button: slot,
             packed,
         });
-        slots.touch();
     }
 }
 
@@ -106,7 +106,6 @@ mod tests {
         let Some(data) = client_data() else { return };
         let (store, sent) = normalize(&data, &[spell_button(0, 1752)], &[11294]);
         assert_eq!(store.buttons[&0].action, 11294, "slot 1 holds rank 8");
-        assert_eq!(store.generation(), 1, "the feed re-resolves the slot");
         assert_eq!(sent, vec![(0, 11294)]);
     }
 

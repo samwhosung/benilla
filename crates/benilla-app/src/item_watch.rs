@@ -77,6 +77,10 @@ pub(crate) enum ItemNotice {
     /// ([`crate::ui_items::feed::tooltips_answered`]), for a found record only
     /// (`0x52e551`, `0x52f826`). It concerns no item of ours.
     TooltipRecord { entry: u32 },
+    /// A record landed that an action slot's lookup asked for: the bar's callback `0x4e5b80`
+    /// recounts the entry (`0x4e5b8a` → `0x4e5c70`), for a found record only (`0x4e5b86`). It
+    /// concerns no item of ours.
+    ActionRecord { entry: u32 },
 }
 
 /// What a notice asks of the trade's own column (`0x4bfb10`, `0x4bfb60`).
@@ -321,7 +325,8 @@ impl ItemNotice {
             | Self::EntryRecord { entry, .. }
             | Self::StackCount { entry, .. }
             | Self::SpellCharges { entry, .. }
-            | Self::Enchantment { entry, .. } => vec![*entry],
+            | Self::Enchantment { entry, .. }
+            | Self::ActionRecord { entry } => vec![*entry],
             Self::Entry {
                 old,
                 new,

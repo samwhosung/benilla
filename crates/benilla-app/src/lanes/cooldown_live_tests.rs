@@ -168,7 +168,6 @@ fn client() -> Client {
                 .buttons
                 .insert(slot, ActionButton { slot, action, kind });
         }
-        slots.touch();
     }
     crate::items::test_spawn_item(
         world,
@@ -285,7 +284,6 @@ fn a_cooldown_querys_record_flushes_at_its_answers_place() {
                 kind: ACTION_KIND_ITEM,
             },
         );
-        slots.touch();
     }
     world
         .resource_mut::<crate::spell::Cooldowns>()
@@ -351,18 +349,7 @@ fn a_pet_spell_list_binds_its_macros_between_its_sort_and_its_pet() {
         // The load's derivation, with no pet: a miss.
         script.derive_macro_bindings(|_, _| true);
     }
-    {
-        let mut slots = world.resource_mut::<crate::ui_action::ActionSlots>();
-        slots.buttons.insert(
-            3,
-            ActionButton {
-                slot: 3,
-                action: 1,
-                kind: ACTION_KIND_MACRO,
-            },
-        );
-        slots.touch();
-    }
+    crate::ui_action::hold_for_test(world, 4, ACTION_KIND_MACRO, 1);
     c.frame(vec![]);
     c.eval::<()>(
         false,
@@ -575,18 +562,7 @@ fn the_pet_book_and_a_pet_bound_slot_read_the_pets_list_inside_their_packet() {
         .resource_mut::<crate::net::GuidIndex>()
         .0
         .insert(PET, pet);
-    {
-        let mut slots = world.resource_mut::<crate::ui_action::ActionSlots>();
-        slots.buttons.insert(
-            3,
-            ActionButton {
-                slot: 3,
-                action: 1,
-                kind: ACTION_KIND_MACRO,
-            },
-        );
-        slots.touch();
-    }
+    crate::ui_action::hold_for_test(world, 4, ACTION_KIND_MACRO, 1);
     c.frame(vec![]);
     c.frame(vec![]);
     crate::ui_macro::bind_for_test(

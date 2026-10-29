@@ -177,7 +177,20 @@ fn load_macros(
             state.merge_scope(true, character_records);
             files.held.get(script)[1] = false;
             if !moves.is_empty() {
-                migrate_character_bar(&mut bar, &state, &files, &moves);
+                for id in migrate_character_bar(&mut bar, &state, &files, &moves) {
+                    // The VM's copy of the moved slot, the bar's word with nothing resolved:
+                    // its getters resolve it at the call.
+                    let slot = bar.button(id).map(|b| benilla_ui::script::ActionSlot {
+                        kind: b.kind,
+                        action: b.action,
+                        ..Default::default()
+                    });
+                    script.set_action(id, slot);
+                    fires.post(
+                        "ACTIONBAR_SLOT_CHANGED",
+                        vec![benilla_ui::script::ScriptValue::Int(i64::from(id))],
+                    );
+                }
             }
         }
         info!(
@@ -216,18 +229,21 @@ fn load_macros(
 /// fails nothing moves and the next load tries again. Each button then goes out as a placement's
 /// does ([`crate::ui_action::ActionBarSteps::set`]): `CMSG_SET_ACTION_BUTTON` sent and the slot
 /// stored. A button whose old place holds no macro is cleared the same way: its
-/// word would read as an account macro of that id, and misbind once one takes it.
+/// word would read as an account macro of that id, and misbind once one takes it. Returns the
+/// 1-based slots it wrote, in order.
 fn migrate_character_bar(
     bar: &mut crate::ui_action::ActionBarSteps,
     state: &MacroState,
     files: &MacroFiles,
     moves: &[(u32, u32)],
-) {
-    let Some(path) = &files.character else { return };
+) -> Vec<u32> {
+    let Some(path) = &files.character else {
+        return Vec::new();
+    };
     let text = store::write(state.saved(true).into_iter());
     if let Err(e) = crate::local_state::write_atomic(path, &text) {
         warn!("ui_macro: renumbering {}: {e}", path.display());
-        return;
+        return Vec::new();
     }
     let mut writes: Vec<(u32, u32)> = bar
         .buttons()
@@ -247,9 +263,10 @@ fn migrate_character_bar(
         "ui_macro: {} character macro button(s) moved to macro ids or cleared",
         writes.len()
     );
-    for (id, packed) in writes {
+    for &(id, packed) in &writes {
         bar.set(id, packed);
     }
+    writes.into_iter().map(|(id, _)| id).collect()
 }
 
 /// Persist on the engine's dirty edge. The verbs signal `UPDATE_MACROS` themselves, inside their

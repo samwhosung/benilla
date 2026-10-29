@@ -127,6 +127,7 @@ fn client() -> App {
             }),
         );
     }
+    crate::ui_action::hold_for_test(world, 5, ACTION_KIND_ITEM, POTION);
     let mut script = UiScript::new().unwrap();
     script.set_action(
         5,

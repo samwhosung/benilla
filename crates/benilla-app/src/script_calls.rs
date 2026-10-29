@@ -348,12 +348,47 @@ impl ScriptCallHost<'_, '_> {
         }
     }
 
-    /// Our player's arrival's slot pass (`0x5deafc`): every slot's usable pair stored but an
-    /// unknown spell's ([`crate::ui_action::ActionStates::arrival_slots`]).
+    /// Our player's arrival's slot pass (`0x5deafc`): every word into the VM's copy, each item
+    /// word recounted and every slot's usable pair stored but an unknown spell's
+    /// ([`crate::ui_action::ActionStates::arrival_slots`]).
     pub(crate) fn engine_arrival_slots(&mut self, script: &mut UiScript) {
         if let Some(states) = self.appliers.action_states().as_mut() {
             states.arrival_slots(script);
         }
+    }
+
+    /// A new VM's copy of the bar, its counts and its states, with nothing signalled
+    /// ([`crate::ui_action::ActionStates::seed`]).
+    pub(crate) fn engine_seed_action_slots(&mut self, script: &mut UiScript) {
+        if let Some(states) = self.appliers.action_states().as_mut() {
+            states.seed(script);
+        }
+    }
+
+    /// `0x4e6d20(entry)`, a recount's one count of its entry (`0x4e5c75`); `None` in a harness
+    /// without the action feed's inputs.
+    pub(crate) fn engine_item_count(&mut self, entry: u32) -> Option<u32> {
+        self.appliers
+            .action_states()
+            .as_ref()
+            .map(|states| states.item_count(entry))
+    }
+
+    /// A recount's write of the 1-based `action` when it holds `entry`: `count` stored
+    /// (`0x4e5caa`), the VM's copy with it, and the slot's usable pair (`0x4e5cb1` into
+    /// `0x4e58e0`); whether it held the entry
+    /// ([`crate::ui_action::ActionStates::recounted`]).
+    pub(crate) fn engine_recounted(
+        &mut self,
+        script: &mut UiScript,
+        action: u32,
+        entry: u32,
+        count: u32,
+    ) -> bool {
+        self.appliers
+            .action_states()
+            .as_mut()
+            .is_some_and(|states| states.recounted(script, action, entry, count))
     }
 
     /// Push the views a call left for the script's next line, and for the listeners at a signal
@@ -966,10 +1001,13 @@ impl CallHost for ScriptCallHost<'_, '_> {
             }
             ScriptCall::ActionBar(call) => {
                 appliers.action_bar().apply(call);
-                // The write's store of the slot's pair (`0x4e5903`-`0x4e5914`), ahead of its
-                // signal.
+                // An item word's count (`0x4e66e9`-`0x4e66f1`), then the write's store of the
+                // slot's pair (`0x4e5903`-`0x4e5914`), ahead of its signal.
                 if let ActionBarCall::Set { id, .. } | ActionBarCall::Notify { id } = call {
                     if let Some(states) = appliers.action_states().as_mut() {
+                        if matches!(call, ActionBarCall::Set { .. }) {
+                            states.item_written(script, id);
+                        }
                         states.slot_written(script, id);
                     }
                 }
@@ -1320,6 +1358,33 @@ impl<P: SystemParam + 'static> VmWith<'_, '_, P> {
                 host.engine_arrival_slots(script);
             }
         }
+    }
+
+    /// A new VM's seed of the bar with the host ([`ScriptCallHost::engine_seed_action_slots`]).
+    pub(crate) fn engine_seed_action_slots(&mut self) {
+        if let Some(script) = self.script.as_deref_mut() {
+            if let Some(host) = self.set.p1().as_mut() {
+                host.engine_seed_action_slots(script);
+            }
+        }
+    }
+
+    /// A recount's count of `entry` with the host ([`ScriptCallHost::engine_item_count`]); `None`
+    /// with no VM or no host, where no slot is read.
+    pub(crate) fn engine_item_count(&mut self, entry: u32) -> Option<u32> {
+        self.script.as_ref()?;
+        self.set.p1().as_mut()?.engine_item_count(entry)
+    }
+
+    /// A recount's write of one slot with the host ([`ScriptCallHost::engine_recounted`]).
+    pub(crate) fn engine_recounted(&mut self, action: u32, entry: u32, count: u32) -> bool {
+        let Some(script) = self.script.as_deref_mut() else {
+            return false;
+        };
+        self.set
+            .p1()
+            .as_mut()
+            .is_some_and(|host| host.engine_recounted(script, action, entry, count))
     }
 
     /// An engine writer's `SelectTarget(0)`, signalled in place with the host

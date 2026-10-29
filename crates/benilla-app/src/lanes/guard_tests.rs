@@ -65,12 +65,6 @@ pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
          greeting's in its call, and none fires from it",
     ),
     (
-        Row::HostHeld,
-        "::ui_action::ActionSlots",
-        "the action slots, which `feed_actions` resolves; a handler's Lua writes them in its \
-         call, through the host's bar verbs",
-    ),
-    (
         Row::Queue,
         "::ui_logout::SessionPosts",
         "the exit and the cinematic stop a session verb posts, which nothing the script reads \
@@ -80,8 +74,7 @@ pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
         Row::HostHeld,
         "::items::Items",
         "the record answers' callbacks still run off the frame's records rather than in the \
-         answer's list (`ItemCacheReceive` `0x55bdb0`, `0x55bf12`-`0x55bf39`): the action bar's \
-         slot records' (`0x4e5b80`) asked as a slot first shows, the \
+         answer's list (`ItemCacheReceive` `0x55bdb0`, `0x55bf12`-`0x55bf39`): the \
          dress-up's (`0x504ba0`), the cast failure's redisplay (`0x6e29b0`, `0x6e2a90`), the \
          equipment display's (`0x5ed880`), and the lock-key tooltip's (`0x52ad10`), which \
          `drive_mouseover_tooltip` rebuilds each frame; and the combat log's (`0x6294b0`) and the \
@@ -187,6 +180,11 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // learn, unlearn and supersede handlers write at their packet (`0x4b262c`, `0x5e9e49`,
     // `0x4b2c83`); no feed fires off them.
     "::ui_action::LearnedAbilities",
+    // Read through the host by the bar's getters, and quiet: the bar's words, which our arrival's
+    // pass writes into the VM's copy (`0x5deb00`), the verbs and the spell packets' clears and
+    // replaces at their writes (`0x4e5d60`, `0x4e5db0`), and a new VM's seed copies; no feed fires
+    // off them.
+    "::ui_action::ActionSlots",
     // Quiet: the reactive list, which the learn and supersede handlers' registrar leg grows at
     // their packet (`0x4b27b3`-`0x4b27c7`) and our create's arrival empties and fills again
     // (`0x5dea86`); the usable refreshes re-check it in their places, and no feed reads it.
@@ -364,8 +362,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // The ammo getters' hits fire after the push that carries their record, whenever it runs.
     ("::ui_char::feed_char", &["items::Countdowns", "items::Items", "names::NameCache",
         "net::GuidIndex", "net::ObjectStore", "ui_char::AmmoRecordHits"]),
-    ("::ui_action::feed::feed_actions", &["items::Countdowns", "items::Items", "net::GuidIndex",
-        "net::ObjectStore", "ui_action::ActionSlots"]),
     ("::ui_action::state::feed_action_state", &["Transform",
         "creature_anim::sheath::CommittedSheath", "items::Countdowns", "items::Items",
         "names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",

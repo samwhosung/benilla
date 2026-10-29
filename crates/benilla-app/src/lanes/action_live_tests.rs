@@ -187,6 +187,11 @@ fn spells() -> crate::ui_action::Spells {
 /// whose line for each event carries what its listener read of the bar: Frostbolt's usable pair
 /// and the sword's equipped flag, the two forms' checked state, the bonus bar's offset.
 fn client() -> Client {
+    client_with(|_| {})
+}
+
+/// [`client`] with `more` run on its world before our player's create.
+fn client_with(more: impl FnOnce(&mut World)) -> Client {
     let mut app = crate::game_plugins::schedule_tests::headless_client();
     app.insert_resource(bevy::ecs::error::DefaultErrorHandler(
         bevy::ecs::error::ignore,
@@ -256,7 +261,6 @@ fn client() -> Client {
                 .buttons
                 .insert(slot, ActionButton { slot, action, kind });
         }
-        slots.touch();
     }
     // The sword: entry, stack 1, durability 30 of 40, so the worn walk counts it.
     crate::items::test_spawn_item(
@@ -279,6 +283,7 @@ fn client() -> Client {
         .into_created(benilla_protocol::messages::ObjectType::Item),
         false,
     );
+    more(world);
     let mut c = Client {
         app,
         inbound,
@@ -566,6 +571,153 @@ fn a_placed_slots_listener_reads_the_pair_its_write_stored() {
     );
 }
 
+/// A ration the cache has no record of, on bar slot 8, three of them ours.
+const RATION_GUID: u64 = 0x4000_0000_0000_00F2;
+const RATION: u32 = 4540;
+const RATION_DISPLAY: u32 = 6413;
+const RATION_ICON: &str = "Interface\\Icons\\INV_Misc_Food_11";
+
+/// Our arrival's slot pass counts the ration slot through the item cache with the bar's callback
+/// (`0x5deb00` → `0x4e5d60` → `0x4e6d20`, `0x4e6d69`), which the record's answer runs inside its
+/// packet (`0x55bf39` → `0x4e5b80` → `0x4e5c70`): the slot's `ACTIONBAR_SLOT_CHANGED` fires between
+/// the packets around the answer, and every getter reads the slot's icon, consumable test and count
+/// at its call (`0x4e6a50`, `0x4e5250`, `0x4e6c70`): the first packet's listener reads the count our
+/// arrival stored before the rations reached the pack, and the last the answer's. The record is the
+/// cache's as the frame's packets left it until each packet's events fire inside its dispatch, so
+/// both read the ration's icon.
+#[test]
+fn a_bar_items_record_repaints_its_slot_at_the_answer_and_the_getters_read_it_live() {
+    let mut c = client_with(|world| {
+        crate::items::test_spawn_item(
+            world,
+            RATION_GUID,
+            ObjectFields::from_pairs(&[
+                (OBJECT_TYPE, 0x3),
+                (3, RATION),
+                (6, ME as u32),
+                (7, (ME >> 32) as u32),
+                (STACK_COUNT, 3),
+            ])
+            .into_created(benilla_protocol::messages::ObjectType::Item),
+            false,
+        );
+        world
+            .resource_mut::<crate::ui_action::ActionSlots>()
+            .buttons
+            .insert(
+                7,
+                ActionButton {
+                    slot: 7,
+                    action: RATION,
+                    kind: benilla_protocol::messages::ACTION_KIND_ITEM,
+                },
+            );
+        world.insert_resource(crate::entities::ItemDisplays::icons_for_tests(
+            benilla_formats::ItemDisplayCatalog::from_displays(HashMap::from([(
+                RATION_DISPLAY,
+                benilla_formats::ItemDisplay {
+                    icon: Some(RATION_ICON.to_string()),
+                    ..Default::default()
+                },
+            )])),
+        ));
+    });
+    c.write_store(&[
+        (PACK_SLOT_1 + 2, RATION_GUID as u32),
+        (PACK_SLOT_1 + 3, (RATION_GUID >> 32) as u32),
+    ]);
+    c.eval::<()>(
+        false,
+        "local f = CreateFrame('Frame') f:RegisterEvent('UNIT_MANA') \
+         f:RegisterEvent('ACTIONBAR_SLOT_CHANGED') \
+         f:SetScript('OnEvent', function() \
+             if event == 'ACTIONBAR_SLOT_CHANGED' and arg1 ~= 8 then return end \
+             table.insert(Seen, 'RATION:' .. event .. ':' .. tostring(GetActionTexture(8)) .. ':' \
+                 .. tostring(IsConsumableAction(8)) .. ':' .. GetActionCount(8)) end)",
+    );
+    c.seen(&[]);
+    // A cold record reads the resolver's question mark at the call; the arrival's count asked for
+    // it, and the getter, finding it pending, asks nothing more.
+    let icon: String = c.eval(true, "return GetActionTexture(8)");
+    assert_eq!(icon, crate::ui_action::MISSING_ITEM_ICON);
+    let asked = crate::query_cache::queries(&c._sent)
+        .into_iter()
+        .filter(|q| matches!(q, ClientCommand::ItemQuery { entry, .. } if *entry == RATION))
+        .count();
+    assert_eq!(asked, 1);
+    // Tough rations: one on-use block whose charges -1 make the slot show its count.
+    let mut info = crate::items::test_template("Ration");
+    info.display_info_id = RATION_DISPLAY;
+    info.spells = vec![benilla_protocol::messages::ItemSpellEntry {
+        index: 0,
+        spell_id: 433,
+        trigger: 0,
+        charges: -1,
+        cooldown_ms: -1,
+        category: 0,
+        category_cooldown_ms: -1,
+    }];
+    c.frame(vec![
+        vec![values(ME, &[(MANA, 90)])],
+        vec![SessionEvent::ItemTemplate {
+            entry: RATION,
+            info: Some(Box::new(info)),
+        }],
+        vec![values(ME, &[(MANA, 100)])],
+    ]);
+    let ration: Vec<String> = c
+        .seen(&["RATION"])
+        .into_iter()
+        .map(|l| l.trim_start_matches("RATION:").to_string())
+        .collect();
+    assert_eq!(
+        ration,
+        [
+            format!("UNIT_MANA:{RATION_ICON}:1:0"),
+            format!("ACTIONBAR_SLOT_CHANGED:{RATION_ICON}:1:3"),
+            format!("UNIT_MANA:{RATION_ICON}:1:3"),
+        ]
+    );
+}
+
+/// A new VM's copy of the bar is the bar's own, its counts as the last recount stored them: the
+/// tables outlive a VM (`0x4e4f50` runs only at the game entry), so a stack that moved with no
+/// recount reads the stored count after a reload too, and no slot signals.
+#[test]
+fn a_new_vm_is_seeded_with_the_bars_words_and_stored_counts() {
+    let mut c = client();
+    let potions = c.app.world().resource::<crate::net::GuidIndex>().0[&POTION_GUID];
+    c.app
+        .world_mut()
+        .get_mut::<crate::net::ObjectStore>(potions)
+        .expect("the potions")
+        .0
+        .merge(ObjectFields::from_pairs(&[(STACK_COUNT, 5)]));
+    c.app
+        .world_mut()
+        .insert_non_send_resource(UiScript::new().expect("a VM"));
+    c.eval::<()>(
+        false,
+        "Seen = {} local f = CreateFrame('Frame') f:RegisterEvent('ACTIONBAR_SLOT_CHANGED') \
+         f:SetScript('OnEvent', function() table.insert(Seen, event) end)",
+    );
+    c.frame(vec![]);
+    let chunk = "return HasAction(1), HasAction(6), GetActionCount(7), GetActionTexture(1)";
+    let seeded: (Option<i64>, Option<i64>, i64, String) = c.eval(false, chunk);
+    assert_eq!(
+        seeded,
+        (
+            Some(1),
+            None,
+            2,
+            format!("Interface\\Icons\\Spell_{FROSTBOLT}")
+        )
+    );
+    let live: (Option<i64>, Option<i64>, i64, String) = c.eval(true, chunk);
+    assert_eq!(live, seeded);
+    assert!(c.seen(&["ACTIONBAR_SLOT_CHANGED"]).is_empty());
+}
+
 /// Our create's arrival empties the reactive list and its registrar runs take the initial spells in
 /// again in wire order (`0x5dea86`, `0x5dea96`-`0x5deab9` → `0x4b27b3`), so a refresh raises their
 /// words in that order (`0x4b31d7`-`0x4b3226`): Overpower, listed first, before Revenge, whose id
@@ -634,16 +786,7 @@ fn a_superseded_macro_slots_cooldown_reads_the_new_rank_inside_its_packet() {
             .resource_mut::<crate::ui_action::PlayerActions>()
             .spells
             .insert(FROSTBOLT_2);
-        let mut slots = world.resource_mut::<crate::ui_action::ActionSlots>();
-        slots.buttons.insert(
-            5,
-            ActionButton {
-                slot: 5,
-                action: 1,
-                kind: benilla_protocol::messages::ACTION_KIND_MACRO,
-            },
-        );
-        slots.touch();
+        crate::ui_action::hold_for_test(world, 6, benilla_protocol::messages::ACTION_KIND_MACRO, 1);
     }
     c.frame(vec![vec![SessionEvent::SpellCooldowns {
         caster: ME,
@@ -712,7 +855,6 @@ fn action_getter_cost() {
                 },
             );
         }
-        slots.touch();
     }
     c.frame(vec![]);
     let mut times = Vec::new();

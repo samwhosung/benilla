@@ -578,7 +578,7 @@ fn food_on_the_bar_greys_while_the_player_is_in_combat() {
                 (PACK_SLOT_1, 0xF0),
             ])),
         ));
-        // The slot as the identity feed pushed it, with the ten muffins it counted.
+        // The slot as a recount left it, with the ten muffins it counted.
         let mut script = UiScript::new().unwrap();
         script.set_action(
             1,
@@ -591,6 +591,10 @@ fn food_on_the_bar_greys_while_the_player_is_in_combat() {
         );
         app.insert_non_send_resource(script);
         add_action_feed(&mut app);
+        app.world_mut()
+            .resource_mut::<super::ActionStateMemory>()
+            .counts
+            .insert(1, 10);
         write_all(&mut app);
         app.update();
         app.world()
@@ -679,6 +683,10 @@ fn an_item_slot_is_held_by_its_stored_count_not_the_bags() {
         );
         app.insert_non_send_resource(script);
         add_action_feed(&mut app);
+        app.world_mut()
+            .resource_mut::<super::ActionStateMemory>()
+            .counts
+            .insert(1, stored);
         write_all(&mut app);
         app.update();
         app.world()

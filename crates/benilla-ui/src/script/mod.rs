@@ -234,8 +234,9 @@ pub(crate) mod xml_layout;
 mod zone_text;
 
 pub use action::{
-    macro_slot_id, macro_slot_word, ActionBarCall, ActionSlot, ActionState, ActionStateNow,
-    ActionUsableNow, ActionUse, CastView, OpenProfessions, Profession, WearsItem,
+    macro_slot_id, macro_slot_word, ActionBarCall, ActionConsumableNow, ActionCountNow, ActionSlot,
+    ActionState, ActionStateNow, ActionTextureNow, ActionUsableNow, ActionUse, CastView,
+    OpenProfessions, Profession, WearsItem,
 };
 pub use addon::{addon_load_context, AddOnInfo, AddonLoad, AddonReply, AddonSecurity};
 pub use addon_enable::{AddonStateFiles, EnableHash, EnableStore};
