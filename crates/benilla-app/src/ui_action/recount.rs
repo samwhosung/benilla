@@ -318,11 +318,18 @@ mod tests {
         );
     }
 
-    /// Our player's arrival stores every item slot's count with no per-slot signal, then signals
-    /// slot 0 once (`0x5dea50`): a worldport's re-created bags recount here and nowhere else.
+    /// Our player's arrival loads the staged words, stores every item slot's count with no
+    /// per-slot signal, then signals slot 0 once (`0x5dea50`): a worldport's re-created bags
+    /// recount here and nowhere else.
     #[test]
     fn our_arrival_recounts_every_item_slot_quietly_and_signals_slot_zero() {
         let mut app = app();
+        {
+            let mut slots = app
+                .world_mut()
+                .resource_mut::<crate::ui_action::ActionSlots>();
+            slots.staged = std::mem::take(&mut slots.buttons);
+        }
         app.world_mut()
             .run_system_cached(arrival_slot_pass)
             .expect("the arrival's slot pass runs");

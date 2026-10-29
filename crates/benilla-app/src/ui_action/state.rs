@@ -299,7 +299,7 @@ pub(crate) struct ActionWalk<'w, 's> {
 pub(crate) struct ActionStates<'w, 's> {
     walk: ActionWalk<'w, 's>,
     memory: ResMut<'w, ActionStateMemory>,
-    /// The known spells, which the arrival's slot pass tests (`0x60c740`).
+    /// The known spells, which the arrival's load tests (`0x60c740`).
     actions: Res<'w, PlayerActions>,
     /// The reactive list; absent in a harness that seeds none.
     reactive: Option<ResMut<'w, super::ReactiveSpells>>,
@@ -421,15 +421,24 @@ impl ActionStates<'_, '_> {
         push(script, &fresh, &self.memory.cache, Some(action));
     }
 
-    /// Our player's arrival's slot pass (`0x5deae2`-`0x5deb12`): each slot written through
+    /// The known spells, which the arrival's load tests a spell word against (`0x60c740`).
+    pub(crate) fn known_spells(&self) -> std::collections::BTreeSet<u32> {
+        self.actions.spells.clone()
+    }
+
+    /// Our player's arrival's slot pass (`0x5deae2`-`0x5deb12`) over the 1-based slots `loaded`,
+    /// the words its load stored ([`super::ActionSlots::load_staged`]): each written through
     /// `0x4e5d60` with no send and quiet set (`0x5deafc`), into the VM's copy, each item word
-    /// recounted first (`0x4e5d90`), so its pair is stored, but an empty one or a spell word the
-    /// player does not know (`0x60c740`, skipped at `0x5deaf5`). Nothing else recounts a
-    /// worldport: its items are created again before our player, outside the world latch, and run
-    /// no record set-up.
-    pub(crate) fn arrival_slots(&mut self, script: &mut benilla_ui::script::UiScript) {
+    /// recounted first (`0x4e5d90`), and its pair stored (`0x4e58e0`). A slot the load skipped keeps
+    /// its word, its count and its pair. Nothing else recounts a worldport: its items are created
+    /// again before our player, outside the world latch, and run no record set-up.
+    pub(crate) fn arrival_slots(
+        &mut self,
+        script: &mut benilla_ui::script::UiScript,
+        loaded: &[u32],
+    ) {
         let mut counted: HashMap<u32, u32> = HashMap::new();
-        for action in 1..=120u32 {
+        for &action in loaded {
             let button = self.walk.button(action).copied();
             if let Some(b) = button.filter(|b| b.kind == ACTION_KIND_ITEM) {
                 let count = *counted
@@ -443,11 +452,7 @@ impl ActionStates<'_, '_> {
             .walk
             .all(script, &self.memory, Instant::now(), false, None)
             .0;
-        for (&slot, b) in &self.walk.slots.buttons {
-            if b.kind == ACTION_KIND_SPELL && !self.actions.spells.contains(&b.action) {
-                continue;
-            }
-            let action = u32::from(slot) + 1;
+        for &action in loaded {
             let pair = fresh
                 .get(&action)
                 .map_or((false, false), |st| (st.usable, st.not_enough_mana));

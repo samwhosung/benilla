@@ -1942,7 +1942,9 @@ fn enter_refresh(app: &mut App) -> bool {
         .expect("the refresh runs")
 }
 
-/// Our player created anew with `mana`, and its arrival's slot pass.
+/// Our player created anew with `mana`, and its arrival's load and slot pass over the bar's words
+/// as the server holds them, staged again by a worldport's `SMSG_ACTION_BUTTONS` (the bar is
+/// client-authoritative).
 fn arrive(app: &mut App, mana: u32) {
     let old = app.world().resource::<crate::net::GuidIndex>().0[&ME];
     app.world_mut().despawn(old);
@@ -1963,10 +1965,19 @@ fn arrive(app: &mut App, mana: u32) {
         .0
         .insert(ME, me);
     use bevy::ecs::system::RunSystemOnce;
+    let loaded = app
+        .world_mut()
+        .run_system_once(
+            |mut slots: ResMut<ActionSlots>, actions: Res<PlayerActions>| {
+                slots.staged = slots.buttons.clone();
+                slots.load_staged(|word| actions.spells.contains(&word))
+            },
+        )
+        .expect("the arrival's load runs");
     app.world_mut()
         .run_system_once(
-            |mut states: ActionStates, mut script: NonSendMut<UiScript>| {
-                states.arrival_slots(&mut script);
+            move |mut states: ActionStates, mut script: NonSendMut<UiScript>| {
+                states.arrival_slots(&mut script, &loaded);
             },
         )
         .expect("the arrival's slot pass runs");

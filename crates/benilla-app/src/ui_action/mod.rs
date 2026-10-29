@@ -79,20 +79,45 @@ pub(crate) const SPELL_ATTACK: u32 = 6603;
 pub(crate) struct ActionSlots {
     /// Wire slot (0-based) to its packed action; the Lua action id is slot + 1.
     pub buttons: HashMap<u8, ActionButton>,
-    /// Whether this login's `SMSG_ACTION_BUTTONS` has come, so the bar is this character's.
+    /// `0xc4c2b4`: the words `SMSG_ACTION_BUTTONS` staged (`0x5e6680`), empty ones left out,
+    /// which only our player's arrival loads into the bar ([`Self::load_staged`]). No game entry
+    /// clears them.
+    pub(crate) staged: HashMap<u8, ActionButton>,
+    /// Whether this login's `SMSG_ACTION_BUTTONS` has come, so the staged words are this
+    /// character's.
     arrived: bool,
 }
 
 impl ActionSlots {
-    /// `SMSG_ACTION_BUTTONS`'s 120 words, every slot replaced (`0x5e6680` into `0xc4c2b4`).
-    pub(crate) fn arrive(&mut self, buttons: impl IntoIterator<Item = ActionButton>) {
-        self.buttons = buttons.into_iter().map(|b| (b.slot, b)).collect();
+    /// `SMSG_ACTION_BUTTONS`'s 120 words staged, every one replaced (`0x5e6680` into `0xc4c2b4`);
+    /// the bar itself waits for our player's arrival.
+    pub(crate) fn stage(&mut self, buttons: impl IntoIterator<Item = ActionButton>) {
+        self.staged = buttons.into_iter().map(|b| (b.slot, b)).collect();
         self.arrived = true;
     }
 
-    /// Whether this login's bar has come ([`Self::arrive`]).
+    /// Whether this login's bar has come ([`Self::stage`]).
     pub(crate) fn arrived(&self) -> bool {
         self.arrived
+    }
+
+    /// Our player's arrival's load of the staged words (`0x5deae2`-`0x5deb12`): each stored into
+    /// the bar through `0x4e5d60`, but a word whose top nibble is clear and that `knows` does not
+    /// hold (`0x60c740`, skipped at `0x5deaf5`), an empty word among them, whose slot keeps what it
+    /// held. The 1-based ids stored, in slot order.
+    pub(crate) fn load_staged(&mut self, knows: impl Fn(u32) -> bool) -> Vec<u32> {
+        let mut staged: Vec<ActionButton> = self.staged.values().copied().collect();
+        staged.sort_by_key(|b| b.slot);
+        let mut loaded = Vec::new();
+        for b in staged {
+            let word = (u32::from(b.kind) << 24) | b.action;
+            if word & 0xf000_0000 == 0 && !knows(word) {
+                continue;
+            }
+            self.buttons.insert(b.slot, b);
+            loaded.push(u32::from(b.slot) + 1);
+        }
+        loaded
     }
 
     /// The game entry's reset (`ResetActionBarState 0x4e4f50`): every word 0, and no bar yet for

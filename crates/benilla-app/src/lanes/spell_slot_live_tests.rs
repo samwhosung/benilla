@@ -129,7 +129,7 @@ fn client() -> Client {
     {
         let mut slots = world.resource_mut::<crate::ui_action::ActionSlots>();
         for (slot, action) in [(0, FIREBALL), (1, FROSTBOLT_1)] {
-            slots.buttons.insert(
+            slots.staged.insert(
                 slot,
                 ActionButton {
                     slot,
@@ -262,7 +262,7 @@ fn a_learned_abilitys_latch_reads_at_the_learn_packet() {
 /// The next login in the same run, as B: `logout` runs the session's end first, else the session
 /// dropped with no logout. Then B's login, B's book, which knows only Frostbolt's second rank, and
 /// B's bar, in vmangos's order (`Player.cpp:19253`, `:19256`). A's bar held the first rank, which
-/// A knew. Returns the bar's sends and B's bar.
+/// A knew. Returns the bar's sends and B's staged words.
 fn next_login(logout: bool) -> (Vec<(u8, u32)>, Vec<ActionButton>, ActionButton) {
     use benilla_formats::{SkillLineCatalog, SlaInfo};
     let mut c = client();
@@ -318,7 +318,8 @@ fn next_login(logout: bool) -> (Vec<(u8, u32)>, Vec<ActionButton>, ActionButton)
         ],
     );
     let slots = c.app.world().resource::<crate::ui_action::ActionSlots>();
-    let bar = slots.buttons.values().copied().collect();
+    assert!(slots.buttons.is_empty(), "B's bar waits for B's arrival");
+    let bar = slots.staged.values().copied().collect();
     (c.sends(), bar, b_bar)
 }
 

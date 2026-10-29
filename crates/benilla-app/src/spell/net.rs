@@ -876,11 +876,12 @@ fn spell_book(
     }
 }
 
-/// `SMSG_ACTION_BUTTONS`, at login and on server-side edits, into the action store, every slot
-/// replaced.
+/// `SMSG_ACTION_BUTTONS` (`0x5e6680`), at login and at each worldport (vmangos
+/// `CharacterHandler.cpp:574`, `MovementHandler.cpp:112` → `Player.cpp:19256`): its words staged,
+/// every one replaced, for our player's arrival to load ([`crate::ui_action::ActionSlots`]).
 fn action_buttons(buttons: Vec<ActionButton>, slots: &mut crate::ui_action::ActionSlots) {
-    debug!("net: action bar — {} occupied slots", buttons.len());
-    slots.arrive(buttons);
+    debug!("net: action bar — {} occupied slots staged", buttons.len());
+    slots.stage(buttons);
 }
 
 /// `SMSG_LEARNED_SPELL`: the spell joins the known spells, which the book reads (learning never

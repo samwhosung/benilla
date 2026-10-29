@@ -142,7 +142,7 @@ fn client() -> Client {
         .extend([HEAL]);
     {
         let mut slots = world.resource_mut::<crate::ui_action::ActionSlots>();
-        slots.buttons.insert(
+        slots.staged.insert(
             0,
             ActionButton {
                 slot: 0,

@@ -165,7 +165,7 @@ fn client() -> Client {
             (2, POTION, ACTION_KIND_ITEM),
         ] {
             slots
-                .buttons
+                .staged
                 .insert(slot, ActionButton { slot, action, kind });
         }
     }

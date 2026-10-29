@@ -278,7 +278,7 @@ fn client_with(more: impl FnOnce(&mut World)) -> Client {
             (6, POTION, benilla_protocol::messages::ACTION_KIND_ITEM),
         ] {
             slots
-                .buttons
+                .staged
                 .insert(slot, ActionButton { slot, action, kind });
         }
     }
@@ -623,7 +623,7 @@ fn a_bar_items_record_repaints_its_slot_at_the_answer_and_the_getters_read_it_li
         );
         world
             .resource_mut::<crate::ui_action::ActionSlots>()
-            .buttons
+            .staged
             .insert(
                 7,
                 ActionButton {
@@ -709,8 +709,12 @@ fn a_bar_items_record_repaints_its_slot_at_the_answer_and_the_getters_read_it_li
 fn an_aura_packet_notifies_its_spells_slots_between_its_neighbours() {
     let mut c = client_with(|world| {
         world
+            .resource_mut::<crate::ui_action::PlayerActions>()
+            .spells
+            .insert(TOGGLE);
+        world
             .resource_mut::<crate::ui_action::ActionSlots>()
-            .buttons
+            .staged
             .insert(
                 7,
                 ActionButton {
@@ -764,7 +768,7 @@ fn set_action_reads_the_slots_cooldown_at_the_call() {
             .insert(FROSTBOLT_2);
         world
             .resource_mut::<crate::ui_action::ActionSlots>()
-            .buttons
+            .staged
             .insert(
                 7,
                 ActionButton {
@@ -908,6 +912,42 @@ fn an_equipped_listener_finds_an_item_a_later_packet_destroys() {
     };
     let seen: Vec<String> = c.seen(&["UNIT_MANA"]).iter().map(worn).collect();
     assert_eq!(seen, ["UNIT_MANA:1"]);
+}
+
+/// `SMSG_ACTION_BUTTONS` only stages its words (`0x5e6680` into `0xc4c2b4`); our player's arrival
+/// loads them into the bar and skips each spell word the player does not know (`0x5deaee` →
+/// `0x60c740`, `0x5deaf5`). vmangos sends saved words with no such check
+/// (`MasterPlayer.cpp:341`), so a slot saved with a rank the character lost stays empty: no
+/// action, no icon, nothing in the bar, while the known words beside it load.
+#[test]
+fn an_arrival_leaves_a_saved_unknown_spells_slot_empty() {
+    let mut c = client_with(|world| {
+        let mut words: Vec<ActionButton> = world
+            .resource::<crate::ui_action::ActionSlots>()
+            .staged
+            .values()
+            .copied()
+            .collect();
+        words.push(ActionButton {
+            slot: 7,
+            action: FROSTBOLT_2,
+            kind: benilla_protocol::messages::ACTION_KIND_SPELL,
+        });
+        crate::net::handlers::dispatch(world, vec![SessionEvent::ActionButtons { buttons: words }]);
+        assert!(
+            world
+                .resource::<crate::ui_action::ActionSlots>()
+                .buttons
+                .is_empty(),
+            "the packet only stages"
+        );
+    });
+    let chunk = "return HasAction(8), GetActionTexture(8), HasAction(1)";
+    let read: (Option<i64>, Option<String>, Option<i64>) = c.eval(true, chunk);
+    assert_eq!(read, (None, None, Some(1)));
+    let bar = c.app.world().resource::<crate::ui_action::ActionSlots>();
+    assert!(!bar.buttons.contains_key(&7), "the bar holds no word there");
+    assert_eq!(bar.buttons.len(), 6, "the known words loaded");
 }
 
 /// A macro slot's icon is its record's but where its bound spell is Attack or a ranged shot:

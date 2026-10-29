@@ -577,6 +577,15 @@ impl ActionBarSteps<'_> {
         }
     }
 
+    /// Our player's arrival's load of the staged words ([`ActionSlots::load_staged`]); nothing in
+    /// a harness without the store.
+    pub(crate) fn load_staged(&mut self, knows: impl Fn(u32) -> bool) -> Vec<u32> {
+        self.slots
+            .as_deref_mut()
+            .map(|slots| slots.load_staged(knows))
+            .unwrap_or_default()
+    }
+
     /// The slot write `0x4e58e0` for the 1-based `lua_id` (`packed == 0` clears), which the VM
     /// already mirrors: `CMSG_SET_ACTION_BUTTON` sent, ahead of the `ACTIONBAR_SLOT_CHANGED` the
     /// VM signals after it, and the slot stored (`0x4e590a`).
