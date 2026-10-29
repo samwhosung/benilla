@@ -541,18 +541,14 @@ impl super::UiScript {
     pub fn set_world_map_catalog(&mut self, continents: Vec<WorldMapContinentView>) {
         let mut model = self.model_mut();
         model.worldmap.continents = continents;
-        model
-            .pending_events
-            .push(("WORLD_MAP_UPDATE".to_string(), Vec::new()));
+        model.queue_event("WORLD_MAP_UPDATE", Vec::new());
     }
 
     /// Pushes the orphan list beside the catalog, both filled in one walk (`0x4a5d00`).
     pub fn set_world_map_direct_areas(&mut self, direct_areas: Vec<(u32, WorldMapZoneView)>) {
         let mut model = self.model_mut();
         model.worldmap.direct_areas = direct_areas;
-        model
-            .pending_events
-            .push(("WORLD_MAP_UPDATE".to_string(), Vec::new()));
+        model.queue_event("WORLD_MAP_UPDATE", Vec::new());
     }
 
     /// Pushes the resolver's orphan leg; the continent leg rides [`Self::set_world_map_feed`].
@@ -566,9 +562,7 @@ impl super::UiScript {
         let mut model = self.model_mut();
         if model.worldmap.explored != explored {
             model.worldmap.explored = explored;
-            model
-                .pending_events
-                .push(("WORLD_MAP_UPDATE".to_string(), Vec::new()));
+            model.queue_event("WORLD_MAP_UPDATE", Vec::new());
         }
     }
 
@@ -668,9 +662,7 @@ impl super::UiScript {
     ) {
         let mut model = self.model_mut();
         select_resolved(&mut model, continent, zone, direct_area);
-        model
-            .pending_events
-            .push(("WORLD_MAP_UPDATE".to_string(), Vec::new()));
+        model.queue_event("WORLD_MAP_UPDATE", Vec::new());
     }
 
     /// The map UV at UI point `(x, y)`, or `None` off the art, normalized over `WorldMapButton`
@@ -733,9 +725,7 @@ fn refresh_landmarks(model: &mut Model) {
     let landmarks = build_landmarks(model);
     if model.worldmap.landmarks != landmarks {
         model.worldmap.landmarks = landmarks;
-        model
-            .pending_events
-            .push(("WORLD_MAP_UPDATE".to_string(), Vec::new()));
+        model.queue_event("WORLD_MAP_UPDATE", Vec::new());
     }
 }
 

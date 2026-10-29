@@ -13,10 +13,9 @@ impl UiScript {
     /// outside any Lua verb. A drain runs a step behind its input, so firing at once would
     /// overtake events the host already queued. A Lua verb's own events never wait here: they
     /// fire inside it ([`verb`]).
+    #[track_caller]
     pub fn queue_event(&mut self, event: &str, args: Vec<ScriptValue>) {
-        self.model_mut()
-            .pending_events
-            .push((event.to_string(), args));
+        self.model_mut().queue_event(event, args);
     }
 
     /// Fire an event to every frame registered for it, shown or not, setting the
@@ -32,6 +31,7 @@ impl UiScript {
     /// saved next leaves the walk on a node whose links the unlink zeroed (`0x70559d`, `0x7055a3`)
     /// and whose free keeps its object (`0x645eb0`): that listener runs once more, then the walk
     /// ends, and the listeners after it miss the event.
+    #[track_caller]
     pub fn fire_event(&mut self, event: &str, args: Vec<ScriptValue>) {
         fire_event_into(&self.lua, event, args);
     }
@@ -42,11 +42,20 @@ impl Model {
     /// returns, once the segment's borrow drops; anywhere else it joins the host queue
     /// ([`Model::pending_events`]) for the next tick. So a helper shared by a Lua verb and a host
     /// path, such as the cursor's clear, fires in place for the one and queues for the other.
+    #[track_caller]
     pub(crate) fn raise(&mut self, event: &str, args: Vec<ScriptValue>) {
         match &mut self.verb_events {
             Some(segment) => segment.push(Raised::Event(event.to_string(), args)),
-            None => self.pending_events.push((event.to_string(), args)),
+            None => self.queue_event(event, args),
         }
+    }
+
+    /// Queue `event` on the host's lane ([`Model::pending_events`]) for the next tick: the one
+    /// push onto it, where the raise's origin is judged ([`super::origin`]).
+    #[track_caller]
+    pub(crate) fn queue_event(&mut self, event: &str, args: Vec<ScriptValue>) {
+        super::origin::check(event, None);
+        self.pending_events.push((event.to_string(), args));
     }
 
     /// Inside a [`verb`] segment, show `payload` on the cursor to the handlers of the events
@@ -169,6 +178,10 @@ pub(crate) enum Fan {
 /// ([`super::calls::Held::Segment`]); the writes stand meanwhile, and the take puts them back to
 /// make them again in their places, a cursor write as its operation ([`Fan::Again`]).
 pub(crate) fn verb<R>(lua: &Lua, body: impl FnOnce(&mut Model) -> R) -> R {
+    super::origin::within(super::origin::Origin::Script, || verb_segment(lua, body))
+}
+
+fn verb_segment<R>(lua: &Lua, body: impl FnOnce(&mut Model) -> R) -> R {
     let (out, raised) = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data set");
         let outer = model.verb_events.replace(Vec::new());
@@ -302,7 +315,12 @@ pub(crate) fn show_chat_line_into(lua: &Lua, key: &'static str, text: String) {
 /// assignment to it reaches the next listener. The walk takes each listener's successor before
 /// its call (`0x703ee8`): one appended meanwhile is reached unless the running one was the tail.
 /// An engine step that cannot lend the host holds the walk for it ([`super::host::holding`]).
+///
+/// Every fire into the VM comes this way, and the raise's origin is judged here
+/// ([`super::origin`]).
+#[track_caller]
 pub(crate) fn fire_event_into(lua: &Lua, event: &str, args: Vec<ScriptValue>) {
+    super::origin::check(event, Some(lua));
     let model_mut = || lua.app_data_mut::<Model>().expect("model app_data set");
     let mut at = {
         let model = model_mut();
@@ -359,6 +377,10 @@ impl super::UiScript {
     /// range); drains the layout again (`0x765799`); then re-picks the hover against those rects
     /// (`0x7657be`). The draw pass fires `OnUpdateModel`.
     pub fn tick(&mut self, elapsed: f32) {
+        super::origin::within(super::origin::Origin::Tick, || self.tick_within(elapsed));
+    }
+
+    fn tick_within(&mut self, elapsed: f32) {
         self.advance_clock_and_events(elapsed);
         self.resolve();
         self.update_walk(elapsed);
@@ -390,7 +412,9 @@ impl super::UiScript {
     /// (`0x4426c3`): the next walk gets its own frame's. The clock and the queued events still
     /// advance, being no part of the layer.
     pub fn tick_covered(&mut self, elapsed: f32) {
-        self.advance_clock_and_events(elapsed);
+        super::origin::within(super::origin::Origin::Tick, || {
+            self.advance_clock_and_events(elapsed);
+        });
     }
 
     /// The `GetTime()` clock, then the events queued since the last tick and the item and spell

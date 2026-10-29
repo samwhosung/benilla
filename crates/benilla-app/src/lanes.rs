@@ -209,7 +209,7 @@ pub(crate) fn waits_behind(head: Option<Stamp>) -> bool {
 pub(crate) fn firing<R>(at: Stamp, f: impl FnOnce() -> R) -> (R, bool) {
     let before = CLOCK.load(Ordering::Relaxed);
     let outer = FIRING.replace(Some(at));
-    let r = f();
+    let r = benilla_ui::script::origin::within(benilla_ui::script::origin::Origin::Lane, f);
     FIRING.set(outer);
     (r, CLOCK.load(Ordering::Relaxed) != before)
 }
@@ -386,6 +386,7 @@ impl LaneApp for App {
         begin: Option<fn(&World)>,
     ) -> &mut Self {
         if self.world().get_resource::<Lanes>().is_none() {
+            crate::raise_origin::arm_each_frame(self);
             self.init_resource::<Lanes>()
                 .configure_sets(
                     Update,
@@ -489,7 +490,11 @@ pub(crate) fn fire_in_order(world: &mut World) {
             fence,
         };
         let lane = &lanes.0[i];
-        if let Err(e) = world.run_system_with(lane.fire, until) {
+        let fired =
+            benilla_ui::script::origin::within(benilla_ui::script::origin::Origin::Lane, || {
+                world.run_system_with(lane.fire, until)
+            });
+        if let Err(e) = fired {
             error!("lanes: `{}` did not fire: {e}", lane.name);
             break;
         }

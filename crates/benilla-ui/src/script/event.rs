@@ -15,6 +15,7 @@ use super::{Model, ScriptValue, REG_SCRIPTS};
 use crate::script::object::frame_wrapper;
 
 /// `UiScript::fire_event` for engine code that holds only the Lua context.
+#[track_caller]
 pub(super) fn fire_global(lua: &Lua, event: &str, args: &[ScriptValue]) {
     super::tick::fire_event_into(lua, event, args.to_vec());
 }
@@ -144,5 +145,7 @@ pub(crate) fn invoke_with_globals(
     }
     // A protected call; the globals are put back before its outcome returns.
     let handler = super::stdlib::error_function(lua);
-    super::stdlib::with_capture(|| lua.call_with_globals(func, &globals, handler.as_ref()))
+    super::origin::within(super::origin::Origin::Script, || {
+        super::stdlib::with_capture(|| lua.call_with_globals(func, &globals, handler.as_ref()))
+    })
 }

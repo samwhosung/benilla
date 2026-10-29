@@ -2048,3 +2048,60 @@ fn every_call_that_queues_for_the_tick_is_listed() {
         .collect();
     assert!(empty.is_empty(), "rows with no reason: {empty:?}");
 }
+
+/// Each entry of the raise check's allow list ([`crate::raise_origin::RAISES_AT_THEIR_OWN_PLACE`])
+/// names a function that exists and gives its reason; one that cites a guard list has that list's
+/// row for it; and every call that queues for the tick has its entry, as each raises at its own
+/// place in the frame.
+#[test]
+fn every_raise_origin_allowed_names_its_function_and_its_row() {
+    use crate::raise_origin::{RAISES_AT_THEIR_OWN_PLACE, ROW_LISTS};
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let module = |file: &str| file.trim_end_matches(".rs").replace('/', "::");
+    let queued: BTreeSet<String> = QUEUED_FOR_THE_TICK
+        .iter()
+        .map(|(f, _, _)| {
+            let (file, func) = f.split_once("::").expect("a `file::fn` row");
+            format!("{}::{func}", module(file))
+        })
+        .collect();
+    let mut wrong = Vec::new();
+    for a in RAISES_AT_THEIR_OWN_PLACE {
+        let (path, func) = a.frame.rsplit_once("::").expect("a `module::fn` frame");
+        let dir = path.replace("::", "/");
+        let found = [format!("{dir}.rs"), format!("{dir}/mod.rs")]
+            .iter()
+            .filter_map(|f| std::fs::read_to_string(src.join(f)).ok())
+            .any(|code| {
+                code.contains(&format!("fn {func}(")) || code.contains(&format!("fn {func}<"))
+            });
+        if !found {
+            wrong.push(format!("{}: no such function", a.frame));
+        }
+        if a.why.trim().is_empty() {
+            wrong.push(format!("{}: no reason", a.frame));
+        }
+        let Some((list, _)) = a.why.split_once(':').filter(|(l, _)| ROW_LISTS.contains(l)) else {
+            continue;
+        };
+        let suffix = format!("::{}", a.frame);
+        let named = a.why.split('`').nth(1).filter(|n| n.starts_with("::"));
+        let has_row = match list {
+            "QUEUED_FOR_THE_TICK" => queued.contains(a.frame),
+            "AT_THEIR_OWN_PLACE" => AT_THEIR_OWN_PLACE.iter().any(|(s, _)| s.ends_with(&suffix)),
+            "NOT_YET_ON_A_LANE" => NOT_YET_ON_A_LANE
+                .iter()
+                .any(|(_, s, _)| named.map_or(s.ends_with(&suffix), |n| *s == n)),
+            _ => false,
+        };
+        if !has_row {
+            wrong.push(format!("{}: {list} has no row for it", a.frame));
+        }
+    }
+    for q in &queued {
+        if !RAISES_AT_THEIR_OWN_PLACE.iter().any(|a| a.frame == q) {
+            wrong.push(format!("{q}: queues for the tick and has no allow entry"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}

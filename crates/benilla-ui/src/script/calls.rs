@@ -814,6 +814,10 @@ fn swap_raising(lua: &Lua, raise: Option<String>) -> Option<String> {
 /// next, as the host comes back and before its tail, ahead of the rest; the calls its tail makes
 /// apply inside the tail.
 pub(crate) fn drain(lua: &Lua) {
+    super::origin::within(super::origin::Origin::Script, || drain_within(lua));
+}
+
+fn drain_within(lua: &Lua) {
     if !super::host::free(lua) {
         return;
     }
@@ -878,6 +882,10 @@ pub(crate) fn drain(lua: &Lua) {
 /// level, so a call one makes is the call's own nested call, and a call made meanwhile one level
 /// in. The reference runs both inside the call.
 pub(super) fn settle(lua: &Lua, script: &mut UiScript) {
+    super::origin::within(super::origin::Origin::Script, || settle_within(lua, script));
+}
+
+fn settle_within(lua: &Lua, script: &mut UiScript) {
     let mut left = take_waiting(lua);
     while let Some(item) = left.pop_front() {
         if !super::host::free(lua) {
@@ -983,6 +991,10 @@ impl super::Model {
 /// to lend, or a lend's once the outermost lend has ended): the held handlers run, with the calls
 /// they make waiting, and every call is dropped. The count of calls dropped.
 pub(crate) fn refuse_waiting(lua: &Lua) -> usize {
+    super::origin::within(super::origin::Origin::Script, || refuse_waiting_within(lua))
+}
+
+fn refuse_waiting_within(lua: &Lua) -> usize {
     super::host::open_unheld(lua, || {
         let mut dropped = 0;
         loop {
