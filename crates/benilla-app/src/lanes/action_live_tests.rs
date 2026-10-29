@@ -170,7 +170,10 @@ fn spells() -> crate::ui_action::Spells {
     };
     let catalog = SpellCatalog::from_displays(HashMap::from([
         row(FROSTBOLT, |d| d.mana_cost = 50),
-        row(FROSTBOLT_2, |d| d.mana_cost = 60),
+        row(FROSTBOLT_2, |d| {
+            d.mana_cost = 60;
+            d.recovery_ms = 120_000;
+        }),
         row(CAT, |d| d.shapeshift_form = Some(CAT_FORM)),
         row(BEAR, |d| d.shapeshift_form = Some(BEAR_FORM)),
         // `SPELL_EFFECT_ATTACK`, which makes the slot the Attack slot (`0x4e59de`).
@@ -740,6 +743,55 @@ fn an_aura_packet_notifies_its_spells_slots_between_its_neighbours() {
             format!("TOGGLE:CHAT_MSG_SPELL_AURA_GONE_SELF:{own}"),
             format!("TOGGLE:UNIT_MANA:{own}"),
         ]
+    );
+}
+
+/// `GameTooltip:SetAction` runs the slot's cooldown query at the call (`0x5323a6` → `0x4e6ca0`),
+/// so a hover inside the packet that armed a two-minute cooldown builds the remaining time and
+/// answers 1 (`0x532597`, `0x5325a9`), where the frame's push still holds none.
+#[test]
+fn set_action_reads_the_slots_cooldown_at_the_call() {
+    let mut c = client_with(|world| {
+        world
+            .resource_mut::<crate::ui_action::PlayerActions>()
+            .spells
+            .insert(FROSTBOLT_2);
+        world
+            .resource_mut::<crate::ui_action::ActionSlots>()
+            .buttons
+            .insert(
+                7,
+                ActionButton {
+                    slot: 7,
+                    action: FROSTBOLT_2,
+                    kind: benilla_protocol::messages::ACTION_KIND_SPELL,
+                },
+            );
+    });
+    crate::ui_script::test_ui::load_tooltip_template(c.app.world().non_send_resource::<UiScript>());
+    c.eval::<()>(
+        false,
+        "local a = CreateFrame('Button', 'B') a:SetPoint('CENTER', 0, 0) a:SetWidth(10) \
+         a:SetHeight(10) CreateFrame('GameTooltip', 'TT', nil, 'TestTooltipTemplate')",
+    );
+    let hover = "TT:SetOwner(B, 'ANCHOR_RIGHT') return TT:SetAction(8)";
+    assert_eq!(c.eval::<Option<i64>>(true, hover), None, "nothing running");
+    crate::net::handlers::dispatch(
+        c.app.world_mut(),
+        vec![SessionEvent::SpellCooldowns {
+            caster: ME,
+            cooldowns: vec![(FROSTBOLT_2, 120_000)],
+        }],
+    );
+    assert_eq!(
+        c.eval::<Option<i64>>(true, hover),
+        Some(1),
+        "live: the armed cooldown"
+    );
+    assert_eq!(
+        c.eval::<Option<i64>>(false, hover),
+        None,
+        "the frame's push holds none"
     );
 }
 

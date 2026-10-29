@@ -977,6 +977,12 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             // `is-number` else `Usage: SetAction(slot)` (`0x855200`, `0x5326c3`).
             let slot = binding_abi::index_arg32(lua, slot, "Usage: SetAction(slot)")?;
             let now = crate::script::clock::now(lua);
+            // The slot's cooldown query (`0x5323a6` → `0x4e6ca0`) and its attack test (`0x5323b4` →
+            // `0x4e59b0`), both at the call, as `GetActionCooldown` and `IsAttackAction` read them.
+            let state = super::action::state_of(lua, slot);
+            let cooldown = state
+                .filter(|s| !s.no_cooldown_query)
+                .and_then(|s| super::action::slot_cooldown(lua, &s));
             let (action, remaining_ms, owned, attack) = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");
                 let action = model.actions.get(&slot).cloned();
@@ -985,12 +991,11 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     .as_ref()
                     .filter(|a| a.kind == 0x80)
                     .and_then(|a| super::tooltip_item::owned_instance(lua, &model, a.action));
-                let state = model.action_states.get(&slot);
                 (
                     action,
-                    live_remaining_ms(state.and_then(|s| s.cooldown), now),
+                    live_remaining_ms(cooldown, now),
                     owned,
-                    state.is_some_and(|s| s.state.is_attack),
+                    state.is_some_and(|s| s.is_attack),
                 )
             };
             // Every slot clears the tooltip first (`0x5323ad`), an empty one included.

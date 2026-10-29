@@ -204,7 +204,7 @@ pub(super) fn slot_texture(lua: &Lua, action: u32) -> Option<String> {
 
 /// `action`'s state as the lent host reads it at the call ([`ActionStateNow`]), else the pushed
 /// snapshot; `None` for an empty slot.
-fn state_of(lua: &Lua, action: u32) -> Option<ActionState> {
+pub(super) fn state_of(lua: &Lua, action: u32) -> Option<ActionState> {
     let ui_now = super::clock::now(lua);
     let (query, snapshot) = {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
@@ -471,6 +471,21 @@ impl super::UiScript {
     pub fn take_ui_errors_with_input(&mut self) -> Vec<(&'static str, super::InputEvents)> {
         std::mem::take(&mut self.model_mut().ui_errors)
     }
+}
+
+/// The cooldown query `0x4e6ca0` of a slot that reaches one, `state` as the call resolved it: the
+/// spell's, the item's or the pet's list read through the lent host at the call (`0x6e2ea0`,
+/// `0x6e2ed0`), else the pushed triple; `(start, duration, enabled)` in `GetTime` seconds.
+pub(super) fn slot_cooldown(lua: &Lua, state: &ActionState) -> Option<(f64, f64, bool)> {
+    let query = match (state.spell, state.item, state.pet_spell) {
+        (Some(spell), _, _) => Some(super::CooldownQuery::Spell(spell)),
+        (None, Some(entry), _) => Some(super::CooldownQuery::Item(entry)),
+        (None, None, Some(spell)) => Some(super::CooldownQuery::PetSpell(spell)),
+        (None, None, None) => None,
+    };
+    let snapshot = state.cooldown.map(super::cooldown_read::seconds);
+    let live = query.and_then(|q| super::cooldown_read::read_live(lua, q));
+    live.unwrap_or(snapshot)
 }
 
 /// Register the action globals.
@@ -803,15 +818,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let Some(state) = state_of(lua, action).filter(|s| !s.no_cooldown_query) else {
                 return Ok((0.0, 0.0, 0));
             };
-            let query = match (state.spell, state.item, state.pet_spell) {
-                (Some(spell), _, _) => Some(super::CooldownQuery::Spell(spell)),
-                (None, Some(entry), _) => Some(super::CooldownQuery::Item(entry)),
-                (None, None, Some(spell)) => Some(super::CooldownQuery::PetSpell(spell)),
-                (None, None, None) => None,
-            };
-            let snapshot = state.cooldown.map(super::cooldown_read::seconds);
-            let live = query.and_then(|q| super::cooldown_read::read_live(lua, q));
-            Ok(match live.unwrap_or(snapshot) {
+            Ok(match slot_cooldown(lua, &state) {
                 Some((start, duration, enabled)) if start + duration > now || !enabled => (
                     crate::script::clock::held_start(start, enabled, now),
                     duration,
