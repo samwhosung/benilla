@@ -74,6 +74,7 @@ fn load_room_with_bags(s: &UiScript) {
 /// (`PaperDollFrame.lua:100-104`).
 fn shown_paper_doll() -> UiScript {
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     for file in crate::ui_script::test_ui::production_order(&[
         CHARACTER_UI,
@@ -146,6 +147,7 @@ fn backpack_with_jerky(s: &mut UiScript) -> String {
 fn ctrl_click_on_a_bag_item_opens_the_room_wearing_it() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_room_with_bags(&s);
     let btn = backpack_with_jerky(&mut s);
@@ -178,6 +180,7 @@ fn ctrl_click_on_a_bag_item_opens_the_room_wearing_it() {
 fn shift_click_posts_the_link_with_chat_open_and_splits_with_it_closed() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_room_with_bags(&s);
     let btn = backpack_with_jerky(&mut s);
@@ -218,6 +221,7 @@ fn shift_click_posts_the_link_with_chat_open_and_splits_with_it_closed() {
 fn ctrl_clicking_a_chat_link_previews_it() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_room(&s);
 
@@ -339,6 +343,7 @@ fn shift_clicking_an_unresolved_slot_posts_nothing_and_never_raises() {
 fn reset_re_dresses_close_empties_and_the_arrows_spin_the_pane() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_room(&s);
     s.run("ShowUIPanel(DressUpFrame)").unwrap();
@@ -391,6 +396,7 @@ fn reset_re_dresses_close_empties_and_the_arrows_spin_the_pane() {
 fn the_room_binds_the_player() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    s.keep_calls();
     s.set_screen_size(1024.0, 768.0);
     load_room(&s);
     s.set_unit_guids(&benilla_ui::script::UnitGuids {

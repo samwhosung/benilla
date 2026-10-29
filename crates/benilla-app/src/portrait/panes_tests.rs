@@ -554,6 +554,8 @@ struct Harness {
 impl Harness {
     fn new(lua: &str) -> Self {
         let mut script = UiScript::new().unwrap();
+        // A dressing-room pane's `SetUnit` is a call no host takes here.
+        script.keep_calls();
         script.set_screen_size(1024.0, 768.0);
         script.set_unit_guids(&benilla_ui::script::UnitGuids {
             player: ME,

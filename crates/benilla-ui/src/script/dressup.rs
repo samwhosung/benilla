@@ -1,8 +1,8 @@
-//! The dressing room: the `DressUpModel` verbs (table `0x84f190`) and the intent queue behind them
-//! and behind `SetUnit`/`RefreshUnit` on a dressing-room pane. The reference edits a clone of the
-//! unit's model (`0x5059a0`, `0x504350`); here the app composes the look from the intents in
-//! order, which matters: on a closed window `DressUpItem` resets, then tries on
-//! (`DressUpFrame.lua:3-7`).
+//! The dressing room: the `DressUpModel` verbs (table `0x84f190`) and `SetUnit`/`RefreshUnit` on a
+//! dressing-room pane, each handed to the host, which applies it to the room inside the call
+//! ([`super::ScriptCall::DressUp`]). The reference edits a clone of the unit's model (`0x5059a0`,
+//! `0x504350`); here the app composes the look from the verbs in call order, which matters: on a
+//! closed window `DressUpItem` resets, then tries on (`DressUpFrame.lua:3-7`).
 
 use mlua::{Lua, Table, Value};
 
@@ -14,7 +14,7 @@ use crate::widget::FrameKind;
 /// Registry key of the `DressUpModel` method table, its own three; the rest come by the chain.
 pub(super) const REG_DRESSUPMODEL_METHODS: &str = "__benilla_dressupmodel_methods";
 
-/// One queued dressing-room intent, applied in order.
+/// One dressing-room verb, applied inside its call.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DressUpIntent {
     /// `SetUnit`, `RefreshUnit` and `Dress` (the Reset button): the reference's rebuild from the
@@ -26,26 +26,24 @@ pub enum DressUpIntent {
     /// `TryOn(item)`: the item in its `InventoryType`'s slot, a held one in the lane `0x5048e8`
     /// picks, with no class, level or proficiency check (`DressUpFrame.lua:2-16`).
     TryOn(u32),
-    /// The window was hidden, so the booth empties. The reference keeps its state while hidden,
-    /// but the next `DressUpItem` re-issues `SetUnit("player")`, so that state is never seen.
-    Close,
 }
 
 impl super::UiScript {
-    /// Drain the dressing room's intents, oldest first; the app applies them in order.
+    /// The dressing-room verbs a harness's VM kept ([`Self::keep_calls`]), oldest first.
     pub fn take_dressup_intents(&mut self) -> Vec<DressUpIntent> {
-        std::mem::take(&mut self.model_mut().dressup_intents)
+        self.take_calls_where(|call| match call {
+            super::ScriptCall::DressUp(intent) => Some(*intent),
+            _ => None,
+        })
     }
 }
 
-fn queue(lua: &Lua, intent: DressUpIntent) {
-    lua.app_data_mut::<Model>()
-        .expect("model app_data")
-        .dressup_intents
-        .push(intent);
+/// Hand `intent` to the host, which applies it before this returns.
+fn submit(lua: &Lua, intent: DressUpIntent) -> mlua::Result<()> {
+    super::calls::submit(lua, super::ScriptCall::DressUp(intent))
 }
 
-/// Queue the rebuild when `PlayerModel`'s `SetUnit`/`RefreshUnit` lands on a `DressUpModel`.
+/// The rebuild when `PlayerModel`'s `SetUnit`/`RefreshUnit` lands on a `DressUpModel`.
 pub(super) fn redress_if_dressup(lua: &Lua, this: &Table) -> mlua::Result<()> {
     let h = frame_handle_of(lua, this)?;
     let is_dressup = lua
@@ -55,7 +53,7 @@ pub(super) fn redress_if_dressup(lua: &Lua, this: &Table) -> mlua::Result<()> {
         .frame(h)
         .is_some_and(|f| f.kind == FrameKind::DressUpModel);
     if is_dressup {
-        queue(lua, DressUpIntent::Dress);
+        submit(lua, DressUpIntent::Dress)?;
     }
     Ok(())
 }
@@ -77,8 +75,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "Undress",
         lua.create_function(|lua, this: Table| {
             frame_handle_of(lua, &this)?;
-            queue(lua, DressUpIntent::Undress);
-            Ok(())
+            submit(lua, DressUpIntent::Undress)
         })?,
     )?;
 
@@ -87,8 +84,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "Dress",
         lua.create_function(|lua, this: Table| {
             frame_handle_of(lua, &this)?;
-            queue(lua, DressUpIntent::Dress);
-            Ok(())
+            submit(lua, DressUpIntent::Dress)
         })?,
     )?;
 
@@ -100,7 +96,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             frame_handle_of(lua, &this)?;
             if let Ok(id) = u32::try_from(item_arg(lua, &item)) {
                 if id != 0 {
-                    queue(lua, DressUpIntent::TryOn(id));
+                    submit(lua, DressUpIntent::TryOn(id))?;
                 }
             }
             Ok(())
@@ -117,6 +113,7 @@ mod tests {
 
     fn room() -> UiScript {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_screen_size(800.0, 600.0);
         s.run(r#"dm = CreateFrame("DressUpModel", "DM", UIParent)"#)
             .unwrap();
@@ -167,7 +164,7 @@ mod tests {
 
     /// The stock `DressUpItemLink` passes the link's digits: a digit string is an id, a link is 0.
     #[test]
-    fn the_verbs_queue_intents_in_order_and_try_on_reads_its_argument_like_the_client() {
+    fn the_verbs_hand_their_calls_over_in_order_and_try_on_reads_its_argument_like_the_client() {
         let mut s = room();
         s.run(
             r#"
@@ -195,7 +192,7 @@ mod tests {
                 DressUpIntent::Dress,
             ]
         );
-        // The same two PlayerModel verbs on a paper-doll pane queue nothing.
+        // The same two PlayerModel verbs on a paper-doll pane make no call.
         s.run(r#"pm = CreateFrame("PlayerModel", "PMOnly", UIParent) pm:SetUnit("player") pm:RefreshUnit()"#)
             .unwrap();
         assert!(s.take_dressup_intents().is_empty());

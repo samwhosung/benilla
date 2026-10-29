@@ -277,6 +277,10 @@ pub enum ScriptCall {
     /// `NextView`, `PrevView` or `FlipCameraYaw`, seated on the camera inside the call, its CVar
     /// writes with it (`0x512f17`, `0x50fa09`).
     CameraView(super::CameraViewRequest),
+    /// A dressing-room verb ([`super::DressUpIntent`]): `Dress`, `Undress`, `TryOn`, or `SetUnit`
+    /// and `RefreshUnit` on a `DressUpModel`, applied to the room inside the call; a cached
+    /// record's try-on goes on, or refuses with `ERR_NOT_EQUIPPABLE`, there (`0x504540`).
+    DressUp(super::DressUpIntent),
     /// `FollowUnit` or `FollowByName` ([`super::FollowRequest`]): the start gate, its refusal's
     /// line or the follow armed and `AUTOFOLLOW_BEGIN` signalled, inside the call (`0x60fed0`).
     Follow(super::FollowRequest),

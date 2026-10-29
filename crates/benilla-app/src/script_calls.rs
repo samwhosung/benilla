@@ -145,6 +145,8 @@ disjoint::disjoint_set! {
         cvars: crate::cvars::CvarSteps<'static>,
         /// The camera's five views, which the view verbs seat and save.
         views: crate::player::camera_view::ViewSteps<'static, 'static>,
+        /// The dressing room the `DressUpModel` verbs edit.
+        dressup: crate::ui_dressup::DressUpSteps<'static>,
         asks: engine::RecordAsks<'static, 'static>,
         /// What the getters read as they run ([`live::LiveReads`]).
         live: live::LiveReads<'static, 'static>,
@@ -926,6 +928,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
                 let writes = appliers.views().apply(request);
                 appliers.cvars().write(script, &writes);
             }
+            ScriptCall::DressUp(intent) => appliers.dressup().apply(script, intent),
             ScriptCall::RecordAsk(benilla_ui::script::RecordAsk::AuctionName { guid, list }) => {
                 appliers.auction().wait_for_name(guid, list);
             }

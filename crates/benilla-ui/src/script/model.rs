@@ -1051,8 +1051,6 @@ pub(crate) struct Model {
     /// slots 1..=19 as the doll numbers them: the slot getters' other-unit leg (`0x4c8420` →
     /// `0x5f0d60`).
     pub(crate) visible_equipment: HashMap<u64, char_stats::InventorySlots>,
-    /// `DressUpModel` `SetUnit`, `Dress`, `Undress` and `TryOn` calls, applied in call order.
-    pub(crate) dressup_intents: Vec<super::dressup::DressUpIntent>,
     /// Tabard designs per `TabardModel`, the app's preview five, the host facts and queued calls.
     pub(crate) tabard_designs: HashMap<crate::widget::FrameHandle, [i32; 5]>,
     pub(crate) tabard_preview: Option<[i32; 5]>,
@@ -1707,7 +1705,6 @@ impl Model {
             inventory_alerts: [0; 12],
             weapon_enchants: [None; 2],
             visible_equipment: HashMap::new(),
-            dressup_intents: Vec::new(),
             tabard_designs: HashMap::new(),
             tabard_preview: None,
             tabard_host: Default::default(),
