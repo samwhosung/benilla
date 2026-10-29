@@ -83,9 +83,9 @@ pub(crate) struct ActionSlots {
     /// which only our player's arrival loads into the bar ([`Self::load_staged`]). No game entry
     /// clears them.
     pub(crate) staged: HashMap<u8, ActionButton>,
-    /// Whether this login's `SMSG_ACTION_BUTTONS` has come, so the staged words are this
-    /// character's.
-    arrived: bool,
+    /// Whether the staged words are this login's and wait for our player's arrival to load them:
+    /// set by `SMSG_ACTION_BUTTONS`, cleared by the load and by the game entry.
+    unloaded: bool,
 }
 
 impl ActionSlots {
@@ -93,12 +93,14 @@ impl ActionSlots {
     /// the bar itself waits for our player's arrival.
     pub(crate) fn stage(&mut self, buttons: impl IntoIterator<Item = ActionButton>) {
         self.staged = buttons.into_iter().map(|b| (b.slot, b)).collect();
-        self.arrived = true;
+        self.unloaded = true;
     }
 
-    /// Whether this login's bar has come ([`Self::stage`]).
-    pub(crate) fn arrived(&self) -> bool {
-        self.arrived
+    /// Whether this login's staged words wait for the arrival's load ([`Self::stage`],
+    /// [`Self::load_staged`]): a worldport's book, which vmangos sends ahead of its bar
+    /// (`Player.cpp:19253`, `:19256`), finds the last staging loaded.
+    pub(crate) fn staged_unloaded(&self) -> bool {
+        self.unloaded
     }
 
     /// Our player's arrival's load of the staged words (`0x5deae2`-`0x5deb12`): each stored into
@@ -106,6 +108,7 @@ impl ActionSlots {
     /// hold (`0x60c740`, skipped at `0x5deaf5`), an empty word among them, whose slot keeps what it
     /// held. The 1-based ids stored, in slot order.
     pub(crate) fn load_staged(&mut self, knows: impl Fn(u32) -> bool) -> Vec<u32> {
+        self.unloaded = false;
         let mut staged: Vec<ActionButton> = self.staged.values().copied().collect();
         staged.sort_by_key(|b| b.slot);
         let mut loaded = Vec::new();
@@ -120,11 +123,11 @@ impl ActionSlots {
         loaded
     }
 
-    /// The game entry's reset (`ResetActionBarState 0x4e4f50`): every word 0, and no bar yet for
-    /// this login.
+    /// The game entry's reset (`ResetActionBarState 0x4e4f50`): every word 0, and no staging yet
+    /// for this login.
     fn game_entry(&mut self) {
         self.buttons.clear();
-        self.arrived = false;
+        self.unloaded = false;
     }
 }
 

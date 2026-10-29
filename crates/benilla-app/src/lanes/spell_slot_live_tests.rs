@@ -323,6 +323,59 @@ fn next_login(logout: bool) -> (Vec<(u8, u32)>, Vec<ActionButton>, ActionButton)
     (c.sends(), bar, b_bar)
 }
 
+/// A worldport resends the book ahead of the bar (vmangos `MovementHandler.cpp:112` →
+/// `Player.cpp:19253`, `:19256`). The book's rank pass reaches only a staging that waits for our
+/// player's arrival, so it never sends the last staging, which the arrival loaded and the bar may
+/// have moved on from; the worldport's own bar packet gets the pass.
+#[test]
+fn a_worldports_book_leaves_the_loaded_staging_alone() {
+    use benilla_formats::{SkillLineCatalog, SlaInfo};
+    let mut c = client();
+    // This login's bar packet, then the arrival that loads it.
+    let bar: Vec<ActionButton> = {
+        let slots = c.app.world().resource::<crate::ui_action::ActionSlots>();
+        slots.buttons.values().copied().collect()
+    };
+    crate::net::handlers::dispatch(
+        c.app.world_mut(),
+        vec![SessionEvent::ActionButtons {
+            buttons: bar.clone(),
+        }],
+    );
+    c.app
+        .world_mut()
+        .run_system_cached(crate::ui_action::recount::arrival_slot_pass)
+        .expect("the arrival's slot pass runs");
+    c.sends();
+    // Frostbolt's second rank trained, which supersedes the first in the book.
+    let ability = |forward_spell_id| SlaInfo {
+        skill_id: 6,
+        req_skill_value: 0,
+        forward_spell_id,
+        trivial_low: 0,
+        trivial_high: 0,
+    };
+    c.app.insert_resource(crate::ui_spellbook::SkillLines {
+        catalog: SkillLineCatalog::from_abilities([
+            (FROSTBOLT_1, ability(FROSTBOLT_2)),
+            (FROSTBOLT_2, ability(0)),
+        ]),
+    });
+    crate::net::handlers::dispatch(
+        c.app.world_mut(),
+        vec![SessionEvent::SpellBook {
+            spell_ids: vec![FIREBALL, FROSTBOLT_2],
+            cooldowns: Vec::new(),
+        }],
+    );
+    assert_eq!(c.sends(), [], "the book's pass waits for the bar");
+    crate::net::handlers::dispatch(
+        c.app.world_mut(),
+        vec![SessionEvent::ActionButtons { buttons: bar }],
+    );
+    assert_eq!(c.sends(), [(1, FROSTBOLT_2)], "the bar's pass moves it");
+}
+
 /// A relog in the same run: the game entry empties A's bar (`0x48f5a4` → `0x4e4f50`) and the
 /// book's rank pass waits for B's bar, so neither moves or sends A's slots.
 #[test]

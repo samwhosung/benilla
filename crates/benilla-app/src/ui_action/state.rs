@@ -554,6 +554,15 @@ impl ActionStates<'_, '_> {
     /// `GetActionTexture`'s answer for a spell or item slot ([`ActionTextureNow`]).
     fn texture_now(&self, action: u32) -> Option<String> {
         let b = self.walk.button(action)?;
+        // `0x4e6a50`'s attack and ranged tests run on the slot's spell ahead of its kind arms
+        // (`0x4e6ab2`, `0x4e6acb`), an item word's its on-use spell (`0x4e5a50` → `0x4e5ae0`, its
+        // record looked up with the bar's callback); a spell word's are its own face's.
+        if b.kind == ACTION_KIND_ITEM {
+            let spell = self.walk.bar_record(b.action).and_then(|t| t.use_spell);
+            if let Some(face) = spell.and_then(|u| self.walk.attack_face(u.spell_id)) {
+                return Some(face);
+            }
+        }
         self.walk.face(b, true)
     }
 
@@ -820,6 +829,7 @@ impl ActionWalk<'_, '_> {
             only,
             now,
             clock: self.clock_pair_at(now, script.now()),
+            getter: false,
         };
         self.slot_states(walk, reactive)
     }
@@ -843,6 +853,7 @@ impl ActionWalk<'_, '_> {
             only: Some(slot),
             now,
             clock: self.clock_pair_at(now, q.ui_now),
+            getter: true,
         };
         self.slot_states(walk, None).0.remove(&q.action)
     }
@@ -860,6 +871,7 @@ impl ActionWalk<'_, '_> {
             only,
             now,
             clock: (anchor, ui_now),
+            getter,
         } = walk;
         let Self {
             cooldowns,
@@ -1014,13 +1026,23 @@ impl ActionWalk<'_, '_> {
                     st.cooldown = info.ui_triple(anchor, ui_now);
                 }
                 ACTION_KIND_ITEM => {
-                    // The usable test looks the record up twice, each with its callback and the
-                    // dedupe flag, so a miss, a refused record asked again among them, answers
-                    // through both in that order: `0x6e2fc0` with `0x6e2f70` (`0x4e50d0`,
-                    // `0x6e2fe9`), as the cooldown query does (`0x6e2efb`), then `0x4e5a50` →
-                    // `0x4e5ae0` with the bar's `0x4e5b80` (`0x4e5b30`), which recounts the entry.
-                    Cooldowns::query_record(items, commands, button.action, 0, true);
-                    let template = self.bar_record(button.action);
+                    // The count the slot holds (`0xbc6390`), which `GetActionCount` answers too:
+                    // the gate reads the cache the recount wrote, never the bags (`0x4e50ab`).
+                    let count = counts(action);
+                    // The usable test asks nothing with no player (`0x4e5080`) or a stored count
+                    // of 0 (`0x4e50ab`). Past them it looks the record up twice, each with its
+                    // callback and the dedupe flag, so a miss, a refused record asked again among
+                    // them, answers through both in that order: `0x6e2fc0` with `0x6e2f70`
+                    // (`0x4e50d0`, `0x6e2fe9`), then `0x4e5a50` → `0x4e5ae0` with the bar's
+                    // `0x4e5b80` (`0x4e5b30`), which recounts the entry. A getter's read asks as
+                    // its own legs do, whatever the count: `GetActionCooldown`'s query with
+                    // `0x6e2f70` (`0x6e2efb`), the range tests' `0x4e5a50` → `0x4e5ae0`.
+                    let template = if getter || (me.is_some() && count > 0) {
+                        Cooldowns::query_record(items, commands, button.action, 0, true);
+                        self.bar_record(button.action)
+                    } else {
+                        items.template(button.action, 0, Ask::Read)
+                    };
                     // Only the `Copy` on-use spell, not a clone of the template per slot.
                     let use_spell = template.and_then(|t| t.use_spell);
                     // `IsCurrentAction`'s item arm holds the entry against the in-flight item
@@ -1029,9 +1051,6 @@ impl ActionWalk<'_, '_> {
                     // `GetItemCooldown 0x6e2ed0` queries only an item whose record is cached and
                     // has an on-use spell (`0x6e2f14`, `0x6e2f20`-`0x6e2f34`).
                     st.no_cooldown_query = use_spell.is_none();
-                    // The count the slot holds (`0xbc6390`), which `GetActionCount` answers too:
-                    // the gate reads the cache the recount wrote, never the bags (`0x4e50ab`).
-                    let count = counts(action);
                     // `IsEquippedAction`, the green border: `0x622270` at mask 1
                     // (`0x4e5377`-`0x4e5380`), the walker over the worn slots, so a broken copy is
                     // not worn.
@@ -1118,6 +1137,8 @@ struct Walk<'a> {
     only: Option<u8>,
     now: Instant,
     clock: (Instant, f64),
+    /// A getter's read at its call ([`ActionStates::state_now`]), whose lookups are its own legs'.
+    getter: bool,
 }
 
 impl crate::script_calls::live::LiveFamily for ActionStates<'_, '_> {

@@ -128,7 +128,7 @@ pub(crate) struct Scene<'w, 's> {
 /// `SMSG_INITIAL_SPELLS`, once at login, into the known spells and the learn latches, the book's
 /// reset first (`0x4b2439`, `0x4b243f`) and then each spell in wire order, as the arrival learns
 /// them (`0x5dea8b`-`0x5deab9`); then the bar's ranks ([`crate::ui_action::normalize_ranks`]),
-/// once this login's bar has come.
+/// over this login's staging while it waits for the arrival.
 fn on_spell_book(In(ev): In<SessionEvent>, mut l: Lifecycle, sc: Scene, mut bar: LoginRanks) {
     if let SessionEvent::SpellBook {
         spell_ids,
@@ -149,9 +149,10 @@ fn on_spell_book(In(ev): In<SessionEvent>, mut l: Lifecycle, sc: Scene, mut bar:
             &mut l.cooldowns,
             (l.spells.as_deref(), &sc.items, &l.spell_mods, pad),
         );
-        // Only over this login's bar: the book comes ahead of it (vmangos `Player.cpp:19253`,
-        // `:19256`).
-        if bar.slots.arrived() {
+        // Only over this login's staging while it waits for the arrival: the book comes ahead of
+        // the bar (vmangos `Player.cpp:19253`, `:19256`), at the login and at each worldport, whose
+        // book finds the last staging already loaded and the bar moved on since.
+        if bar.slots.staged_unloaded() {
             bar.normalize(&l.actions, &l.net);
         }
     }

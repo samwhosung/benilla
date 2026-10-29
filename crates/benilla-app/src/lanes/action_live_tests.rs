@@ -211,6 +211,11 @@ fn client() -> Client {
 
 /// [`client`] with `more` run on its world before our player's create.
 fn client_with(more: impl FnOnce(&mut World)) -> Client {
+    client_created_with(more, &[])
+}
+
+/// [`client_with`], our player's create carrying the fields `extra` too.
+fn client_created_with(more: impl FnOnce(&mut World), extra: &[(u16, u32)]) -> Client {
     let mut app = crate::game_plugins::schedule_tests::headless_client();
     app.insert_resource(bevy::ecs::error::DefaultErrorHandler(
         bevy::ecs::error::ignore,
@@ -308,20 +313,18 @@ fn client_with(more: impl FnOnce(&mut World)) -> Client {
         inbound,
         _sent: sent,
     };
-    c.frame(vec![vec![created(
-        ME,
-        EntityKind::Player,
-        &[
-            (OBJECT_TYPE, TYPE_PLAYER),
-            (FIELD_UNIT_HEALTH, 100),
-            (FIELD_UNIT_MAXHEALTH, 100),
-            (MANA, 100),
-            (MAX_MANA, 100),
-            (FLAGS, PLAYER_CONTROLLED),
-            (PACK_SLOT_1, POTION_GUID as u32),
-            (PACK_SLOT_1 + 1, (POTION_GUID >> 32) as u32),
-        ],
-    )]]);
+    let mut fields = vec![
+        (OBJECT_TYPE, TYPE_PLAYER),
+        (FIELD_UNIT_HEALTH, 100),
+        (FIELD_UNIT_MAXHEALTH, 100),
+        (MANA, 100),
+        (MAX_MANA, 100),
+        (FLAGS, PLAYER_CONTROLLED),
+        (PACK_SLOT_1, POTION_GUID as u32),
+        (PACK_SLOT_1 + 1, (POTION_GUID >> 32) as u32),
+    ];
+    fields.extend_from_slice(extra);
+    c.frame(vec![vec![created(ME, EntityKind::Player, &fields)]]);
     c.frame(vec![]);
     c.frame(vec![]);
     c.seen(&[]);
@@ -692,27 +695,46 @@ fn a_bar_items_record_repaints_its_slot_at_the_answer_and_the_getters_read_it_li
     );
 }
 
-/// The usable test's item lookup carries the bar's callback and its dedupe (`0x4e5050` →
-/// `0x4e5a50` → `0x4e5ae0`, `0x4e5b30`), so a refused record it asks again answers through
-/// `0x4e5b80` → `0x4e5c70`: after the refusal, a power packet's usable refresh (`0x604876` →
-/// `0x4b31c0`) is the one lookup, and the record's answer signals the slot's
-/// `ACTIONBAR_SLOT_CHANGED`.
-#[test]
-fn a_usable_refreshs_lookup_of_a_refused_record_repaints_its_slot_at_the_answer() {
-    let mut c = client_with(|world| {
-        world
-            .resource_mut::<crate::ui_action::ActionSlots>()
-            .staged
-            .insert(
-                7,
-                ActionButton {
-                    slot: 7,
-                    action: RATION,
-                    kind: benilla_protocol::messages::ACTION_KIND_ITEM,
-                },
+/// A bar slot holding [`RATION`], its record refused after our player's arrival asked it
+/// (`0x4e6d20`), and `rations` of them in backpack slot 2 at the create, which the arrival's
+/// recount stores (`0x4e5d90`); and a counter of the record's asks.
+fn refused_ration(rations: u32) -> (Client, impl Fn(&Client) -> usize) {
+    let mut extra = Vec::new();
+    if rations > 0 {
+        extra.extend([
+            (PACK_SLOT_1 + 2, RATION_GUID as u32),
+            (PACK_SLOT_1 + 3, (RATION_GUID >> 32) as u32),
+        ]);
+    }
+    let mut c = client_created_with(
+        |world| {
+            crate::items::test_spawn_item(
+                world,
+                RATION_GUID,
+                ObjectFields::from_pairs(&[
+                    (OBJECT_TYPE, 0x3),
+                    (3, RATION),
+                    (6, ME as u32),
+                    (7, (ME >> 32) as u32),
+                    (STACK_COUNT, rations),
+                ])
+                .into_created(benilla_protocol::messages::ObjectType::Item),
+                false,
             );
-    });
-    // The arrival's recount asked the record (`0x4e6d20`); the server refuses it.
+            world
+                .resource_mut::<crate::ui_action::ActionSlots>()
+                .staged
+                .insert(
+                    7,
+                    ActionButton {
+                        slot: 7,
+                        action: RATION,
+                        kind: benilla_protocol::messages::ACTION_KIND_ITEM,
+                    },
+                );
+        },
+        &extra,
+    );
     c.frame(vec![vec![SessionEvent::ItemTemplate {
         entry: RATION,
         info: None,
@@ -725,6 +747,19 @@ fn a_usable_refreshs_lookup_of_a_refused_record_repaints_its_slot_at_the_answer(
             .count()
     };
     asked(&c);
+    let count: i64 = c.eval(true, "return GetActionCount(8)");
+    assert_eq!(count, i64::from(rations), "the arrival's stored count");
+    (c, asked)
+}
+
+/// The usable test's item lookup carries the bar's callback and its dedupe (`0x4e5050` →
+/// `0x4e5a50` → `0x4e5ae0`, `0x4e5b30`), so a refused record it asks again answers through
+/// `0x4e5b80` → `0x4e5c70`: after the refusal, a power packet's usable refresh (`0x604876` →
+/// `0x4b31c0`) is the one lookup, and the record's answer signals the slot's
+/// `ACTIONBAR_SLOT_CHANGED`.
+#[test]
+fn a_usable_refreshs_lookup_of_a_refused_record_repaints_its_slot_at_the_answer() {
+    let (mut c, asked) = refused_ration(3);
     c.frame(vec![vec![values(ME, &[(MANA, 90)])]]);
     assert_eq!(asked(&c), 1, "the refresh asks the refused record again");
     c.seen(&[]);
@@ -738,6 +773,16 @@ fn a_usable_refreshs_lookup_of_a_refused_record_repaints_its_slot_at_the_answer(
         .filter(|l| l.starts_with("ACTIONBAR_SLOT_CHANGED:8:"))
         .collect();
     assert_eq!(slot.len(), 1, "the slot repaints at the answer: {slot:?}");
+}
+
+/// The usable test asks nothing of an item slot whose stored count is 0: it returns at
+/// `0x4e50ab`, ahead of both lookups (`0x4e50d0`, `0x4e50e7`), so a refresh leaves a refused
+/// record refused.
+#[test]
+fn a_usable_refresh_asks_nothing_of_an_empty_item_slot() {
+    let (mut c, asked) = refused_ration(0);
+    c.frame(vec![vec![values(ME, &[(MANA, 90)])]]);
+    assert_eq!(asked(&c), 0);
 }
 
 /// The active player's aura add and removal each notify the bar's slots that stand for the spell
@@ -988,7 +1033,8 @@ fn an_arrival_leaves_a_saved_unknown_spells_slot_empty() {
 /// A macro slot's icon is its record's but where its bound spell is Attack or a ranged shot:
 /// `0x4e6a50` runs both tests on the slot's spell through the record (`0x4e6ab2` → `0x4e59b0`,
 /// `0x4e6acb` → `0x4e5a00`, each through `0x4e5a50` → `0x4e5ba0`) ahead of its kind arms, so a
-/// macro bound to Attack shows the main hand's icon and one bound to Auto Shot the bow's.
+/// macro bound to Attack shows the main hand's icon and one bound to Auto Shot the bow's. An item
+/// slot runs them on its on-use spell (`0x4e5a50` → `0x4e5ae0`).
 #[test]
 fn a_macro_bound_to_an_attack_shows_its_weapons_icon() {
     use crate::ui_macro::{Bound, BoundSpell};
@@ -997,6 +1043,7 @@ fn a_macro_bound_to_an_attack_shows_its_weapons_icon() {
     const RANGED: u16 = 486 + 2 * 17;
     const SWORD_ICON: &str = "Interface\\Icons\\INV_Sword_04";
     const BOW_ICON: &str = "Interface\\Icons\\INV_Weapon_Bow_02";
+    const QUIVER: u32 = 2101;
     let mut c = client_with(|world| {
         crate::items::test_spawn_item(
             world,
@@ -1016,6 +1063,20 @@ fn a_macro_bound_to_an_attack_shows_its_weapons_icon() {
                 }),
             );
         }
+        // An item whose on-use spell is the ranged shot.
+        items.insert_template(
+            QUIVER,
+            Some(benilla_protocol::messages::ItemInfo {
+                display_info_id: 952,
+                use_spell: Some(benilla_protocol::messages::ItemUseSpell {
+                    spell_id: AUTO_SHOT,
+                    cooldown_ms: -1,
+                    category: 0,
+                    category_cooldown_ms: -1,
+                }),
+                ..crate::items::test_template("Quiver")
+            }),
+        );
         let display = |icon: &str| benilla_formats::ItemDisplay {
             icon: Some(icon.to_string()),
             ..Default::default()
@@ -1024,6 +1085,7 @@ fn a_macro_bound_to_an_attack_shows_its_weapons_icon() {
             benilla_formats::ItemDisplayCatalog::from_displays(HashMap::from([
                 (950, display(SWORD_ICON)),
                 (951, display(BOW_ICON)),
+                (952, display("Interface\\Icons\\INV_Misc_Quiver_09")),
             ])),
         ));
     });
@@ -1045,6 +1107,12 @@ fn a_macro_bound_to_an_attack_shows_its_weapons_icon() {
                 id,
             );
         }
+        crate::ui_action::hold_for_test(
+            world,
+            12,
+            benilla_protocol::messages::ACTION_KIND_ITEM,
+            QUIVER,
+        );
     }
     c.frame(vec![vec![values(
         ME,
@@ -1064,6 +1132,11 @@ fn a_macro_bound_to_an_attack_shows_its_weapons_icon() {
             "Interface\\Icons\\".to_string()
         ),
         "the weapons' icons, then the Frostbolt macro's own"
+    );
+    assert_eq!(
+        c.eval::<String>(true, "return GetActionTexture(12)"),
+        BOW_ICON,
+        "the item's on-use shot"
     );
 }
 
