@@ -417,10 +417,11 @@ fn on_spell_start(
     }
 }
 
-/// The GO, then its deferred auto-attack start (`0x6e8402` → `0x6131a0` → `0x5ecb70`): StartAttack
-/// with its own select (`0x5eccaa`), which selects the hit unit whatever is selected and signals
-/// in place, behind the GO's reports, before the swing
-/// ([`crate::script_calls::ScriptCallHost::engine_start_attack`]).
+/// The GO, then its deferred auto-attack start (`0x6e8402` → `0x6131a0`): the player's Attack at
+/// the hit unit, whose validator (`0x612df0`, `0x6131aa`) refuses on the actor's state or the
+/// target with its line and no swing, selects the hit whatever is selected and signals in place,
+/// behind the GO's reports, then swings at the selection it re-read (`0x6130c1`)
+/// ([`crate::script_calls::ScriptCallHost::engine_attack`]).
 #[allow(clippy::type_complexity)] // a Bevy system's full input set
 fn on_spell_go(
     In(ev): In<SessionEvent>,
@@ -432,7 +433,7 @@ fn on_spell_go(
             crate::script_calls::disjoint::Pair<
                 'static,
                 'static,
-                crate::target::SelectCommit<'static, 'static>,
+                crate::ui_action::AttackPress<'static, 'static>,
                 Option<crate::spell::PickBind<'static, 'static>>,
             >,
         >,
@@ -492,13 +493,19 @@ fn on_spell_go(
             )
         };
         if let Some(guid) = deferred {
-            set.p1().engine_start_attack(guid, mark, |mut start| {
-                // The select's bind (`0x4935d5`) goes ahead of the swing it owes.
-                let debt = start.p0().start_attack_owing(guid);
-                if let Some(mut bind) = start.p1() {
+            set.p1().engine_attack(guid, mark, |mut press| {
+                // With no listeners, the validator's select is paid at once, after its bind.
+                let Some(owed) = press.p0().pick_attack_at(Some(guid), true) else {
+                    return;
+                };
+                if let Some(mut bind) = press.p1() {
                     bind.bind();
                 }
-                start.p0().pay_now(debt);
+                let mut press = press.p0();
+                press.pay(owed);
+                if let Some(target) = press.settle_attack() {
+                    press.start_attack(target);
+                }
             });
         }
     }
@@ -1445,10 +1452,11 @@ fn spell_go(
         // The GO-deferred auto-attack start (`0x6e83c0`), the complement of
         // [`crate::spell::cast_send`]'s send-time tail: an `AttributesEx2 & 0x100000` spell (the
         // stealth openers and Judgement, 36 rows) starts the swing once the server confirms it.
-        // The target is `hits[0]`, else the null pair (`0x6e83e9`–`0x6e83fe`), which `0x612df0`
-        // resolves to the selection or else the nearest hostile. Deviation: the fallback is the
-        // packet's target guid, never the nearest-hostile acquire, because that would attack
-        // something the player never named. Gated on `[player+0xc48] == 0` (`0x6e83e7`).
+        // The validator's candidate is `hits[0]`, else the null pair (`0x6e83e9`–`0x6e83fe`),
+        // which `0x612df0` resolves to the selection or else the nearest hostile (`0x61306b`,
+        // `0x6130b5`). Deviation: the fallback is the packet's target guid, and with none there
+        // is no start, never the nearest-hostile acquire, because that would attack something
+        // the player never named. Gated on `[player+0xc48] == 0` (`0x6e83e7`).
         if display.initiates_auto_attack_at_go() && !engaged {
             if let (true, Some(guid)) = (
                 index.0.contains_key(&caster),

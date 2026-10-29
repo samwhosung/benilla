@@ -457,17 +457,21 @@ fn a_switch_to_a_friend_while_swinging_stops_again() {
     );
 }
 
-/// StartAttack selects its target (`0x5ecca0`-`0x5eccaa` → `0x493540`) after the stand and before
-/// the swing: the attack a stealth opener defers to its `SMSG_SPELL_GO` (`0x6e8402` → `0x6131a0`
-/// → `0x5ecb70`) selects the GO's first hit, whatever is selected, and its `PLAYER_TARGET_CHANGED`
-/// (`0x49389c`) runs its listeners before the swing (`0x5ecd3c`).
-#[test]
-fn a_go_deferred_attack_selects_its_hit_before_it_swings() {
+/// The keys of the refusals a handler queued for the action feed's lines.
+fn error_keys(f: &Frame) -> Vec<String> {
+    f.app
+        .world()
+        .resource::<crate::ui_action::UiErrorKeys>()
+        .snapshot()
+        .into_iter()
+        .map(|e| e.key.to_string())
+        .collect()
+}
+
+/// Backstab's `SMSG_SPELL_GO` from us at [`MOB`], whose start of the swing it defers
+/// (`AttributesEx2` bit 20, `0x6e83c0`), with us not swinging (`[+0xc48]`, `0x6e83e7`).
+fn backstab_lands(f: &mut Frame) {
     const BACKSTAB: u32 = 53;
-    let mut f = frame(true);
-    spawn_mob(&mut f, &[]);
-    swinging_at_old(&mut f);
-    on_target_changed(&mut f, "RandomRoll(1, 100)");
     let world = f.app.world_mut();
     let me = world.resource::<GuidIndex>().0[&ME];
     world
@@ -479,7 +483,6 @@ fn a_go_deferred_attack_selects_its_hit_before_it_swings() {
                 BACKSTAB,
                 benilla_formats::SpellDisplay {
                     name: "Backstab".into(),
-                    // `AttributesEx2` bit 20, the GO-deferred start's test (`0x6e83c0`).
                     attributes_ex2: 0x0010_0000,
                     ..Default::default()
                 },
@@ -511,6 +514,19 @@ fn a_go_deferred_attack_selects_its_hit_before_it_swings() {
             unit_caster: ME,
         }],
     );
+}
+
+/// The GO's deferred start is the player's Attack at its first hit (`0x6e8402` → `0x6131a0`),
+/// whose validator (`0x612df0`) selects the hit whatever is selected (`0x613100`), and its
+/// `PLAYER_TARGET_CHANGED` (`0x49389c`) runs its listeners before the swing at the selection the
+/// validator re-read (`0x6130c1`).
+#[test]
+fn a_go_deferred_attack_selects_its_hit_before_it_swings() {
+    let mut f = frame(true);
+    spawn_mob(&mut f, &[]);
+    swinging_at_old(&mut f);
+    on_target_changed(&mut f, "RandomRoll(1, 100)");
+    backstab_lands(&mut f);
     assert_eq!(selected(&f), Some(MOB));
     assert_eq!(
         attack_wire(&f),
@@ -518,84 +534,89 @@ fn a_go_deferred_attack_selects_its_hit_before_it_swings() {
     );
 }
 
-/// With the targeting cursor up, the deferred attack's select (`0x5eccaa`) hands the GO's hit to the
-/// cursor's cast (`0x4935d5` → `0x6e5b40`), which binds it inside the GO's packet, ahead of the
-/// swing StartAttack goes on to: the cast goes out first, the selection stays and the cursor is
-/// down.
+/// The validator's actor checks run first (`0x612e10`-`0x61305a`): a stunned player's GO shows
+/// its line, selects nothing and sends no swing.
 #[test]
-fn a_go_deferred_attack_with_the_cursor_up_binds_its_hit_before_it_swings() {
-    const BACKSTAB: u32 = 53;
+fn a_stunned_casters_go_shows_its_line_and_does_not_swing() {
+    let mut f = frame(true);
+    spawn_mob(&mut f, &[]);
+    swinging_at_old(&mut f);
+    let world = f.app.world_mut();
+    let me = world.resource::<GuidIndex>().0[&ME];
+    let mut store = world.get_mut::<ObjectStore>(me).unwrap();
+    let flags = store.0.unit_flags();
+    store.0.merge(benilla_protocol::ObjectFields::from_pairs(&[(
+        FLAGS,
+        flags | 0x0004_0000,
+    )]));
+    backstab_lands(&mut f);
+    assert_eq!(error_keys(&f), ["ERR_ATTACK_STUNNED"]);
+    assert_eq!(attack_wire(&f), Vec::<String>::new());
+    assert_eq!(selected(&f), Some(OLD));
+}
+
+/// With the targeting cursor up, the validator's select (`0x613100`) hands the GO's hit to the
+/// cursor's cast (`0x4935d5` → `0x6e5b40`), which binds it inside the GO's packet and selects
+/// nothing; the validator then re-reads the selection (`0x6130c1`), so the swing goes at the unit
+/// selected before, after the cast.
+#[test]
+fn a_go_deferred_attack_with_the_cursor_up_binds_its_hit_and_swings_at_the_selection() {
     let mut f = frame(true);
     spawn_mob(&mut f, &[]);
     swinging_at_old(&mut f);
     with_the_cursor_up(&mut f);
-    let world = f.app.world_mut();
-    let me = world.resource::<GuidIndex>().0[&ME];
-    world
-        .entity_mut(me)
-        .remove::<crate::creature_anim::Engaged>();
-    world.insert_resource(crate::ui_action::Spells {
-        catalog: benilla_formats::SpellCatalog::from_displays(
-            [(
-                BACKSTAB,
-                benilla_formats::SpellDisplay {
-                    name: "Backstab".into(),
-                    attributes_ex2: 0x0010_0000,
-                    ..Default::default()
-                },
-            )]
-            .into_iter()
-            .collect(),
-        ),
-        forms: Default::default(),
-        ranges: Default::default(),
-        cast_times: Default::default(),
-        durations: Default::default(),
-        radii: Default::default(),
-    });
-    crate::net::handlers::dispatch(
-        world,
-        vec![benilla_protocol::SessionEvent::SpellGo {
-            caster: ME,
-            spell_id: BACKSTAB,
-            cast_flags: 0,
-            hits: vec![MOB],
-            misses: vec![],
-            target: Some(MOB),
-            go_target: None,
-            target_mask: 0x2,
-            source: None,
-            dest: None,
-            ammo_display_id: None,
-            item_caster: None,
-            unit_caster: ME,
-        }],
+    backstab_lands(&mut f);
+    let sent: Vec<String> =
+        f.rx.try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::CastSpell { spell_id, target } => {
+                    Some(format!("CastSpell {spell_id} {target:x?}"))
+                }
+                ClientCommand::SetSelection { guid } => Some(format!("SetSelection {guid:#x}")),
+                ClientCommand::AttackSwing { guid } => Some(format!("AttackSwing {guid:#x}")),
+                _ => None,
+            })
+            .collect();
+    assert_eq!(
+        sent,
+        [
+            format!("CastSpell {HEAL} Some(31)"),
+            "AttackSwing 0x21".into()
+        ]
     );
+    assert_eq!(selected(&f), Some(OLD));
+    assert!(!cursor_is_up(&f));
+}
+
+/// The same with nothing selected: the bind leaves the selection empty, so the re-read finds
+/// nothing and the validator shows "There is nothing to attack." (`0x6130d9`), with no swing.
+#[test]
+fn a_go_deferred_attack_the_cursor_took_with_nothing_selected_shows_no_target() {
+    let mut f = frame(false);
+    spawn_mob(&mut f, &[]);
+    swinging_at_old(&mut f);
+    with_the_cursor_up(&mut f);
+    backstab_lands(&mut f);
+    assert_eq!(error_keys(&f), ["ERR_NO_ATTACK_TARGET"]);
     let sent: Vec<_> = f.rx.try_iter().collect();
-    let at = |want: fn(&ClientCommand) -> bool| sent.iter().position(want);
-    let cast = at(|c| {
-        matches!(
+    assert!(
+        sent.iter().any(|c| matches!(
             c,
             ClientCommand::CastSpell {
                 spell_id: HEAL,
                 target: Some(MOB)
             }
-        )
-    });
-    let swing = at(|c| matches!(c, ClientCommand::AttackSwing { .. }));
-    assert!(cast.is_some(), "bound in the packet: {sent:?}");
-    assert!(
-        swing.is_none_or(|swing| cast < Some(swing)),
-        "the cast goes ahead of the swing: {sent:?}"
-    );
-    assert!(
-        !sent
-            .iter()
-            .any(|c| matches!(c, ClientCommand::SetSelection { .. })),
+        )),
         "{sent:?}"
     );
-    assert_eq!(selected(&f), Some(OLD));
-    assert!(!cursor_is_up(&f));
+    assert!(
+        !sent.iter().any(|c| matches!(
+            c,
+            ClientCommand::AttackSwing { .. } | ClientCommand::SetSelection { .. }
+        )),
+        "{sent:?}"
+    );
+    assert_eq!(selected(&f), None);
 }
 
 /// The wire a pick and what follows it send, in order: selections, rolls, Sinister Strike's casts

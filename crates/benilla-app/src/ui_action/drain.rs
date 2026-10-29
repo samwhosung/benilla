@@ -132,13 +132,24 @@ impl AttackPress<'_, '_> {
     /// actor checks, then the pick ([`crate::target::AttackPick::pick`]), what its commit owes;
     /// `None` once an actor check refused. Its `SelectTarget` calls (`0x613100`, `0x4941e6`) may
     /// hand a unit to the targeting cursor, which binds it before the swing goes out, so a caller
-    /// that owns the cursor binds between the halves.
-    pub(crate) fn pick_attack(&mut self, may_pick: bool) -> Option<crate::target::Owed> {
-        self.begin_validate(None, may_pick)
+    /// that owns the cursor binds between the halves. The candidate is `passed`, else the
+    /// selection: `AttackTarget` passes none, a go's deferred start its first hit (`0x6e8402` →
+    /// `0x6131a0`).
+    pub(crate) fn pick_attack_at(
+        &mut self,
+        passed: Option<u64>,
+        may_pick: bool,
+    ) -> Option<crate::target::Owed> {
+        self.begin_validate(passed, may_pick)
+    }
+
+    /// Pay what the pick's commit owes now, for a caller with no listeners to run first.
+    pub(crate) fn pay(&mut self, owed: crate::target::Owed) {
+        crate::target::SelectDebt::from(owed).pay(&mut self.selection, &mut self.seam);
     }
 
     /// TryCast's attack pick (`0x6e4efb`) for a spell press held there
-    /// ([`crate::spell::HeldForPick`]), [`Self::pick_attack`] with the caster as the candidate
+    /// ([`crate::spell::HeldForPick`]), [`Self::pick_attack_at`] with the caster as the candidate
     /// for a self-cast press (`0x4e610e`): the validator alone, with no swing after it. The cast
     /// goes on, at the unit the pick left selected, when [`Self::settle_attack`] passes.
     pub(crate) fn pick_for_cast(
