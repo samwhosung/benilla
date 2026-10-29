@@ -516,15 +516,12 @@ mod tests {
                 if changed && !declared.contains(&id) {
                     written.insert(name);
                 } else if changed {
-                    owed.insert(name);
+                    owed.insert(id);
                 }
             }
         }
         assert!(written.is_empty(), "written but not declared: {written:?}");
-        assert_eq!(
-            owed.len(),
-            declared.len(),
-            "each applied resource written: {owed:?}"
-        );
+        // By id: without the `debug` feature every resource shares one placeholder name.
+        assert_eq!(owed.len(), declared.len(), "each applied resource written");
     }
 }
