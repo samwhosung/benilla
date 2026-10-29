@@ -191,13 +191,15 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // patches, the removals and the pages fire on the house lane at their handlers.
     "::ui_auction::AuctionOpen",
     // Quiet: the craft and profession windows' open type and line, which an opener's cast
-    // toggles and signals inside its call (`0x4fc910`, `0x4f6000`) and the closes zero in theirs;
-    // the profession builds read the line through the host at their places, and the craft feed
-    // pushes its list off the type, silently.
+    // toggles and signals inside its call (`0x4fc910`, `0x4f6000`), the closes zero in theirs, and
+    // the disconnect handlers (`ui_craft::on_session_end`, `ui_tradeskill::on_session_end`) clear
+    // without a signal; the profession builds read the line through the host at their places,
+    // and the craft feed pushes its list off the type, silently.
     "::ui_craft::CraftOpen",
     "::ui_tradeskill::TradeSkillOpen",
     // Quiet: the profession openers a cast intercepted (`0x6e4bd7`), which the call host toggles
-    // before the call returns; no feed reads it.
+    // before the call returns and the disconnect handler (`ui_tradeskill::on_session_end`)
+    // empties; no feed reads it.
     "::ui_tradeskill::TradeSkillOpens",
     // Read through the host by the bank getters, and quiet: its events fire on the bank lane at
     // their handlers, and `PurchaseSlot` and `CloseBankFrame` hold it in their calls.

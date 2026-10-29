@@ -384,10 +384,13 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetTradeSkillCooldown(index) (`0x4fda20`): the start plus the duration minus the clock,
-    // scaled by 0.001, read at the call; nil when ready, which the stock Lua tests for truthiness
-    // (Blizzard_TradeSkillUI.lua:215). A held cooldown has not started, so its whole duration is
-    // left.
+    // GetTradeSkillCooldown(index) (`0x4fda20`): the player's list asked at the call
+    // (`0x4fda8b` → `0x6e2ea0` with `edx` 0, the player history), which finds only a leg ending
+    // after now (`0x6e13e0`, `0x6e160e`), so an expired record or none answers nil (`0x4fda92` →
+    // `0x4fdacd`), which the stock Lua tests for truthiness (Blizzard_TradeSkillUI.lua:215); a
+    // found one answers its start plus its duration minus the clock, scaled by 0.001
+    // (`0x4fda99`-`0x4fdab5`), the enabled flag unread. A held leg writes a start of now
+    // (`0x6e1517`, `0x6e15a1`), so its answer is its duration.
     g.set(
         "GetTradeSkillCooldown",
         lua.create_function(|lua, index: Value| {

@@ -274,10 +274,11 @@ fn a_reagents_record_answer_signals_the_update_at_its_packet() {
 }
 
 /// A learn inside an open book rebuilds it with flag 1 at its packet (`0x5e9d79`), reading the
-/// line's list as the learn left it (`0x5e9d72`), so the update's listener finds the new recipe
-/// between the packets around it.
+/// line's list as the learn left it (`0x5e9d72`) and banding the new recipe on the rank as it
+/// stands there (`0x4fcc28`-`0x4fcc41`): with no Tailoring slot yet it reads `optimal`, though a
+/// later packet of the frame raises the rank past its trivial mark.
 #[test]
-fn a_learn_inside_an_open_book_lists_its_recipe_at_its_packet() {
+fn a_learn_inside_an_open_book_bands_its_recipe_at_its_packet() {
     let mut app = crafter();
     quietly(&mut app, r#"CastSpellByName("Tailoring")"#);
     app.world()
@@ -287,26 +288,58 @@ fn a_learn_inside_an_open_book_lists_its_recipe_at_its_packet() {
             local f = CreateFrame("Frame")
             f:RegisterEvent("TRADE_SKILL_UPDATE")
             f:SetScript("OnEvent", function()
-                local found = false
                 for i = 1, GetNumTradeSkills() do
-                    if GetTradeSkillInfo(i) == "Linen Bandage" then found = true end
+                    local name, kind = GetTradeSkillInfo(i)
+                    if name == "Linen Bandage" then table.insert(Seen, "band:" .. kind) end
                 end
-                table.insert(Seen, "listed:" .. tostring(found))
             end)
             "#,
         )
         .unwrap();
-    assert_eq!(
-        frame(
-            &mut app,
-            vec![
-                fall(5),
-                SessionEvent::SpellLearned { spell_id: BANDAGE },
-                fall(6)
-            ]
-        ),
-        [FELL, "TRADE_SKILL_UPDATE", "listed:true", FELL]
+    let seen = frame(
+        &mut app,
+        vec![
+            fall(5),
+            SessionEvent::SpellLearned { spell_id: BANDAGE },
+            tailoring(5),
+            fall(6),
+        ],
     );
+    let bands: Vec<&String> = seen.iter().filter(|e| e.starts_with("band:")).collect();
+    assert_eq!(
+        bands.first().map(|b| b.as_str()),
+        Some("band:optimal"),
+        "{seen:?}"
+    );
+}
+
+/// A build that finds no player (the lookup `0x468460` at `0x4fcb11`) has zeroed the full count
+/// first (`0x4fca52`) and leaves past its signal (`0x4fcb1b` → `0x4fd170`): a reagent's answer
+/// while our player is gone, as a world transfer leaves it, empties the book and signals nothing.
+#[test]
+fn a_build_with_no_player_empties_the_book_silently() {
+    let mut app = crafter();
+    quietly(&mut app, r#"CastSpellByName("Tailoring")"#);
+    quietly(
+        &mut app,
+        r#"for i = 1, GetNumTradeSkills() do GetTradeSkillReagentInfo(i, 1) end"#,
+    );
+    let me = app.world().resource::<crate::net::GuidIndex>().0[&ME];
+    app.world_mut()
+        .entity_mut(me)
+        .remove::<crate::net::SelfPlayer>();
+    let answer = SessionEvent::ItemTemplate {
+        entry: LINEN,
+        info: Some(Box::new(crate::items::test_template("Linen Cloth"))),
+    };
+    let seen = frame(&mut app, vec![fall(5), answer, fall(6)]);
+    assert!(!seen.iter().any(|e| e == "TRADE_SKILL_UPDATE"), "{seen:?}");
+    let first = app
+        .world()
+        .non_send_resource::<UiScript>()
+        .eval::<Option<String>>("return (GetTradeSkillInfo(1))")
+        .unwrap();
+    assert_eq!(first, None, "the rows are gone");
 }
 
 /// A `/reload` with a product's record in flight: the open's build kept the callback `0x4fc8e0`

@@ -43,13 +43,14 @@ fn note_build(model: &mut super::Model) {
 /// The open line's book as the build reads it there (`0x4fca20`): the line `[0xbde040]`, the
 /// player's known spells of it, its slot's rank, the bags and the item cache as they stand, each
 /// product looked up with the callback `0x4fc8e0`, one kept per miss (`0x4fcd4d`). The lent host
-/// answers; `None` with no line open or no player (`0x4fcaee`, `0x4fcb1b`), where the build keeps
-/// the list the VM holds.
+/// answers `Some(None)` for a build that finds no line (`0x4fcaf5`) or no player (the lookup
+/// `0x468460` at `0x4fcb11`, its miss at `0x4fcb1b`), which both leave for `0x4fd170` past the
+/// signal; it declines where it lacks the catalogs, and the build keeps the list the VM holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TradeSkillBookQuery;
 
 impl super::live::LiveQuery for TradeSkillBookQuery {
-    type Answer = TradeSkillState;
+    type Answer = Option<TradeSkillState>;
 }
 
 /// One recipe of the open line as its getters read it at the call: the reagents' carried counts
@@ -308,7 +309,22 @@ impl super::UiScript {
         let fresh = super::live::ask(&self.lua, &TradeSkillBookQuery);
         let mut model = self.model_mut();
         let changed = match fresh {
-            Some(s) => seat(&mut model, s),
+            Some(Some(s)) => seat(&mut model, s),
+            // The build's head runs before it finds no line or player: the pending requests
+            // cancelled (`0x4fca40`), the full count zeroed (`0x4fca52`), and with the flag set the
+            // headers and the subclass and fold masks (`0x4fcad8`-`0x4fcae8`); then it leaves past
+            // its signal (`0x4fcb1b` → `0x4fd170`). The displayed count stays as the last sort left
+            // it.
+            Some(None) => {
+                model.trade_skill_pending = 0;
+                model.trade_skill_rows.clear();
+                if remake {
+                    model.trade_skill_headers.clear();
+                    model.trade_skill_subclass_hidden.clear();
+                    model.trade_skill_collapsed.clear();
+                }
+                return false;
+            }
             None => {
                 if let Some(t) = model.trade_skill.as_mut() {
                     refresh(t);

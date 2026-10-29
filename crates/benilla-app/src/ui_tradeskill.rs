@@ -616,6 +616,18 @@ impl TradeSkillReads<'_, '_> {
         })
     }
 
+    /// The build's book of the open `line`: `Some(None)` with no line open or no player, as the
+    /// build's leave (`0x4fcaf5`, `0x4fcb1b`); `None` while a catalog is missing.
+    fn book(
+        &self,
+        line: Option<u32>,
+        clock: &crate::ui_script::UiClock,
+    ) -> Option<Option<TradeSkillState>> {
+        self.spells.as_deref()?;
+        self.skill_lines.as_deref()?;
+        Some(line.and_then(|line| self.state(line, clock)))
+    }
+
     /// `spell_id`'s row of `line`'s book as it stands, the build's lookup of its product made
     /// with the callback `0x4fc8e0` when `build`, else read.
     fn recipe_of(
@@ -712,7 +724,7 @@ impl crate::script_calls::live::LiveFamily for TradeSkillLive<'_, '_> {
         let unticked = crate::ui_script::UiClock::default();
         let clock = self.clock.as_deref().map_or(&unticked, |c| &c.0);
         let (line, reads) = (self.open.line, &self.reads);
-        ask.answer(|_: &TradeSkillBookQuery| reads.state(line?, clock))
+        ask.answer(|_: &TradeSkillBookQuery| reads.book(line, clock))
             || ask.answer(|q: &TradeSkillRecipeQuery| reads.recipe_of(q.0, line?, false, clock))
             || ask.answer(|_: &TradeSkillLineQuery| Some(reads.line_now(line.unwrap_or(0))))
     }
