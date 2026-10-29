@@ -831,12 +831,9 @@ pub(crate) fn split_container_item(
             equip_slots: s.equip_slots.clone(),
         }
     };
-    let targeting = verb(lua, |model| {
-        clear_cursor(model);
-        model.spell_targeting
-    });
+    verb(lua, clear_cursor);
     // `StopTargeting` ends an armed spell's targeting, as `SpellStopTargeting` does.
-    if targeting {
+    if super::action::spell_targeting(lua) {
         super::calls::submit(lua, super::ScriptCall::SpellStopTargeting)?;
     }
     pick_up_item(lua, item);

@@ -1138,11 +1138,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             if !crate::script::protected::gate(lua, crate::script::protected::Tag::CAST) {
                 return Ok(());
             }
-            if !lua
-                .app_data_ref::<Model>()
-                .expect("model app_data")
-                .spell_targeting
-            {
+            if !super::super::action::spell_targeting(lua) {
                 return Ok(());
             }
             check_unit_token(&Some(token.clone()))?;

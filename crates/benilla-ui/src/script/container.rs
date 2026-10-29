@@ -1177,7 +1177,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, (bag, slot): (Value, Value)| {
             // The targeting and base-mode gates run before either argument is read
             // (`0x4fa469`-`0x4fa47a`).
-            if super::merchant::sell_cursor_shut(&lua.app_data_ref::<Model>().expect("model")) {
+            if super::merchant::sell_cursor_shut(lua) {
                 return Ok(());
             }
             // `is-number` on args 1 and 2 else `Usage: ShowContainerSellCursor(index, slot)`

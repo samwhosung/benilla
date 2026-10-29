@@ -171,6 +171,9 @@ live_reads! {
         /// The targeting word's halves and `SpellCanTargetUnit`'s unit leg; absent in a harness
         /// without the unit checks' inputs.
         targeting: Option<crate::spell::targeting::TargetingLive<'static, 'static>>,
+        /// Our cast's state: the in-flight slot, the targeting word, the auto-repeat key and the
+        /// attack flag; absent in a harness without the cast state.
+        cast: Option<crate::ui_cast::CastLive<'static, 'static>>,
         #[cfg(test)]
         probe: tests::ProbeLive<'static>,
     }

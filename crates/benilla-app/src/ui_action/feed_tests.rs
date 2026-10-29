@@ -188,8 +188,8 @@ fn a_notice_under_the_loading_cover_fires_at_the_reveal() {
     assert!(app.world().resource::<UiErrorKeys>().texts().is_empty());
 }
 
-/// The cast reports' feed ([`crate::ui_cast::feed_cast_reports`]) over a VM, with `reports`
-/// queued and `spells` as the catalog.
+/// The cast reports' lane ([`crate::ui_cast::signal_reports`]) over a VM, with `reports` queued
+/// and `spells` as the catalog.
 fn report_feed(spells: crate::ui_action::Spells, reports: crate::ui_cast::CastReports) -> App {
     let (tx, _rx) = crossbeam_channel::unbounded();
     let mut app = App::new();

@@ -1037,11 +1037,8 @@ impl Plugin for UiItemsPlugin {
                         .in_set(crate::ui_script::UiFeed)
                         .before(crate::ui_char::feed_char),
                     // The item-tooltip store answers in the feed, so the next frame's input
-                    // records, a re-hover among them, see the answer, and seats a new VM before its world entry; a
-                    // refused cast's item name reads the store it leaves.
-                    feed_item_stats
-                        .in_set(UnitFeed)
-                        .before(crate::ui_cast::feed_cast_reports),
+                    // records, a re-hover among them, see the answer, and seats a new VM before its world entry.
+                    feed_item_stats.in_set(UnitFeed),
                     // The equip callbacks a lookup ran on a record the VM's copy lacked, after
                     // the record feed has pushed it; an answer runs its own at its packet.
                     crate::ui_bind_confirm::replay_equip_records.in_set(crate::ui_script::UiDrain),

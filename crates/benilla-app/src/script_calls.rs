@@ -4938,10 +4938,11 @@ mod tests {
             crate::dev::add_every_instrument,
         );
         let (writers, unhosted) = vm_writers_and_the_unhosted(&mut app);
-        // The census reads the client's systems: ninety writers at least in either build, and
-        // where the build carries type names, a feed and two frame polls among them.
+        // The census reads the client's systems: eighty writers at least in either build, a floor
+        // the feeds' going live lowers toward, and where the build carries type names, a feed and
+        // two frame polls among them.
         assert!(
-            writers.len() >= 90,
+            writers.len() >= 80,
             "the census reads the client's VM writers: {} read",
             writers.len()
         );

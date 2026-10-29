@@ -2,20 +2,18 @@
 //! (`ReportCastFailure 0x6e1a00`), the wire edges that become the `SPELLCAST_*` events stock
 //! `CastingBarFrame.lua:6-13` registers for, named from `Spell.dbc`, and the tradeskill repeat's
 //! disarm. A script call's reports are signalled inside the call ([`crate::script_calls`]), the
-//! rest from their lane in the packets' order ([`fire_cast_reports`]), after the frame's feed has
-//! pushed the VM's cast state ([`feed_cast_reports`]). The cast lifecycle is `crate::spell`'s.
+//! rest from their lane in the packets' order ([`fire_cast_reports`]), where the getters read the
+//! cast state each packet left ([`CastLive`]). The cast lifecycle is `crate::spell`'s.
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use benilla_ui::script::{ScriptValue, UiScript};
 
-use crate::spell::CastState;
 use crate::ui_action::{CastFail, CastFailLines, MessageSink, Shown, Spells};
-use crate::ui_unit::UnitFeed;
 
 mod views;
-pub(crate) use views::{slot_moves_here, CastViews};
+pub(crate) use views::{slot_moves_here, CastLive, CastViews};
 
 /// One edge of our own cast, queued by the spell's packet handlers, its reports and its cancels.
 pub(crate) enum CastBarEdge {
@@ -471,28 +469,6 @@ impl CallReports<'_, '_> {
     }
 }
 
-/// Push the cast state the frame's packets and cancels left ([`CastState`]), which
-/// `SpellStopCasting` (`0x6e6e80`) and the bar's checked tests read: a queued strike and the spell
-/// awaiting its click count as in flight, so the first Esc stops it and `ToggleGameMenu` skips
-/// `ClearTarget()` (`UIParent.lua:1489-1492`). The reports made outside any script call fire from
-/// their lane after every feed ([`fire_cast_reports`]), each listener reading the view its own
-/// packet left, which the views lane pushes at its place ([`views`]).
-#[allow(clippy::type_complexity)] // a Bevy system's full input set
-pub(crate) fn feed_cast_reports(
-    // The cast state, which the host's casts write, and the views' log.
-    mut vm: crate::script_calls::VmWith<(
-        CastState<'static, 'static>,
-        Option<ResMut<'static, CastViews>>,
-    )>,
-) {
-    vm.turn(|script, (cast_state, mut views)| {
-        let Some(script) = script else {
-            return;
-        };
-        views::feed_live(script, views.as_deref_mut(), cast_state.view());
-    });
-}
-
 /// The cast lane's `fire_until` ([`crate::lanes`]): each report the lane holds while `until`
 /// admits it, readied and signalled at its place with the host lent, as the spell handlers signal
 /// inside their packets (`0x6e1a00`, `0x6e7a2d`, `0x6e7550`); the lane stops after a report whose
@@ -526,24 +502,15 @@ fn fire_cast_reports(
     }
 }
 
-/// The frame's cast-state push, then every report queued fired alone, for a test that drives the
-/// reports without the other lanes.
-#[cfg(test)]
-pub(crate) fn signal_reports(world: &mut World) {
-    use bevy::ecs::system::RunSystemOnce;
-    world.run_system_once(feed_cast_reports).unwrap();
-    fire_cast_lane(world);
-}
-
 /// The session's end drops the reports no VM will hear, as the chat lane drops its lines: the
 /// Lua state they were for is replaced at the session end.
 fn end_session_reports(mut reports: ResMut<CastReports>) {
     reports.clear();
 }
 
-/// The reports queued, fired alone, for a test that drives them without the other lanes.
+/// Every report queued, fired alone, for a test that drives the reports without the other lanes.
 #[cfg(test)]
-pub(crate) fn fire_cast_lane(world: &mut World) {
+pub(crate) fn signal_reports(world: &mut World) {
     use bevy::ecs::system::RunSystemOnce;
     let until = crate::lanes::Until::all();
     while world
@@ -557,8 +524,7 @@ pub(crate) fn fire_cast_lane(world: &mut World) {
     }
 }
 
-/// The cast-state push, before the VM ticks so an edge and its first `OnUpdate` share a frame, and
-/// after the local cancel so a move or Esc kills the bar on the next tick; and the cast lane.
+/// The cast lane and the cast views' log.
 pub(crate) struct UiCastPlugin;
 
 impl Plugin for UiCastPlugin {
@@ -571,13 +537,6 @@ impl Plugin for UiCastPlugin {
                 |world| world.get_resource::<CastReports>()?.peek(),
                 fire_cast_reports,
                 None,
-            )
-            .add_systems(
-                Update,
-                // After the spell's local cancel, whose state this pushes the same frame.
-                feed_cast_reports
-                    .in_set(UnitFeed)
-                    .after(crate::spell::LocalCancel),
             )
             .add_systems(
                 OnExit(crate::client_state::ClientState::InWorld),

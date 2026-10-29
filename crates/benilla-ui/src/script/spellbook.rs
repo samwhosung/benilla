@@ -257,8 +257,9 @@ impl super::UiScript {
             .is_empty()
     }
 
-    /// Whether the spell-targeting cursor is up, for `SpellIsTargeting()` and
-    /// `SpellStopTargeting()`; pushed each frame before the input pass runs the ESC chain. Arming
+    /// Whether the spell-targeting cursor is up, for `SpellIsTargeting()`, `SpellStopTargeting()`
+    /// and the other tests of the word with no host to ask ([`super::CastViewNow`]); pushed each
+    /// frame before the input pass runs the ESC chain. Arming
     /// ends repair mode, as `HideRepairCursor` does: the targeting arm writes the Cast base mode
     /// over Repair (`0x6e50b0`), and its end restores Point (`0x6e49f5`, `0x6e554c`), never Repair.
     pub fn set_spell_targeting(&mut self, targeting: bool) {
@@ -827,11 +828,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let may_stop = protected::gate(lua, Tag::CAST);
             // `0x6e6e80` reads only the auto-repeat key `0xceac30` and the in-flight id
             // `0xceca88`, which is 0 mid-channel, as the call that cast last left them.
-            let stoppable = lua
-                .app_data_ref::<Model>()
-                .expect("model app_data")
-                .cast_view
-                .stoppable();
+            let stoppable = super::action::cast_view(lua).stoppable();
             if may_stop && stoppable {
                 super::calls::submit(lua, ScriptCall::SpellStopCasting)?;
                 Ok(Value::Integer(1))
@@ -844,10 +841,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // SpellIsTargeting() (`0x6e6cd0`): 1 while the targeting cursor is up, else nil.
     g.set(
         "SpellIsTargeting",
-        lua.create_function(|lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(flag(model.spell_targeting))
-        })?,
+        lua.create_function(|lua, ()| Ok(flag(super::action::spell_targeting(lua))))?,
     )?;
 
     // SpellCanTargetUnit("unit") (`0x6e6d00`): the argument is a string or a number (`0x6e6d0e`,
@@ -885,11 +879,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, ()| {
             // The gate's tag 2 opens the function (`0x6e6e38`); a refusal answers nil (`0x6e6e69`).
             let may_stop = protected::gate(lua, Tag::CAST);
-            let targeting = lua
-                .app_data_ref::<Model>()
-                .expect("model app_data")
-                .spell_targeting;
-            if may_stop && targeting {
+            if may_stop && super::action::spell_targeting(lua) {
                 super::calls::submit(lua, ScriptCall::SpellStopTargeting)?;
                 Ok(Value::Integer(1))
             } else {

@@ -144,8 +144,8 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     "::spell::cast_send::ScriptCastPermit",
     "::spell::cast_send::unit_caster::UnitAttackOwed",
     // Quiet: the cast in flight, which `SpellStopCasting` and the bar's tests read through the
-    // host; `feed_cast_reports` pushes its view (its `READS_FRAME_FINAL` row), and the spell
-    // packets' events fire on the cast lane at their handlers.
+    // host, as of the drain's place, and the spell packets' events fire on the cast lane at their
+    // handlers.
     "::spell::inflight::ActiveChannel",
     "::spell::inflight::AutoRepeatActive",
     "::spell::inflight::PendingCast",
@@ -159,8 +159,8 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // call's before its next step; no feed reads it.
     "::spell::targeting::CursorPicks",
     // Quiet: the targeting word, which `SpellIsTargeting` (`0x6e6cd0`) reads through the host;
-    // `feed_cast_reports` pushes its view and the feed publishes the world pick's words for the
-    // next frame's input, and no feed fires off it.
+    // the feed publishes the world pick's words for the next frame's input, and no feed fires off
+    // it.
     "::spell::targeting::SpellTargeting",
     // Quiet: every selection writer signals `PLAYER_TARGET_CHANGED` in place (`0x49389c`), and the
     // getters' `"target"` reads it through the host (`0x515a86`); the feeds that read it push
@@ -359,9 +359,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_aura::feed_unit_guids", &["net::GuidIndex", "net::ObjectStore", "target::Selection",
         "ui_party::GroupState"]),
     ("::ui_macro::load_macros", &["ui_action::ActionSlots"]),
-    ("::ui_cast::feed_cast_reports", &["net::GuidIndex", "net::ObjectStore",
-        "spell::inflight::AutoRepeatActive", "spell::inflight::PendingCast",
-        "spell::inflight::QueuedMeleeSpell", "spell::targeting::SpellTargeting"]),
     // The locks of the objects that went, forgotten as the frame left the index.
     ("::ui_items::locks::forget_gone_item_locks", &["net::GuidIndex"]),
     ("::ui_items::feed::feed_item_stats", &["items::Items", "net::HomeBind", "net::ObjectStore",

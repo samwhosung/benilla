@@ -320,10 +320,10 @@ impl ActionState {
 }
 
 /// The player's cast state as the reference's globals hold it, which the action bar's checked
-/// tests (`0x4e53a0`, `0x4e55b0`) and `SpellStopCasting` (`0x6e6e80`) read live. The app pushes it
-/// each frame, as each packet left it where that packet's events fire, and after every script call
-/// that moved it, so a listener reads its own packet's and a script's next line what the call
-/// left.
+/// tests (`0x4e53a0`, `0x4e55b0`) and `SpellStopCasting` (`0x6e6e80`) read live, through the lent
+/// host ([`CastViewNow`]), so a listener reads its own packet's and a script's next line what the
+/// call left. The app also pushes it, as each packet left it and after every script call that
+/// moved it, for a read with no host to ask.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CastView {
     /// The spell in the in-flight slot (`0xceca88`, `0x6e3d10`): a cast from its attempt to its
@@ -342,6 +342,38 @@ pub struct CastView {
     /// its object looked up live (`0x4e53ef`): `None` with no item cast in flight or with its
     /// object gone.
     pub item: Option<u32>,
+}
+
+/// The cast state's question to the lent host: our cast's globals as they stand where the getter
+/// runs ([`CastView`]), which `IsCurrentAction`, `IsAutoRepeatAction`, `SpellStopCasting` and the
+/// targeting word's tests read inside the call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CastViewNow;
+
+impl super::live::LiveQuery for CastViewNow {
+    type Answer = CastView;
+}
+
+/// The cast state at the call ([`CastViewNow`]), else as the app last pushed it.
+pub(crate) fn cast_view(lua: &Lua) -> CastView {
+    super::live::ask(lua, &CastViewNow).unwrap_or_else(|| {
+        lua.app_data_ref::<Model>()
+            .expect("model app_data")
+            .cast_view
+    })
+}
+
+/// `IsTargeting 0x6e48a0` at the call: the targeting word is up, as [`cast_view`] holds its spell,
+/// else as the app last pushed it.
+pub(crate) fn spell_targeting(lua: &Lua) -> bool {
+    super::live::ask(lua, &CastViewNow).map_or_else(
+        || {
+            lua.app_data_ref::<Model>()
+                .expect("model app_data")
+                .spell_targeting
+        },
+        |view| view.targeting.is_some(),
+    )
 }
 
 impl CastView {
@@ -454,7 +486,7 @@ impl super::UiScript {
     }
 
     /// Push the player's cast state ([`CastView`]), which the checked tests and `SpellStopCasting`
-    /// read.
+    /// read with no host to ask ([`CastViewNow`]).
     pub fn set_cast_view(&mut self, view: CastView) {
         self.model_mut().cast_view = view;
     }
@@ -692,12 +724,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         }
     }
 
-    /// 1 or nil for a slot's test against the live cast state.
+    /// 1 or nil for a slot's test against the cast state at the call.
     fn live_flag(lua: &Lua, action: u32, pick: impl Fn(&ActionState, &CastView) -> bool) -> Value {
         let state = state_of(lua, action);
-        let model = lua.app_data_ref::<Model>().expect("model app_data");
         match state {
-            Some(s) if pick(&s, &model.cast_view) => Value::Integer(1),
+            Some(s) if pick(&s, &cast_view(lua)) => Value::Integer(1),
             _ => Value::Nil,
         }
     }
@@ -756,12 +787,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // The form arm reads the active player's form byte at the call (`0x4e558b`).
             let form = super::stat_read::read_self(lua, |own| own.shapeshift_form());
             let state = state_of(lua, action);
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let open = model.open_professions();
             let view = CastView {
                 form,
-                ..model.cast_view
+                ..cast_view(lua)
             };
+            let open = lua
+                .app_data_ref::<Model>()
+                .expect("model app_data")
+                .open_professions();
             Ok(match state {
                 Some(s) if s.is_current(&view, open) => Value::Integer(1),
                 _ => Value::Nil,

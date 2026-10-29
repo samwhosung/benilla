@@ -43,9 +43,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "ShowInventorySellCursor",
         lua.create_function(|lua, slot: Value| {
-            if super::merchant::sell_cursor_shut(
-                &lua.app_data_ref::<Model>().expect("model app_data"),
-            ) {
+            if super::merchant::sell_cursor_shut(lua) {
                 return Ok(());
             }
             let slot0 = inventory_slot_arg(

@@ -7,17 +7,19 @@
 //! `0x6e9fd0`, `SpellIsTargeting` `0x6e6cd0`, `SpellStopCasting` `0x6e6e80`), so a listener reads
 //! its own packet's. Here every handler of the frame runs before any listener, so the view each
 //! packet left is logged, stamped ahead of what the packet raised ([`CastViews`]); the views lane
-//! pushes the frame's start, then each packet's view at its place among the other lanes' items.
-//! A listener's call that moves the state moves it live, after every handler, so what it moved
-//! is the live state's from then on: each later view carries the call's fields as they stand
-//! live ([`Moved`]), and the rest as its packet left them.
+//! replays the frame's start, then each packet's view at its place among the other lanes' items,
+//! and the getters read it there through the host ([`CastLive`]). A listener's call that moves the
+//! state moves it live, after every handler, so what it moved is the live state's from then on:
+//! each later view carries the call's fields as they stand live ([`Moved`]), and the rest as its
+//! packet left them. The VM's copy follows the same views, for a read with no host to ask.
 
 use std::collections::VecDeque;
 
-use bevy::ecs::system::SystemState;
+use bevy::ecs::system::{SystemParam, SystemState};
 use bevy::prelude::*;
 
-use benilla_ui::script::{CastView, UiScript};
+use benilla_ui::script::live::LiveAsk;
+use benilla_ui::script::{CastView, CastViewNow, UiScript};
 
 use crate::lanes::{Stamp, Until};
 use crate::spell::CastState;
@@ -33,8 +35,10 @@ pub(crate) struct CastViews {
     last: Option<CastView>,
     /// The drain has pushed the start.
     started: bool,
-    /// The live view the VM last took, from the frame's feed or a call: a call that leaves it as
-    /// it stands pushes nothing, so the drain's view stays its listener's packet's.
+    /// The packet's view the drain last replayed: where its listeners stand.
+    at: Option<CastView>,
+    /// The live view as the last packet or call left it: a call that leaves it as it stands
+    /// pushes nothing, so the drain's view stays its listener's packet's.
     live: Option<CastView>,
     /// The view the VM holds.
     shown: Option<CastView>,
@@ -152,15 +156,40 @@ impl CastViews {
 
     /// A logged `view` into the VM, with the fields the drain's calls moved as they stand live.
     fn replay(&mut self, script: &mut UiScript, view: CastView) {
+        self.at = Some(view);
         let view = self.called.over(view, self.live.unwrap_or(view));
         self.show(script, view);
     }
+
+    /// The view a getter reads at the call, `live` being the state as it stands: inside the
+    /// drain, the packet's view the lane last replayed, with the fields the drain's calls moved as
+    /// they stand live; else the live state.
+    pub(crate) fn here(&self, live: CastView) -> CastView {
+        match self.at.filter(|_| self.started) {
+            Some(at) => self.called.over(at, live),
+            None => live,
+        }
+    }
 }
 
-/// `view` into the VM with no log kept, in a harness without one.
-fn push(script: &mut UiScript, view: CastView) {
-    script.set_cast_view(view);
-    script.set_spell_targeting(view.targeting.is_some());
+/// Our cast's state as the getters read it inside the call (`IsCurrentAction` `0x4e53a0`,
+/// `IsAutoRepeatAction` `0x4e55b0` → `0x6e9fd0`, `SpellIsTargeting` `0x6e6cd0`, `SpellStopCasting`
+/// `0x6e6e80`): the live state, as of the drain's place while the views lane replays the frame's
+/// packets ([`CastViews::here`]).
+#[derive(SystemParam)]
+pub(crate) struct CastLive<'w, 's> {
+    state: CastState<'w, 's>,
+    /// The views' log; absent in a harness without the cast lanes, which reads the live state.
+    views: Option<Res<'w, CastViews>>,
+}
+
+impl crate::script_calls::live::LiveFamily for CastLive<'_, '_> {
+    fn answer(&mut self, ask: &mut LiveAsk<'_>) -> bool {
+        ask.answer(|_: &CastViewNow| {
+            let live = self.state.view();
+            Some(self.views.as_deref().map_or(live, |v| v.here(live)))
+        })
+    }
 }
 
 /// The live view off the world, through a reader built once.
@@ -202,7 +231,8 @@ fn packets_begin(world: &mut World) {
 
 /// A packet handled: its view logged at `at`, the stamp taken ahead of its handler, when it
 /// differs from the one before it; with its slot at the stamp its handler moved it, when it
-/// named one ([`slot_moves_here`]).
+/// named one ([`slot_moves_here`]). The view it left is the live one a call after it is told
+/// against.
 fn packet_end(world: &mut World, at: Stamp) {
     let moves = SLOT_MOVES.take().filter(|s| *s > at);
     let Some(view) = live_view(world) else {
@@ -211,6 +241,7 @@ fn packet_end(world: &mut World, at: Stamp) {
     let Some(mut views) = world.get_resource_mut::<CastViews>() else {
         return;
     };
+    views.live = Some(view);
     let Some(last) = views.last else {
         return;
     };
@@ -274,6 +305,7 @@ fn end_cast_views(world: &mut World) {
         views.entries.clear();
         views.start = None;
         views.started = false;
+        views.at = None;
         views.called = Moved::default();
         let Some(view) = view else {
             return;
@@ -293,18 +325,6 @@ fn drop_cast_views(mut views: ResMut<CastViews>) {
         shown,
         ..Default::default()
     };
-}
-
-/// The frame's feed of the live view, which the drain's start replaces while the frame logged
-/// any ([`super::feed_cast_reports`]).
-pub(super) fn feed_live(script: &mut UiScript, views: Option<&mut CastViews>, view: CastView) {
-    match views {
-        Some(views) => {
-            views.show(script, view);
-            views.live = Some(view);
-        }
-        None => push(script, view),
-    }
 }
 
 /// The log, its packet hooks, the lane, its end and the drop under the exact complement of the

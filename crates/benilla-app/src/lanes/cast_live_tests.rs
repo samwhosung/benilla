@@ -537,3 +537,81 @@ fn a_refused_reagent_record_shows_unknown_at_its_answer() {
         ]
     );
 }
+
+/// With no frame after them, the getters read through the host the cast state each packet left,
+/// inside the call (`0x4e53a0`, `0x6e6e80`): Heal in flight after its start, popped after its
+/// result, where the VM's copy, which no feed pushes, still holds it in flight; and
+/// `SpellStopCasting` finds nothing to stop.
+#[test]
+fn the_cast_getters_read_each_packets_state_at_the_call() {
+    let mut c = client();
+    cast_heal(&mut c);
+    let chunk = "return IsCurrentAction(1), SpellIsTargeting()";
+    crate::net::handlers::dispatch(
+        c.app.world_mut(),
+        vec![SessionEvent::SpellStart {
+            caster: ME,
+            spell_id: HEAL,
+            cast_flags: 0,
+            cast_time_ms: 2500,
+            target: None,
+            ammo_display_id: None,
+        }],
+    );
+    assert_eq!(
+        c.eval::<(Option<i64>, Option<i64>)>(true, chunk),
+        (Some(1), None)
+    );
+    crate::net::handlers::dispatch(
+        c.app.world_mut(),
+        vec![SessionEvent::CastResult {
+            spell_id: HEAL,
+            success: true,
+            reason: None,
+            arg: None,
+        }],
+    );
+    assert_eq!(
+        c.eval::<(Option<i64>, Option<i64>)>(true, chunk),
+        (None, None)
+    );
+    assert_eq!(
+        c.eval::<(Option<i64>, Option<i64>)>(false, chunk),
+        (Some(1), None),
+        "the VM's copy"
+    );
+    c.press("Stopped = SpellStopCasting()");
+    assert_eq!(c.eval::<Option<i64>>(false, "return Stopped"), None);
+}
+
+/// The targeting word and the auto-repeat key read at the call too (`0x6e6cd0`, `0x6e9fd0`), each
+/// written with no push after it: the cursor up for Heal and Heal repeating. `SpellStopTargeting`
+/// tests the word at the call and ends it inside it (`0x6e6e30` → `0x6e4900`).
+#[test]
+fn the_targeting_word_and_the_auto_repeat_key_read_at_the_call() {
+    let mut c = client();
+    let world = c.app.world_mut();
+    world.resource_mut::<crate::spell::SpellTargeting>().enter(
+        HEAL,
+        crate::spell::CastCommit::Spell,
+        0x0002,
+    );
+    world.resource_mut::<crate::spell::AutoRepeatActive>().0 = Some(HEAL);
+    let chunk = "return SpellIsTargeting(), IsAutoRepeatAction(1)";
+    assert_eq!(
+        c.eval::<(Option<i64>, Option<i64>)>(true, chunk),
+        (Some(1), Some(1))
+    );
+    assert_eq!(
+        c.eval::<(Option<i64>, Option<i64>)>(false, chunk),
+        (None, None),
+        "the VM's copy"
+    );
+    c.press("Stopped = SpellStopTargeting()");
+    assert_eq!(c.eval::<Option<i64>>(false, "return Stopped"), Some(1));
+    assert!(!c
+        .app
+        .world()
+        .resource::<crate::spell::SpellTargeting>()
+        .active());
+}
