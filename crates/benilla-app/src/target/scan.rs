@@ -916,7 +916,7 @@ impl AttackPick<'_, '_> {
     /// on the pet arm (`0x4bd40d`), which vmangos gives its owner's faction (`Pet.cpp:248`). The
     /// reaction to oneself is 4 before any faction rung (`0x606200`), so a passed caster is never
     /// kept, FFA flag or not.
-    fn keeps(&self, guid: u64) -> bool {
+    pub(crate) fn keeps(&self, guid: u64) -> bool {
         if self.scan.self_guid() == Some(guid) {
             return false;
         }

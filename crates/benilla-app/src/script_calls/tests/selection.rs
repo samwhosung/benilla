@@ -471,6 +471,11 @@ fn error_keys(f: &Frame) -> Vec<String> {
 /// Backstab's `SMSG_SPELL_GO` from us at [`MOB`], whose start of the swing it defers
 /// (`AttributesEx2` bit 20, `0x6e83c0`), with us not swinging (`[+0xc48]`, `0x6e83e7`).
 fn backstab_lands(f: &mut Frame) {
+    backstab_lands_at(f, vec![MOB], Some(MOB));
+}
+
+/// [`backstab_lands`] with `hits` and the packet's `target`.
+fn backstab_lands_at(f: &mut Frame, hits: Vec<u64>, target: Option<u64>) {
     const BACKSTAB: u32 = 53;
     let world = f.app.world_mut();
     let me = world.resource::<GuidIndex>().0[&ME];
@@ -502,9 +507,9 @@ fn backstab_lands(f: &mut Frame) {
             caster: ME,
             spell_id: BACKSTAB,
             cast_flags: 0,
-            hits: vec![MOB],
+            hits,
             misses: vec![],
-            target: Some(MOB),
+            target,
             go_target: None,
             target_mask: 0x2,
             source: None,
@@ -514,6 +519,21 @@ fn backstab_lands(f: &mut Frame) {
             unit_caster: ME,
         }],
     );
+}
+
+/// A GO with no hit falls back to the packet's target (the `Deviation:` at `spell_go`), but only
+/// one the validator keeps: a friend would drop to the nearest-enemy cycle (`0x6130b5`), which
+/// the fallback never runs, so nothing is selected and no swing goes out.
+#[test]
+fn a_go_with_no_hit_and_a_friendly_target_starts_nothing() {
+    let mut f = frame(true);
+    with_factions(&mut f, FRIEND, &[]);
+    spawn_mob(&mut f, &[(TEMPLATE, FOE)]);
+    swinging_at_old(&mut f);
+    backstab_lands_at(&mut f, vec![], Some(OLD));
+    assert_eq!(attack_wire(&f), Vec::<String>::new());
+    assert_eq!(selected(&f), Some(OLD));
+    assert!(error_keys(&f).is_empty());
 }
 
 /// The GO's deferred start is the player's Attack at its first hit (`0x6e8402` → `0x6131a0`),
@@ -907,6 +927,51 @@ fn a_possessed_attacks_latch_signals_its_bar_before_the_order() {
     assert!(
         eval::<bool>(&mut f, "return LIT == 1"),
         "the latch lit Attack"
+    );
+}
+
+/// With the targeting cursor up, the pet bar's Attack validator (`0x4bd40d`) hands its kept unit
+/// to the cast at its select (`0x613100` → `0x4935d5`), inside the validator, so the cast goes out
+/// ahead of the latch's `PET_BAR_UPDATE` (`0x4bd438`), whose listener's packet follows, and the
+/// order at the unit last (`0x4bd4a4`).
+#[test]
+fn a_possessed_attacks_bind_goes_ahead_of_its_bar_update() {
+    let attack = benilla_protocol::messages::PET_COMMAND_ATTACK
+        | (u32::from(benilla_protocol::messages::PET_ACT_COMMAND) << 24);
+    let mut f = frame(true);
+    with_factions(&mut f, FOE, &[]);
+    with_pet(&mut f, true, attack);
+    feeds(&mut f);
+    f.rx.try_iter().for_each(drop);
+    run(
+        &mut f,
+        r#"local r = CreateFrame("Frame")
+        r:RegisterEvent("PET_BAR_UPDATE")
+        r:SetScript("OnEvent", function() RandomRoll(1, 100) end)"#,
+    );
+    with_the_cursor_up(&mut f);
+    run_pressed(&mut f, "PetAttack()");
+    let wire: Vec<String> =
+        f.rx.try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::CastSpell { spell_id, target } => {
+                    Some(format!("CastSpell {spell_id} {target:x?}"))
+                }
+                ClientCommand::RandomRoll { .. } => Some("RandomRoll".into()),
+                ClientCommand::PetAction { target_guid, .. } => {
+                    Some(format!("PetAction {target_guid:#x}"))
+                }
+                ClientCommand::SetSelection { guid } => Some(format!("SetSelection {guid:#x}")),
+                _ => None,
+            })
+            .collect();
+    assert_eq!(
+        wire,
+        [
+            format!("CastSpell {HEAL} Some(21)"),
+            "RandomRoll".into(),
+            "PetAction 0x21".into()
+        ]
     );
 }
 

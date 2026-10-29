@@ -461,6 +461,8 @@ fn on_spell_go(
             source,
             dest,
         };
+        // No hit leaves the start at the packet's target, the `Deviation:` in [`spell_go`].
+        let no_hit = hits.is_empty();
         let deferred = {
             let (mut l, mut sc) = set.p0();
             let engaged = sc
@@ -492,6 +494,9 @@ fn on_spell_go(
                 l.play_seq.next(),
             )
         };
+        // The fallback starts only at a unit the validator keeps, so its pick never runs the
+        // nearest-enemy cycle (`0x6130b5`) for a target the player is friendly toward.
+        let deferred = deferred.filter(|&guid| !no_hit || set.p1().own().p0().keeps(guid));
         if let Some(guid) = deferred {
             set.p1().engine_attack(guid, mark, |mut press| {
                 // With no listeners, the validator's select is paid at once, after its bind.
@@ -1454,9 +1459,9 @@ fn spell_go(
         // stealth openers and Judgement, 36 rows) starts the swing once the server confirms it.
         // The validator's candidate is `hits[0]`, else the null pair (`0x6e83e9`–`0x6e83fe`),
         // which `0x612df0` resolves to the selection or else the nearest hostile (`0x61306b`,
-        // `0x6130b5`). Deviation: the fallback is the packet's target guid, and with none there
-        // is no start, never the nearest-hostile acquire, because that would attack something
-        // the player never named. Gated on `[player+0xc48] == 0` (`0x6e83e7`).
+        // `0x6130b5`). Deviation: the fallback is the packet's target guid, started only when the
+        // validator keeps it ([`on_spell_go`]), and with none there is no start, never the
+        // nearest-hostile acquire, because that would attack something the player never named. Gated on `[player+0xc48] == 0` (`0x6e83e7`).
         if display.initiates_auto_attack_at_go() && !engaged {
             if let (true, Some(guid)) = (
                 index.0.contains_key(&caster),

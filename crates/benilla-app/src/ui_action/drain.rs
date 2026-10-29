@@ -143,6 +143,12 @@ impl AttackPress<'_, '_> {
         self.begin_validate(passed, may_pick)
     }
 
+    /// Whether the validator keeps `guid` as its candidate (`0x6130a3`) rather than dropping it to
+    /// the nearest-enemy cycle (`0x6130b5`).
+    pub(crate) fn keeps(&self, guid: u64) -> bool {
+        self.pick.keeps(guid)
+    }
+
     /// Pay what the pick's commit owes now, for a caller with no listeners to run first.
     pub(crate) fn pay(&mut self, owed: crate::target::Owed) {
         crate::target::SelectDebt::from(owed).pay(&mut self.selection, &mut self.seam);
