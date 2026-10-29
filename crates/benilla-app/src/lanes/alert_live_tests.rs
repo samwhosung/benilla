@@ -38,10 +38,11 @@ const fn item(low: u64) -> u64 {
 }
 
 /// The spy: each `UPDATE_INVENTORY_ALERTS` with the head's status as it fires, each system line
-/// with the head's status as it shows, and `PLAYER_ENTERING_WORLD`.
+/// and each tutorial with the head's status as it shows, and `PLAYER_ENTERING_WORLD`.
 const SPY: &str = r#"Seen = {}
     local f = CreateFrame("Frame")
-    for _, e in ipairs({"UPDATE_INVENTORY_ALERTS", "CHAT_MSG_SYSTEM", "PLAYER_ENTERING_WORLD"}) do
+    for _, e in ipairs({"UPDATE_INVENTORY_ALERTS", "CHAT_MSG_SYSTEM", "PLAYER_ENTERING_WORLD",
+            "TUTORIAL_TRIGGER"}) do
         f:RegisterEvent(e)
     end
     f:SetScript("OnEvent", function()
@@ -49,6 +50,8 @@ const SPY: &str = r#"Seen = {}
             table.insert(Seen, "ALERTS:" .. GetInventoryAlertStatus(1))
         elseif event == "CHAT_MSG_SYSTEM" then
             table.insert(Seen, arg1 .. ":" .. GetInventoryAlertStatus(1))
+        elseif event == "TUTORIAL_TRIGGER" then
+            table.insert(Seen, "TUTORIAL:" .. arg1 .. ":" .. GetInventoryAlertStatus(1))
         else
             table.insert(Seen, event)
         end
@@ -244,4 +247,30 @@ fn a_temporary_enchant_reads_one_then_two_at_the_next_pass() {
     c.frame(vec![vec![values(SWORD.0, &[(DURABILITY, 49)])]]);
     assert_eq!(c.seen(), ["ALERTS:0"]);
     assert_eq!(main_hand(&mut c), 2, "30 s or fewer left");
+}
+
+/// The pass fires its tutorials in its loop (`0x4b5390` with delay 0, `0x4c8002`), each region's
+/// after its status is stored and ahead of the pass's signal (`0x4c8085`): Broken Items (36,
+/// published 37) between the packets around the break, its listener reading the head broken.
+#[test]
+fn a_breaks_tutorial_fires_in_the_pass_ahead_of_its_signal() {
+    let (mut c, _) = client(40);
+    c.frame(vec![vec![SessionEvent::TutorialFlags(vec![0; 32])]]);
+    c.frame(vec![]);
+    c.seen();
+    c.frame(vec![
+        vec![system("before")],
+        vec![values(HELM.0, &[(DURABILITY, 0)])],
+        vec![system("after")],
+    ]);
+    assert_eq!(
+        c.seen(),
+        ["before:0", "TUTORIAL:37:4", "ALERTS:4", "after:4"]
+    );
+    c.frame(vec![]);
+    assert_eq!(
+        c.seen(),
+        Vec::<String>::new(),
+        "fired once, not again a frame late"
+    );
 }

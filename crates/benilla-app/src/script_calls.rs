@@ -974,7 +974,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::Stable(StableCall::Close) => self.close_stable(script, &mut at.mark),
             ScriptCall::Stable(call) => appliers.stable().apply(call),
             ScriptCall::Session(request) => appliers.session().apply(request),
-            ScriptCall::Tutorial(call) => appliers.tutorial().apply(call),
+            ScriptCall::Tutorial(call) => appliers.tutorial().apply(script, call),
             ScriptCall::Bank(BankCall::Close) => self.close_bank(script, &mut at.mark),
             ScriptCall::Bank(BankCall::Purchase) => appliers.bank().purchase(script),
             ScriptCall::TradeSkill(TradeSkillCall::Do { spell_id, count }) => {

@@ -1390,8 +1390,8 @@ fn equip_slot(item_id: u32, name: &str) -> benilla_ui::script::InvSlotView {
         // A cached record of a wearable type.
         inventory_type: Some(1),
         name: Some(name.to_string()),
-        // Full durability: the setter fires `UPDATE_INVENTORY_ALERTS`, and a worn item would light
-        // DurabilityFrame.
+        // Full durability: a worn item short of it would light DurabilityFrame at an alert
+        // recompute.
         durability: Some((100, 100)),
         link: Some(format!("|cff1eff00|Hitem:{item_id}:0:0:0|h[{name}]|h|r")),
         ..Default::default()

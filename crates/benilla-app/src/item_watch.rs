@@ -67,6 +67,10 @@ pub(crate) enum ItemNotice {
     /// One of our visible items changed (`0x5dee30`, for the active player): the old and new
     /// `PLAYER_VISIBLE_ITEM_<n>_0`.
     Visible { old: u32, new: u32 },
+    /// Another player's visible item changed (`0x5dee30` ahead of its test for the active player,
+    /// `0x5dee82`): the profession and craft lists' rebuilds (`0x5dee70`, `0x5dee75`) and the
+    /// alert recompute (`0x5dee7a`) alone, with no recount.
+    ForeignVisible,
     /// The record a trade getter asked for landed: its callback `0x4c0340` signals `TRADE_UPDATE`
     /// (`0x4c034f`), for a ready record only. Each getter call that missed registered one callback
     /// with no dedupe (`0x4c017f`, `0x4c0582`), so an answer writes one notice per call, after the
@@ -356,7 +360,9 @@ impl ItemNotice {
             Self::Seat { old, new } => old.iter().chain(new.iter()).copied().collect(),
             Self::Bag { entries } => entries.clone(),
             Self::Visible { old, new } => vec![*old, *new],
-            Self::TradeRecord { .. } | Self::TooltipRecord { .. } => Vec::new(),
+            Self::TradeRecord { .. } | Self::TooltipRecord { .. } | Self::ForeignVisible => {
+                Vec::new()
+            }
         }
     }
 
@@ -583,8 +589,9 @@ where
                 out.push((at, run));
             }
         }
-        // `0x5dee30` on another player's visible item: the recompute ahead of its test for the
-        // active player (`0x5dee7a`, `0x5dee82`); the rest is the active player's.
+        // `0x5dee30` on another player's visible item: the rebuilds and the recompute ahead of
+        // its test for the active player (`0x5dee70`-`0x5dee7a`, `0x5dee82`); the rest is the
+        // active player's.
         if kind == ObjectType::Player && self.me != Some(guid) {
             for i in 0..19u8 {
                 if VISIBLE_WATCHED & (1 << i) == 0 {
@@ -592,7 +599,7 @@ where
                 }
                 let base = FIELD_PLAYER_VISIBLE_ITEM_1_CREATOR + 12 * u16::from(i);
                 if let Some(at) = place(base..base + 12, List::Type) {
-                    out.push((at, Run::alerts()));
+                    out.push((at, self.run(ItemNotice::ForeignVisible, bags)));
                 }
             }
         }
@@ -714,7 +721,7 @@ where
                 run.bags.extend(self.item_bag(guid, bags));
                 run.alerts = true;
             }
-            ItemNotice::Visible { .. } => run.alerts = true,
+            ItemNotice::Visible { .. } | ItemNotice::ForeignVisible => run.alerts = true,
             _ => {}
         }
         run.notice = Some(notice);
@@ -1228,9 +1235,13 @@ mod tests {
         // A ring (slot 10) has no watcher.
         let ring = FIELD_PLAYER_VISIBLE_ITEM_1_CREATOR + 12 * 10;
         assert!(w.values(ME, &[(ring + 2, 1)]).is_empty());
-        // Another player's visible items run nothing for us.
+        // Another player's visible item runs the rebuilds and the recompute alone (`0x5dee70`-
+        // `0x5dee7a`, ahead of `0x5dee82`'s test for us).
         w.objects.insert(OTHER, player(&[]));
-        assert!(w.values(OTHER, &[(base + 2, 1)]).is_empty());
+        assert_eq!(
+            w.values(OTHER, &[(base + 2, 1)]),
+            [ItemNotice::ForeignVisible]
+        );
     }
 
     #[test]

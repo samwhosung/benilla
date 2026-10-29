@@ -738,3 +738,25 @@ fn a_craft_reagents_record_answer_signals_the_update_at_its_packet() {
     .unwrap();
     assert_eq!(name, "Strange Dust");
 }
+
+/// Another player's visible item rebuilds both open lists (`0x5e2810` → `0x5dee30`: `0x4fca20(0)`
+/// at `0x5dee70`, `0x4f60c0` at `0x5dee75`), ahead of its test for the active player
+/// (`0x5dee82`), so each window's update fires at that player's packet.
+#[test]
+fn another_players_visible_item_rebuilds_the_open_lists() {
+    const OTHER: u64 = 0x9;
+    let mut app = crafter();
+    quietly(
+        &mut app,
+        r#"CastSpellByName("Tailoring") CastSpellByName("Enchanting")"#,
+    );
+    let entry = benilla_protocol::field::FIELD_PLAYER_VISIBLE_ITEM_1_CREATOR + 2;
+    frame(
+        &mut app,
+        vec![created(OTHER, EntityKind::Player, &[(entry, 2996)])],
+    );
+    assert_eq!(
+        frame(&mut app, vec![values(OTHER, &[(entry, 2589)])]),
+        ["TRADE_SKILL_UPDATE", "CRAFT_UPDATE"]
+    );
+}

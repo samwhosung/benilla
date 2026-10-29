@@ -190,7 +190,11 @@ fn fire_run(vm: &mut RunVm, reads: &mut RunReads, run: Run, touch: Option<TradeT
         return;
     };
     let rebuild = rebuild_at(&notice);
-    let alerts_first = alerts && matches!(notice, ItemNotice::Visible { .. });
+    let alerts_first = alerts
+        && matches!(
+            notice,
+            ItemNotice::Visible { .. } | ItemNotice::ForeignVisible
+        );
     let held = vm.run(|script| {
         let Some(script) = script else {
             return false;
@@ -236,7 +240,7 @@ fn on_vm(vm: &mut RunVm, f: impl FnOnce(&mut UiScript)) {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Rebuild {
     /// Ahead of the recount: the record set-up (`0x5d85be`), the destroy (`0x5d8788`), the stack
-    /// count (`0x5d94d1`) and a visible item (`0x5dee70`).
+    /// count (`0x5d94d1`) and anyone's visible item (`0x5dee70`).
     BeforeRecount,
     /// After the recounts, ahead of the bag update: a backpack or keyring seat (`0x4f8e65`) and a
     /// container's (`0x4f917c`).
@@ -252,7 +256,8 @@ fn rebuild_at(notice: &ItemNotice) -> Option<Rebuild> {
         ItemNotice::Record { .. }
         | ItemNotice::Destroyed { .. }
         | ItemNotice::StackCount { .. }
-        | ItemNotice::Visible { .. } => Some(Rebuild::BeforeRecount),
+        | ItemNotice::Visible { .. }
+        | ItemNotice::ForeignVisible => Some(Rebuild::BeforeRecount),
         ItemNotice::Seat { .. } => Some(Rebuild::BeforeBags),
         ItemNotice::Bag { .. } => Some(Rebuild::AfterBags),
         ItemNotice::EntryRecord { .. }

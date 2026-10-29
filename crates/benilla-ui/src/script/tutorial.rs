@@ -33,6 +33,29 @@ pub enum TutorialCall {
     Clear,
     /// `ResetTutorials()`: `ResetAllTutorials 0x4b5660`.
     Reset,
+    /// `TriggerTutorial(id, 0)` (`0x4b5390`) from an engine step that runs beside a script, on the
+    /// 0-based `id`: the fire-once test, then the popup cue and `TUTORIAL_TRIGGER` in place
+    /// ([`trigger_in_place`]).
+    Trigger(u32),
+}
+
+/// `TriggerTutorial(id, 0)` (`0x4b5390`) from an engine step, at its place: through the host when
+/// one is open, which tests the fire-once bank and signals before this returns; else queued for
+/// the app's bank ([`super::UiScript::take_tutorial_triggers`]). The caller holds no borrow of the
+/// model.
+pub(crate) fn trigger_in_place(lua: &Lua, id: u32) {
+    if super::host::open(lua) {
+        if let Err(e) = submit(lua, TutorialCall::Trigger(id)) {
+            lua.app_data_mut::<Model>()
+                .expect("model app_data")
+                .record_lua_error(&e);
+        }
+    } else {
+        lua.app_data_mut::<Model>()
+            .expect("model app_data")
+            .tutorial_triggers
+            .push(id);
+    }
 }
 
 impl super::UiScript {

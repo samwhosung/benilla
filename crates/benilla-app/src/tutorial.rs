@@ -659,8 +659,9 @@ fn tick_tutorial_timers(tutorials: Res<Tutorials>) {
 }
 
 /// Before the drain: the triggers the VM's sites beside a script queued, stamped here: Quest
-/// Completion (`0x4df792`), Replying to Tells (`0x49b107`), the Quest Log (`0x5013df`) and the
-/// inventory alerts (`0x4c8002`, `0x4c802e`).
+/// Completion (`0x4df792`), Replying to Tells (`0x49b107`), the Quest Log (`0x5013df`), and the
+/// inventory alerts' (`0x4c8002`, `0x4c802e`) from a pass that ran with no host open; with one,
+/// those fire in the pass ([`TutorialCall::Trigger`]).
 fn stamp_script_triggers(mut hosted_vm: crate::script_calls::HostedVm, tutorials: Res<Tutorials>) {
     let ids = hosted_vm.run(|script| script.map(UiScript::take_tutorial_triggers));
     let mut state = tutorials.lock();
@@ -710,20 +711,38 @@ pub(crate) struct TutorialSteps<'w> {
     /// Absent in a harness with no tutorial state, which drops the calls.
     tutorials: Option<Res<'w, Tutorials>>,
     commands: Res<'w, NetCommands>,
+    /// Absent in a harness without the sounds, whose triggers fire with no cue.
+    sounds: Option<Res<'w, crate::sound::MessageSounds>>,
 }
 
 impl TutorialSteps<'_> {
     /// `FlagTutorial`'s `0x4b54c0` (`0x4b59dc`), `ClearTutorials`'s `0x4b55c0` (`0x4b5a00`) or
-    /// `ResetTutorials`'s `0x4b5660` (`0x4b5a10`), its packet sent with any owed before it.
-    pub(crate) fn apply(&mut self, call: TutorialCall) {
+    /// `ResetTutorials`'s `0x4b5660` (`0x4b5a10`), its packet sent with any owed before it; or an
+    /// engine step's `TriggerTutorial(id, 0)` (`0x4b5390`), its fire-once test, then the cue and
+    /// `TUTORIAL_TRIGGER` in place, the bank free while the listeners run.
+    pub(crate) fn apply(&mut self, script: &mut UiScript, call: TutorialCall) {
         let Some(tutorials) = self.tutorials.as_deref() else {
             return;
         };
+        if let TutorialCall::Trigger(id) = call {
+            let published = tutorials.lock().trigger(id, 0, Instant::now());
+            if let Some(published) = published {
+                if let Some(sounds) = self.sounds.as_deref() {
+                    sounds.push_cue(TUTORIAL_POPUP_SOUND);
+                }
+                script.fire_event(
+                    "TUTORIAL_TRIGGER",
+                    vec![ScriptValue::Int(i64::from(published))],
+                );
+            }
+            return;
+        }
         let mut state = tutorials.lock();
         match call {
             TutorialCall::Flag(id) => state.acknowledge(id),
             TutorialCall::Clear => state.clear(),
             TutorialCall::Reset => state.reset(),
+            TutorialCall::Trigger(_) => {}
         }
         state.flush(&self.commands);
     }

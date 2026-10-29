@@ -267,26 +267,27 @@ fn alert_status(item: Option<AlertItem>) -> u8 {
     }
 }
 
-/// The 12 statuses off `inputs`, and the tutorials the pass fires in region order: a region broken
-/// by durability fires Broken Items (`0x4c8002`) and a damaged one Damaged Items (`0x4c802e`); the
-/// force-red arm (`0x4c7fb0`) and the ammo arm (`0x4c7f78`: 3 at 20 or fewer) fire nothing.
-fn alert_statuses(inputs: &AlertInputs) -> ([u8; 12], Vec<u32>) {
-    let mut statuses = [0u8; 12];
-    let mut tutorials = Vec::new();
+/// Each region's status off `inputs`, in `0x806eb8`'s order, with the tutorial its arm fires: a
+/// region broken by durability fires Broken Items (`0x4c8002`) and a damaged one Damaged Items
+/// (`0x4c802e`); the force-red arm (`0x4c7fb0`), the temporary-enchant arm and the ammo arm
+/// (`0x4c7f78`: 3 at 20 or fewer) fire nothing.
+fn alert_statuses(inputs: &AlertInputs) -> [(u8, Option<u32>); 12] {
+    let mut out = [(0u8, None); 12];
     for (i, &item) in inputs.worn.iter().enumerate() {
-        statuses[i] = alert_status(item);
+        let status = alert_status(item);
         let forced = item.is_some_and(|v| v.flags & 0x10 != 0);
-        match statuses[i] {
-            4 if !forced => tutorials.push(TUTORIAL_BROKEN_ITEMS),
-            3 => tutorials.push(TUTORIAL_DAMAGED_ITEMS),
-            _ => {}
-        }
+        let tutorial = match status {
+            4 if !forced => Some(TUTORIAL_BROKEN_ITEMS),
+            3 => Some(TUTORIAL_DAMAGED_ITEMS),
+            _ => None,
+        };
+        out[i] = (status, tutorial);
     }
-    statuses[11] = match inputs.ammo {
+    out[11].0 = match inputs.ammo {
         Some(count) if count <= 20 => 3,
         _ => 0,
     };
-    (statuses, tutorials)
+    out
 }
 
 /// The doll snapshot's reads, for a VM with no host to ask: each worn region's view, and the ammo
@@ -327,24 +328,31 @@ fn alert_inputs(lua: &Lua) -> Option<AlertInputs> {
     }
 }
 
-/// `0x4c7ee0`'s pass over the stored statuses (`0xb71f60`), each set to 0 and recomputed whole
-/// (`0x4c7f1b`), with its tutorials; the caller signals.
-fn store_inventory_alerts(model: &mut Model, inputs: &AlertInputs) {
-    let (statuses, tutorials) = alert_statuses(inputs);
-    model.inventory_alerts = statuses;
-    model.tutorial_triggers.extend(tutorials);
+/// `0x4c7ee0`'s pass over the stored statuses (`0xb71f60`), region by region: each set to 0 and
+/// recomputed (`0x4c7f1b`), its tutorial fired at once (`0x4b5390` with delay 0), so a
+/// `TUTORIAL_TRIGGER` listener reads the regions before it recomputed and those after it as the
+/// last pass left them; the caller signals. The caller holds no borrow of the model.
+fn store_inventory_alerts(lua: &Lua, inputs: &AlertInputs) {
+    for (i, (status, tutorial)) in alert_statuses(inputs).into_iter().enumerate() {
+        lua.app_data_mut::<Model>()
+            .expect("model app_data")
+            .inventory_alerts[i] = status;
+        if let Some(id) = tutorial {
+            super::tutorial::trigger_in_place(lua, id);
+        }
+    }
 }
 
 /// The alert recompute in a verb's call (`UpdateInventoryAlertStatus`, `0x4c9560`): the statuses
 /// stored and `UPDATE_INVENTORY_ALERTS` raised at the pass's end (`0x4c8085`); nothing while no
 /// active player is held.
 pub(super) fn recompute_inventory_alerts_in_verb(lua: &Lua) {
-    let inputs = alert_inputs(lua);
+    let Some(inputs) = alert_inputs(lua) else {
+        return;
+    };
+    store_inventory_alerts(lua, &inputs);
     super::tick::verb(lua, |model| {
-        if let Some(inputs) = inputs {
-            store_inventory_alerts(model, &inputs);
-            model.raise("UPDATE_INVENTORY_ALERTS", Vec::new());
-        }
+        model.raise("UPDATE_INVENTORY_ALERTS", Vec::new());
     });
 }
 
@@ -379,7 +387,7 @@ impl super::UiScript {
         let Some(inputs) = alert_inputs(&lua) else {
             return;
         };
-        store_inventory_alerts(&mut self.model_mut(), &inputs);
+        store_inventory_alerts(&lua, &inputs);
         self.fire_event("UPDATE_INVENTORY_ALERTS", vec![]);
     }
 
@@ -2885,7 +2893,7 @@ mod tests {
         let status = |item: AlertItem| {
             let mut worn = [None; 11];
             worn[8] = Some(item);
-            super::alert_statuses(&AlertInputs { worn, ammo: None }).0[8]
+            super::alert_statuses(&AlertInputs { worn, ammo: None })[8].0
         };
         let enchanted = |left: u32| AlertItem {
             durability: 40,
