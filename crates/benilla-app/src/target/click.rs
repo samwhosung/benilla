@@ -3065,6 +3065,65 @@ mod tests {
         }
     }
 
+    /// The re-click gate (`0x5f0251`) reads the latch as the click finds it (`[0xb4e2d0]`): a
+    /// window an earlier record of the frame closed leaves the frame's copy of the latch naming its
+    /// NPC, and a right-click on that NPC still greets it.
+    #[test]
+    fn the_reclick_gate_reads_the_latch_as_the_click_finds_it() {
+        const F_NPC_FLAGS: u16 = 147;
+        const NPC: u64 = BOAR + 1;
+        let (tx, rx) = crossbeam_channel::unbounded::<ClientCommand>();
+        let (mut world, _boar) = right_click_world();
+        world.insert_resource(NetCommands(tx));
+        let me = world
+            .query_filtered::<Entity, With<SelfPlayer>>()
+            .single(&world)
+            .unwrap();
+        world.entity_mut(me).insert((
+            store(&[(F_HEALTH, 100), (F_MAXHEALTH, 100)]),
+            Transform::default(),
+        ));
+        let npc = world
+            .spawn((
+                Guid(NPC),
+                store(&[(F_HEALTH, 100), (F_MAXHEALTH, 100), (F_NPC_FLAGS, 0x1)]),
+                Transform::from_xyz(3.0, 0.0, 0.0),
+                crate::net::NetEntity {
+                    kind: benilla_protocol::EntityKind::Unit,
+                    display_id: None,
+                    scale: 1.0,
+                },
+            ))
+            .id();
+        world
+            .resource_mut::<crate::net::GuidIndex>()
+            .0
+            .insert(NPC, npc);
+        // The frame's copy, as the last frame's packets left it, and the latch the close cleared.
+        world.insert_resource(crate::ui_session::InteractNpc(Some(npc), Some(NPC)));
+        world.insert_resource(crate::ui_session::InteractLatch::default());
+        *world.resource_mut::<PressPick>() = PressPick {
+            hovered: Hovered {
+                target: Some(npc),
+                guid: Some(NPC),
+                distance: 3.0,
+                ..Hovered::default()
+            },
+            cursor: WorldCursor {
+                kind: cursor_mode::CursorKind::Interact,
+                unable: false,
+            },
+            ..PressPick::default()
+        };
+        crate::script_calls::run_cached(&mut world, act_on_right_click).unwrap();
+        let sent: Vec<_> = rx.try_iter().collect();
+        assert!(
+            sent.iter()
+                .any(|c| matches!(c, ClientCommand::GossipHello { guid } if *guid == NPC)),
+            "the closed window's NPC is greeted again: {sent:?}"
+        );
+    }
+
     /// The dispatcher's attack arm (`0x60c18c`) is taken on the fork, not the sword: a ghost over
     /// a hostile NPC sees the pointer, and its right-click is refused silently inside the arm
     /// (`0x60c1a1`), with no swing and no service packet; a live player on the same fork swings.
