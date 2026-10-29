@@ -3,7 +3,7 @@
 use super::*;
 use crate::names::NameCache;
 use benilla_formats::{
-    ItemDisplay, ItemDisplayCatalog, SpellDisplay, SPELL_ATTR_IS_TRADESKILL,
+    ItemDisplay, ItemDisplayCatalog, SpellDisplay, TokenContext, SPELL_ATTR_IS_TRADESKILL,
     SPELL_EFFECT_CREATE_ITEM, SPELL_EFFECT_LEARN_PET_SPELL, SPELL_EFFECT_LEARN_SPELL,
     SPELL_EFFECT_SKILL_STEP,
 };

@@ -8,7 +8,7 @@
 use std::collections::BTreeSet;
 
 use benilla_formats::{
-    LearnEffect, SkillLineCatalog, SpellCatalog, TokenContext, SPELL_EFFECT_LEARN_PET_SPELL,
+    LearnEffect, SkillLineCatalog, SpellCatalog, SPELL_EFFECT_LEARN_PET_SPELL,
     SPELL_EFFECT_LEARN_SPELL, SPELL_EFFECT_SKILL_STEP,
 };
 use benilla_protocol::messages::{trainer_spell_state, TrainerSpell};
@@ -609,13 +609,13 @@ pub(crate) struct DescriptionReads<'w> {
 }
 
 /// What a service's resolve reads, built once over the world ([`TrainerReads::with`]).
-struct Resolver<'a> {
+struct Resolver<'a, 't> {
     spells: &'a SpellCatalog,
     skill_lines: &'a SkillLineCatalog,
     books: &'a ReqBooks<'a>,
     icons: Option<&'a ItemDisplays>,
     items: &'a Items,
-    text: &'a ServiceText<'a>,
+    text: &'a ServiceText<'a, 't>,
 }
 
 /// Everything a list's or a pass's push and a getter's per-call read resolve the services from:
@@ -647,7 +647,6 @@ impl TrainerReads<'_, '_> {
         let pet = store
             .and_then(|s| s.0.unit_pet_guid())
             .and_then(|guid| self.player.store(guid));
-        let gender = store.and_then(|s| s.0.unit_gender()).unwrap_or(0);
         let home_area: Option<&str> = self
             .desc
             .home_bind
@@ -658,52 +657,6 @@ impl TrainerReads<'_, '_> {
             lines: Some(&skill_lines.catalog),
             spells: Some(&spells.catalog),
             items: Some(items),
-        };
-        let player_level =
-            |d: &benilla_formats::SpellDisplay| crate::spell::player_spell_level(store, skills, d);
-        let pet_skill_level = |d: &benilla_formats::SpellDisplay| {
-            d.skill_level(crate::spell::pet_skill_value(pet.map(|p| &p.0)))
-        };
-        // `$c` and `$p` (`0x6e31b0`, `0x6e3300`) at the same caster's level and fields.
-        let player_cost = |d: &benilla_formats::SpellDisplay| {
-            store.map_or(-1, |s| crate::spell::usable::power_cost(d, s, skills, mods))
-        };
-        let player_per_second = |d: &benilla_formats::SpellDisplay| {
-            let level = crate::spell::SpellLevel::Player { me: store, skills };
-            crate::spell::usable::per_second_cost(d, level)
-        };
-        let pet_level =
-            |d: &benilla_formats::SpellDisplay| crate::spell::SpellLevel::Known(pet_skill_level(d));
-        let pet_cost = |d: &benilla_formats::SpellDisplay| {
-            pet.map_or(-1, |p| {
-                let level = pet_level(d);
-                crate::spell::usable::power_cost_at(d, &p.0, level, mods)
-            })
-        };
-        let pet_per_second = |d: &benilla_formats::SpellDisplay| {
-            crate::spell::usable::per_second_cost(d, pet_level(d))
-        };
-        let ctx = TokenContext {
-            durations: &spells.durations,
-            radii: &spells.radii,
-            ranges: Some(&spells.ranges),
-            level: &player_level,
-            lookup: &|id| spells.catalog.get(id),
-            mods: Some(mods),
-            power_cost: &player_cost,
-            power_per_second: &player_per_second,
-            unmodified_points: false,
-            gender: &|| gender,
-            home_area: &|| home_area,
-            // Never read: the text leaves each template to the getter's read of the VM's strings.
-            global: &|_| None,
-            printf: &crate::ui_script::token_printf,
-        };
-        let pet_ctx = TokenContext {
-            level: &pet_skill_level,
-            power_cost: &pet_cost,
-            power_per_second: &pet_per_second,
-            ..ctx
         };
         // `UNIT_FIELD_SUMMON`'s unit (`0x4d9860`-`0x4d987d`), its book read only as the pet bar's
         // (`0x60c77a`).
@@ -731,17 +684,23 @@ impl TrainerReads<'_, '_> {
             race_class: store.map_or((0, 0), |s| s.race_class()),
             skills: skill_slots.as_deref(),
         };
-        Some(f(&Resolver {
-            spells: &spells.catalog,
-            skill_lines: &skill_lines.catalog,
-            books: &books,
-            icons: self.icons.as_deref(),
-            items,
-            text: &ServiceText {
-                player: &ctx,
-                pet: &pet_ctx,
+        Some(crate::spell::with_token_contexts(
+            spells,
+            skills,
+            mods,
+            (store, pet),
+            home_area,
+            |(player, pet)| {
+                f(&Resolver {
+                    spells: &spells.catalog,
+                    skill_lines: &skill_lines.catalog,
+                    books: &books,
+                    icons: self.icons.as_deref(),
+                    items,
+                    text: &ServiceText { player, pet },
+                })
             },
-        }))
+        ))
     }
 
     /// The window's services resolved for the VM, the header labels read through `get`; `None`

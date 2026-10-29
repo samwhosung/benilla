@@ -7,7 +7,7 @@
 use bevy::prelude::*;
 
 use benilla_formats::{
-    substitute_parts, ExpandAt, TokenContext, SPELL_ATTR_IS_TRADESKILL, SPELL_EFFECT_CREATE_ITEM,
+    substitute_parts, ExpandAt, SPELL_ATTR_IS_TRADESKILL, SPELL_EFFECT_CREATE_ITEM,
     SPELL_EFFECT_ENCHANT_ITEM, SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY, SPELL_EFFECT_LEARN_PET_SPELL,
     SPELL_EFFECT_LEARN_SPELL,
 };
@@ -250,7 +250,7 @@ fn craft_description(
     d: &benilla_formats::SpellDisplay,
     spells: &benilla_formats::SpellCatalog,
     open_type: u32,
-    (player, pet): Contexts<'_, '_>,
+    (player, pet): crate::spell::TokenContexts<'_, '_>,
 ) -> Option<TooltipText> {
     let expand = |text: &str, d: &benilla_formats::SpellDisplay, at_pet: bool| {
         let ctx = if at_pet { pet } else { player };
@@ -276,10 +276,6 @@ fn craft_description(
 /// Beast Training's craft type, which sets the expander's pet flag for a row's own text
 /// (`cmp esi,1` at `0x4f7b3d`).
 const CRAFT_TYPE_BEAST_TRAINING: u32 = 1;
-
-/// The `$`-token contexts of the player and of its pet, which the expander's pet flag picks
-/// between ([`CraftReads::with_contexts`]).
-type Contexts<'c, 'a> = (&'c TokenContext<'a>, &'c TokenContext<'a>);
 
 /// What the craft list's build and getters read (`0x4f60c0`, `0x4f6c10`-`0x4f7be6`): the
 /// player's known spells and lists, the catalogs, the player object and the bags as of the drain's
@@ -324,68 +320,25 @@ impl CraftReads<'_, '_> {
         spells: &Spells,
         skill_lines: &SkillLines,
         store: &ObjectStore,
-        f: impl FnOnce(Contexts<'_, '_>) -> R,
+        f: impl FnOnce(crate::spell::TokenContexts<'_, '_>) -> R,
     ) -> R {
         let pet = store
             .0
             .unit_pet_guid()
             .and_then(|guid| self.stores.by_guid(guid, self.objects.store(guid)));
-        let home_area = self.home_area();
-        let mods = &*self.spell_mods;
         let skills = crate::spell::PlayerSkills {
             lines: Some(&skill_lines.catalog),
             spells: Some(&spells.catalog),
             items: Some(&self.items),
         };
-        let player_level = |d: &benilla_formats::SpellDisplay| {
-            crate::spell::player_spell_level(Some(store), skills, d)
-        };
-        let player_cost = |d: &benilla_formats::SpellDisplay| {
-            crate::spell::usable::power_cost(d, store, skills, mods)
-        };
-        let player_per_second = |d: &benilla_formats::SpellDisplay| {
-            let level = crate::spell::SpellLevel::Player {
-                me: Some(store),
-                skills,
-            };
-            crate::spell::usable::per_second_cost(d, level)
-        };
-        let pet_skill_level = |d: &benilla_formats::SpellDisplay| {
-            d.skill_level(crate::spell::pet_skill_value(pet.map(|p| &p.0)))
-        };
-        let pet_level =
-            |d: &benilla_formats::SpellDisplay| crate::spell::SpellLevel::Known(pet_skill_level(d));
-        let pet_cost = |d: &benilla_formats::SpellDisplay| {
-            pet.map_or(-1, |p| {
-                crate::spell::usable::power_cost_at(d, &p.0, pet_level(d), mods)
-            })
-        };
-        let pet_per_second = |d: &benilla_formats::SpellDisplay| {
-            crate::spell::usable::per_second_cost(d, pet_level(d))
-        };
-        let player_ctx = TokenContext {
-            durations: &spells.durations,
-            radii: &spells.radii,
-            ranges: Some(&spells.ranges),
-            level: &player_level,
-            lookup: &|id| spells.catalog.get(id),
-            mods: Some(mods),
-            power_cost: &player_cost,
-            power_per_second: &player_per_second,
-            unmodified_points: false,
-            gender: &|| store.0.unit_gender().unwrap_or(0),
-            home_area: &|| home_area,
-            // Never read: the parts leave each template to the getter's read of the VM's strings.
-            global: &|_| None,
-            printf: &crate::ui_script::token_printf,
-        };
-        let pet_ctx = TokenContext {
-            level: &pet_skill_level,
-            power_cost: &pet_cost,
-            power_per_second: &pet_per_second,
-            ..player_ctx
-        };
-        f((&player_ctx, &pet_ctx))
+        crate::spell::with_token_contexts(
+            spells,
+            skills,
+            &self.spell_mods,
+            (Some(store), pet),
+            self.home_area(),
+            f,
+        )
     }
 
     /// The book of `craft_type`, opened by an opener of `line`, as a build reads it; `None` while
@@ -496,7 +449,7 @@ impl CraftReads<'_, '_> {
         skill_lines: &SkillLines,
         store: &ObjectStore,
         open_type: u32,
-        ctxs: Contexts<'_, '_>,
+        ctxs: crate::spell::TokenContexts<'_, '_>,
     ) -> Option<CraftRecipe> {
         let d = spells.catalog.get(s)?;
         let objects = self.stores.item_objects(&self.objects);

@@ -259,6 +259,71 @@ pub(crate) fn pet_skill_value(pet: Option<&benilla_protocol::ObjectFields>) -> u
         .saturating_mul(5)
 }
 
+/// The `$`-token contexts of the player and of its pet, which the expander's pet flag picks
+/// between ([`with_token_contexts`]).
+pub(crate) type TokenContexts<'c, 'a> = (
+    &'c benilla_formats::TokenContext<'a>,
+    &'c benilla_formats::TokenContext<'a>,
+);
+
+/// `f` over the `$`-token contexts a description expands over (`0x5075f0`, as the spell tooltip's
+/// call `0x52f717` makes it): the player `me`'s and its pet `pet`'s, the two casters the
+/// expander's pet flag picks between for its level and its `$c` and `$p` terms (`0x6e3130`,
+/// `0x6e31b0`, `0x6e3300`), with `home_area` the bind point's area `$z` names. No template is
+/// read here: each is left to the reader of the VM's strings.
+pub(crate) fn with_token_contexts<R>(
+    spells: &crate::ui_action::Spells,
+    skills: PlayerSkills<'_>,
+    mods: &SpellModifiers,
+    (me, pet): (
+        Option<&crate::net::ObjectStore>,
+        Option<&crate::net::ObjectStore>,
+    ),
+    home_area: Option<&str>,
+    f: impl FnOnce(TokenContexts<'_, '_>) -> R,
+) -> R {
+    let gender = me.and_then(|s| s.0.unit_gender()).unwrap_or(0);
+    let player_level = |d: &benilla_formats::SpellDisplay| player_spell_level(me, skills, d);
+    let pet_skill_level =
+        |d: &benilla_formats::SpellDisplay| d.skill_level(pet_skill_value(pet.map(|p| &p.0)));
+    // `$c` and `$p` (`0x6e31b0`, `0x6e3300`) at the same caster's level and fields.
+    let player_cost = |d: &benilla_formats::SpellDisplay| {
+        me.map_or(-1, |s| usable::power_cost(d, s, skills, mods))
+    };
+    let player_per_second = |d: &benilla_formats::SpellDisplay| {
+        usable::per_second_cost(d, SpellLevel::Player { me, skills })
+    };
+    let pet_level = |d: &benilla_formats::SpellDisplay| SpellLevel::Known(pet_skill_level(d));
+    let pet_cost = |d: &benilla_formats::SpellDisplay| {
+        pet.map_or(-1, |p| usable::power_cost_at(d, &p.0, pet_level(d), mods))
+    };
+    let pet_per_second =
+        |d: &benilla_formats::SpellDisplay| usable::per_second_cost(d, pet_level(d));
+    let player_ctx = benilla_formats::TokenContext {
+        durations: &spells.durations,
+        radii: &spells.radii,
+        ranges: Some(&spells.ranges),
+        level: &player_level,
+        lookup: &|id| spells.catalog.get(id),
+        mods: Some(mods),
+        power_cost: &player_cost,
+        power_per_second: &player_per_second,
+        unmodified_points: false,
+        gender: &|| gender,
+        home_area: &|| home_area,
+        // Never read: the parts leave each template to the reader of the VM's strings.
+        global: &|_| None,
+        printf: &crate::ui_script::token_printf,
+    };
+    let pet_ctx = benilla_formats::TokenContext {
+        level: &pet_skill_level,
+        power_cost: &pet_cost,
+        power_per_second: &pet_per_second,
+        ..player_ctx
+    };
+    f((&player_ctx, &pet_ctx))
+}
+
 /// The player's skill in `line`, [`spell_skill_value`]'s second half: 0 without a player or a
 /// slot for it.
 pub(crate) fn skill_line_value(me: Option<&crate::net::ObjectStore>, line: u32) -> u32 {

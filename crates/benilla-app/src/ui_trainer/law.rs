@@ -124,9 +124,9 @@ pub(super) fn service_tooltip(wire_spell: u32, spells: &SpellCatalog) -> Trainer
 /// The `$`-token contexts a service description expands over, picked per row by the caster the
 /// expander's level terms read (`0x6e3130`'s selector): the active player's, or the pet's, which
 /// a `LEARN_PET_SPELL` wrapper selects.
-pub(super) struct ServiceText<'a> {
-    pub(super) player: &'a TokenContext<'a>,
-    pub(super) pet: &'a TokenContext<'a>,
+pub(super) struct ServiceText<'c, 'a> {
+    pub(super) player: &'c TokenContext<'a>,
+    pub(super) pet: &'c TokenContext<'a>,
 }
 
 /// `GetTrainerServiceDescription 0x4d9b40`: the text the stock window shows under the service's
