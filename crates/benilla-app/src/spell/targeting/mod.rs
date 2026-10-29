@@ -18,7 +18,8 @@
 //! - [`CursorPicks`]: the selection writers' own seam. `SelectTarget 0x493540` binds the unit it was
 //!   given to the pending cast and returns, with the cursor up (`0x4935ca`-`0x4935d5`), so a script's
 //!   `TargetUnit`, `TargetByName`, a TAB and the rest never select then ([`crate::target`]'s front
-//!   parks the unit here), and the cursor's owner binds it through [`bind_target_unit`].
+//!   parks the unit here), and the cursor's owner binds it through [`bind_target_unit`] at the
+//!   select's place ([`PickBind`]).
 //!
 //! Every seam commits through [`crate::spell::CastLadder::commit_targeted`] (`SendCast 0x6e54f0`).
 //! Only the unit and corpse arms have a range gate ([`merge`]): the terrain and GameObject clicks
@@ -301,9 +302,9 @@ const SELF_PICK_BITS: u16 = 0x850e;
 
 /// The units `SelectTarget 0x493540` found the cursor up for (`0x4935ca`) and so hands to
 /// `BindTarget 0x6e5b40` in place of selecting (`0x4935d5`): parked by the selection writers, which
-/// own no cast ladder, and bound in order by the script calls' pass ([`ScriptCursor::bind_parked`]):
-/// after the call that parked them, and at the head of the next pass for a writer outside it (a
-/// loot window's select, the chat layer's `/target`), which waits for it.
+/// own no cast ladder, and bound in order by the writer as its select returns, before anything
+/// after the select runs: a call's step ([`ScriptCursor::bind_parked`]), a handler's select at its
+/// packet ([`PickBind`]), a plate click's and a walk's arrival in their legs.
 #[derive(Resource, Default)]
 pub(crate) struct CursorPicks(Vec<(Entity, u64)>);
 
@@ -319,6 +320,23 @@ impl CursorPicks {
         for (entity, guid) in std::mem::take(&mut self.0) {
             bind_target_unit(ladder, checks, entity, guid);
         }
+    }
+}
+
+/// The cursor's bind of the units its writers parked ([`CursorPicks`]), for a writer outside the
+/// calls that holds it beside its select: a handler binds between its select and what follows it,
+/// so the bind's send and its signals (`0x6e60cb`, `0x6e60d7`) are its packet's.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct PickBind<'w, 's> {
+    checks: BindChecks<'w, 's>,
+    ladder: crate::spell::CastLadder<'w, 's>,
+    picks: ResMut<'w, CursorPicks>,
+}
+
+impl PickBind<'_, '_> {
+    /// Bind every parked unit, in the order parked.
+    pub(crate) fn bind(&mut self) {
+        self.picks.bind_all(&mut self.ladder, &self.checks);
     }
 }
 

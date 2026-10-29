@@ -485,3 +485,80 @@ fn a_later_list_in_the_frame_does_not_show_through_to_an_earlier_step() {
         "Garrosh"
     );
 }
+
+/// A response with the targeting cursor up hands its unit to the cast (`0x5ebc35` → `0x48f3be` →
+/// `0x4935d5` → `0x6e5b40`), which binds it inside the packet, ahead of the open (`0x48f3cb`): the
+/// cast goes out in the frame with no selection sent, its signals (`0x6e60cb`, the send's
+/// `0x6e589d`) fire after the line before it and ahead of `LOOT_OPENED` and the line after, and a
+/// listener of the window, as every call after it, reads the cursor down.
+#[test]
+fn a_response_with_the_cursor_up_binds_its_unit_at_the_packet() {
+    /// A living mark, which the pick-pocket's loot is from.
+    const MARK: u64 = 0xF130_0000_0000_00AD;
+    /// A spell the library does not know, so any unit binds under its `TARGET_FLAG_UNIT` word.
+    const HEAL: u32 = 2050;
+    let mut c = client();
+    c.frame(vec![vec![created(
+        MARK,
+        EntityKind::Unit,
+        &[(FIELD_UNIT_HEALTH, 100)],
+    )]]);
+    c.frame(vec![]);
+    c.eval::<()>(
+        false,
+        r#"
+        local g = CreateFrame("Frame")
+        g:RegisterEvent("CURRENT_SPELL_CAST_CHANGED")
+        g:RegisterEvent("LOOT_OPENED")
+        g:SetScript("OnEvent", function()
+            if event == "LOOT_OPENED" then
+                table.insert(Seen, "targeting:" .. tostring(SpellIsTargeting()))
+            else
+                table.insert(Seen, event)
+            end
+        end)
+        "#,
+    );
+    c.seen();
+    c.sent();
+    c.app
+        .world_mut()
+        .resource_mut::<crate::spell::SpellTargeting>()
+        .enter(HEAL, crate::spell::CastCommit::Spell, 0x0002);
+    c.ask_loot(MARK);
+    c.frame(vec![
+        vec![boar_says("a")],
+        vec![SessionEvent::LootResponse {
+            guid: MARK,
+            loot_type: loot_type::PICKPOCKETING,
+            gold: 0,
+            items: vec![row(0, LINEN, slot_type::ALLOW_LOOT)],
+        }],
+        vec![boar_says("b")],
+    ]);
+    assert_eq!(
+        c.seen(),
+        [
+            "CHAT_MSG_MONSTER_SAY:a",
+            "CURRENT_SPELL_CAST_CHANGED",
+            "CURRENT_SPELL_CAST_CHANGED",
+            "LOOT_OPENED:nil",
+            "targeting:nil",
+            "CHAT_MSG_MONSTER_SAY:b",
+        ]
+    );
+    let sent = c.sent();
+    let casts: Vec<&String> = sent.iter().filter(|s| s.starts_with("CastSpell")).collect();
+    assert_eq!(
+        casts,
+        [&format!(
+            "CastSpell {{ spell_id: {HEAL}, target: Some({MARK}) }}"
+        )],
+        "{sent:?}"
+    );
+    assert!(
+        !sent.iter().any(|s| s.starts_with("SetSelection")),
+        "bound, not selected: {sent:?}"
+    );
+    assert!(c.eval::<bool>(true, "return SpellIsTargeting() == nil"));
+}

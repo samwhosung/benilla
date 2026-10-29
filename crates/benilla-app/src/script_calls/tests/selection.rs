@@ -518,6 +518,86 @@ fn a_go_deferred_attack_selects_its_hit_before_it_swings() {
     );
 }
 
+/// With the targeting cursor up, the deferred attack's select (`0x5eccaa`) hands the GO's hit to the
+/// cursor's cast (`0x4935d5` → `0x6e5b40`), which binds it inside the GO's packet, ahead of the
+/// swing StartAttack goes on to: the cast goes out first, the selection stays and the cursor is
+/// down.
+#[test]
+fn a_go_deferred_attack_with_the_cursor_up_binds_its_hit_before_it_swings() {
+    const BACKSTAB: u32 = 53;
+    let mut f = frame(true);
+    spawn_mob(&mut f, &[]);
+    swinging_at_old(&mut f);
+    with_the_cursor_up(&mut f);
+    let world = f.app.world_mut();
+    let me = world.resource::<GuidIndex>().0[&ME];
+    world
+        .entity_mut(me)
+        .remove::<crate::creature_anim::Engaged>();
+    world.insert_resource(crate::ui_action::Spells {
+        catalog: benilla_formats::SpellCatalog::from_displays(
+            [(
+                BACKSTAB,
+                benilla_formats::SpellDisplay {
+                    name: "Backstab".into(),
+                    attributes_ex2: 0x0010_0000,
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+        ),
+        forms: Default::default(),
+        ranges: Default::default(),
+        cast_times: Default::default(),
+        durations: Default::default(),
+        radii: Default::default(),
+    });
+    crate::net::handlers::dispatch(
+        world,
+        vec![benilla_protocol::SessionEvent::SpellGo {
+            caster: ME,
+            spell_id: BACKSTAB,
+            cast_flags: 0,
+            hits: vec![MOB],
+            misses: vec![],
+            target: Some(MOB),
+            go_target: None,
+            target_mask: 0x2,
+            source: None,
+            dest: None,
+            ammo_display_id: None,
+            item_caster: None,
+            unit_caster: ME,
+        }],
+    );
+    let sent: Vec<_> = f.rx.try_iter().collect();
+    let at = |want: fn(&ClientCommand) -> bool| sent.iter().position(want);
+    let cast = at(|c| {
+        matches!(
+            c,
+            ClientCommand::CastSpell {
+                spell_id: HEAL,
+                target: Some(MOB)
+            }
+        )
+    });
+    let swing = at(|c| matches!(c, ClientCommand::AttackSwing { .. }));
+    assert!(cast.is_some(), "bound in the packet: {sent:?}");
+    assert!(
+        swing.is_none_or(|swing| cast < Some(swing)),
+        "the cast goes ahead of the swing: {sent:?}"
+    );
+    assert!(
+        !sent
+            .iter()
+            .any(|c| matches!(c, ClientCommand::SetSelection { .. })),
+        "{sent:?}"
+    );
+    assert_eq!(selected(&f), Some(OLD));
+    assert!(!cursor_is_up(&f));
+}
+
 /// The wire a pick and what follows it send, in order: selections, rolls, Sinister Strike's casts
 /// and swings.
 fn pick_wire(f: &Frame) -> Vec<String> {

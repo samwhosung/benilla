@@ -53,7 +53,7 @@ pub(crate) use report::{
 };
 // `TargetingWants` is exported for the ground reticle, which draws for the location word alone.
 pub(crate) use targeting::{
-    ground_cast_radius, CorpsePick, CursorPicks, PicksSelf, ScriptCursor, SpellTargeting,
+    ground_cast_radius, CorpsePick, CursorPicks, PickBind, PicksSelf, ScriptCursor, SpellTargeting,
     TargetingWants,
 };
 

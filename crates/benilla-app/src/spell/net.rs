@@ -429,7 +429,12 @@ fn on_spell_go(
         crate::script_calls::VmWith<
             'static,
             'static,
-            crate::target::SelectCommit<'static, 'static>,
+            crate::script_calls::disjoint::Pair<
+                'static,
+                'static,
+                crate::target::SelectCommit<'static, 'static>,
+                Option<crate::spell::PickBind<'static, 'static>>,
+            >,
         >,
     >,
 ) {
@@ -487,8 +492,14 @@ fn on_spell_go(
             )
         };
         if let Some(guid) = deferred {
-            set.p1()
-                .engine_start_attack(guid, mark, |mut commit| commit.start_attack(guid));
+            set.p1().engine_start_attack(guid, mark, |mut start| {
+                // The select's bind (`0x4935d5`) goes ahead of the swing it owes.
+                let debt = start.p0().start_attack_owing(guid);
+                if let Some(mut bind) = start.p1() {
+                    bind.bind();
+                }
+                start.p0().pay_now(debt);
+            });
         }
     }
 }

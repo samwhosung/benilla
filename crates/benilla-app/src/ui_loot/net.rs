@@ -28,7 +28,9 @@ pub(super) fn register(app: &mut App) {
 
 /// An admitted response for an object we hold selects a looted unit (`0x5ebc35` → `0x48f3a0`),
 /// signalling at that place, before the window opens (`0x4c1cb0`), so the outgoing target's
-/// teardown closes a window still open on it. One for an object we lack shows
+/// teardown closes a window still open on it; with the targeting cursor up the select binds the
+/// unit to the cast there instead (`0x4935d5` → `0x6e5b40`), whose send and signals go ahead of the
+/// open. One for an object we lack shows
 /// `ERR_LOOT_DIDNT_KILL` and returns (`0x5ebb33`, mask 1, `0x5ebb3f`) before the latch
 /// (`0x5ebb60`) and the open. One that lands while our own
 /// body moves takes the move-start close (`0x5ebc3a`-`0x5ebc51`), which the loot lane runs after
@@ -37,13 +39,11 @@ pub(super) fn register(app: &mut App) {
 /// copier asks each row's record here (`0x4c1e77`).
 fn on_response(
     In(ev): In<SessionEvent>,
-    mut select: crate::target::SelectCommit,
-    player: Option<Res<crate::player::Player>>,
-    lock: Option<Res<crate::player::MoverLock>>,
-    mut owed: OwedAhead,
-    index: Res<crate::net::GuidIndex>,
-    errors: Res<UiErrorKeys>,
-    items: Res<crate::items::Items>,
+    mut set: crate::script_calls::disjoint::Pair<
+        Response<'static, 'static>,
+        // Absent in a harness without the cast ladder, which binds nothing.
+        Option<crate::spell::PickBind<'static, 'static>>,
+    >,
 ) {
     let SessionEvent::LootResponse {
         guid,
@@ -54,43 +54,86 @@ fn on_response(
     else {
         return;
     };
-    let seam = &mut select.seam;
-    owed.settle(&mut seam.loot, &mut seam.loot_latch, &seam.net);
-    if !admit_response(
-        guid,
-        loot_type,
-        &mut seam.loot_latch,
-        &mut seam.loot,
-        &seam.net,
+    let Some(latch_before) = set.p0().select(guid, loot_type) else {
+        return;
+    };
+    if let Some(mut bind) = set.p1() {
+        bind.bind();
+    }
+    set.p0().open(guid, loot_type, gold, rows, latch_before);
+}
+
+/// What a loot response reads and writes beside the cursor's bind.
+#[derive(bevy::ecs::system::SystemParam)]
+struct Response<'w, 's> {
+    select: crate::target::SelectCommit<'w, 's>,
+    player: Option<Res<'w, crate::player::Player>>,
+    lock: Option<Res<'w, crate::player::MoverLock>>,
+    owed: OwedAhead<'w, 's>,
+    index: Res<'w, crate::net::GuidIndex>,
+    errors: Res<'w, UiErrorKeys>,
+    items: Res<'w, crate::items::Items>,
+}
+
+impl Response<'_, '_> {
+    /// The response up to its select: the owed closes, the admission, the latch and the select
+    /// (`0x5ebc35`); the latch it replaced, or `None` once it returned.
+    fn select(&mut self, guid: u64, loot_type: u8) -> Option<Option<u64>> {
+        let seam = &mut self.select.seam;
+        self.owed
+            .settle(&mut seam.loot, &mut seam.loot_latch, &seam.net);
+        if !admit_response(
+            guid,
+            loot_type,
+            &mut seam.loot_latch,
+            &mut seam.loot,
+            &seam.net,
+        ) {
+            return None;
+        }
+        if !self.index.0.contains_key(&guid) {
+            debug!("net: loot response {guid:#x} for an object we lack — ERR_LOOT_DIDNT_KILL");
+            self.errors.push(UiError::key("ERR_LOOT_DIDNT_KILL"));
+            return None;
+        }
+        // A fishing bobber first arms here and still does not kneel: `LootKneel` decides the pose.
+        let latch_before = seam.loot_latch.0;
+        seam.loot_latch.0 = Some(guid);
+        // Its signals wait for the packet's end, beside the deselects; with no targets, nowhere.
+        match self.owed.dead.owed_selects() {
+            Some(owed) => self.select.select_unit_in_packet(guid, owed),
+            None => self.select.select_unit(guid),
+        }
+        Some(latch_before)
+    }
+
+    /// The rest, past the select and its bind: the window's open (`0x48f3cb` → `0x4c1cb0`), its
+    /// rows' asks and the move-start close it owes.
+    fn open(
+        &mut self,
+        guid: u64,
+        loot_type: u8,
+        gold: u32,
+        rows: Vec<benilla_protocol::messages::LootItem>,
+        latch_before: Option<u64>,
     ) {
-        return;
-    }
-    if !index.0.contains_key(&guid) {
-        debug!("net: loot response {guid:#x} for an object we lack — ERR_LOOT_DIDNT_KILL");
-        errors.push(UiError::key("ERR_LOOT_DIDNT_KILL"));
-        return;
-    }
-    // A fishing bobber first arms here and still does not kneel: `LootKneel` decides the pose.
-    let latch_before = seam.loot_latch.0;
-    seam.loot_latch.0 = Some(guid);
-    debug!(
-        "net: loot response {guid:#x} type {loot_type} gold {gold} {} item(s)",
-        rows.len()
-    );
-    // Its signals wait for the packet's end, beside the deselects; with no targets, nowhere.
-    match owed.dead.owed_selects() {
-        Some(owed) => select.select_unit_in_packet(guid, owed),
-        None => select.select_unit(guid),
-    }
-    let seam = &mut select.seam;
-    seam.loot.open(guid, loot_type, gold, rows);
-    seam.loot.note_replaced_latch(latch_before);
-    seam.loot.ask_rows(&items, &seam.net);
-    let steering_ourselves = lock.is_none_or(|l| l.foreign_mover.is_none());
-    if steering_ourselves
-        && player.is_some_and(|p| p.move_flags() & crate::creature_anim::move_flags::STEERING != 0)
-    {
-        owed.move_start.0 = true;
+        debug!(
+            "net: loot response {guid:#x} type {loot_type} gold {gold} {} item(s)",
+            rows.len()
+        );
+        let seam = &mut self.select.seam;
+        seam.loot.open(guid, loot_type, gold, rows);
+        seam.loot.note_replaced_latch(latch_before);
+        seam.loot.ask_rows(&self.items, &seam.net);
+        let steering_ourselves = self.lock.as_ref().is_none_or(|l| l.foreign_mover.is_none());
+        if steering_ourselves
+            && self
+                .player
+                .as_ref()
+                .is_some_and(|p| p.move_flags() & crate::creature_anim::move_flags::STEERING != 0)
+        {
+            self.owed.move_start.0 = true;
+        }
     }
 }
 

@@ -760,8 +760,8 @@ impl SelectCommit<'_, '_> {
         SelectDebt::default()
     }
 
-    /// Pay all of `debt` now, for a test's writer whose signals have no listeners to run first.
-    #[cfg(test)]
+    /// Pay all of `debt` now, for a writer whose signals have no listeners to run first: a test's,
+    /// or one with no VM.
     pub(crate) fn pay_now(&mut self, mut debt: SelectDebt) {
         while debt != SelectDebt::default() {
             debt = self.pay(debt);
@@ -811,6 +811,12 @@ impl SelectCommit<'_, '_> {
             self.commit(entity, guid);
         }
         self.owe(OwedSwing::Tail { guid });
+    }
+
+    /// [`Self::start_attack`], owing its swing past its select, for a writer that binds what the
+    /// select handed the targeting cursor (`0x4935d5`) before the swing, then pays.
+    pub(crate) fn start_attack_owing(&mut self, guid: u64) -> SelectDebt {
+        self.owing(|commit| commit.start_attack(guid))
     }
 
     /// `StartAttack`'s target legs (`0x5ecc16`, `0x5ecc2e`) on the held object `entity`, `guid`:

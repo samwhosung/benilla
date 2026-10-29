@@ -229,7 +229,9 @@ impl ScriptCallHost<'_, '_> {
 
     /// An engine writer's StartAttack (`0x5ecb70`) at `guid` outside any call, such as a spell's
     /// deferred melee start (`0x6e8402` → `0x6131a0`): its own select (`0x5eccaa`) signals in
-    /// place, before its swing, behind the cast reports made since `mark`.
+    /// place, before its swing, behind the cast reports made since `mark`; with the targeting
+    /// cursor up the select binds the unit to the cast there instead (`0x4935d5`), so the cast goes
+    /// out ahead of the swing.
     pub(crate) fn engine_start_attack(
         &mut self,
         script: &mut UiScript,
@@ -245,6 +247,7 @@ impl ScriptCallHost<'_, '_> {
                 mark: self.appliers.reports().mark_at(mark),
             };
             let owed = self.appliers.select().start_attack(guid);
+            self.appliers.cursor().bind_parked();
             self.settle_selection(script, &mut at, owed);
             self.commit_views(script);
             #[cfg(test)]
@@ -1231,7 +1234,8 @@ impl<P: SystemParam + 'static> VmWith<'_, '_, P> {
     }
 
     /// An engine writer's StartAttack at `guid`, its select signalled in place with the host
-    /// ([`ScriptCallHost::engine_start_attack`]); with no VM or no host, `start` runs it on `P`.
+    /// ([`ScriptCallHost::engine_start_attack`]), a unit it handed the targeting cursor bound
+    /// there; with no VM or no host, `start` runs it on `P`.
     pub(crate) fn engine_start_attack(
         &mut self,
         guid: u64,
@@ -1374,17 +1378,25 @@ pub(crate) fn run_cached<O: 'static, M, S: IntoSystem<(), O, M> + 'static>(
     r
 }
 
-/// Bind the units a selection writer outside the calls (a loot window's select, the chat layer's
-/// `/target`) found the targeting cursor up for (`SelectTarget`, `0x4935d5`), in the target chain:
-/// a call binds its own as it applies.
-pub(crate) fn bind_parked_picks(mut cursor: crate::spell::ScriptCursor) {
-    cursor.bind_parked();
+/// Bind the units a plate click's select found the targeting cursor up for (`SelectTarget`,
+/// `0x4935d5`), in the click's legs, ahead of its interact: a call binds its own as it applies, and
+/// a handler at its select ([`crate::spell::PickBind`]).
+pub(crate) fn bind_parked_picks(mut bind: crate::spell::PickBind) {
+    bind.bind();
 }
 
 /// [`bind_parked_picks`] after a walk's arrival in the frame time, whose dispatch selects through
 /// the same front.
-pub(crate) fn bind_arrival_picks(mut cursor: crate::spell::ScriptCursor) {
-    cursor.bind_parked();
+pub(crate) fn bind_arrival_picks(mut bind: crate::spell::PickBind) {
+    bind.bind();
+}
+
+/// [`bind_parked_picks`] from an exclusive writer, at its select's place; a harness without the
+/// cursor's seams binds nothing.
+pub(crate) fn bind_picks_here(world: &mut World) {
+    if let Err(err) = run_cached(world, bind_parked_picks) {
+        debug!("targeting: the parked picks were not bound: {err}");
+    }
 }
 
 /// The census list ([`benilla_ui::script::census`]).
@@ -4002,27 +4014,6 @@ mod tests {
         assert_eq!(casts_of(&sent), vec![(HEAL, Some(MOB))], "{sent:?}");
         assert_eq!(selections(&sent), Vec::<u64>::new());
         assert_eq!(selected(&f), Some(OLD), "the friend stays selected");
-    }
-
-    /// The selection writers outside the script calls (a loot window's select, `0x48f3a0`) hand the
-    /// unit to the cursor too, and the target chain's bind binds it.
-    #[test]
-    fn a_loot_windows_select_with_the_cursor_up_is_bound_by_the_chains_bind() {
-        let mut f = frame(true);
-        spawn_mob(&mut f, &[(2, 0x9)]);
-        with_the_cursor_up(&mut f);
-        let world = f.app.world_mut();
-        world
-            .run_system_once(|mut select: crate::target::SelectCommit| select.select_unit(MOB))
-            .expect("the select runs");
-        assert_eq!(selected(&f), Some(OLD), "nothing selected");
-        assert_eq!(casts(&f), vec![], "and nothing bound until the bind");
-        f.app
-            .world_mut()
-            .run_system_once(bind_parked_picks)
-            .expect("the bind runs as a one-shot system");
-        assert_eq!(casts(&f), vec![(HEAL, Some(MOB))]);
-        assert_eq!(selected(&f), Some(OLD));
     }
 
     /// `CastBookSpell` (`0x4b3300`) asks `GetTargetingSpellId` (`0x6e48e0`) ahead of the cast and the

@@ -89,14 +89,6 @@ pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
          the answer's list rather than in it",
     ),
     (
-        Row::HostHeld,
-        "::spell::targeting::CursorPicks",
-        "the units a handler's select found the targeting cursor up for, the loot response's \
-         (`0x5ebc35` → `0x48f3a0`), which the next call or `bind_parked_picks` in the next \
-         frame's click legs binds, where `SelectTarget` binds in place (`0x4935d5` → `0x6e5b40`), \
-         inside the packet",
-    ),
-    (
         Row::Edge,
         "::ui_action::state::fire_action_events",
         "the usable cache's refresh `0x4e5c00` (`ACTIONBAR_UPDATE_USABLE`) of `EditMacro` \
@@ -170,6 +162,11 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // Quiet: read by the cost and `$`-token builds; the feeds that read it push views
     // (`READS_FRAME_FINAL`), and none fires off it.
     "::spell::mods::SpellModifiers",
+    // Quiet: the units a select found the targeting cursor up for, which its writer binds at the
+    // select's place (`0x4935d5` → `0x6e5b40`): a handler's in its packet (the loot response's
+    // `0x48f3be`, the acquires' `0x6259fe` and `0x6e799c`, the go's deferred start's `0x5eccaa`), a
+    // call's before its next step; no feed reads it.
+    "::spell::targeting::CursorPicks",
     // Quiet: the targeting word, which `SpellIsTargeting` (`0x6e6cd0`) reads through the host;
     // `feed_cast_reports` pushes its view and the feed publishes the world pick's words for the
     // next frame's input, and no feed fires off it.
@@ -525,7 +522,6 @@ pub(super) const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::PlayerOutdoors",
     "::EmoteSounds",
     "::ExplorationSounds",
-    "::ScriptCastPermit",
     "::AutoSelfCast",
     "::GroupRoster",
     "::ActiveChannel",

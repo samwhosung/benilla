@@ -1089,11 +1089,19 @@ pub(crate) fn fire_owed_selects_lane(world: &mut World) {
 
 /// One owed select on the world, its unit edits applied as it returns.
 fn run_owed_select(world: &mut World, select: OwedSelect) {
+    select_in_place(world, select);
+    crate::creature_anim::apply_unit_edits(world);
+}
+
+/// One owed select, then the bind of a unit it handed the targeting cursor (`SelectTarget`,
+/// `0x4935d5` → `0x6e5b40`) at the select's place: the acquires' selects (`0x6259fe`,
+/// `0x6e799c`) bind inside their packets, so the cast goes out and signals there.
+fn select_in_place(world: &mut World, select: OwedSelect) {
     if let Err(err) = world.run_system_cached_with(owed_select, select) {
         // A harness without the selection's seams selects nothing.
         debug!("target: an owed select did not run: {err}");
     }
-    crate::creature_anim::apply_unit_edits(world);
+    crate::script_calls::bind_picks_here(world);
 }
 
 /// The packet's owed selects, after its handlers, each run as the firing of its stamp with the
@@ -1106,12 +1114,7 @@ pub(super) fn run_owed_selects(world: &mut World, _: crate::lanes::Stamp) {
     };
     for (at, select) in std::mem::take(&mut owed.0) {
         crate::lanes::firing(at, || {
-            super::release::park_signals(world, |world| {
-                if let Err(err) = world.run_system_cached_with(owed_select, select) {
-                    // A harness without the selection's seams selects nothing.
-                    debug!("target: an owed select did not run: {err}");
-                }
-            });
+            super::release::park_signals(world, |world| select_in_place(world, select));
         });
     }
 }
