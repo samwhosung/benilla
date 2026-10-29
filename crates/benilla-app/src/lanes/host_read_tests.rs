@@ -43,8 +43,8 @@ use crate::game_plugins::schedule_tests::{census, type_names_available, SyncPoin
 
 /// The most rows [`super::guard_tests::READS_FRAME_FINAL`] may hold, and the most inputs across
 /// them: each only falls, so lower it when a row or an input goes.
-const FRAME_FINAL_FEEDS: usize = 8;
-const FRAME_FINAL_INPUTS: usize = 34;
+const FRAME_FINAL_FEEDS: usize = 7;
+const FRAME_FINAL_INPUTS: usize = 30;
 
 /// The systems that may run after the dispatch (`apply_net_updates`) and run ahead of the drain
 /// (`fire_in_order`), by a suffix of the system's name, with what each writes of the state a
