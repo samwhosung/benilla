@@ -17,8 +17,8 @@
 //! - when the unit is the selection (`0xb4e2d8`), `SetSelection(0, 0)` (`0x605901`) and then
 //!   `StopAutoRepeatSpell 0x6ea080` (`0x605906`);
 //! - the tail from `0x60590b`: the quest marker, the missiles, the effects, a sound, the auto-move
-//!   stop (`0x605938`, [`crate::player::AutoMoveStop`]) and `0x4931c0` on the unit's guid
-//!   (`0x605950`).
+//!   stop (`0x605938`), which finds none (the health watcher's tick ended it first, `0x60479c`,
+//!   [`crate::player::AutoMoveStop`]), and `0x4931c0` on the unit's guid (`0x605950`).
 //!
 //! The health watcher runs it inside the update packet that wrote the health (`0x6046f0` at
 //! `0x6047a3`). Here the packet's end runs each death's legs in place ([`crate::field_callbacks`]),
@@ -55,6 +55,11 @@ pub(crate) fn died(world: &mut World, e: FieldChanged) {
         .next();
     let own = e.kind == ObjectType::Player && me == Some(e.entity);
     let mut parked = Parked::new(world);
+    // Ahead of `OnDied`, the health watcher runs the dying active mover's input tick
+    // (`0x60477a`-`0x60479c`), whose precondition fails on the health (`0x5144fd`), so it stops the
+    // auto-move (`0x5146d6`), its `AUTOFOLLOW_END` first; the tail's stop (`0x605938`) then finds
+    // the mode at 12.
+    parked.leg(world, |world| crate::player::stop_auto_move(world, e.guid));
     // `CGPlayer_C::OnDied 0x5e99b0`, for a player (`0x605882`).
     if own {
         // The active player's leg (`0x5e99d8`-`0x5e99e4` match), in its order.
@@ -76,9 +81,6 @@ pub(crate) fn died(world: &mut World, e: FieldChanged) {
         parked.leg(world, crate::death::signal_death_state);
     }
     parked.leg(world, |world| step(world, unit_died, e));
-    // The tail's auto-move stop (`0x605938` → `StopAutoMove(0, 1)`), which acts only on the active
-    // mover: our own death ends a follow, its `AUTOFOLLOW_END` at this place.
-    parked.leg(world, |world| crate::player::stop_auto_move(world, e.guid));
     // The tail's `0x4931c0` on the unit's guid (`0x605950`, `dl = 1`): no goodbye.
     parked.leg(world, |world| {
         crate::ui_session::release_cell(world, e.guid, false)

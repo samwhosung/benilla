@@ -32,6 +32,7 @@ fn following() -> App {
             f:RegisterEvent("AUTOFOLLOW_END")
             f:RegisterEvent("PLAYER_REGEN_DISABLED")
             f:RegisterEvent("UNIT_AURA")
+            f:RegisterEvent("PLAYER_TARGET_CHANGED")
             f:SetScript("OnEvent", function() table.insert(Seen, event) end)
             "#,
         )
@@ -141,12 +142,21 @@ fn the_movers_release_ends_the_follow_at_its_packet() {
     assert!(!app.world().resource::<crate::net::MoverClaim>().holds(BOAR));
 }
 
-/// Our death ends the follow in `OnDied`'s tail (`0x605938`), inside the health's packet.
+/// Our death ends the follow inside the health's packet, through the health watcher's input
+/// tick (`0x60479c` → `0x5146d6`) ahead of `OnDied` (`0x6047a3`): `AUTOFOLLOW_END` before our
+/// death's target clear (`0x5e9a45`) signals `PLAYER_TARGET_CHANGED`.
 #[test]
 fn our_death_ends_the_follow_at_its_packet() {
     let mut app = following();
     let died = values(ME, &health(0));
-    ends_between_the_falls(&frame(&mut app, vec![fall(5), died, fall(5)]));
+    let seen = frame(&mut app, vec![fall(5), died, fall(5)]);
+    ends_between_the_falls(&seen);
+    let at = |e: &str| seen.iter().position(|s| s == e);
+    let cleared = at("PLAYER_TARGET_CHANGED");
+    assert!(
+        cleared.is_some() && at("AUTOFOLLOW_END") < cleared,
+        "{seen:?}"
+    );
 }
 
 /// Our own swing's report ends the follow (`0x625a03`-`0x625a21`), inside its handler.
