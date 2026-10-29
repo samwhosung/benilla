@@ -1,11 +1,14 @@
-//! The UI error line's queues and resolvers, which `super::feed_actions` drains into
-//! [`show_messages`]; cast failures ride the cast's reports ([`crate::ui_cast::CastReports`]) and
-//! resolve in [`super::cast_fail`] and [`super::cast_lines`].
+//! The UI error line's lane and resolvers: the refusals and notices fire from their lane at their
+//! packet's place ([`UiErrorKeys`]); cast failures ride the cast's reports
+//! ([`crate::ui_cast::CastReports`]) and resolve in [`super::cast_fail`] and [`super::cast_lines`].
+
+use std::collections::VecDeque;
 
 use benilla_ui::messages::MessageRecord;
 use benilla_ui::script::{InputEvents, ScriptValue, UiScript};
 use bevy::prelude::*;
 
+use crate::lanes::{Stamp, Until};
 use crate::net::ObjectStore;
 use crate::sound::MessageSounds;
 use crate::ui_chat::{ChatEvent, ChatEventKind, ChatLog};
@@ -89,17 +92,6 @@ impl CastFail {
     }
 }
 
-/// (Dis)mount refusals from `SMSG_MOUNTRESULT`/`SMSG_DISMOUNTRESULT` as `(mount, code)`, resolved
-/// by [`mount_result_key`].
-#[derive(Resource, Default)]
-pub(crate) struct MountErrors(pub Vec<(bool, u32)>);
-
-/// Taming refusals as the raw `SMSG_PET_TAME_FAILURE` reason. The reference (`0x6e6a20`) resolves
-/// the reason's `PETTAME_*` string through the VM (`0x703bf0`) and passes it as `ERR_TAME_FAILED`'s
-/// `%s` (`DisplayError(0xee)`), so both lookups wait for the VM at the drain.
-#[derive(Resource, Default)]
-pub(crate) struct PetTameFailures(pub Vec<u8>);
-
 /// Where a message shows: the `kind` field (`+0x04`) of the reference's message record, read from
 /// the catalog ([`benilla_ui::messages`]).
 pub(crate) use benilla_ui::messages::MsgKind;
@@ -172,36 +164,112 @@ impl UiError {
     }
 }
 
-/// Client-local refusals queued by GlobalStrings key: the `DisplayError` route for errors with no
-/// wire code and no spell record.
+/// One line the ui-error lane holds: a `DisplayError` (`0x496720`) by key, or a text that reaches
+/// the sink `0x4945b0(text, flag)` already resolved, with no key and no catalog record, flag 1
+/// firing `UI_ERROR_MESSAGE` and 0 `UI_INFO_MESSAGE`: `SMSG_NOTIFICATION` (`0x401828`) passes 1,
+/// `SMSG_AREA_TRIGGER_MESSAGE` (`0x48f921`) passes 0.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Queued {
+    Key(UiError),
+    Text(String, MsgKind),
+}
+
+/// The refusals and notices the handlers and the verbs show on the UI error line, each stamped as
+/// it is queued ([`crate::lanes::stamp`]): the lane fires each at its place among the packets'
+/// events, as `DisplayError` (`0x496720`) and `0x4945b0` signal inside whatever calls them.
 ///
 /// An append-only sink shared through `&self`, as [`crate::ui_chat::ChatLog`] is: a call the host
 /// applies inside a system's Lua queues its refusal while that system queues its own, in one
 /// order.
 #[derive(Resource, Default)]
-pub(crate) struct UiErrorKeys(std::sync::Mutex<Vec<UiError>>);
+pub(crate) struct UiErrorKeys(std::sync::Mutex<VecDeque<(Stamp, Queued)>>);
 
 impl UiErrorKeys {
     /// The queue, held for one step; a poisoned lock still holds whole items.
-    fn q(&self) -> std::sync::MutexGuard<'_, Vec<UiError>> {
+    fn q(&self) -> std::sync::MutexGuard<'_, VecDeque<(Stamp, Queued)>> {
         self.0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// Stamp `item` and queue it behind everything stamped before it.
+    fn queue(&self, item: Queued) {
+        let stamp = crate::lanes::stamp();
+        let mut q = self.q();
+        let at = q.partition_point(|(s, _)| *s < stamp);
+        q.insert(at, (stamp, item));
+    }
+
     /// Queue one refusal.
     pub(crate) fn push(&self, error: UiError) {
-        self.q().push(error);
+        self.queue(Queued::Key(error));
     }
 
     /// Queue refusals in order.
     pub(crate) fn extend(&self, errors: impl IntoIterator<Item = UiError>) {
-        self.q().extend(errors);
+        for error in errors {
+            self.push(error);
+        }
     }
 
-    /// Take everything queued, in order.
+    /// The red `UI_ERROR_MESSAGE` arm of the sink (`0x4945b0(text, 1)`).
+    pub(crate) fn error_text(&self, text: String) {
+        self.queue(Queued::Text(text, MsgKind::Error));
+    }
+
+    /// The yellow `UI_INFO_MESSAGE` arm of the sink (`0x4945b0(text, 0)`).
+    pub(crate) fn info_text(&self, text: String) {
+        self.queue(Queued::Text(text, MsgKind::Info));
+    }
+
+    /// The head's stamp, unless it is a resolved text held under the loading cover: the
+    /// reference sends `CMSG_PLAYER_LOGIN` only after its world load (`0x46c272`), and its cover
+    /// drops at the player's create (`0x5debbd`), which vmangos sends ahead of the notices
+    /// (`Maps/Map.cpp:432`, `Handlers/CharacterHandler.cpp:675`), so a login notice's
+    /// `UIErrorsFrame` hold starts at the reveal. What is queued behind it waits with it.
+    fn head(&self, covered: bool) -> Option<Stamp> {
+        let q = self.q();
+        let (stamp, item) = q.front()?;
+        (!(covered && matches!(item, Queued::Text(..)))).then_some(*stamp)
+    }
+
+    /// Take the head if `until` admits it and the cover does not hold it.
+    fn pop(&self, until: Until, covered: bool) -> Option<(Stamp, Queued)> {
+        let head = self.head(covered).filter(|&s| until.admits(s))?;
+        let mut q = self.q();
+        (q.front().map(|(s, _)| *s) == Some(head))
+            .then(|| q.pop_front())
+            .flatten()
+    }
+
+    /// Take the refusals queued since `mark` ([`crate::lanes::mark`]), in order: a call's own,
+    /// which it signals inside itself ([`crate::ui_cast::CallReports`]).
+    pub(crate) fn take_since(&self, mark: crate::lanes::Mark) -> Vec<UiError> {
+        let mut q = self.q();
+        let (since, before): (VecDeque<_>, VecDeque<_>) = std::mem::take(&mut *q)
+            .into_iter()
+            .partition(|(s, item)| s.since(mark) && matches!(item, Queued::Key(_)));
+        *q = before;
+        since
+            .into_iter()
+            .filter_map(|(_, item)| match item {
+                Queued::Key(e) => Some(e),
+                Queued::Text(..) => None,
+            })
+            .collect()
+    }
+
+    /// Everything queued, dropped.
+    pub(crate) fn clear(&self) {
+        self.q().clear();
+    }
+
+    /// Take every refusal queued, in order, unfired, for the producers' tests.
+    #[cfg(test)]
     pub(crate) fn take(&self) -> Vec<UiError> {
-        std::mem::take(&mut *self.q())
+        let taken = self.snapshot();
+        self.q().retain(|(_, item)| !matches!(item, Queued::Key(_)));
+        taken
     }
 
     /// Whether nothing is queued, for the producers' tests.
@@ -210,41 +278,125 @@ impl UiErrorKeys {
         self.q().is_empty()
     }
 
-    /// How many are queued.
+    /// How many refusals are queued, for the producers' tests.
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
-        self.q().len()
+        self.snapshot().len()
     }
 
-    /// Take what was queued from `start` on, leaving the earlier refusals queued.
-    pub(crate) fn take_from(&self, start: usize) -> Vec<UiError> {
-        let mut q = self.q();
-        let start = start.min(q.len());
-        q.drain(start..).collect()
-    }
-
-    /// A copy of what is queued, for the producers' tests.
+    /// A copy of the refusals queued, for the producers' tests.
     #[cfg(test)]
     pub(crate) fn snapshot(&self) -> Vec<UiError> {
-        self.q().clone()
+        self.q()
+            .iter()
+            .filter_map(|(_, item)| match item {
+                Queued::Key(e) => Some(e.clone()),
+                Queued::Text(..) => None,
+            })
+            .collect()
+    }
+
+    /// A copy of the resolved texts queued, for the producers' tests.
+    #[cfg(test)]
+    pub(crate) fn texts(&self) -> Vec<(String, MsgKind)> {
+        self.q()
+            .iter()
+            .filter_map(|(_, item)| match item {
+                Queued::Text(text, kind) => Some((text.clone(), *kind)),
+                Queued::Key(_) => None,
+            })
+            .collect()
     }
 }
 
-/// Lines that arrive already resolved, with no key and no catalog record: they reach the
-/// reference's sink `0x4945b0(text, flag)` without `DisplayError`, flag 1 firing
-/// `UI_ERROR_MESSAGE` and 0 `UI_INFO_MESSAGE`. `SMSG_NOTIFICATION` (`0x401800`) passes 1,
-/// `SMSG_AREA_TRIGGER_MESSAGE` (`0x48f8ff`) passes 0.
-#[derive(Resource, Default)]
-pub(crate) struct UiErrorTexts(pub Vec<(String, MsgKind)>);
+/// The ui-error lane and its drop at the world's end ([`UiErrorKeys`]): a line still queued, held
+/// under the cover or waiting for the interface, dies with the world's interface, as the
+/// reference's, drawn at once by `0x4945b0`, dies in the UI teardown (`0x490bd0`). One queued
+/// before the in-game interface is up waits for it.
+pub(super) fn add_ui_error_lane(app: &mut App) {
+    use crate::lanes::LaneApp;
+    app.init_resource::<UiErrorKeys>()
+        .add_lane("ui errors", peek_ui_errors, fire_ui_errors, None)
+        .add_systems(
+            OnExit(crate::client_state::ClientState::InWorld),
+            drop_ui_errors.in_set(crate::ui_script::SessionEnd::Clears),
+        );
+}
 
-impl UiErrorTexts {
-    /// The red `UI_ERROR_MESSAGE` arm (`0x4945b0(text, 1)`).
-    pub(crate) fn error(&mut self, text: String) {
-        self.0.push((text, MsgKind::Error));
+fn drop_ui_errors(errors: Res<UiErrorKeys>) {
+    errors.clear();
+}
+
+/// Whether the loading cover is up.
+fn covered(world: &World) -> bool {
+    world
+        .get_resource::<crate::loading_screen::LoadingScreen>()
+        .is_some_and(|c| c.covering())
+}
+
+/// The lane's head ([`crate::lanes`]).
+fn peek_ui_errors(world: &World) -> Option<Stamp> {
+    world.get_resource::<UiErrorKeys>()?.head(covered(world))
+}
+
+/// The lane's firing: each line `until` admits, resolved against the VM's strings and shown with
+/// the host lent, as `DisplayError` shows it inside its caller (`0x496720`): a chat row's line is
+/// written at once (`0x496842`), the others signal `UI_ERROR_MESSAGE` or `UI_INFO_MESSAGE`
+/// (`0x49684b`, `0x49685c`). It stops after a line whose firing stamped anything, so what that
+/// pushed fires next.
+fn fire_ui_errors(
+    In(until): In<Until>,
+    mut vm: crate::script_calls::HostedVm,
+    errors: Res<UiErrorKeys>,
+    cover: Option<Res<crate::loading_screen::LoadingScreen>>,
+    mut sink: MessageSink,
+) {
+    if !vm.run(|script| script.is_some()) {
+        return;
     }
+    let covered = cover.is_some_and(|c| c.covering());
+    while let Some((stamp, item)) = errors.pop(until, covered) {
+        let ((), moved) = crate::lanes::firing(stamp, || {
+            vm.run(|script| {
+                if let Some(script) = script {
+                    show_queued(script, &mut sink, item);
+                }
+            })
+        });
+        if moved {
+            return;
+        }
+    }
+}
 
-    /// The yellow `UI_INFO_MESSAGE` arm (`0x4945b0(text, 0)`).
-    pub(crate) fn info(&mut self, text: String) {
-        self.0.push((text, MsgKind::Info));
+/// One queued line, shown.
+fn show_queued(script: &mut UiScript, sink: &mut MessageSink, item: Queued) {
+    let shown = match item {
+        Queued::Key(e) => ui_error_text(&e, &|key| script.lua().globals().get::<String>(key).ok())
+            .map(|text| Shown::keyed(e.key, text)),
+        Queued::Text(text, kind) => Some(Shown::unkeyed(kind, text)),
+    };
+    if let Some(shown) = shown {
+        show_now(script, sink, "ui_action", shown);
+    }
+}
+
+/// Every line queued, fired alone, for a test that drives them without the other lanes.
+#[cfg(test)]
+pub(crate) fn fire_ui_error_lane(world: &mut World) {
+    use bevy::ecs::system::RunSystemOnce;
+    let until = Until::all();
+    let covered = covered(world);
+    while world
+        .resource::<UiErrorKeys>()
+        .head(covered)
+        .is_some_and(|s| until.admits(s))
+    {
+        let before = world.resource::<UiErrorKeys>().head(covered);
+        world.run_system_once_with(fire_ui_errors, until).unwrap();
+        if world.resource::<UiErrorKeys>().head(covered) == before {
+            break;
+        }
     }
 }
 
@@ -314,7 +466,7 @@ impl Shown {
         }
     }
 
-    /// A line with no catalog row, the wire's own text ([`UiErrorTexts`]), which reaches the sink
+    /// A line with no catalog row, the wire's own text ([`UiErrorKeys::error_text`]), which reaches the sink
     /// `0x4945b0` without a record and so makes no sound.
     pub(crate) fn unkeyed(kind: MsgKind, text: String) -> Self {
         Self {

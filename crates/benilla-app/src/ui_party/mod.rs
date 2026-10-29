@@ -814,25 +814,31 @@ impl GroupState {
         self.signal(GroupSignal::InviteRequest(inviter.to_string()));
     }
 
-    /// `SMSG_GROUP_DECLINE`: our invitee said no; only the inviter gets it.
-    pub fn apply_declined(&mut self, name: &str) -> Vec<UiError> {
-        vec![UiError::s("ERR_DECLINE_GROUP_S", name)]
+    /// A handler's line, shown where it shows it (`0x496720`), among its signals; returned too.
+    fn show(&mut self, line: UiError) -> UiError {
+        self.signal(GroupSignal::Line(line.clone()));
+        line
     }
 
-    /// `SMSG_GROUP_UNINVITE`: we were kicked; ends the party and prints unconditionally
-    /// (`0x5e6850`-`0x5e6865`).
+    /// `SMSG_GROUP_DECLINE`: our invitee said no; only the inviter gets it.
+    pub fn apply_declined(&mut self, name: &str) -> Vec<UiError> {
+        vec![self.show(UiError::s("ERR_DECLINE_GROUP_S", name))]
+    }
+
+    /// `SMSG_GROUP_UNINVITE`: we were kicked; ends the party, then prints unconditionally
+    /// (`0x5e6855`, `0x5e685e`, then `0x5e6865`).
     pub fn apply_uninvited(&mut self) -> Vec<UiError> {
         self.end_party();
-        vec![UiError::key("ERR_UNINVITE_YOU")]
+        vec![self.show(UiError::key("ERR_UNINVITE_YOU"))]
     }
 
     /// `SMSG_GROUP_DESTROYED`: prints only while a party slot is occupied (`0x5e6880` tests
-    /// `0x4e86d0`, the slot count), so not after a kick or in a raid whose subgroup holds only us,
-    /// then ends the party (`0x5e6893`). vmangos's two-member collapse sends none
+    /// `0x4e86d0`, the slot count), so not after a kick or in a raid whose subgroup holds only us
+    /// (`0x5e688b`), then ends the party (`0x5e6898`). vmangos's two-member collapse sends none
     /// (`Group/Group.cpp:533`).
     pub fn apply_destroyed(&mut self) -> Vec<UiError> {
         let lines = if self.party_slots().next().is_some() {
-            vec![UiError::key("ERR_GROUP_DISBANDED")]
+            vec![self.show(UiError::key("ERR_GROUP_DISBANDED"))]
         } else {
             Vec::new()
         };
@@ -842,11 +848,12 @@ impl GroupState {
 
     /// `SMSG_GROUP_SET_LEADER`; vmangos sends the full list right after (`Group::ChangeLeader`).
     pub fn apply_leader_changed(&mut self, name: &str, own_name: Option<&str>) -> Vec<UiError> {
-        if own_name == Some(name) {
-            vec![UiError::key("ERR_NEW_LEADER_YOU")]
+        let line = if own_name == Some(name) {
+            UiError::key("ERR_NEW_LEADER_YOU")
         } else {
-            vec![UiError::s("ERR_NEW_LEADER_S", name)]
-        }
+            UiError::s("ERR_NEW_LEADER_S", name)
+        };
+        vec![self.show(line)]
     }
 
     /// `SMSG_PARTY_COMMAND_RESULT` through the reference's jump table (`0x5e6a14`): one message
@@ -861,7 +868,7 @@ impl GroupState {
         result: u32,
     ) -> Option<UiError> {
         let named = |key: &'static str| UiError::s(key, member);
-        match result {
+        let line = match result {
             party_result::OK => match operation {
                 // The reference's guard: an invite ack with no name prints nothing.
                 party_operation::INVITE if !member.is_empty() => Some(named("ERR_INVITE_PLAYER_S")),
@@ -881,7 +888,8 @@ impl GroupState {
             party_result::WRONG_FACTION => Some(UiError::key("ERR_PLAYER_WRONG_FACTION")),
             party_result::IGNORING_YOU => Some(named("ERR_IGNORING_YOU_S")),
             _ => None,
-        }
+        };
+        line.map(|line| self.show(line))
     }
 
     /// `SMSG_PARTY_MEMBER_STATS`: a delta patches the record field by field (`0x5e519d`, seeded from
@@ -1039,22 +1047,23 @@ impl GroupState {
     }
 
     /// `MSG_RAID_READY_CHECK`, open form, echoed to the whole group: `0x4ba360` splits on the
-    /// leader guid, and only a non-leader prints the leader's line and gets the popup. Both arms
-    /// arm the engine's side first.
+    /// leader guid, and only a non-leader prints the leader's line (`0x4ba51e`), then gets the
+    /// popup (`0x4ba53a`). Both arms arm the engine's side first.
     pub fn apply_ready_check_request(&mut self, we_lead: bool) -> Vec<UiError> {
         self.signal(GroupSignal::ReadyCheckRequest { we_lead });
         if we_lead {
             return Vec::new();
         }
-        self.signal(GroupSignal::ReadyCheck);
         // The reference prints its name cache's entry for the leader; the roster holds the same.
         let leader = self
             .members
             .iter()
             .find(|m| m.guid == self.leader)
-            .map(|m| m.name.as_str())
-            .unwrap_or("");
-        vec![UiError::s("ERR_RAID_LEADER_READY_CHECK_START_S", leader)]
+            .map(|m| m.name.clone())
+            .unwrap_or_default();
+        let line = self.show(UiError::s("ERR_RAID_LEADER_READY_CHECK_START_S", leader));
+        self.signal(GroupSignal::ReadyCheck);
+        vec![line]
     }
 
     /// `MSG_RAID_READY_CHECK`, answer form: one member's answer, forwarded to the leader alone.

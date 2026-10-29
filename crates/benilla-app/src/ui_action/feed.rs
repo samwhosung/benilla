@@ -1,7 +1,8 @@
 //! The action bar's identity feed: each of the 120 slots' icon and count, pushed to the VM with
 //! `ACTIONBAR_SLOT_CHANGED` per changed slot; between resolves an item slot's count moves by the
-//! item watchers' recount ([`super::recount`]). [`feed_actions`] also drains the UI error queues
-//! (a refused cast's line rides the cast's reports, [`crate::ui_cast`]) and feeds the stance page
+//! item watchers' recount ([`super::recount`]). [`feed_actions`] also shows the engine's own
+//! refusals (the handlers' and the verbs' fire from their lane, [`super::UiErrorKeys`]; a refused
+//! cast's line rides the cast's reports, [`crate::ui_cast`]) and feeds the stance page
 //! (`GetBonusBarOffset`: the form's `SpellShapeshiftForm.dbc` BonusActionBar column, `0x4e4fc0`).
 
 use crate::query_cache::Ask;
@@ -18,12 +19,8 @@ use crate::entities::ItemDisplays;
 use crate::items::Items;
 use crate::net::{NetCommands, ObjectStore, SelfPlayer};
 
-use super::errors::mount_result_key;
 use super::weapon_icon::{auto_attack_icon, substitutes_weapon_icon};
-use super::{
-    show_messages, ui_error_text, ActionSlots, MessageSink, MountErrors, PetTameFailures, Shown,
-    Spells, UiError, UiErrorKeys, UiErrorTexts,
-};
+use super::{show_messages, ui_error_text, ActionSlots, MessageSink, Shown, Spells, UiError};
 
 /// An item action's icon when its template has not answered or its display id has no
 /// `ItemDisplayInfo` row: the reference's literal `0x847fe4`, from the resolver's `0x5d8927`.
@@ -61,15 +58,6 @@ pub(super) fn feed_actions(
     // The bar the identity resolve reads, which the host's action presses also read and its bar
     // verbs write.
     mut vm: crate::script_calls::VmWith<Res<'static, ActionSlots>>,
-    mut mount_errors: ResMut<MountErrors>,
-    mut pet_tame_failures: ResMut<PetTameFailures>,
-    // The by-key and resolved-text queues and the cover that holds the latter, as one parameter,
-    // at Bevy's 16-parameter limit.
-    ui_errors: (
-        Res<UiErrorKeys>,
-        ResMut<UiErrorTexts>,
-        Option<Res<crate::loading_screen::LoadingScreen>>,
-    ),
     spells: Option<Res<Spells>>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     objects: crate::net::Objects,
@@ -79,71 +67,13 @@ pub(super) fn feed_actions(
     mut memory: Local<crate::ui_script::VmMemo<FeedMemory>>,
     mut sink: MessageSink,
 ) {
-    // The messages, with the host lent: `UI_ERROR_MESSAGE`'s handlers may make calls.
+    // The engine's refusals, with the host lent: `UI_ERROR_MESSAGE`'s handlers may make calls.
     vm.run(|script| {
         let Some(script) = script else {
             return;
         };
-        let (ui_error_keys, mut ui_error_texts, cover) = ui_errors;
-
-        // (Dis)mount refusals by key ([`mount_result_key`]); none of these strings takes arguments.
-        let mount_texts: Vec<(&'static str, String)> = mount_errors
-            .0
-            .drain(..)
-            .filter_map(|(mount, code)| {
-                let key = mount_result_key(mount, code)?;
-                Some((key, script.lua().globals().get::<String>(key).ok()?))
-            })
-            .collect();
-        show_messages(
-            script,
-            &mut sink,
-            "ui_action",
-            mount_texts
-                .into_iter()
-                .map(|(key, text)| Shown::keyed(key, text)),
-        );
-
-        // Taming refusals ([`PetTameFailures`]): the reason's `PETTAME_*` string fills
-        // `ERR_TAME_FAILED` ("%s."), two lookups in that order.
-        let tame_texts: Vec<Shown> = pet_tame_failures
-            .0
-            .drain(..)
-            .filter_map(|reason| {
-                let reason_key = benilla_protocol::messages::pet_tame_failure_key(reason);
-                let reason_text = script.lua().globals().get::<String>(reason_key).ok()?;
-                super::keyed_line_s(script, "ERR_TAME_FAILED", &[&reason_text])
-            })
-            .collect();
-        show_messages(script, &mut sink, "ui_action", tame_texts);
-
-        // Client-local refusals by key ([`UiErrorKeys`]); the key also names the catalog record.
-        let key_lines: Vec<Shown> = ui_error_keys
-            .take()
-            .into_iter()
-            .filter_map(|e| {
-                ui_error_text(&e, &|key| script.lua().globals().get::<String>(key).ok())
-                    .map(|t| Shown::keyed(e.key, t))
-            })
-            .collect();
-        show_messages(script, &mut sink, "ui_action", key_lines);
-
-        // Already-resolved lines ([`UiErrorTexts`]); the queued kind is the `0x4945b0` flag. Held
-        // while the loading cover is up, so a login notice's hold starts at the reveal: the
-        // reference sends `CMSG_PLAYER_LOGIN` only after its world load (`0x46c272`), and its cover
-        // drops at the player's create (`0x5debbd`), which vmangos sends ahead of the notices
-        // (`Maps/Map.cpp:432`, `Handlers/CharacterHandler.cpp:675`).
-        if !cover.is_some_and(|c| c.covering()) {
-            let resolved: Vec<Shown> = ui_error_texts
-                .0
-                .drain(..)
-                .map(|(text, kind)| Shown::unkeyed(kind, text))
-                .collect();
-            show_messages(script, &mut sink, "ui_action", resolved);
-        }
-
         // The engine's own by-key refusals (`ERR_PASSIVE_ABILITY`): `benilla_ui` cannot reach
-        // [`UiErrorKeys`], so it queues keys that show here, one frame late.
+        // [`super::UiErrorKeys`], so it queues keys that show here, one frame late.
         let engine_keys = script.take_ui_errors_with_input();
         let engine_lines: Vec<Shown> = engine_keys
             .into_iter()

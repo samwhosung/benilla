@@ -63,10 +63,11 @@ pub(crate) struct CooldownEvents;
 pub(crate) use cast_fail::report_reaches_pop;
 #[cfg(test)]
 pub(crate) use cast_fail::CAST_FAIL_KEYS;
+#[cfg(test)]
+pub(crate) use errors::fire_ui_error_lane;
 pub(crate) use errors::{
     attack_actor_refusal, keyed_line, keyed_line_s, reagent_totem_refusal, show_messages, show_now,
-    ui_error_text, CastFail, Caster, FillArg, MessageSink, MountErrors, PetTameFailures, Shown,
-    UiError, UiErrorKeys, UiErrorTexts,
+    ui_error_text, CastFail, Caster, FillArg, MessageSink, Shown, UiError, UiErrorKeys,
 };
 pub(crate) use weapon_icon::{melee_auto_attack_icon, ranged_weapon_icon, substitutes_weapon_icon};
 
@@ -461,6 +462,7 @@ impl Plugin for UiActionPlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
         cooldown_lane::add_cooldown_lane(app);
+        errors::add_ui_error_lane(app);
         // A UI-only harness has no net stack; declaring a message twice is idempotent.
         app.add_message::<crate::net::FieldChanged>()
             .init_resource::<state::ActionEvents>()
@@ -469,10 +471,6 @@ impl Plugin for UiActionPlugin {
             .init_resource::<ActionSlots>()
             .init_resource::<LearnedAbilities>()
             .init_resource::<CastFailRedisplays>()
-            .init_resource::<MountErrors>()
-            .init_resource::<PetTameFailures>()
-            .init_resource::<UiErrorKeys>()
-            .init_resource::<UiErrorTexts>()
             .init_resource::<ClickCasts>()
             .add_systems(Startup, load_spells.after(AssetSet::Open))
             .add_systems(Startup, load_spell_mechanics.after(AssetSet::Open))
@@ -498,18 +496,8 @@ impl Plugin for UiActionPlugin {
                         .after(state::feed_action_state)
                         .before(crate::ui_cast::feed_cast_reports),
                 ),
-            )
-            .add_systems(
-                OnExit(crate::client_state::ClientState::InWorld),
-                drop_held_lines.in_set(crate::ui_script::SessionEnd::Clears),
             );
     }
-}
-
-/// `OnExit(InWorld)`: a line still held under the cover dies with the world's interface, as the
-/// reference's, drawn at once by `0x4945b0`, dies in the UI teardown (`0x490bd0`).
-fn drop_held_lines(mut texts: ResMut<UiErrorTexts>) {
-    texts.0.clear();
 }
 
 fn load_spells(mut commands: Commands, assets: Option<Res<WorldAssets>>) {

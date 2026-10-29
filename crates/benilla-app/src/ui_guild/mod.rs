@@ -906,9 +906,11 @@ pub(crate) mod net {
                 masker.plain(motd);
             }
         }
+        // Each arm's line (`0x5e745f`-`0x5e74b7`), then the roster update the arms but the
+        // sign-on pair's end in (`0x5e74c4`); the message of the day's signal has no line.
         let announce = announce_signon(social, notify, self_guid, notice.guid);
-        guild.apply_event(&notice);
         push_lines(errors, lines::event_line(&notice, announce));
+        guild.apply_event(&notice);
     }
 
     /// The sign-on/sign-off line's four conjuncts ([`event`]) as one predicate.
@@ -939,21 +941,22 @@ pub(crate) mod net {
         push_lines(errors, lines::command_line(&result));
     }
 
-    /// `SMSG_GUILD_INVITE`: the popup's show (`GUILD_INVITE_REQUEST`, `0x48f45c`) and the notice
-    /// line printed beside it. There is no hide edge: nothing in the 1.12 client raises
-    /// `GUILD_INVITE_CANCEL` (its wrapper `0x48f470` has no callers), and the accept and decline
-    /// packets name no invitation, so none is held.
+    /// `SMSG_GUILD_INVITE` (`0x5e6f20`): the popup's show (`GUILD_INVITE_REQUEST`, `0x5e6f53` →
+    /// `0x48f45c`), then the notice line (`0x5e6f65`). There is no hide edge: nothing in the 1.12
+    /// client raises `GUILD_INVITE_CANCEL` (its wrapper `0x48f470` has no callers), and the accept
+    /// and decline packets name no invitation, so none is held.
     pub(crate) fn invite(
         guild: &mut GuildState,
         errors: &UiErrorKeys,
         inviter: String,
         guild_name: String,
     ) {
-        push_lines(errors, [lines::invite_line(&inviter, &guild_name)]);
+        let line = lines::invite_line(&inviter, &guild_name);
         guild.raise(Fire::Invite {
             inviter,
             guild: guild_name,
         });
+        push_lines(errors, [line]);
     }
 
     /// `SMSG_GUILD_DECLINE`: a line, no state.

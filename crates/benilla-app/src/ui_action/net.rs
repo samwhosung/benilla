@@ -4,7 +4,7 @@
 use benilla_protocol::{SessionEvent, SessionEventKind};
 use bevy::prelude::*;
 
-use super::{ActionSlots, MountErrors};
+use super::{ActionSlots, UiError, UiErrorKeys};
 use crate::net::NetHandlerApp;
 
 pub(super) fn register(app: &mut App) {
@@ -21,21 +21,27 @@ fn on_game_entry(In(ev): In<SessionEvent>, mut slots: ResMut<ActionSlots>) {
     }
 }
 
-fn on_mount_result(In(ev): In<SessionEvent>, mut errors: ResMut<MountErrors>) {
+fn on_mount_result(
+    In(ev): In<SessionEvent>,
+    errors: Res<UiErrorKeys>,
+    me: Query<(), With<crate::net::SelfPlayer>>,
+) {
     if let SessionEvent::MountResult { mount, code } = ev {
-        mount_result(mount, code, &mut errors);
+        mount_result(mount, code, !me.is_empty(), &errors);
     }
 }
 
-/// `SMSG_MOUNTRESULT`/`SMSG_DISMOUNTRESULT`: OK (`MOUNTRESULT_OK` 10, `DISMOUNTRESULT_OK` 3) is
-/// silent in the reference; a failure queues the red error line.
-fn mount_result(mount: bool, code: u32, errors: &mut MountErrors) {
-    let ok = if mount { code == 10 } else { code == 3 };
-    if !ok {
-        info!(
-            "net: {}mount refused (code {code})",
-            if mount { "" } else { "dis" }
-        );
-        errors.0.push((mount, code));
-    }
+/// `SMSG_MOUNTRESULT`/`SMSG_DISMOUNTRESULT` (arms of `0x5e38c0`): with the active player
+/// resolved (`0x5e3d02`, `0x5e3dd9`), the code's line through `0x5ec6e0` or `0x5ec700`
+/// ([`super::errors::mount_result_key`]), the handler's one signal. OK (`MOUNTRESULT_OK` 10,
+/// `DISMOUNTRESULT_OK` 3) is the tables' none row, `0x1d1`, which shows nothing.
+fn mount_result(mount: bool, code: u32, player: bool, errors: &UiErrorKeys) {
+    let Some(key) = super::errors::mount_result_key(mount, code).filter(|_| player) else {
+        return;
+    };
+    info!(
+        "net: {}mount refused (code {code})",
+        if mount { "" } else { "dis" }
+    );
+    errors.push(UiError::key(key));
 }

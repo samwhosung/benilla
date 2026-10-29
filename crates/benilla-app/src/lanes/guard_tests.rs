@@ -53,26 +53,6 @@ pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     ),
     (
         Row::Queue,
-        "::ui_action::errors::UiErrorKeys",
-        "the refusals the handlers push, which the action feed shows",
-    ),
-    (
-        Row::Queue,
-        "::ui_action::errors::MountErrors",
-        "the mount refusals",
-    ),
-    (
-        Row::Queue,
-        "::ui_action::errors::PetTameFailures",
-        "the pet-tame refusals",
-    ),
-    (
-        Row::Queue,
-        "::ui_action::errors::UiErrorTexts",
-        "the wire's error texts",
-    ),
-    (
-        Row::Queue,
         "::player::view_subject::FarSight",
         "the far-sight machine a handler's Lua runs through the host's buff cancel; every feed \
          that lends the host reads it, and none fires from it",
@@ -372,8 +352,7 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_char::feed_char", &["items::Countdowns", "items::Items", "names::NameCache",
         "net::GuidIndex", "net::ObjectStore", "ui_char::AmmoRecordHits"]),
     ("::ui_action::feed::feed_actions", &["items::Countdowns", "items::Items", "net::GuidIndex",
-        "net::ObjectStore", "ui_action::ActionSlots", "ui_action::errors::MountErrors",
-        "ui_action::errors::PetTameFailures", "ui_action::errors::UiErrorTexts"]),
+        "net::ObjectStore", "ui_action::ActionSlots"]),
     ("::ui_action::state::feed_action_state", &["Transform",
         "creature_anim::sheath::CommittedSheath", "items::Countdowns", "items::Items",
         "names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
@@ -430,13 +409,12 @@ pub(super) const BUILT_OUTSIDE_THE_PACKETS_IN_THE_REFERENCE: &[(&str, &[&str], &
 ];
 
 /// The resources the handlers fill through a shared reference, which their declared access shows
-/// as a read: the error keys a refusal pushes, the close counts a window's core adds to and what a
-/// session verb posts. The lanes (the tutorials' among them) and the host's two
-/// other sinks (the message sounds and the unit edits, which raise no event) are not queues here.
+/// as a read: the close counts a window's core adds to and what a session verb posts. The lanes
+/// (the tutorials' and the ui errors' among them) and the host's two other sinks (the message
+/// sounds and the unit edits, which raise no event) are not queues here.
 pub(super) const FILLED_THROUGH_A_READ: &[&str] = &[
     // The account-data sections, which the download's handler stores through `&self`.
     "::account_data::AccountData",
-    "::ui_action::errors::UiErrorKeys",
     // The far-sight machine the call host's buff cancel runs (`0x6e70ad`).
     "::player::view_subject::FarSight",
     "::ui_logout::SessionPosts",
@@ -648,7 +626,7 @@ pub(super) const READ_ONLY_TO_HANDLERS: &[&str] = &[
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.
-pub(super) fn lane_types() -> [TypeId; 40] {
+pub(super) fn lane_types() -> [TypeId; 41] {
     [
         // The views lane: what each packet changed in the stores.
         TypeId::of::<crate::ui_unit::views::ViewLog>(),
@@ -727,12 +705,14 @@ pub(super) fn lane_types() -> [TypeId; 40] {
         // The tutorials lane: each site's trigger, acknowledge and selection, and the flags'
         // copy, stamped where it runs.
         TypeId::of::<crate::tutorial::Tutorials>(),
+        // The ui-error lane: each refusal and notice, stamped where its handler or verb shows it.
+        TypeId::of::<crate::ui_action::UiErrorKeys>(),
     ]
 }
 
 /// [`lane_types`] by the lane that drains each: a queue is stripped only from its own lane's row,
 /// so another lane's read of the same type shows as the state it is.
-fn lane_queue_owners() -> [(&'static str, TypeId); 40] {
+fn lane_queue_owners() -> [(&'static str, TypeId); 41] {
     [
         ("unit views", TypeId::of::<crate::ui_unit::views::ViewLog>()),
         (
@@ -807,6 +787,7 @@ fn lane_queue_owners() -> [(&'static str, TypeId); 40] {
             TypeId::of::<crate::ui_world_enter::ArrivalLane>(),
         ),
         ("tutorials", TypeId::of::<crate::tutorial::Tutorials>()),
+        ("ui errors", TypeId::of::<crate::ui_action::UiErrorKeys>()),
     ]
 }
 
@@ -995,6 +976,7 @@ fn the_drain_runs_after_the_feeds_and_before_the_tick() {
             "trade",
             "trainer",
             "tutorials",
+            "ui errors",
             "unit views",
             "world states"
         ]
@@ -1237,7 +1219,7 @@ const AT_THEIR_OWN_PLACE: &[(&str, &str)] = &[
     (
         "::ui_chat::channels::auto_join_zone_channels",
         "world entry only arms the zone-channel walk, an engine turn that runs no Lua: its one \
-         push is a walk's refusal into `UiErrorKeys`, which the action feed shows",
+         push is a walk's refusal onto the ui-error lane",
     ),
     (
         "::ui_chat::channels::end_session_channels_on_disconnect",

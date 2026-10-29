@@ -431,7 +431,7 @@ impl CastReporter<'_, '_> {
 
 /// The reports a script call makes, signalled inside it ([`crate::script_calls`]): the by-key
 /// refusals its verb raised (an item not ready, a slot that cannot be used), then its cast's
-/// reports in order. What was queued before the call stays for the frame's feed.
+/// reports in order. What was queued before the call stays on its lane.
 #[derive(SystemParam)]
 pub(crate) struct CallReports<'w, 's> {
     reports: ResMut<'w, CastReports>,
@@ -439,27 +439,27 @@ pub(crate) struct CallReports<'w, 's> {
     reporter: CastReporter<'w, 's>,
 }
 
-/// Where a call's reports start: the refusal keys' count, and the clock its cast reports are
-/// stamped after.
+/// Where a call's reports start: the clock its refusal keys and its cast reports are stamped
+/// after.
 #[derive(Clone, Copy)]
-pub(crate) struct ReportMark(usize, crate::lanes::Mark);
+pub(crate) struct ReportMark(crate::lanes::Mark, crate::lanes::Mark);
 
 impl CallReports<'_, '_> {
     pub(crate) fn mark(&self) -> ReportMark {
-        ReportMark(self.ui_errors.len(), crate::lanes::mark())
+        let now = crate::lanes::mark();
+        ReportMark(now, now)
     }
 
     /// A mark at the clock's `at`, for an engine writer that marked where its step began: the
     /// cast reports it made since then are its own, and it raises no refusal keys.
     pub(crate) fn mark_at(&self, at: crate::lanes::Mark) -> ReportMark {
-        ReportMark(self.ui_errors.len(), at)
+        ReportMark(crate::lanes::mark(), at)
     }
 
     /// The reports queued since `mark`, taken off their queues and readied.
     pub(crate) fn ready_since(&mut self, script: &UiScript, mark: ReportMark) -> Vec<Ready> {
         let ReportMark(errors, reports) = mark;
-        let start = errors.min(self.ui_errors.len());
-        let errors = self.ui_errors.take_from(start);
+        let errors = self.ui_errors.take_since(errors);
         let mut ready: Vec<Ready> = errors
             .iter()
             .filter_map(|e| {

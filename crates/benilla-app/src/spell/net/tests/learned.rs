@@ -42,13 +42,13 @@ fn the_list_orders_keep_their_learn_order() {
     assert_eq!(actions.profession_order, [A, B, A]);
     assert_eq!(actions.craft_order, [A, B]);
     let errors = UiErrorKeys::default();
-    learned_spell(B, &mut actions, Some(&spells), &errors);
+    learned_spell(B, &mut actions, Some(&spells));
     assert_eq!(actions.profession_order, [A, B, A, B]);
     assert_eq!(actions.craft_order, [A, B]);
     removed_spell(A, &mut actions, Some(&spells), &errors);
     assert_eq!(actions.profession_order, [A, B, B]);
     assert_eq!(actions.craft_order, [B]);
-    superceded_spell(B, A, &mut actions, Some(&spells), &errors);
+    superceded_spell(B, A, &mut actions, Some(&spells));
     assert_eq!(actions.profession_order, [A, B, A]);
     assert_eq!(actions.craft_order, [A]);
 }
@@ -74,11 +74,11 @@ fn the_known_spells_keep_their_learn_order() {
     );
     assert_eq!(actions.profession_order, [A, B, C]);
     let errors = UiErrorKeys::default();
-    learned_spell(D, &mut actions, Some(&spells), &errors);
+    learned_spell(D, &mut actions, Some(&spells));
     assert_eq!(actions.profession_order, [A, B, C, D]);
     removed_spell(B, &mut actions, Some(&spells), &errors);
     assert_eq!(actions.profession_order, [A, C, D]);
-    superceded_spell(A, B, &mut actions, Some(&spells), &errors);
+    superceded_spell(A, B, &mut actions, Some(&spells));
     assert_eq!(actions.profession_order, [C, D, B]);
 }
 
@@ -111,7 +111,7 @@ fn a_trade_skill_opener_learn_fills_its_effect_slot() {
     let mut actions = PlayerActions::default();
     let errors = UiErrorKeys::default();
     for id in [10, 12, 13, 14, 15, 11] {
-        learned_spell(id, &mut actions, Some(&spells), &errors);
+        learned_spell(id, &mut actions, Some(&spells));
     }
     assert_eq!(actions.effect_slots, [Some(11), None, None, Some(12)]);
     removed_spell(11, &mut actions, Some(&spells), &errors);
@@ -184,7 +184,7 @@ fn the_dispel_list_takes_each_friendly_dispel_type_once() {
     let mut actions = PlayerActions::default();
     let errors = UiErrorKeys::default();
     for id in [527, 370, 988, 526] {
-        learned_spell(id, &mut actions, Some(&spells), &errors);
+        learned_spell(id, &mut actions, Some(&spells));
     }
     assert_eq!(actions.dispels, [1, 4, 3]);
     removed_spell(526, &mut actions, Some(&spells), &errors);

@@ -16,6 +16,7 @@ use crate::names::NameCache;
 use crate::net::{ClientCommand, GuidIndex, NetCommands, NetHandlerApp, ObjectStore, SelfGuid};
 use crate::query_cache::Ask;
 use crate::sound::MessageSounds;
+#[cfg(test)]
 use crate::ui_action::{UiError, UiErrorKeys};
 use crate::ui_quest::QuestGiver;
 
@@ -49,21 +50,22 @@ fn on_invite(In(ev): In<SessionEvent>, mut group: ResMut<GroupState>) {
     }
 }
 
-fn on_decline(In(ev): In<SessionEvent>, mut group: ResMut<GroupState>, errors: Res<UiErrorKeys>) {
+/// The party handlers' lines fire from the party lane, each in its place among their signals
+/// ([`GroupState`]'s `apply_*`).
+fn on_decline(In(ev): In<SessionEvent>, mut group: ResMut<GroupState>) {
     if let SessionEvent::GroupDecline { name } = ev {
-        declined(&mut group, &errors, &name);
+        group.apply_declined(&name);
     }
 }
 
 fn on_uninvited(
     In(ev): In<SessionEvent>,
     mut group: ResMut<GroupState>,
-    errors: Res<UiErrorKeys>,
     mut teardown: RosterTeardown,
 ) {
     if let SessionEvent::GroupUninvited = ev {
         let before = teardown.before(&group);
-        uninvited(&mut group, &errors);
+        group.apply_uninvited();
         teardown.run(&mut group, before);
     }
 }
@@ -71,24 +73,22 @@ fn on_uninvited(
 fn on_leader_changed(
     In(ev): In<SessionEvent>,
     mut group: ResMut<GroupState>,
-    errors: Res<UiErrorKeys>,
     self_guid: Res<SelfGuid>,
     names: Res<NameCache>,
 ) {
     if let SessionEvent::GroupLeaderChanged { name } = ev {
-        leader_changed(&mut group, &errors, &name, &self_guid, &names);
+        leader_changed(&mut group, &name, &self_guid, &names);
     }
 }
 
 fn on_destroyed(
     In(ev): In<SessionEvent>,
     mut group: ResMut<GroupState>,
-    errors: Res<UiErrorKeys>,
     mut teardown: RosterTeardown,
 ) {
     if let SessionEvent::GroupDestroyed = ev {
         let before = teardown.before(&group);
-        destroyed(&mut group, &errors);
+        group.apply_destroyed();
         teardown.run(&mut group, before);
     }
 }
@@ -124,7 +124,6 @@ fn on_list(
 fn on_command_result(
     In(ev): In<SessionEvent>,
     mut group: ResMut<GroupState>,
-    errors: Res<UiErrorKeys>,
     mut teardown: RosterTeardown,
 ) {
     if let SessionEvent::PartyCommandResult {
@@ -134,7 +133,8 @@ fn on_command_result(
     } = ev
     {
         let before = teardown.before(&group);
-        command_result(&mut group, &errors, operation, &member, result);
+        // The catalog row picks the surface; `None` is the reference's silence.
+        group.apply_command_result(operation, &member, result);
         teardown.run(&mut group, before);
     }
 }
@@ -249,11 +249,12 @@ fn on_raid_target(In(ev): In<SessionEvent>, mut group: ResMut<GroupState>) {
 fn on_ready_check_request(
     In(ev): In<SessionEvent>,
     mut group: ResMut<GroupState>,
-    errors: Res<UiErrorKeys>,
     self_guid: Res<SelfGuid>,
 ) {
     if let SessionEvent::ReadyCheckRequest = ev {
-        ready_check_request(&mut group, &errors, &self_guid);
+        // We lead when our guid is the leader's, the reference's test at `0x4ba3a0`.
+        let we_lead = self_guid.0 == Some(group.leader);
+        group.apply_ready_check_request(we_lead);
     }
 }
 
@@ -304,41 +305,12 @@ fn on_session_end(
     }
 }
 
-/// Queue the messages an `apply_*` named; `ui_action::feed_actions` resolves and shows them.
-fn push_group_lines(errors: &UiErrorKeys, lines: Vec<UiError>) {
-    errors.extend(lines);
-}
-
-/// We lead when our guid is the leader's, the reference's test at `0x4ba3a0`.
-fn ready_check_request(group: &mut GroupState, errors: &UiErrorKeys, self_guid: &SelfGuid) {
-    let we_lead = self_guid.0 == Some(group.leader);
-    push_group_lines(errors, group.apply_ready_check_request(we_lead));
-}
-
-fn declined(group: &mut GroupState, errors: &UiErrorKeys, name: &str) {
-    push_group_lines(errors, group.apply_declined(name));
-}
-
-fn uninvited(group: &mut GroupState, errors: &UiErrorKeys) {
-    push_group_lines(errors, group.apply_uninvited());
-}
-
-fn destroyed(group: &mut GroupState, errors: &UiErrorKeys) {
-    push_group_lines(errors, group.apply_destroyed());
-}
-
 /// Our own name, cached from login (`session::connected`), picks the line; this never queries.
-fn leader_changed(
-    group: &mut GroupState,
-    errors: &UiErrorKeys,
-    name: &str,
-    self_guid: &SelfGuid,
-    names: &NameCache,
-) {
+fn leader_changed(group: &mut GroupState, name: &str, self_guid: &SelfGuid, names: &NameCache) {
     let own = self_guid
         .0
         .and_then(|g| names.resolve_player(g, Ask::Read).map(str::to_string));
-    push_group_lines(errors, group.apply_leader_changed(name, own.as_deref()));
+    group.apply_leader_changed(name, own.as_deref());
 }
 
 /// `SMSG_GROUP_LIST`: apply the roster, seat new members' records, ask for every raid-target icon
@@ -546,17 +518,6 @@ pub(crate) fn roster_deactivated(
         let object = held(guid).map(|s| (s, place.position(index.0.get(&guid).copied(), local)));
         member_deactivated(guid, group, object, zone, held, names, script, net_commands);
     }
-}
-
-fn command_result(
-    group: &mut GroupState,
-    errors: &crate::ui_action::UiErrorKeys,
-    operation: u32,
-    member: &str,
-    result: u32,
-) {
-    // By key, so the catalog row picks the surface; `None` is the reference's silence.
-    errors.extend(group.apply_command_result(operation, member, result));
 }
 
 #[cfg(test)]

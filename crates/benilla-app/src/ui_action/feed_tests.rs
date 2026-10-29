@@ -9,7 +9,7 @@ use benilla_ui::script::UiScript;
 use bevy::prelude::*;
 
 use super::feed::{feed_actions, MISSING_ITEM_ICON};
-use super::{MountErrors, PetTameFailures, PlayerActions, UiErrorKeys, UiErrorTexts};
+use super::{PlayerActions, UiError, UiErrorKeys};
 use crate::entities::ItemDisplays;
 use crate::items::{test_template, Items};
 use crate::net::{ClientCommand, NetCommands};
@@ -51,10 +51,7 @@ fn app_with_food_on_the_bar() -> (App, crossbeam_channel::Receiver<ClientCommand
         .insert_resource(slots)
         .init_resource::<Items>()
         .init_resource::<crate::net::GuidIndex>()
-        .init_resource::<MountErrors>()
-        .init_resource::<PetTameFailures>()
         .init_resource::<UiErrorKeys>()
-        .init_resource::<UiErrorTexts>()
         // The cast-failure combat-log line rides the same drain.
         .init_resource::<crate::ui_chat::ChatLog>()
         .init_resource::<crate::sound::MessageSounds>()
@@ -63,7 +60,8 @@ fn app_with_food_on_the_bar() -> (App, crossbeam_channel::Receiver<ClientCommand
         ))
         .insert_resource(NetCommands(tx));
     app.insert_non_send_resource(UiScript::new().unwrap());
-    app.add_systems(Update, feed_actions);
+    // The ui-error lane fired alone after the feed, as the drain fires it after every feed.
+    app.add_systems(Update, (feed_actions, super::fire_ui_error_lane).chain());
     (app, rx)
 }
 
@@ -393,10 +391,7 @@ fn a_macro_slot_shows_the_macros_own_icon_and_follows_an_edit() {
         .insert_resource(slots)
         .init_resource::<Items>()
         .init_resource::<crate::net::GuidIndex>()
-        .init_resource::<MountErrors>()
-        .init_resource::<PetTameFailures>()
         .init_resource::<UiErrorKeys>()
-        .init_resource::<UiErrorTexts>()
         // The cast-failure combat-log line rides the same drain.
         .init_resource::<crate::ui_chat::ChatLog>()
         .init_resource::<crate::sound::MessageSounds>()
@@ -493,7 +488,7 @@ fn a_macro_slot_shows_the_macros_own_icon_and_follows_an_edit() {
     assert_eq!(events(&mut app), 1);
 }
 
-/// `UiErrorTexts` end to end into the stock `UIErrorsFrame`: an `SMSG_NOTIFICATION` draws red,
+/// The resolved texts end to end into the stock `UIErrorsFrame`: an `SMSG_NOTIFICATION` draws red,
 /// an `SMSG_AREA_TRIGGER_MESSAGE` yellow.
 #[test]
 fn pre_resolved_lines_land_on_the_errors_frame_in_the_arms_colour() {
@@ -512,14 +507,14 @@ fn pre_resolved_lines_land_on_the_errors_frame_in_the_arms_colour() {
     }
 
     // What the net drain queues for one `.gm on`, plus a refused portal.
-    let mut texts = app.world_mut().resource_mut::<UiErrorTexts>();
-    texts.error("GM mode is ON".to_string());
-    texts.info("You must be at least level 58 to enter.".to_string());
+    let texts = app.world().resource::<UiErrorKeys>();
+    texts.error_text("GM mode is ON".to_string());
+    texts.info_text("You must be at least level 58 to enter.".to_string());
     app.update();
 
     assert!(
-        app.world().resource::<UiErrorTexts>().0.is_empty(),
-        "the feed drains the queue"
+        app.world().resource::<UiErrorKeys>().texts().is_empty(),
+        "the lane drains the queue"
     );
 
     let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
@@ -584,14 +579,14 @@ fn a_notice_under_the_loading_cover_fires_at_the_reveal() {
             .unwrap()
     };
 
-    app.world_mut()
-        .resource_mut::<UiErrorTexts>()
-        .error("GM mode is ON".to_string());
+    app.world()
+        .resource::<UiErrorKeys>()
+        .error_text("GM mode is ON".to_string());
     app.update();
     app.update();
     assert!(fired(&mut app).is_empty(), "nothing fires under the cover");
     assert_eq!(
-        app.world().resource::<UiErrorTexts>().0.len(),
+        app.world().resource::<UiErrorKeys>().texts().len(),
         1,
         "the notice stays queued"
     );
@@ -603,7 +598,7 @@ fn a_notice_under_the_loading_cover_fires_at_the_reveal() {
         ["GM mode is ON"],
         "the reveal fires it once"
     );
-    assert!(app.world().resource::<UiErrorTexts>().0.is_empty());
+    assert!(app.world().resource::<UiErrorKeys>().texts().is_empty());
 }
 
 /// The cast reports' feed ([`crate::ui_cast::feed_cast_reports`]) over a VM, with `reports`
@@ -820,7 +815,8 @@ fn an_empty_default_format_shows_nothing_and_still_logs() {
 }
 
 /// `0x6e6a20` resolves `PETTAME_<reason>` first and passes the string to `DisplayError(0xee)`,
-/// so `ERR_TAME_FAILED` ("%s.") prints the sentence, not the key.
+/// so `ERR_TAME_FAILED` ("%s.") prints the sentence, not the key; a missing string reads as `""`
+/// (`FrameScript_GetText 0x703bf0`), and the line still shows.
 #[test]
 fn a_tame_failure_composes_the_reason_string_into_err_tame_failed() {
     let (mut app, _rx) = app_with_food_on_the_bar();
@@ -850,15 +846,24 @@ fn a_tame_failure_composes_the_reason_string_into_err_tame_failed() {
             .unwrap()
     };
 
+    // The line the handler queues for a reason ([`crate::ui_pet`]'s `pet_tame_failure`).
+    let tame = |reason: u8| {
+        UiError::args(
+            "ERR_TAME_FAILED",
+            vec![super::FillArg::Global(
+                benilla_protocol::messages::pet_tame_failure_key(reason).to_string(),
+            )],
+        )
+    };
     // 9 is `PETTAME_TOOHIGHLEVEL`; 12, a vmangos value past the reference's `reason - 1 > 0xa`
     // bound, takes the default arm.
-    app.world_mut().resource_mut::<PetTameFailures>().0.push(9);
-    app.world_mut().resource_mut::<PetTameFailures>().0.push(12);
+    app.world().resource::<UiErrorKeys>().push(tame(9));
+    app.world().resource::<UiErrorKeys>().push(tame(12));
     app.update();
 
     assert!(
-        app.world().resource::<PetTameFailures>().0.is_empty(),
-        "the feed drains the queue"
+        app.world().resource::<UiErrorKeys>().is_empty(),
+        "the lane drains the queue"
     );
     assert_eq!(
         line(&mut app, 1).as_deref(),
@@ -871,13 +876,13 @@ fn a_tame_failure_composes_the_reason_string_into_err_tame_failed() {
         "out of range takes the default arm rather than showing nothing"
     );
 
-    // A reason whose `PETTAME_` string is not loaded shows nothing, not a bare ".".
-    app.world_mut().resource_mut::<PetTameFailures>().0.push(1);
+    // A reason whose `PETTAME_` string is not loaded fills `%s` with `""`.
+    app.world().resource::<UiErrorKeys>().push(tame(1));
     app.update();
     assert_eq!(
-        line(&mut app, 3),
-        None,
-        "an unresolvable reason shows nothing"
+        line(&mut app, 3).as_deref(),
+        Some("."),
+        "a missing reason string reads as empty, as GetText answers it"
     );
 }
 
@@ -1109,10 +1114,7 @@ fn the_feed_signals_no_macro_slot_of_its_own() {
         .insert_resource(slots)
         .init_resource::<Items>()
         .init_resource::<crate::net::GuidIndex>()
-        .init_resource::<MountErrors>()
-        .init_resource::<PetTameFailures>()
         .init_resource::<UiErrorKeys>()
-        .init_resource::<UiErrorTexts>()
         .init_resource::<crate::ui_chat::ChatLog>()
         .init_resource::<crate::sound::MessageSounds>()
         .insert_resource(NetCommands(tx));

@@ -1,6 +1,6 @@
 //! The chat window's packet handlers: the spoken line, and the notices and answers that print as
 //! chat. `SMSG_NOTIFICATION` and `SMSG_AREA_TRIGGER_MESSAGE` are `UIErrorsFrame` toasts instead,
-//! queued on [`UiErrorTexts`].
+//! on the ui-error lane ([`UiErrorKeys`]).
 
 use benilla_protocol::messages::{ChatMessage, CHAT_MSG_RAID_BOSS_WHISPER, CHAT_MSG_WHISPER};
 use benilla_protocol::{SessionEvent, SessionEventKind};
@@ -8,7 +8,7 @@ use bevy::prelude::*;
 
 use super::{Broadcast, ChatLog};
 use crate::net::{ClientCommand, NetCommands, NetHandlerApp, ServerSaidMessage};
-use crate::ui_action::{UiErrorKeys, UiErrorTexts};
+use crate::ui_action::UiErrorKeys;
 use crate::ui_social::SocialState;
 
 /// Register the chat window's handlers and its session-end listener, the channel list's among
@@ -77,10 +77,10 @@ fn on_broadcast(In(ev): In<SessionEvent>, chat_log: Res<ChatLog>) {
     broadcast(b, &chat_log);
 }
 
-fn on_toast(In(ev): In<SessionEvent>, mut errors: ResMut<UiErrorTexts>) {
+fn on_toast(In(ev): In<SessionEvent>, errors: Res<UiErrorKeys>) {
     match ev {
-        SessionEvent::Notification { text } => notification(text, &mut errors),
-        SessionEvent::AreaTriggerMessage { text } => area_trigger_message(text, &mut errors),
+        SessionEvent::Notification { text } => notification(text, &errors),
+        SessionEvent::AreaTriggerMessage { text } => area_trigger_message(text, &errors),
         _ => {}
     }
 }
@@ -216,17 +216,17 @@ fn chat_wrong_faction(errors: &crate::ui_action::UiErrorKeys) {
 /// `SMSG_NOTIFICATION` (`0x1cb`, handler `0x401800`): the red `UIErrorsFrame` line,
 /// `UI_ERROR_MESSAGE` from `0x4945b0(text, 1)`, never a chat line. vmangos sends `.gm on` as both
 /// a system line and a notification (`Objects/Player.cpp:2676-2677`).
-fn notification(text: String, errors: &mut UiErrorTexts) {
-    // The reference also logs it to the console (`0x63cd00`).
+fn notification(text: String, errors: &UiErrorKeys) {
+    // The reference also logs it to the console (`0x63cd00`), after the line (`0x40183b`).
     info!("net: notification — {text}");
-    errors.error(text);
+    errors.error_text(text);
 }
 
 /// An area trigger's refusal (`SMSG_AREA_TRIGGER_MESSAGE`, `0x2b8`, arm `0x48f8ff` of
 /// `0x48f690`): the yellow `UIErrorsFrame` line, `UI_INFO_MESSAGE` from `0x4945b0(text, 0)`.
-fn area_trigger_message(text: String, errors: &mut UiErrorTexts) {
+fn area_trigger_message(text: String, errors: &UiErrorKeys) {
     info!("net: area-trigger message — {text}");
-    errors.info(text);
+    errors.info_text(text);
 }
 
 /// Park a world broadcast for `ui_chat::broadcast`'s resolve pass, logged: a defense broadcast
@@ -466,10 +466,10 @@ mod tests {
             "the SendSysMessage half is the chat line, and it stays"
         );
 
-        let mut errors = UiErrorTexts::default();
-        notification("GM mode is ON".to_string(), &mut errors);
+        let errors = UiErrorKeys::default();
+        notification("GM mode is ON".to_string(), &errors);
         assert_eq!(
-            errors.0,
+            errors.texts(),
             [(
                 "GM mode is ON".to_string(),
                 benilla_ui::messages::MsgKind::Error
@@ -480,13 +480,13 @@ mod tests {
 
     #[test]
     fn an_area_trigger_refusal_takes_the_yellow_arm() {
-        let mut errors = UiErrorTexts::default();
+        let errors = UiErrorKeys::default();
         area_trigger_message(
             "You must be at least level 58 to enter.".to_string(),
-            &mut errors,
+            &errors,
         );
         assert_eq!(
-            errors.0,
+            errors.texts(),
             [(
                 "You must be at least level 58 to enter.".to_string(),
                 benilla_ui::messages::MsgKind::Info

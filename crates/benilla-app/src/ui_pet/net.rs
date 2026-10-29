@@ -14,7 +14,7 @@ use benilla_assets::coords::wow_to_bevy;
 
 use super::PetBar;
 use crate::net::{GuidIndex, NetHandlerApp, PetDismissSoundMessage, PetTalkMessage};
-use crate::ui_action::{PetTameFailures, Spells, UiError, UiErrorKeys};
+use crate::ui_action::{FillArg, Spells, UiError, UiErrorKeys};
 use crate::ui_cast::CastReports;
 
 pub(super) fn register(app: &mut App) {
@@ -101,9 +101,9 @@ fn on_cast_failed(In(ev): In<SessionEvent>, mut reports: ResMut<CastReports>) {
     }
 }
 
-fn on_tame_failure(In(ev): In<SessionEvent>, mut failures: ResMut<PetTameFailures>) {
+fn on_tame_failure(In(ev): In<SessionEvent>, errors: Res<UiErrorKeys>) {
     if let SessionEvent::PetTameFailure { reason } = ev {
-        pet_tame_failure(reason, &mut failures);
+        pet_tame_failure(reason, &errors);
     }
 }
 
@@ -249,14 +249,18 @@ fn pet_feedback_key(reason: u8) -> Option<&'static str> {
     })
 }
 
-/// `SMSG_PET_TAME_FAILURE`: the reason byte, queued. vmangos also sends it for a summon while a
-/// pet or a charmed unit is out (`Spell.cpp:5467`).
-fn pet_tame_failure(reason: u8, failures: &mut PetTameFailures) {
-    debug!(
-        "net: pet tame failure {reason} ({})",
-        benilla_protocol::messages::pet_tame_failure_key(reason)
-    );
-    failures.0.push(reason);
+/// `SMSG_PET_TAME_FAILURE` (`0x6e97e0` → `0x6e6a20`), the handler's one signal: the reason's
+/// `PETTAME_*` string (the jump table `0x6e6ac0`, `PETTAME_UNKNOWNERROR` outside 1 to 11), read
+/// through `FrameScript_GetText` (`0x6e6a91`, `""` when missing) as `ERR_TAME_FAILED`'s `%s`
+/// (`DisplayError(0xee)`, `0x6e6ab4`). vmangos also sends it for a summon while a pet or a charmed
+/// unit is out (`Spell.cpp:5467`).
+fn pet_tame_failure(reason: u8, errors: &UiErrorKeys) {
+    let key = benilla_protocol::messages::pet_tame_failure_key(reason);
+    debug!("net: pet tame failure {reason} ({key})");
+    errors.push(UiError::args(
+        "ERR_TAME_FAILED",
+        vec![FillArg::Global(key.to_string())],
+    ));
 }
 
 /// `SMSG_PET_NAME_INVALID`, an empty body: the reference raises `ERR_INVALID_PETNAME` and reads

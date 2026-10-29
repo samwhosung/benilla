@@ -623,6 +623,8 @@ mod trainer_live_tests;
 #[cfg(test)]
 mod tutorial_live_tests;
 #[cfg(test)]
+mod ui_error_live_tests;
+#[cfg(test)]
 mod unit_feed_live_tests;
 #[cfg(test)]
 mod unit_live_tests;
