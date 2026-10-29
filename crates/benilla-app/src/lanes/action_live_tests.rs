@@ -692,6 +692,54 @@ fn a_bar_items_record_repaints_its_slot_at_the_answer_and_the_getters_read_it_li
     );
 }
 
+/// The usable test's item lookup carries the bar's callback and its dedupe (`0x4e5050` →
+/// `0x4e5a50` → `0x4e5ae0`, `0x4e5b30`), so a refused record it asks again answers through
+/// `0x4e5b80` → `0x4e5c70`: after the refusal, a power packet's usable refresh (`0x604876` →
+/// `0x4b31c0`) is the one lookup, and the record's answer signals the slot's
+/// `ACTIONBAR_SLOT_CHANGED`.
+#[test]
+fn a_usable_refreshs_lookup_of_a_refused_record_repaints_its_slot_at_the_answer() {
+    let mut c = client_with(|world| {
+        world
+            .resource_mut::<crate::ui_action::ActionSlots>()
+            .staged
+            .insert(
+                7,
+                ActionButton {
+                    slot: 7,
+                    action: RATION,
+                    kind: benilla_protocol::messages::ACTION_KIND_ITEM,
+                },
+            );
+    });
+    // The arrival's recount asked the record (`0x4e6d20`); the server refuses it.
+    c.frame(vec![vec![SessionEvent::ItemTemplate {
+        entry: RATION,
+        info: None,
+    }]]);
+    c.seen(&[]);
+    let asked = |c: &Client| {
+        crate::query_cache::queries(&c._sent)
+            .into_iter()
+            .filter(|q| matches!(q, ClientCommand::ItemQuery { entry, .. } if *entry == RATION))
+            .count()
+    };
+    asked(&c);
+    c.frame(vec![vec![values(ME, &[(MANA, 90)])]]);
+    assert_eq!(asked(&c), 1, "the refresh asks the refused record again");
+    c.seen(&[]);
+    c.frame(vec![vec![SessionEvent::ItemTemplate {
+        entry: RATION,
+        info: Some(Box::new(crate::items::test_template("Ration"))),
+    }]]);
+    let slot: Vec<String> = c
+        .seen(&["ACTIONBAR_SLOT_CHANGED"])
+        .into_iter()
+        .filter(|l| l.starts_with("ACTIONBAR_SLOT_CHANGED:8:"))
+        .collect();
+    assert_eq!(slot.len(), 1, "the slot repaints at the answer: {slot:?}");
+}
+
 /// The active player's aura add and removal each notify the bar's slots that stand for the spell
 /// (`0x612440`, `0x61237e` → `0x4e5de0`): a toggle's `ACTIONBAR_SLOT_CHANGED` fires inside each
 /// aura packet, between its neighbours' events, after the add's line and ahead of the removal's

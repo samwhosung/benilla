@@ -1014,15 +1014,14 @@ impl ActionWalk<'_, '_> {
                     st.cooldown = info.ui_triple(anchor, ui_now);
                 }
                 ACTION_KIND_ITEM => {
-                    // Only the `Copy` on-use spell, not a clone of the template per slot per frame.
-                    // The getter's lookup passes a callback (`0x4e5b3f`) on the bar's events, which
-                    // no event here marks: an entry is asked when it first shows.
-                    let template = items.template(button.action, 0, Ask::New(commands));
-                    // A missing record is asked with the callback `0x6e2f70` by the slot's cooldown
-                    // query and its usable test (`0x6e2efb`, `0x6e2fea`).
-                    if template.is_none() {
-                        Cooldowns::query_record(items, commands, button.action, 0, false);
-                    }
+                    // The usable test looks the record up twice, each with its callback and the
+                    // dedupe flag, so a miss, a refused record asked again among them, answers
+                    // through both in that order: `0x6e2fc0` with `0x6e2f70` (`0x4e50d0`,
+                    // `0x6e2fe9`), as the cooldown query does (`0x6e2efb`), then `0x4e5a50` →
+                    // `0x4e5ae0` with the bar's `0x4e5b80` (`0x4e5b30`), which recounts the entry.
+                    Cooldowns::query_record(items, commands, button.action, 0, true);
+                    let template = self.bar_record(button.action);
+                    // Only the `Copy` on-use spell, not a clone of the template per slot.
                     let use_spell = template.and_then(|t| t.use_spell);
                     // `IsCurrentAction`'s item arm holds the entry against the in-flight item
                     // (`0x4e53fc`-`0x4e5428`).
