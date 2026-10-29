@@ -46,6 +46,10 @@ pub enum ActionBarCall {
     /// the store's slot `id` (1-based) set to `packed`, 0 clearing it, and `CMSG_SET_ACTION_BUTTON`
     /// sent, ahead of the `ACTIONBAR_SLOT_CHANGED` the VM signals after it (`0x4e5998`).
     Set { id: u32, packed: u32 },
+    /// `RefreshActionBarUsable` (`0x4e5c00`) outside the usable refresh, `EditMacro`'s last step
+    /// (`0x4f132e`): every slot's pair recomputed and stored, and `ACTIONBAR_UPDATE_USABLE`
+    /// signalled in the call when one changed (`0x4e5c53`).
+    RefreshUsable,
 }
 
 /// What one action slot shows; the app resolves the icon before pushing.

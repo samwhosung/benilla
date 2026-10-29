@@ -376,7 +376,6 @@ fn a_usable_listener_reads_its_own_packets_power() {
         vec![values(ME, &[(MANA, 30)])],
         vec![values(ME, &[(MANA, 100)])],
     ]);
-    let usable = |l: &String| l.split(':').take(3).collect::<Vec<_>>().join(":");
     let seen: Vec<String> = c
         .seen(&[
             "ACTIONBAR_UPDATE_USABLE",
@@ -384,7 +383,7 @@ fn a_usable_listener_reads_its_own_packets_power() {
             "UNIT_MANA",
         ])
         .iter()
-        .map(usable)
+        .map(|l| usable(l))
         .collect();
     assert_eq!(
         seen,
@@ -466,6 +465,66 @@ fn a_slot_changed_listener_reads_the_pair_its_recount_stored() {
         c.seen(&["ACTIONBAR_SLOT_CHANGED"]),
         ["ACTIONBAR_SLOT_CHANGED:7:nil:0"],
         "the last one drunk: greyed in its own signal"
+    );
+}
+
+/// The usable pair a spy line carries: its event and `IsUsableAction(1)`.
+fn usable(l: &str) -> String {
+    l.split(':').take(3).collect::<Vec<_>>().join(":")
+}
+
+/// `EditMacro`'s worker ends in the bar's usable cache refresh (`0x4f132e` into `0x4e5c00`),
+/// inside the call: a pair that moved with no refresh signals `ACTIONBAR_UPDATE_USABLE` before the
+/// call returns, so the chunk's next line has heard it, and no later frame signals it again.
+#[test]
+fn an_edit_macro_refreshes_the_usable_cache_inside_its_call() {
+    let mut c = client();
+    c.eval::<()>(true, "CreateMacro('m', 1, '/say hi', 1)");
+    c.write_store(&[(MANA, 10)]);
+    let heard: Vec<String> = c.eval(
+        true,
+        "Seen = {} EditMacro(1, 'n') local s = Seen Seen = {} return s",
+    );
+    let heard: Vec<String> = heard
+        .iter()
+        .filter(|l| l.starts_with("ACTIONBAR_UPDATE_USABLE"))
+        .map(|l| usable(l))
+        .collect();
+    assert_eq!(heard, ["ACTIONBAR_UPDATE_USABLE:nil:1"], "inside the call");
+    c.frame(vec![]);
+    assert!(c.seen(&["ACTIONBAR_UPDATE_USABLE"]).is_empty());
+}
+
+/// Two packets in one frame: the potion's stack count, whose watcher's `RaiseBagUpdate`
+/// refreshes the bar's usable cache ahead of its `BAG_UPDATE` (`0x4f9370` → `0x4f9374`), then a
+/// power packet. The run's refresh reads the pair a quiet write moved and signals at the run,
+/// between the two packets' events.
+#[test]
+fn a_bag_updates_usable_refresh_signals_at_its_run() {
+    let mut c = client();
+    c.eval::<()>(
+        false,
+        "local f = CreateFrame('Frame') f:RegisterEvent('BAG_UPDATE') \
+         f:SetScript('OnEvent', function() table.insert(Seen, event) end)",
+    );
+    c.write_store(&[(MANA, 10)]);
+    c.frame(vec![
+        vec![values(POTION_GUID, &[(STACK_COUNT, 1)])],
+        vec![values(ME, &[(MANA, 100)])],
+    ]);
+    let seen: Vec<String> = c
+        .seen(&["ACTIONBAR_UPDATE_USABLE", "BAG_UPDATE", "UNIT_MANA"])
+        .iter()
+        .map(|l| usable(l))
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            "ACTIONBAR_UPDATE_USABLE:nil:1",
+            "BAG_UPDATE",
+            "ACTIONBAR_UPDATE_USABLE:1:nil",
+            "UNIT_MANA:1:nil",
+        ]
     );
 }
 

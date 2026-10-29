@@ -19,10 +19,11 @@ use bevy::ecs::system::{SystemParam, SystemParamItem};
 use bevy::prelude::*;
 
 use benilla_ui::script::{
-    AuctionCall, AuraCall, BankCall, BinderCall, CallHost, CallTail, CraftCall, DeathAction,
-    DuelRequest, GmTicketCall, GossipCall, InstanceCall, ItemTextCall, LootRollCall, MailCall,
-    MeetingStoneCall, MerchantCall, MinimapCall, PetitionCall, PostureCall, PvpCall, ScriptCall,
-    StableCall, SummonCall, TabardCall, TaxiCall, TradeCall, TradeSkillCall, TrainerCall, UiScript,
+    ActionBarCall, AuctionCall, AuraCall, BankCall, BinderCall, CallHost, CallTail, CraftCall,
+    DeathAction, DuelRequest, GmTicketCall, GossipCall, InstanceCall, ItemTextCall, LootRollCall,
+    MailCall, MeetingStoneCall, MerchantCall, MinimapCall, PetitionCall, PostureCall, PvpCall,
+    ScriptCall, StableCall, SummonCall, TabardCall, TaxiCall, TradeCall, TradeSkillCall,
+    TrainerCall, UiScript,
 };
 
 pub(crate) mod disjoint;
@@ -301,7 +302,42 @@ impl ScriptCallHost<'_, '_> {
         self.appliers
             .action_states()
             .as_mut()
-            .is_some_and(|states| states.enter_world_refresh(script))
+            .is_some_and(|states| states.cache_refresh(script))
+    }
+
+    /// The bar's usable cache refreshed outside the usable refresh (`RefreshActionBarUsable
+    /// 0x4e5c00`), `RaiseBagUpdate`'s in an item watcher's run (`0x4f9374`): every pair recomputed
+    /// and stored, and `ACTIONBAR_UPDATE_USABLE` signalled with the host lent when one changed
+    /// (`0x4e5c53`). A harness without the action feed's inputs refreshes nothing.
+    pub(crate) fn engine_usable_cache_refresh(&mut self, script: &mut UiScript) {
+        let changed = self
+            .appliers
+            .action_states()
+            .as_mut()
+            .is_some_and(|states| states.cache_refresh(script));
+        if changed {
+            script.hosted(self, |script| {
+                script.fire_event("ACTIONBAR_UPDATE_USABLE", vec![]);
+            });
+        }
+    }
+
+    /// `EditMacro`'s refresh of the bar's usable cache (`0x4f132e` into `0x4e5c00`), inside the
+    /// call: `ACTIONBAR_UPDATE_USABLE` at its signal point when a pair changed (`0x4e5c53`).
+    fn refresh_usable_cache(
+        &mut self,
+        script: &mut UiScript,
+        mark: &mut crate::ui_cast::ReportMark,
+    ) {
+        let changed = self
+            .appliers
+            .action_states()
+            .as_mut()
+            .is_some_and(|states| states.cache_refresh(script));
+        if changed {
+            script.fire_event("ACTIONBAR_UPDATE_USABLE", vec![]);
+            self.at_point(script, mark);
+        }
     }
 
     /// A recount's slot write outside any call (`0x4e58e0`): the slot's usable pair stored and
@@ -917,6 +953,9 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::Instance(InstanceCall::Reset) => appliers.instance().reset(),
             ScriptCall::Pvp(PvpCall::Toggle) => appliers.pvp().toggle(),
             ScriptCall::WornDisplay(set) => appliers.worn().set(set),
+            ScriptCall::ActionBar(ActionBarCall::RefreshUsable) => {
+                self.refresh_usable_cache(script, &mut at.mark);
+            }
             ScriptCall::ActionBar(call) => appliers.action_bar().apply(call),
             ScriptCall::GmTicket(GmTicketCall::Ticket(intent)) => {
                 appliers.gm_ticket().ticket(intent);
@@ -1226,6 +1265,16 @@ impl<P: SystemParam + 'static> VmWith<'_, '_, P> {
         match (self.script.as_deref_mut(), self.set.p1().as_mut()) {
             (Some(script), Some(host)) => host.engine_enter_world_refresh(script),
             _ => false,
+        }
+    }
+
+    /// `RaiseBagUpdate`'s cache refresh with the host
+    /// ([`ScriptCallHost::engine_usable_cache_refresh`]); with no VM or no host, nobody listens.
+    pub(crate) fn engine_usable_cache_refresh(&mut self) {
+        if let Some(script) = self.script.as_deref_mut() {
+            if let Some(host) = self.set.p1().as_mut() {
+                host.engine_usable_cache_refresh(script);
+            }
         }
     }
 

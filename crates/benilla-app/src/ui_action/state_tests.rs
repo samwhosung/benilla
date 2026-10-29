@@ -29,20 +29,12 @@ fn feed_inputs(app: &mut App) {
         .init_resource::<crate::net::Reputations>();
 }
 
-/// The feed's two halves, as the plugin orders them.
+/// The feed, and the cooldown lane after it, as the drain fires it.
 fn add_action_feed(app: &mut App) {
-    app.init_resource::<ActionEvents>()
-        .init_resource::<super::ActionStateMemory>()
-        .add_systems(
-            Update,
-            (
-                feed_action_state,
-                fire_action_events.in_set(crate::ui_action::CooldownEvents),
-                // The cooldown lane, after every feed, as the drain fires it.
-                crate::ui_action::fire_cooldown_lane,
-            )
-                .chain(),
-        );
+    app.init_resource::<super::ActionStateMemory>().add_systems(
+        Update,
+        (feed_action_state, crate::ui_action::fire_cooldown_lane).chain(),
+    );
 }
 
 /// A profession opener (`Effect[0]` 47) names the window `IsCurrentAction` checks it against
@@ -1807,61 +1799,6 @@ fn a_bag_query_on_a_missing_record_flushes_when_the_record_lands() {
     assert!(frame(&mut app).is_empty(), "once");
 }
 
-/// The feed's push half runs ahead of its fire half, whose signals come ahead of the events its
-/// producers precede: `UNIT_HEALTH` and `UNIT_MANA` (the type watchers ahead of the object's bridge at one field, `0x46544a`),
-/// `PLAYER_REGEN_DISABLED` (`0x5ff51b` ahead of `0x5ff533`), `PLAYER_COMBO_POINTS` (`0x5ddff0`)
-/// and the form's cast change (`0x5de011` ahead of `0x5de016`). Read off the declared graph; skips
-/// where bevy carries no system names.
-#[test]
-fn the_feed_pushes_then_signals_ahead_of_the_events_its_producers_precede() {
-    use crate::game_plugins::schedule_tests::{census, headless_client, SyncPoints};
-    use std::collections::HashSet;
-
-    let mut app = headless_client();
-    let c = census(&mut app, Update, SyncPoints::Declared);
-    let named = |needle: &str| {
-        let hits: Vec<_> = c
-            .systems
-            .iter()
-            .filter(|(_, s)| s.name.ends_with(needle))
-            .map(|(k, _)| *k)
-            .collect();
-        (!hits.is_empty()).then(|| {
-            assert_eq!(hits.len(), 1, "one system named {needle}");
-            hits[0]
-        })
-    };
-    let Some(push) = named("::feed_action_state") else {
-        eprintln!("skipped: this build carries no system names");
-        return;
-    };
-    let mut after: HashMap<_, Vec<_>> = HashMap::new();
-    for (a, b) in &c.dependencies {
-        after.entry(*a).or_default().push(*b);
-    }
-    let later_than = |from| {
-        let (mut seen, mut stack) = (HashSet::new(), vec![from]);
-        while let Some(n) = stack.pop() {
-            for m in after.get(&n).into_iter().flatten() {
-                if seen.insert(*m) {
-                    stack.push(*m);
-                }
-            }
-        }
-        seen
-    };
-    let key = |name: &str| named(name).unwrap_or_else(|| panic!("{name} is scheduled"));
-    let fire = key("::fire_action_events");
-    assert!(later_than(push).contains(&fire), "the push half runs first");
-    let seen = later_than(fire);
-    for later in ["::lanes::fire_in_order", "::ui_cast::feed_cast_reports"] {
-        assert!(
-            seen.contains(&key(later)),
-            "the fire half runs before {later}"
-        );
-    }
-}
-
 /// Sets the player's mana to `mana` with no values block, so no watcher runs.
 fn set_mana_quietly(app: &mut App, mana: u32) {
     let me = app.world().resource::<crate::net::GuidIndex>().0[&ME];
@@ -1929,12 +1866,13 @@ fn placing_or_clearing_a_slot_stores_its_pair_with_no_usable_event() {
 /// `0x4e5c00` signals `ACTIONBAR_UPDATE_USABLE` alone for its callers other than `0x4b31c0`: a
 /// reload's world entry against the cache the last VM left (`0x4e4f90`; the cache is zeroed only
 /// by `InitializeGame`, `0x4e4f50`), which the enter cascade refreshes and signals inside itself
-/// (`0x490979`), each `BAG_UPDATE` (`0x4f9374`) and `EditMacro` (`0x4f132e`). A pair that changed
-/// with no refresh signals nothing, a new VM's feed included. Our player's arrival writes every
-/// slot before its enter cascade refreshes (`0x5deafc`, `0x5deb60`), so it signals nothing; a
-/// reload writes none (`0x495664` reaches no `0x5dea50`).
+/// (`0x490979`). A pair that changed with no refresh signals nothing, a new VM's feed included.
+/// Our player's arrival writes every slot before its enter cascade refreshes (`0x5deafc`,
+/// `0x5deb60`), so it signals nothing; a reload writes none (`0x495664` reaches no `0x5dea50`).
+/// `EditMacro`'s and `RaiseBagUpdate`'s refreshes run in their places
+/// (`crate::lanes::action_live_tests`).
 #[test]
-fn the_cache_refreshes_alone_at_a_reload_a_bag_update_and_a_macro_edit() {
+fn the_cache_refreshes_alone_at_a_reload() {
     const FROSTBOLT: u32 = 116;
     let costly = SpellDisplay {
         mana_cost: 400,
@@ -1968,28 +1906,6 @@ fn the_cache_refreshes_alone_at_a_reload_a_bag_update_and_a_macro_edit() {
 
     set_mana_quietly(&mut app, 500);
     assert!(frame(&mut app).is_empty());
-    app.world_mut()
-        .resource_mut::<crate::item_lane::ItemLane>()
-        .push(crate::item_watch::Run {
-            bags: vec![crate::item_watch::BagEvent::Raise(None)],
-            ..Default::default()
-        });
-    assert_eq!(
-        frame(&mut app),
-        ["ACTIONBAR_UPDATE_USABLE"],
-        "a RaiseBagUpdate, even one that signals nothing (`0x4f9374`)"
-    );
-
-    set_mana_quietly(&mut app, 100);
-    assert!(frame(&mut app).is_empty());
-    app.world()
-        .non_send_resource::<UiScript>()
-        .run("CreateMacro('m', 1, '/say hi', 1) EditMacro(1, 'n')")
-        .unwrap();
-    assert_eq!(frame(&mut app), ["ACTIONBAR_UPDATE_USABLE"], "an EditMacro");
-
-    set_mana_quietly(&mut app, 500);
-    assert!(frame(&mut app).is_empty());
     arrive(&mut app, 500);
     assert!(frame(&mut app).is_empty());
     assert!(
@@ -2005,7 +1921,7 @@ fn enter_refresh(app: &mut App) -> bool {
     app.world_mut()
         .run_system_once(
             |mut states: ActionStates, mut script: NonSendMut<UiScript>| {
-                states.enter_world_refresh(&mut script)
+                states.cache_refresh(&mut script)
             },
         )
         .expect("the refresh runs")

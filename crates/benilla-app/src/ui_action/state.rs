@@ -1,9 +1,10 @@
 //! Each action slot's per-frame state behind `IsUsableAction`, `IsActionInRange`,
 //! `IsCurrentAction` and `GetActionCooldown`, diff-pushed into the VM ahead of the world-enter
-//! events ([`feed_action_state`]), and the events their producers raise, signalled after the unit
-//! snapshots their handlers read ([`fire_action_events`]): `ACTIONBAR_UPDATE_USABLE` when a
-//! refresh of the usable cache (`0x4e5c00`) by a caller outside the usable refresh finds a pair
-//! changed, once a frame. The usable refresh `0x4b31c0`, with each reactive spell's `SPELL_ACTIVE`
+//! events ([`feed_action_state`]). The usable cache's refresh `0x4e5c00` alone, with its
+//! `ACTIONBAR_UPDATE_USABLE` when a pair changed, runs in its callers' places
+//! ([`ActionStates::cache_refresh`]): the world entry's cascade, `EditMacro`'s call and each
+//! `RaiseBagUpdate` of an item watcher's run. The usable refresh `0x4b31c0`, with each reactive
+//! spell's `SPELL_ACTIVE`
 //! ([`super::reactive`]) and `SPELL_UPDATE_USABLE`, runs where its callers make it: a selection's
 //! inside `SetSelection` ([`ActionStates::usable_refresh`]), the field watchers' and the control
 //! flag's inside their packets on the notice lane
@@ -38,13 +39,10 @@ use super::{ActionSlots, PlayerActions, Spells};
 use crate::query_cache::Ask;
 use crate::spell::usable;
 
-/// The feed's memory: what was last pushed, and the edge detectors.
+/// The feed's memory: what was last pushed, and the cooldown trace's last line.
 #[derive(Default)]
 pub(super) struct StateMemory {
     pushed: HashMap<u32, ActionState>,
-    /// The VM's macro edits and the item lane's `RaiseBagUpdate` calls as last read.
-    macro_edits: u64,
-    bag_updates: u64,
     last_cd_trace: Option<Instant>,
 }
 
@@ -280,13 +278,6 @@ fn range_answers(
     (has_range, in_range)
 }
 
-/// The event one pass of [`feed_action_state`] raised, which [`fire_action_events`] signals.
-#[derive(Resource, Default)]
-pub(crate) struct ActionEvents {
-    /// `ACTIONBAR_UPDATE_USABLE`.
-    usable_changed: bool,
-}
-
 /// What the action slots' states are computed from, and the memory the feed and the selection's
 /// refresh share: the selection with the relations and positions `IsActionInRange`'s pre-check
 /// reads, the cooldowns, and the pet's bar (the gate and the history a macro bound to a pet spell
@@ -416,13 +407,11 @@ impl ActionStates<'_, '_> {
         }
     }
 
-    /// The world-enter cascade's refresh of the bar's usable cache (`0x490979` → `0x4e4f90` →
-    /// `0x4e5c00`), in its place: every slot's state recomputed and pushed and its pair stored;
-    /// whether a pair changed, which signals `ACTIONBAR_UPDATE_USABLE` (`0x4e5c53`).
-    pub(crate) fn enter_world_refresh(
-        &mut self,
-        script: &mut benilla_ui::script::UiScript,
-    ) -> bool {
+    /// `RefreshActionBarUsable 0x4e5c00` in its caller's place, outside the usable refresh: the
+    /// world-enter cascade's (`0x490979` → `0x4e4f90`), `EditMacro`'s (`0x4f132e`) and
+    /// `RaiseBagUpdate`'s (`0x4f9374`). Every slot's state recomputed and pushed and its pair
+    /// stored; whether a pair changed, which signals `ACTIONBAR_UPDATE_USABLE` (`0x4e5c53`).
+    pub(crate) fn cache_refresh(&mut self, script: &mut benilla_ui::script::UiScript) -> bool {
         let now = Instant::now();
         let clock = self.clock_pair(now, script);
         let pass = Pass {
@@ -454,16 +443,9 @@ impl ActionStates<'_, '_> {
         self.pass(script, pass);
     }
 
-    /// The feed's frame: the cooldowns' upkeep, the cache refreshes this frame's callers owe, then
-    /// the pass, owing its event to [`fire_action_events`]. Every caller of the usable refresh runs
-    /// it in its own place ([`Self::usable_refresh`]).
-    fn feed(
-        &mut self,
-        script: &mut benilla_ui::script::UiScript,
-        bag_updates: u64,
-        arrived: bool,
-        owed: &mut ActionEvents,
-    ) {
+    /// The feed's frame: the pass, which refreshes nothing. Every caller of a refresh runs it in
+    /// its own place ([`Self::usable_refresh`], [`Self::cache_refresh`]).
+    fn feed(&mut self, script: &mut benilla_ui::script::UiScript, arrived: bool) {
         let (memory, _) = self.memory.vm.get_reset(script);
         let now = Instant::now();
         // The cooldown-clock trace (`WOW_MOVE_TRACE` sink, tag "cd"): once per second.
@@ -474,14 +456,6 @@ impl ActionStates<'_, '_> {
         if trace_cd {
             memory.last_cd_trace = Some(now);
         }
-
-        // The usable cache's refreshes outside the usable refresh (`0x4e5c00`) that the frame owes:
-        // `EditMacro` (`0x4f132e`) and each `RaiseBagUpdate` a watcher's run calls (`0x4f9374`); a
-        // new VM meets the cache as it stands, and the world entry's runs in its cascade
-        // ([`Self::enter_world_refresh`]).
-        let macro_edits = script.macro_edits();
-        let refresh_cache = macro_edits != memory.macro_edits || bag_updates != memory.bag_updates;
-        (memory.macro_edits, memory.bag_updates) = (macro_edits, bag_updates);
 
         // The reactive list: emptied at an arrival and filled from the book; the pass re-checks it
         // inside each usable refresh after the bar (`0x4b31d7`-`0x4b323d`).
@@ -504,11 +478,10 @@ impl ActionStates<'_, '_> {
             clock,
             trace_cd,
             refresh: false,
-            refresh_cache,
+            refresh_cache: false,
             arrived,
         };
-        let (usable_changed, _) = self.pass(script, pass);
-        owed.usable_changed |= usable_changed;
+        self.pass(script, pass);
     }
 
     /// Compute every occupied slot's state and diff-push it, store the pairs in the bar's usable
@@ -955,45 +928,19 @@ impl crate::script_calls::live::LiveFamily for ActionStates<'_, '_> {
     }
 }
 
-/// Computes and diff-pushes every occupied slot's state ([`ActionStates`]), and owes the
-/// reference's events to [`fire_action_events`].
+/// Computes and diff-pushes every occupied slot's state ([`ActionStates`]).
 pub(super) fn feed_action_state(
-    // The states, and the item lane's `RaiseBagUpdate` calls, the lane being the host's too.
-    mut vm: crate::script_calls::VmWith<(
-        ActionStates<'static, 'static>,
-        Option<Res<'static, crate::item_lane::ItemLane>>,
-    )>,
-    // The events owed.
-    mut owed: ResMut<ActionEvents>,
+    mut vm: crate::script_calls::VmWith<ActionStates<'static, 'static>>,
     // The active player's creation, whose arrival (`0x5dea50`) writes every slot (`0x5deafc`) and
     // empties the reactive list (`0x5dea86`); a reload reaches neither.
     created: Query<(), Added<SelfPlayer>>,
 ) {
-    let bag_updates = vm.own().1.map_or(0, |l| l.bag_raises());
     let arrived = !created.is_empty();
-    vm.turn(|script, (mut states, _)| {
+    vm.turn(|script, mut states| {
         let Some(script) = script else {
             return;
         };
-        states.feed(script, bag_updates, arrived, &mut owed);
-    })
-}
-
-/// Signals what [`feed_action_state`] owes, after the unit snapshots: `ACTIONBAR_UPDATE_USABLE`
-/// for a cache refresh that found a pair changed (`0x4e5c53`), `EditMacro`'s (`0x4f132e`) and a
-/// `RaiseBagUpdate`'s (`0x4f9374`), which signal it alone.
-pub(super) fn fire_action_events(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    mut owed: ResMut<ActionEvents>,
-) {
-    let owed = std::mem::take(&mut *owed);
-    if !owed.usable_changed {
-        return;
-    }
-    hosted_vm.run(|script| {
-        if let Some(script) = script {
-            script.fire_event("ACTIONBAR_UPDATE_USABLE", vec![]);
-        }
+        states.feed(script, arrived);
     })
 }
 

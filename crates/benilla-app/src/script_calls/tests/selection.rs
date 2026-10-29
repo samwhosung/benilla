@@ -34,9 +34,9 @@ fn seen(f: &mut Frame) -> String {
     eval(f, "return SEEN")
 }
 
-/// The feed that signals what a change no call made owes: the action events.
+/// The action-state feed.
 fn feeds(f: &mut Frame) {
-    crate::ui_action::run_action_events_once(f.app.world_mut());
+    crate::ui_action::run_feed_action_state_once(f.app.world_mut());
 }
 
 /// The pet stops and the selection sends, in order.

@@ -139,15 +139,6 @@ impl Run {
             && self.unlocks.is_empty()
             && self.bags.is_empty()
     }
-
-    /// How many times the run calls `RaiseBagUpdate` (`0x4f9370`), each of which runs the action
-    /// bar's usable refresh (`0x4e5c00`, `0x4f9374`) whether or not it signals.
-    pub(crate) fn bag_raises(&self) -> usize {
-        self.bags
-            .iter()
-            .filter(|e| matches!(e, BagEvent::Raise(_)))
-            .count()
-    }
 }
 
 /// The bag cache `0xbdd060`: the guids of bags 1 to 10 (the four equipped, then the six bank bags)

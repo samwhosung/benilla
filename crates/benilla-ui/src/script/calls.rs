@@ -243,8 +243,8 @@ pub enum ScriptCall {
     /// `ShowHelm` or `ShowCloak` ([`super::WornDisplaySet`]): the model's piece and the toggle
     /// the live bit owes, inside the call (`0x5ee660`-`0x5ee8d0`).
     WornDisplay(super::WornDisplaySet),
-    /// An action bar verb's packet ([`super::ActionBarCall`]): the toggles' send, or a slot write
-    /// stored and sent ahead of its signal (`0x4e58e0`).
+    /// An action bar verb's step ([`super::ActionBarCall`]): the toggles' send, a slot write
+    /// stored and sent ahead of its signal (`0x4e58e0`), or the usable cache's refresh.
     ActionBar(super::ActionBarCall),
     /// A GM ticket verb's packet, or `Stuck`'s cast ([`super::GmTicketCall`]), inside the call.
     GmTicket(super::GmTicketCall),

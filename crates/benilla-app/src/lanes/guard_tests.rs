@@ -88,14 +88,6 @@ pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
          auction lists' (`0x4cca10`, `0x4ccc60`, `0x4cceb0`), which `run_answer_tail` runs after \
          the answer's list rather than in it",
     ),
-    (
-        Row::Edge,
-        "::ui_action::state::fire_action_events",
-        "the usable cache's refresh `0x4e5c00` (`ACTIONBAR_UPDATE_USABLE`) of `EditMacro` \
-         (`0x4f132e`) and `RaiseBagUpdate` (`0x4f9374`), which the reference runs in the call and \
-         in the item watcher's run, one pass a frame over the bar's 120 slots diffed against the \
-         cache",
-    ),
 ];
 
 /// The host-held queues a handler fills that no feed fires off, each named quiet beside why: the
@@ -139,8 +131,7 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // Read through the host by `GetGameTime` (`0x515ee0`), and quiet: no event signals the clock.
     "::net::game_time::ServerTime",
     // Read, and quiet: the control packet's handler and our own create's arrival signal its
-    // changes on the notice lane in place (`0x4958e0`), and the action bar's diff of it is
-    // `fire_action_events`'s edge row.
+    // changes on the notice lane in place (`0x4958e0`), with the usable refresh after them.
     "::player::state::OwnControlLost",
     // Read through the host by the world click's legs (who we drive, the gathering skills its
     // cursor forks on), and quiet: no feed fires off them.

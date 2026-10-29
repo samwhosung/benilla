@@ -381,12 +381,6 @@ impl super::UiScript {
     pub fn macros_generation(&self) -> u64 {
         self.model_mut().macros_generation
     }
-
-    /// How many `EditMacro` calls have edited a macro: each one's worker `EditMacroRecord 0x4f1280`
-    /// ends in the action bar's usable refresh `0x4e5c00` (`0x4f132e`), which the app runs.
-    pub fn macro_edits(&self) -> u64 {
-        self.model_mut().macro_edits
-    }
 }
 
 /// What a derivation reads: the `/cast` aliases and the two books as they stand through the host,
@@ -482,7 +476,6 @@ fn edit_macro(
         model.macro_bindings.insert(id, binding);
         model.macros_dirty = true;
         model.macros_generation += 1;
-        model.macro_edits += 1;
         // The order's rebuild (`0x4f1322` into `0x4f0d30`), then each slot that holds the id,
         // lowest first, signalled and sent nothing (`0x4f1329` into `0x4e5cc0`, `0x4e58e0`).
         model.raise("UPDATE_MACROS", vec![]);
@@ -499,6 +492,10 @@ fn edit_macro(
                 vec![crate::script::ScriptValue::Int(i64::from(slot))],
             );
         }
+        // The bar's usable cache refreshed last (`0x4f132e` into `0x4e5c00`), in the call.
+        model.call_in_verb(crate::script::ScriptCall::ActionBar(
+            crate::script::ActionBarCall::RefreshUsable,
+        ));
     }
     model.macros.index_of_id(id).unwrap_or(0)
 }

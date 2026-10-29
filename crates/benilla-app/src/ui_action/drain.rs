@@ -566,6 +566,8 @@ impl ActionBarSteps<'_> {
                     .send(ClientCommand::SetActionBarToggles { toggles });
             }
             ActionBarCall::Set { id, packed } => self.set(id, packed),
+            // The host's own, with the action states ([`crate::script_calls`]).
+            ActionBarCall::RefreshUsable => {}
         }
     }
 

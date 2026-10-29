@@ -85,18 +85,10 @@ fn app() -> App {
         // The enter cascade and the cast targeting the walk reads.
         .insert_resource(crate::net::SelfGuid(Some(ME)))
         .init_resource::<crate::spell::AutoSelfCast>()
-        .init_resource::<super::state::ActionEvents>()
         .init_resource::<super::state::ActionStateMemory>();
     seat(&mut app);
     app.insert_non_send_resource(listener());
-    app.add_systems(
-        Update,
-        (
-            super::state::feed_action_state,
-            super::state::fire_action_events,
-        )
-            .chain(),
-    );
+    app.add_systems(Update, super::state::feed_action_state);
     // The VM's first frame, which meets the state as it stands and hears no refresh.
     app.update();
     app

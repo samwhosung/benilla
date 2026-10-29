@@ -100,8 +100,7 @@ fn range_answers(
         lit: None,
     });
     app.insert_non_send_resource(UiScript::new().unwrap());
-    app.init_resource::<ActionEvents>()
-        .init_resource::<ActionStateMemory>()
+    app.init_resource::<ActionStateMemory>()
         .add_systems(Update, feed_action_state);
     app.update();
     app.world()
