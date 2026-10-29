@@ -244,8 +244,9 @@ impl AutoMoveStop<'_> {
 /// to 10, whose row's first byte is set (`0x860a58`, filled at `0x60e5b2`-`0x60e65c`), the forward
 /// release `0x60e7f0` queues a move stop (`MoveStop 0x60dc90`) and clears autorun (`0x514630`)
 /// while the input owns the mover (`0x5144e0`), and where it fails (a death, far sight, a server
-/// spline) the tick clears autorun itself (`0x514748`). Here autorun clears inside the handler
-/// ([`super::press::CallAutorun::clear`]), so a call after the stop reads it clear, and the
+/// spline) the tick clears autorun itself (`0x514748`), after the signal either way. Here a
+/// follow's clear runs on the notice lane right behind its `AUTOFOLLOW_END`, a walk's in place
+/// ([`super::press::CallAutorun::clear`]), so a call after the stop reads the bit clear, and the
 /// frame's steer applies it ([`FollowState::owe_release`]) ahead of the controller, whose step
 /// sends the stop, as the reference's mover update sends the one it queued. The `face` leg (`0x60fb92`-`0x60fbe8`) turns no unit: it keeps the target's
 /// heading at `0xc4d8c4` for the camera (`0x60e8f0`; its readers `0x510904` and `0x510ef6`, through
@@ -266,11 +267,20 @@ pub(crate) fn end_auto_move(
     let Some(follow) = follow else {
         return walked;
     };
-    let followed = super::follow::end(follow, lane);
+    let mut lane = lane;
+    let followed = super::follow::end(follow, lane.as_deref_mut());
     if followed || (walked && !faced) {
         follow.owe_release();
-        if let Some(autorun) = autorun {
-            autorun.clear();
+        // `AUTOFOLLOW_END` goes out before the release clears autorun (`0x60fb84`, then `0x60fc08`
+        // → `0x60e83f`), so a follow's clear waits on the lane behind it; a walk signals nothing
+        // and clears in place.
+        match (followed, lane) {
+            (true, Some(lane)) => lane.write(crate::field_watch::FieldNotice::AutorunClear),
+            _ => {
+                if let Some(autorun) = autorun {
+                    autorun.clear();
+                }
+            }
         }
     }
     walked || followed

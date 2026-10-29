@@ -1295,6 +1295,14 @@ impl<P: SystemParam + 'static> VmWith<'_, '_, P> {
         }
     }
 
+    /// A follow stop's autorun clear on the host's bit, VM or not
+    /// ([`crate::player::CommandSteps::clear_autorun`]); with no host, nothing holds the bit.
+    pub(crate) fn engine_autorun_clear(&mut self) {
+        if let Some(host) = self.set.p1().as_mut() {
+            host.appliers.commands().clear_autorun();
+        }
+    }
+
     /// A slot write with the host ([`ScriptCallHost::engine_slot_written`]); with no VM or no
     /// host, nothing stores the pair.
     pub(crate) fn engine_slot_written(&mut self, action: u32) {

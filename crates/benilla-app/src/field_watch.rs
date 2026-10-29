@@ -195,6 +195,11 @@ pub(crate) enum FieldNotice {
     /// the feign-death bit's rise (`0x6004f5`-`0x600530`), whose tick runs with `apply` clear, so
     /// both its predicates fail (`0x51468d`, `0x5146a6`) and it stops (`0x5146d6`).
     AutoMoveStop,
+    /// A follow's stop clearing autorun (`0x60fc08` → `0x514630` at `0x60e83f`), right behind its
+    /// `AUTOFOLLOW_END`, which `StopAutoMove` signals first (`0x60fb84`): it runs after that
+    /// event's listeners, so a toggle one of them made is undone
+    /// ([`crate::player::CallAutorun::clear`]).
+    AutorunClear,
     /// The stun bit's flip on the active player (`0x5ff4ef`-`0x5ff501`): the mover's input tick
     /// with `apply` set, which stops the auto-move when the unit may neither translate nor turn
     /// (`0x5146c1`-`0x5146d6`).

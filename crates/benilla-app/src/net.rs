@@ -439,6 +439,13 @@ pub(crate) struct Embodied;
 #[derive(Component)]
 pub(crate) struct ActiveMover;
 
+/// `IsClientControlled` (`0x5fa5f0`): bit 0x400 of the unit's `+0xc58`, which the control update
+/// sets or clears on its unit (`0x5fa62a`, `0x5fa631`, stored at `0x5fa636`) and only the
+/// constructor clears besides (`0x5fae7a`), so it outlives a release. Our own character's is read
+/// off [`crate::player::OwnControlLost`], which the same update writes beside it.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub(crate) struct ClientControlled;
+
 /// The active-mover global (`0xc4da98`/`0xc4da9c`) as the claims read it: the guid the last
 /// `SetActiveMover` (`0x6006e0`) stored, or none. A claim of the guid it holds returns at once
 /// (`0x6006ee`-`0x6006fb` → `0x600852`), so `CMSG_SET_ACTIVE_MOVER` goes out only on a change.

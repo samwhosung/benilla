@@ -421,12 +421,23 @@ fn on_client_control(
     mut e: Edges,
     // The flag and our guid are the host's too, so they sit in the set it shares with the cast.
     mut vm: crate::script_calls::VmWith<ControlSet>,
+    // The unit whose `IsClientControlled` bit the update writes.
+    mut units: (Option<Res<super::GuidIndex>>, Commands),
 ) {
     let SessionEvent::ClientControl { mover, allow_move } = ev else {
         return;
     };
     e.client_control
         .write(ClientControlMessage { mover, allow_move });
+    // `0x5fa62a`/`0x5fa631`: the unit's own bit first (`0x5fa636`).
+    if let Some(&unit) = units.0.as_deref().and_then(|i| i.0.get(&mover)) {
+        let mut unit = units.1.entity(unit);
+        if allow_move {
+            unit.insert(super::ClientControlled);
+        } else {
+            unit.remove::<super::ClientControlled>();
+        }
+    }
     {
         let (_, self_guid, mut own, mut lane, mut stop) = vm.own();
         let switches = stop.mover().is_some_and(|m| (m == mover) != allow_move);

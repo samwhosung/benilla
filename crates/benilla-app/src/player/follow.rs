@@ -60,9 +60,9 @@ pub(crate) struct FollowState {
     pub(crate) name: String,
     /// The band's latch: the synthesized forward input is held.
     moving: bool,
-    /// A packet's auto-move stop owes its forward release (`0x60e7f0`): it cleared autorun inside
-    /// its handler (`0x514630`, [`super::press::CallAutorun::clear`]), and the frame's steer
-    /// ([`steer_follow`]) applies the bit the calls left before the controller's step.
+    /// A packet's auto-move stop owes its forward release (`0x60e7f0`): it clears autorun
+    /// (`0x514630`, [`super::press::CallAutorun::clear`]) behind its `AUTOFOLLOW_END`, and the
+    /// frame's steer ([`steer_follow`]) applies the bit the calls left before the controller's step.
     release_owed: bool,
     /// `WOW_FOLLOW_TRACE` bookkeeping: the last trace line's time and position.
     traced_at: f64,

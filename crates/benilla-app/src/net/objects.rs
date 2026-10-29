@@ -82,6 +82,7 @@ pub(crate) struct Scene<'w, 's> {
     remote: Query<'w, 's, &'static mut RemoteMotion>,
     modes: Query<'w, 's, &'static mut UnitMoveModes>,
     xp_awarded: Query<'w, 's, (), With<crate::ui_chat::combat::watch::XpAwarded>>,
+    client_controlled: Query<'w, 's, (), With<super::ClientControlled>>,
     riders: Query<'w, 's, &'static mut crate::transport::TransportRider>,
     /// A transport's clock, which only a new object's create sets (`0x5f7080`).
     anchors: Query<'w, 's, &'static crate::transport::TransportAnchor>,

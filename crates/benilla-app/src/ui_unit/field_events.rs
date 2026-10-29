@@ -306,6 +306,11 @@ fn fire_lane(vm: &mut NoticeVm, lane: &mut NoticeLane, firing: &mut NoticeFiring
         return;
     }
     while let Some((stamp, notice)) = lane.pop(until) {
+        // An engine write, with no signal: the host's autorun bit.
+        if notice == FieldNotice::AutorunClear {
+            vm.engine_autorun_clear();
+            continue;
+        }
         if notice == FieldNotice::UsableRefresh {
             let ((), moved) = crate::lanes::firing(stamp, || vm.engine_usable_refresh());
             if moved {
@@ -493,6 +498,10 @@ pub(super) fn add_notice_lane(app: &mut App) {
 /// to hear them, and the one that comes up later must not hear changes from before it. The
 /// reference's interface exists before the world it watches, so it has no such window; the
 /// snapshots the VM reads are pushed whole when it comes up, as they are at a `/reload`.
+///
+/// A follow stop's autorun clear goes too: with no VM no call touches the bit, so the steer's
+/// release takes it clear ([`crate::player::CallAutorun`]), as it does where [`fire_lane`] drops
+/// the lane for want of a VM.
 pub(super) fn drop_field_notices(mut lane: ResMut<NoticeLane>) {
     lane.clear();
 }
@@ -600,6 +609,7 @@ pub(crate) fn fire(
         // Put on the trainer lane by the packet's handler ([`crate::ui_trainer::TrainerPasses`]).
         FieldNotice::TrainerPass
         | FieldNotice::AutoMoveStop
+        | FieldNotice::AutorunClear
         | FieldNotice::InputTick
         | FieldNotice::FarSightStop { .. } => {}
         // Run at its place by the packet's handler ([`crate::net::objects`]), its signal written

@@ -223,6 +223,14 @@ pub(crate) struct CommandSteps<'w, 's> {
 }
 
 impl CommandSteps<'_, '_> {
+    /// A follow stop's autorun clear, at its place behind `AUTOFOLLOW_END` on the notice lane
+    /// ([`crate::field_watch::FieldNotice::AutorunClear`]).
+    pub(crate) fn clear_autorun(&mut self) {
+        if let Some(autorun) = self.autorun.as_deref_mut() {
+            autorun.clear();
+        }
+    }
+
     /// Apply `input`; when it cancels the cast, whether the player is the active mover, the one
     /// extra test of the channel's cancel (`0x51517b`-`0x515191`).
     pub(crate) fn call(&mut self, input: BindingInput) -> Option<bool> {

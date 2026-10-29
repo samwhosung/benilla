@@ -148,6 +148,8 @@ enum Body {
         /// Bit 3 of the unit's `+0xc58`, which only the constructor clears (`0x5fae7a`): the
         /// object a block brings back is the one that left.
         xp_awarded: bool,
+        /// Bit 0x400 of the same word ([`crate::net::ClientControlled`]).
+        client_controlled: bool,
         /// A unit's resolved records, which its slot 3 compares (`0x5fbe28`).
         display: Option<HeldDisplay>,
         /// A transport's clock, which reactivation leaves (`0x464530` constructs nothing).
@@ -292,16 +294,23 @@ fn on_object_create(In(ev): In<SessionEvent>, mut sc: Scene) {
             }),
         ) => {
             let moved = write_fields(&mut store, fields.clone());
-            let (pose, modes, xp_awarded, display, kept_anchor) = match body {
+            let (pose, modes, (xp_awarded, controlled), display, kept_anchor) = match body {
                 Body::World {
                     pose,
                     modes,
                     xp_awarded,
+                    client_controlled,
                     display,
                     anchor,
                     ..
-                } => (Some(pose), modes, xp_awarded, display, anchor),
-                Body::Item { .. } => (None, None, false, None, None),
+                } => (
+                    Some(pose),
+                    modes,
+                    (xp_awarded, client_controlled),
+                    display,
+                    anchor,
+                ),
+                Body::Item { .. } => (None, None, (false, false), None, None),
             };
             // Only a unit takes the block's movement (`0x46638c`); any other type keeps its pose.
             let unit = matches!(kind, EntityKind::Unit | EntityKind::Player);
@@ -321,6 +330,9 @@ fn on_object_create(In(ev): In<SessionEvent>, mut sc: Scene) {
             }
             if xp_awarded {
                 sc.commands.entity(e).insert(XpAwarded);
+            }
+            if controlled {
+                sc.commands.entity(e).insert(crate::net::ClientControlled);
             }
             if let Some(display) = display {
                 sc.commands.entity(e).insert(display);
@@ -610,6 +622,7 @@ fn respawn(sc: &mut Scene, guid: u64, body: Body, store: ObjectFields, pose: Opt
             modes,
             rider,
             xp_awarded,
+            client_controlled,
             display,
             anchor,
         } => {
@@ -637,6 +650,9 @@ fn respawn(sc: &mut Scene, guid: u64, body: Body, store: ObjectFields, pose: Opt
             }
             if xp_awarded {
                 entity.insert(XpAwarded);
+            }
+            if client_controlled {
+                entity.insert(crate::net::ClientControlled);
             }
             if let Some(display) = display {
                 entity.insert(display);
@@ -920,6 +936,7 @@ fn release(sc: &mut Scene, guid: u64) {
                         local_orientation: r.local_orientation,
                     }),
                     xp_awarded: sc.xp_awarded.contains(e),
+                    client_controlled: sc.client_controlled.contains(e),
                     display: sc.held_displays.get(e).ok().copied(),
                     anchor: sc.anchors.get(e).ok().copied(),
                 }
@@ -1197,11 +1214,11 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
                     continue;
                 }
                 let active = sc.mover.as_deref().and_then(crate::net::MoverClaim::get);
-                // `IsClientControlled` (`0x5fa5f0`): our own control, or the unit we drive.
+                // `IsClientControlled` (`0x5fa5f0`): our own control, or the unit's own bit.
                 let controlled = if object == guid {
                     !sc.own_control_lost.as_deref().is_some_and(|l| l.0)
                 } else {
-                    active == Some(object)
+                    sc.client_controlled.contains(sc.index.0[&object])
                 };
                 let stops = if controlled {
                     active.filter(|&m| m != object)

@@ -325,6 +325,39 @@ fn a_toggle_after_the_stop_reads_autorun_clear() {
     );
 }
 
+/// `StopAutoMove` signals `AUTOFOLLOW_END` (`0x60fb84`) before its release clears autorun
+/// (`0x60fc08` → `0x60e83f`), so a toggle made between the stop and the return of END's
+/// listeners is undone: here one between the packet and the drain, where END's listeners run.
+/// The movement verbs' gate (tag 0) refuses an addon's code and passes the client's own only
+/// inside an input event (`0x494ab8`, `0x494b1a`), so the harness makes the listener's call.
+#[test]
+fn the_follows_autorun_clear_runs_after_its_end() {
+    use bevy::ecs::system::RunSystemOnce;
+    let mut app = autorunning();
+    let world = app.world_mut();
+    world
+        .resource_mut::<crate::bindings::BindingsState>()
+        .open_for_test();
+    crate::net::handlers::dispatch(world, vec![our_swing()]);
+    world
+        .run_system_once(|mut steps: crate::player::CommandSteps| {
+            steps.call(benilla_ui::script::BindingInput::Fire(
+                benilla_ui::script::FiredInput::ToggleAutoRun,
+            ))
+        })
+        .unwrap();
+    crate::lanes::fire_in_order(world);
+    let seen = world
+        .non_send_resource_mut::<UiScript>()
+        .eval::<Vec<String>>("return Seen")
+        .unwrap();
+    assert!(seen.iter().any(|e| e == "AUTOFOLLOW_END"), "{seen:?}");
+    assert_eq!(
+        world.resource::<crate::player::CallAutorun>().called(),
+        Some(false)
+    );
+}
+
 /// [`following`] with the boar's loot window open, its own events taken, and a spy on its close.
 fn looting() -> App {
     let mut app = following();
@@ -484,28 +517,52 @@ fn far_sight(object: u64) -> SessionEvent {
 
 /// Far sight on a unit we control takes the active mover (`0x5ee45d` → `0x5ee477`): the switch
 /// stops the outgoing mover's auto-move (`0x600742`), and when the unit already is the mover it
-/// switches nothing (`0x6006fb`) and runs no tick, so the follow goes on.
+/// switches nothing (`0x6006fb`) and runs no tick, so the follow goes on. `IsClientControlled`
+/// (`0x5fa5f0`) is the unit's own bit, which the control update writes (`0x5fa636`) whoever holds
+/// the mover.
 #[test]
 fn far_sight_on_a_unit_we_control_stops_only_the_mover_it_switches_from() {
-    let ends = |mover: u64, object: u64| {
+    let ends = |mover: u64, granted: Option<u64>, object: u64| {
         let mut app = following();
         let (tx, _rx) = crossbeam_channel::unbounded();
         let net = crate::net::NetCommands(tx);
-        app.world_mut()
+        if let Some(unit) = granted {
+            let grant = SessionEvent::ClientControl {
+                mover: unit,
+                allow_move: true,
+            };
+            frame(&mut app, vec![grant]);
+        }
+        let world = app.world_mut();
+        world
             .resource_mut::<crate::net::MoverClaim>()
             .claim(mover, &net);
+        // The grant's own switch may have ended it.
+        world
+            .resource_mut::<crate::player::FollowState>()
+            .start(LEADER, "Leader".into());
         let seen = frame(&mut app, vec![far_sight(object)]);
         seen.iter().filter(|e| *e == "AUTOFOLLOW_END").count()
     };
     assert_eq!(
-        ends(BOAR, BOAR),
+        ends(BOAR, Some(BOAR), BOAR),
         0,
         "the possessed boar already is the mover"
     );
-    assert_eq!(ends(ME, ME), 0, "our own body already is the mover");
+    assert_eq!(ends(ME, None, ME), 0, "our own body already is the mover");
     assert_eq!(
-        ends(BOAR, ME),
+        ends(BOAR, None, ME),
         1,
         "our own body takes the mover from the boar"
+    );
+    assert_eq!(
+        ends(WOLF, Some(BOAR), BOAR),
+        1,
+        "a controlled boar takes it from the wolf"
+    );
+    assert_eq!(
+        ends(ME, None, WOLF),
+        1,
+        "an uncontrolled unit runs the tick"
     );
 }
