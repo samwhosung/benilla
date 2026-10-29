@@ -81,8 +81,7 @@ pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
         "::items::Items",
         "the record answers' callbacks still run off the frame's records rather than in the \
          answer's list (`ItemCacheReceive` `0x55bdb0`, `0x55bf12`-`0x55bf39`): the action bar's \
-         slot records' (`0x4e5b80`) asked as a slot first shows, the craft and profession lists' \
-         (`0x4f7710`, `0x4fdc30`, `0x4fc8e0`) in `feed_craft` and `feed_trade_skill`, the \
+         slot records' (`0x4e5b80`) asked as a slot first shows, the \
          dress-up's (`0x504ba0`), the cast failure's redisplay (`0x6e29b0`, `0x6e2a90`), the \
          equipment display's (`0x5ed880`), and the lock-key tooltip's (`0x52ad10`), which \
          `drive_mouseover_tooltip` rebuilds each frame; and the combat log's (`0x6294b0`) and the \
@@ -193,7 +192,8 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     "::ui_auction::AuctionOpen",
     // Quiet: the craft and profession windows' open type and line, which an opener's cast
     // toggles and signals inside its call (`0x4fc910`, `0x4f6000`) and the closes zero in theirs;
-    // the feeds only push the lists off them, silently.
+    // the profession builds read the line through the host at their places, and the craft feed
+    // pushes its list off the type, silently.
     "::ui_craft::CraftOpen",
     "::ui_tradeskill::TradeSkillOpen",
     // Quiet: the profession openers a cast intercepted (`0x6e4bd7`), which the call host toggles
@@ -380,15 +380,11 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_items::locks::forget_gone_item_locks", &["net::GuidIndex"]),
     ("::ui_items::feed::feed_item_stats", &["items::Items", "net::HomeBind", "net::ObjectStore",
         "spell::mods::SpellModifiers"]),
-    // The getters' item callbacks, kept inside their calls, are spent as the frame left them.
-    ("::ui_tradeskill::feed_trade_skill", &["items::Countdowns", "items::Items", "net::GuidIndex",
-        "net::ObjectStore", "spell::cooldowns::Cooldowns", "ui_action::PlayerActions",
-        "ui_tradeskill::TradeSkillItemWaits", "ui_tradeskill::TradeSkillOpen"]),
     // Beast Training reads the pet off its bar and its family off the creature record as the frame
     // left them (#2217).
     ("::ui_craft::feed_craft", &["items::Countdowns", "items::Items", "names::NameCache",
         "net::GuidIndex", "net::ObjectStore", "spell::mods::SpellModifiers",
-        "ui_action::PlayerActions", "ui_craft::CraftItemWaits", "ui_craft::CraftOpen",
+        "ui_action::PlayerActions", "ui_craft::CraftOpen",
         "ui_pet::PetBar"]),
     // The resolution list's `widescreen` filter (`0x48bcac`), which a listener's `SetCVar` moves
     // inside its call; the reference builds the list at the first resolution verb (`0x48bc90`).

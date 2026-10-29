@@ -1,5 +1,6 @@
-//! The crafting book feed: the client-built TradeSkill window around `benilla_ui::script`'s
-//! `tradeskill` module. There is no wire: a profession opener (`SPELL_EFFECT_TRADE_SKILL` in
+//! The crafting book: the client-built TradeSkill window around `benilla_ui::script`'s
+//! `tradeskill` module, whose builds and getters read it here as it stands
+//! ([`TradeSkillLive`]). There is no wire: a profession opener (`SPELL_EFFECT_TRADE_SKILL` in
 //! `Effect[0]`) never reaches the send, as `Spell_C::TryCast` (`0x6e4b60`) opens the window
 //! client-side, and [`TradeSkillOpens`] is that intercept here.
 //!
@@ -30,7 +31,6 @@ use crate::ui_action::{PlayerActions, Spells};
 use crate::ui_items::{count_of, item_icon, InventoryScope};
 use crate::ui_script::{SweepApp, SweepLeg};
 use crate::ui_spellbook::SkillLines;
-use crate::ui_unit::UnitFeed;
 use benilla_assets::{AssetSet, LockRecover, WorldAssets};
 
 /// Opener spell ids (effect 47) that `send_spell_cast` intercepted (`0x6e4bd7`), which the call
@@ -64,10 +64,19 @@ pub(crate) fn fold_dying_vm_repeat(world: &mut World) {
     }
 }
 
-/// Seat the folded count in a new in-game VM before its load runs; the spell stays disarmed.
+/// Seat the folded count in a new in-game VM before its load runs; the spell stays disarmed. A
+/// book the engine holds open stays open in it, with no list until a rebuild
+/// ([`UiScript::seed_trade_skill_open`]).
 pub(crate) fn seed_repeat(world: &World, script: &mut UiScript) {
     if let Some(carry) = world.get_resource::<TradeSkillRepeatCarry>() {
         script.seed_trade_skill_repeat_count(carry.0);
+    }
+    if let Some(line) = world.get_resource::<TradeSkillOpen>().and_then(|o| o.line) {
+        let name = world
+            .get_resource::<SkillLines>()
+            .and_then(|l| l.catalog.line(line))
+            .map_or_else(|| format!("Skill {line}"), |l| l.name.clone());
+        script.seed_trade_skill_open(line, name);
     }
 }
 
@@ -104,10 +113,8 @@ impl Plugin for UiTradeSkillPlugin {
         app.add_sweep_leg(SweepLeg::TradeSkill, cancel_trade_skill_waits);
         app.init_resource::<TradeSkillOpens>()
             .init_resource::<TradeSkillOpen>()
-            .init_resource::<TradeSkillItemWaits>()
             .init_resource::<TradeSkillRepeatCarry>()
-            .add_systems(Startup, load_spell_focus.after(AssetSet::Open))
-            .add_systems(Update, feed_trade_skill.in_set(UnitFeed));
+            .add_systems(Startup, load_spell_focus.after(AssetSet::Open));
     }
 }
 
@@ -170,26 +177,6 @@ fn skill_value(store: &ObjectStore, skill_id: u32) -> u32 {
     skill_slot(store, skill_id).map_or(0, |s| u32::from(s.value))
 }
 
-/// What a skill watch's rebuild reads again (`0x5de434`, `0x5de457`): the line's rank and
-/// maximum, and each recipe's band on the slot's value (`0x4fcc31`-`0x4fcc41`).
-pub(crate) fn reband(
-    t: &mut TradeSkillState,
-    store: Option<&ObjectStore>,
-    skill_lines: Option<&SkillLines>,
-) {
-    let (Some(store), Some(skill_lines)) = (store, skill_lines) else {
-        return;
-    };
-    let rank = skill_value(store, t.line);
-    (t.rank, t.max_rank) = skill_rank(store, t.line);
-    let (race, class) = store.race_class();
-    for r in &mut t.recipes {
-        if let Some(sla) = skill_lines.catalog.ability(r.spell_id, race, class) {
-            r.difficulty = difficulty(rank, sla.trivial_low, sla.trivial_high);
-        }
-    }
-}
-
 /// The difficulty band (`0x4fcbfc`), with a zero `trivialLow` read as `trivialHigh - 25`; the
 /// TradeSkill window passes the raw rank, the Craft window the rank with bonuses.
 pub(crate) fn difficulty(rank: u32, low: u32, high: u32) -> TradeSkillDifficulty {
@@ -214,18 +201,24 @@ pub(crate) fn difficulty(rank: u32, low: u32, high: u32) -> TradeSkillDifficulty
 /// icon; the reference repaints when the item callback fires `TRADE_SKILL_UPDATE`. The Craft
 /// window and the trainer resolve icons by other laws; the reference shares no resolver.
 fn recipe_icon(
-    d: &benilla_formats::SpellDisplay,
+    product: Option<&benilla_protocol::ItemInfo>,
     icons: Option<&ItemDisplays>,
-    items: &Items,
+) -> Option<String> {
+    item_icon(icons, product?.display_info_id)
+}
+
+/// The build's lookup of a recipe's product, `EffectItemType[0]` whatever the effect, with the
+/// recipe's `0xb0000000` id as the owner (`0x4fcd21`-`0x4fcd4d`); a zero id looks nothing up.
+fn product<'a>(
+    d: &benilla_formats::SpellDisplay,
+    items: &'a Items,
     ask: Ask<'_>,
     owner: u64,
-) -> Option<String> {
+) -> Option<&'a benilla_protocol::ItemInfo> {
     let item = d.effect_item_type[0];
-    if item == 0 {
-        return None;
-    }
-    let display = items.template(item, owner, ask)?.display_info_id;
-    item_icon(icons, display)
+    (item != 0)
+        .then(|| items.template(item, owner, ask))
+        .flatten()
 }
 
 /// Build one recipe row; names still in flight are `None` and resolve when the template lands.
@@ -238,7 +231,7 @@ fn resolve_recipe(
     icons: Option<&ItemDisplays>,
     subclasses: Option<&crate::ui_items::ItemSubClasses>,
     store: &ObjectStore,
-    objects: &Objects,
+    objects: &dyn crate::ui_items::ItemObjects,
     items: &Items,
     ask: Ask<'_>,
     cooldowns: &crate::spell::Cooldowns,
@@ -285,28 +278,25 @@ fn resolve_recipe(
     } else {
         (0, 1, 1)
     };
-    // The build's lookup of the product, with the callback `0x4fc8e0` and the recipe's
-    // `0xb0000000` id as the owner (`0x4fcd21`-`0x4fcd4d`).
-    let owner = benilla_ui::script::spell_owner(spell_id);
-    let icon = recipe_icon(d, icons, items, ask, owner);
+    // The build's lookup of the product, whose miss keeps the callback `0x4fc8e0`.
+    let item = d.effect_item_type[0];
+    let product = product(d, items, ask, benilla_ui::script::spell_owner(spell_id));
+    let icon = recipe_icon(product, icons);
     // The icon getter's item while its record is in flight (`0x4fdb90`).
-    let icon_pending = Some(d.effect_item_type[0])
-        .filter(|&item| item != 0 && items.template(item, 0, Ask::Read).is_none());
+    let icon_pending = Some(item).filter(|&item| item != 0 && product.is_none());
     // The header key (`0x4fca20`): the product's `(class, subclass)` named from
     // `ItemSubClass.dbc`, `None` while its template is in flight, as in the client. The same
     // template gives the `InventoryType` the slot filter reads and the `ItemLevel` the sort
     // breaks ties on (`record+0x14`).
-    let (group, product_inv_type, product_item_level) = (product_item != 0)
-        .then(|| {
-            items.template(product_item, owner, ask).map(|t| {
-                let name = subclasses
-                    .and_then(|sc| sc.0.name(t.class, t.subclass))
-                    .unwrap_or_default()
-                    .to_string();
-                ((t.class, t.subclass, name), t.inventory_type, t.item_level)
-            })
+    let (group, product_inv_type, product_item_level) = product
+        .filter(|_| product_item != 0)
+        .map(|t| {
+            let name = subclasses
+                .and_then(|sc| sc.0.name(t.class, t.subclass))
+                .unwrap_or_default()
+                .to_string();
+            ((t.class, t.subclass, name), t.inventory_type, t.item_level)
         })
-        .flatten()
         .map_or((None, 0, 0), |(g, it, il)| (Some(g), it, il));
 
     // Tools in `0x4ff980`'s order: the spell focus, `Totem[0]`, `Totem[1]`. The focus is always
@@ -360,7 +350,8 @@ fn cancel_trade_skill_waits(mut vm: crate::script_calls::HostedVm) {
 
 /// The packets that rebuild the open profession and craft lists, each at its handler's place on
 /// a lane of their own ([`ListRebuilds`]): a learn, an unlearn and a supersede's two halves
-/// (`0x5e9c20`, `0x5e9fe0`, `0x5e6392`, `0x5e63a4`), and `SMSG_PET_SPELLS` (`0x4bdafa`).
+/// (`0x5e9c20`, `0x5e9fe0`, `0x5e6392`, `0x5e63a4`), `SMSG_PET_SPELLS` (`0x4bdafa`), and the item
+/// answers whose callbacks the lists' lookups kept ([`record_answered`]).
 pub(crate) fn register_rebuild_triggers(app: &mut App) {
     use crate::lanes::LaneApp;
     use SessionEventKind as K;
@@ -392,6 +383,13 @@ enum ListRebuild {
     Trade,
     /// The craft list (`0x4f60c0`).
     Craft,
+    /// A profession getter's record found (`0x4fdc30`): the list with flag 0 (`0x4fdc3c`).
+    TradeRecord,
+    /// A build's product record found (`0x4fc8e0`): the pending count down, and at 0 the list
+    /// with flag 1 (`0x4fc8f3`-`0x4fc900`).
+    TradeBuildRecord,
+    /// A craft getter's record found (`0x4f7710`): the craft list (`0x4f771a`).
+    CraftRecord,
 }
 
 /// The rebuilds the handlers queue, each stamped as its handler queued it
@@ -417,9 +415,9 @@ fn drop_list_rebuilds(mut rebuilds: ResMut<ListRebuilds>) {
     rebuilds.0.clear();
 }
 
-/// The lane's `fire_until` ([`crate::lanes`]): each rebuild `until` admits, over the lists the
-/// feeds pushed this frame, its window's update signalled while the window is open
-/// (`0x4fd164`, `0x4f661a`); the lane stops after one whose firing stamped anything.
+/// The lane's `fire_until` ([`crate::lanes`]): each rebuild `until` admits, its build reading the
+/// book as it stands there, its window's update signalled while the window is open (`0x4fd164`,
+/// `0x4f661a`); the lane stops after one whose firing stamped anything.
 fn fire_list_rebuilds(
     In(until): In<crate::lanes::Until>,
     mut vm: crate::script_calls::HostedVm,
@@ -435,14 +433,16 @@ fn fire_list_rebuilds(
                     return;
                 };
                 match rebuild {
-                    ListRebuild::Trade => {
-                        if script.rebuild_trade_skill_with(true, &mut |_| {}) {
-                            script.fire_event("TRADE_SKILL_UPDATE", vec![]);
-                        }
-                    }
-                    ListRebuild::Craft => {
+                    ListRebuild::Craft | ListRebuild::CraftRecord => {
                         if script.rebuild_craft(&mut |_| {}) {
                             script.fire_event("CRAFT_UPDATE", vec![]);
+                        }
+                    }
+                    ListRebuild::TradeBuildRecord if !script.trade_skill_record_landed() => {}
+                    _ => {
+                        let remake = rebuild != ListRebuild::TradeRecord;
+                        if script.rebuild_trade_skill_with(remake, &mut |_| {}) {
+                            script.fire_event("TRADE_SKILL_UPDATE", vec![]);
                         }
                     }
                 }
@@ -538,8 +538,26 @@ fn on_pet_spells(In(ev): In<SessionEvent>, mut lists: ListTriggers) {
     }
 }
 
+/// A profession or craft callback on a found record, at its place in the entry's list
+/// (`ItemCacheReceive` `0x55bdb0`, [`crate::net::objects`]): its rebuild and signal fire on the
+/// list lane there. A refusal runs each with its status byte clear, which does nothing
+/// (`0x4fdc38`, `0x4fc8e8`, `0x4f7718`).
+pub(crate) fn record_answered(world: &mut World, callback: crate::items::RecordCallback) {
+    use crate::items::RecordCallback as Cb;
+    let rebuild = match callback {
+        Cb::TradeSkill => ListRebuild::TradeRecord,
+        Cb::TradeSkillBuild => ListRebuild::TradeBuildRecord,
+        Cb::Craft => ListRebuild::CraftRecord,
+        _ => return,
+    };
+    if let Some(mut rebuilds) = world.get_resource_mut::<ListRebuilds>() {
+        rebuilds.push(rebuild);
+    }
+}
+
 /// What the book's build reads (`0x4fca20`): the player's known recipes, the catalogs, the
-/// player object, the bags, the item cache and the cooldowns.
+/// player object and the bags as of the drain's place ([`crate::ui_unit::views::ViewStores`]), the
+/// item cache and the cooldowns.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct TradeSkillReads<'w, 's> {
     actions: Res<'w, PlayerActions>,
@@ -548,36 +566,32 @@ pub(crate) struct TradeSkillReads<'w, 's> {
     focus: Option<Res<'w, SpellFocus>>,
     icons: Option<Res<'w, ItemDisplays>>,
     subclasses: Option<Res<'w, crate::ui_items::ItemSubClasses>>,
-    self_store: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
     objects: Objects<'w, 's>,
+    stores: crate::ui_unit::views::ViewStores<'w, 's>,
     items: Res<'w, Items>,
     commands: Res<'w, NetCommands>,
     cooldowns: Res<'w, crate::spell::Cooldowns>,
 }
 
 impl TradeSkillReads<'_, '_> {
-    /// The book of `line`: its known recipes, banded against the current rank, their products'
-    /// records looked up as `asks` says, the cooldowns mapped through `clock`; `None` while a
-    /// catalog or our player is missing.
+    /// The active player's store as of here (`0x468460` at `0x4fcb1b`).
+    fn player(&self) -> Option<&ObjectStore> {
+        self.objects.player().and_then(|e| self.stores.get(e).ok())
+    }
+
+    /// The book of `line` as a build reads it: its known recipes, banded against the current rank,
+    /// the cooldowns mapped through `clock`, each product looked up with the callback `0x4fc8e0`
+    /// kept for a miss (`0x4fcd4d`); `None` while a catalog or our player is missing.
     pub(crate) fn state(
         &self,
         line: u32,
-        asks: bool,
         clock: &crate::ui_script::UiClock,
     ) -> Option<TradeSkillState> {
-        let ask = Ask::at(asks, &self.commands);
         let spells = self.spells.as_deref()?;
         let skill_lines = self.skill_lines.as_deref()?;
-        let store = self.self_store.single().ok()?;
-        let rank = skill_value(store, line);
-        let (line_rank, max_rank) = skill_rank(store, line);
+        let store = self.player()?;
         let (race, class) = store.race_class();
-        let line_name = skill_lines
-            .catalog
-            .line(line)
-            .map(|l| l.name.clone())
-            .unwrap_or_else(|| format!("Skill {line}"));
-        let now = (clock.anchor, clock.ui_now);
+        let (line_name, line_rank, max_rank) = self.line_now(line);
         // The line's list in learn order (`0x5e9d72`), which the build walks (`0x4fcbb7`).
         let recipes: Vec<TradeSkillRecipe> = self
             .actions
@@ -590,23 +604,7 @@ impl TradeSkillReads<'_, '_> {
                     .is_some_and(|d| d.attributes & SPELL_ATTR_IS_TRADESKILL != 0)
                     && skill_lines.catalog.spell_to_line(s, race, class) == Some(line)
             })
-            .filter_map(|&s| {
-                resolve_recipe(
-                    s,
-                    rank,
-                    spells,
-                    skill_lines,
-                    self.focus.as_deref(),
-                    self.icons.as_deref(),
-                    self.subclasses.as_deref(),
-                    store,
-                    &self.objects,
-                    &self.items,
-                    ask,
-                    &self.cooldowns,
-                    now,
-                )
-            })
+            .filter_map(|&s| self.recipe_of(s, line, true, clock))
             .collect();
         // No sort here: the engine orders the book (`0x4fd180`).
         Some(TradeSkillState {
@@ -618,11 +616,61 @@ impl TradeSkillReads<'_, '_> {
         })
     }
 
+    /// `spell_id`'s row of `line`'s book as it stands, the build's lookup of its product made
+    /// with the callback `0x4fc8e0` when `build`, else read.
+    fn recipe_of(
+        &self,
+        spell_id: u32,
+        line: u32,
+        build: bool,
+        clock: &crate::ui_script::UiClock,
+    ) -> Option<TradeSkillRecipe> {
+        let store = self.player()?;
+        let objects = self.stores.item_objects(&self.objects);
+        let recipe = resolve_recipe(
+            spell_id,
+            skill_value(store, line),
+            self.spells.as_deref()?,
+            self.skill_lines.as_deref()?,
+            self.focus.as_deref(),
+            self.icons.as_deref(),
+            self.subclasses.as_deref(),
+            store,
+            &objects,
+            &self.items,
+            Ask::at(build, &self.commands),
+            &self.cooldowns,
+            (clock.anchor, clock.ui_now),
+        )?;
+        if build {
+            if let Some(item) = recipe.icon_pending {
+                self.items
+                    .wait(item, crate::items::RecordCallback::TradeSkillBuild);
+            }
+        }
+        Some(recipe)
+    }
+
+    /// `GetTradeSkillLine`'s answer for `line` (`0x4fdd40`): its `SkillLine` name, `UNKNOWN` for
+    /// none (`0x4fde92`), and the slot's rank and maximum, 0 and 0 with no player.
+    fn line_now(&self, line: u32) -> (String, u32, u32) {
+        let Some(name) = self
+            .skill_lines
+            .as_deref()
+            .and_then(|l| l.catalog.line(line))
+            .map(|l| l.name.clone())
+        else {
+            return ("UNKNOWN".to_string(), 0, 0);
+        };
+        let (rank, max) = self.player().map_or((0, 0), |s| skill_rank(s, line));
+        (name, rank, max)
+    }
+
     /// The opener's line (`SkillLineRecIndex_Find` `0x6de040` at `0x6e4bf3`) and its craft type,
     /// `EffectMiscValue[0]` (`0x6e4bd7`), which routes a nonzero type to the Craft window
     /// (Enchanting 3, Beast Training 1) and zero to this one (3908 Tailoring is line 197).
     fn opener(&self, spell_id: u32) -> Option<(u32, u32)> {
-        let (race, class) = self.self_store.single().map_or((0, 0), |s| s.race_class());
+        let (race, class) = self.player().map_or((0, 0), |s| s.race_class());
         let Some(skill_lines) = self.skill_lines.as_deref() else {
             warn!("ui_tradeskill: opener {spell_id} before SkillLineAbility loaded — dropped");
             return None;
@@ -647,122 +695,37 @@ impl TradeSkillReads<'_, '_> {
     }
 }
 
-/// Keep the VM's book as the engine holds it, silently: a `/reload`'s new VM takes the open line's
-/// list with no event, as its world-enter init left it, and the getters read the state at their
-/// call. The open and the closes signal in their calls ([`TradeSkillSteps`]); the rebuilds signal
-/// at their packets.
-fn feed_trade_skill(
-    mut vm: crate::script_calls::VmWith<(
-        TradeSkillReads<'static, 'static>,
-        Res<'static, TradeSkillOpen>,
-        ResMut<'static, TradeSkillItemWaits>,
-    )>,
-    clock: Res<crate::ui_script::UiClock>,
-    mut memo: Local<crate::ui_script::VmMemo<TradeMemo>>,
-    mut engine: Local<TradeEngine>,
-) {
-    vm.feed(|script, (reads, open, mut waits), fires| {
-        let Some(script) = script else {
-            return;
-        };
-        let memo = memo.get(script);
-        // The open's build asked its products in its call ([`TradeSkillSteps`]); a new VM's first
-        // push asks what it lacks, and the pushes between read, as the getters' lookups stand for
-        // the stock frame's calls (`0x4fdba8`).
-        let fresh = open
-            .line
-            .and_then(|line| reads.state(line, memo.state.is_none(), &clock));
-        // The line stays open while a frame cannot resolve its book (a worldport's purge of our
-        // own player): only a close ends it (`0x4fc870`, `0x4fc920`).
-        let fresh = match fresh {
-            None if open.line.is_some() => memo.state.clone(),
-            f => f,
-        };
-        // The getters' item callbacks, kept inside their calls ([`ask_item_record`]); each record
-        // that landed rebuilds (`0x4fdc30` → `0x4fdc3c`), and a refusal runs it with status 0,
-        // which does nothing (`0x4fdc38`).
-        let arrivals = landed(&mut waits.0, &reads.items);
-        // Every push is silent: the rebuilds signal, and the getters read the state at their call.
-        if fresh != memo.state {
-            script.set_trade_skill(fresh.clone());
-            // The templates the link verbs read, off the cache: they pass no callback (`0x4ff4b9`,
-            // `0x4ff8da`).
-            if let Some(f) = &fresh {
-                script.read_item_templates(f.recipes.iter().flat_map(|r| {
-                    std::iter::once(r.product_item).chain(r.reagents.iter().map(|re| re.item))
-                }));
-            }
-        }
-        // Each landed record's rebuild signals the update; the packets' fire on their lane.
-        if fresh.is_some() {
-            for _ in 0..arrivals {
-                if script.rebuild_trade_skill_with(false, &mut |_| {}) {
-                    fires.post("TRADE_SKILL_UPDATE", vec![]);
-                }
-            }
-        }
-        // Each product record a build waited on runs its callback as it lands (`0x4fc8e0`),
-        // which rebuilds with flag 1 once nothing is pending.
-        engine
-            .build_waits
-            .extend(script.take_trade_skill_build_waits());
-        let built = landed(&mut engine.build_waits, &reads.items);
-        for _ in 0..built {
-            if script.trade_skill_record_landed()
-                && script.rebuild_trade_skill_with(true, &mut |_| {})
-            {
-                fires.post("TRADE_SKILL_UPDATE", vec![]);
-            }
-        }
-        memo.state = fresh;
-    })
+/// The profession getters' and builds' reads as they run, the call host's half of
+/// [`benilla_ui::script::TradeSkillBookQuery`], [`benilla_ui::script::TradeSkillRecipeQuery`] and
+/// [`benilla_ui::script::TradeSkillLineQuery`], over the open line `[0xbde040]`.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct TradeSkillLive<'w, 's> {
+    open: Res<'w, TradeSkillOpen>,
+    reads: TradeSkillReads<'w, 's>,
+    /// The tick's clock pair, as the host reads it.
+    clock: Option<Res<'w, crate::ui_script::HostClock>>,
 }
 
-/// What [`feed_trade_skill`] remembers from its last frame, per VM.
-#[derive(Default)]
-struct TradeMemo {
-    /// The state it last pushed.
-    state: Option<TradeSkillState>,
+impl crate::script_calls::live::LiveFamily for TradeSkillLive<'_, '_> {
+    fn answer(&mut self, ask: &mut benilla_ui::script::live::LiveAsk<'_>) -> bool {
+        use benilla_ui::script::{TradeSkillBookQuery, TradeSkillLineQuery, TradeSkillRecipeQuery};
+        let unticked = crate::ui_script::UiClock::default();
+        let clock = self.clock.as_deref().map_or(&unticked, |c| &c.0);
+        let (line, reads) = (self.open.line, &self.reads);
+        ask.answer(|_: &TradeSkillBookQuery| reads.state(line?, clock))
+            || ask.answer(|q: &TradeSkillRecipeQuery| reads.recipe_of(q.0, line?, false, clock))
+            || ask.answer(|_: &TradeSkillLineQuery| Some(reads.line_now(line.unwrap_or(0))))
+    }
 }
-
-/// What [`feed_trade_skill`] keeps across VMs, as the engine does across a `/reload`.
-#[derive(Default)]
-struct TradeEngine {
-    /// The product records the builds' callbacks wait on, one per miss (`0x4fc8e0`).
-    build_waits: Vec<u32>,
-}
-
-/// The item records the trade-skill getters' lookups missed, one per call, each the callback
-/// `0x4fdc30` the item cache keeps, which outlives a VM and no cancel removes (`0x4fc890`); the
-/// lookups ask inside their calls ([`ask_item_record`]).
-#[derive(Resource, Default)]
-pub(crate) struct TradeSkillItemWaits(pub(crate) Vec<u32>);
 
 /// A trade-skill getter's lookup of a record in flight, inside its call
 /// ([`benilla_ui::script::ItemCallback::TradeSkill`]): the item cache asks a miss, a refused
-/// entry again, and keeps one callback per call (`0x4fdb90`, `0x4fdf77`, `0x4ff6cd`, `0x4ffac6`).
-pub(crate) fn ask_item_record(
-    items: &Items,
-    commands: &NetCommands,
-    waits: &mut TradeSkillItemWaits,
-    entry: u32,
-    owner: u64,
-) {
-    let _ = items.template(entry, owner, Ask::Event(commands));
-    waits.0.push(entry);
-}
-
-/// Spend the waits whose record answered: the count of those that brought one.
-pub(crate) fn landed(waits: &mut Vec<u32>, items: &Items) -> u32 {
-    let mut landed = 0;
-    waits.retain(|&entry| {
-        if !items.template_answered(entry) {
-            return true;
-        }
-        landed += u32::from(items.template(entry, 0, Ask::Read).is_some());
-        false
-    });
-    landed
+/// entry again, and keeps the callback `0x4fdc30` on it, one per call, which outlives a VM and no
+/// cancel removes (`0x4fdb90`, `0x4fdf77`, `0x4ff6cd`, `0x4ffac6`, `0x4fc890`).
+pub(crate) fn ask_item_record(items: &Items, commands: &NetCommands, entry: u32, owner: u64) {
+    if items.template(entry, owner, Ask::Event(commands)).is_none() {
+        items.wait(entry, crate::items::RecordCallback::TradeSkill);
+    }
 }
 
 /// `HandleSpellGo`'s call to the repeat hook `OnTradeSkillCastDone` (`0x4fd7b0` at `0x6e81e7`),
@@ -901,11 +864,8 @@ impl TradeSkillSteps<'_, '_> {
         }
         debug!("ui_tradeskill: the opener opens skill line {line}");
         open.line = Some(line);
-        let clock = self.clock.as_deref().map(|c| &c.0);
-        let fresh = match clock {
-            Some(clock) => reads.state(line, true, clock),
-            None => reads.state(line, true, &crate::ui_script::UiClock::default()),
-        };
+        let unticked = crate::ui_script::UiClock::default();
+        let fresh = reads.state(line, self.clock.as_deref().map_or(&unticked, |c| &c.0));
         let (update, show) = script.open_trade_skill(fresh);
         if update {
             script.fire_event("TRADE_SKILL_UPDATE", vec![]);
@@ -1026,7 +986,10 @@ mod tests {
         let icons = landed_item(&mut deps);
         let d = recipe(SPELL_EFFECT_CREATE_ITEM, 777);
         assert_eq!(
-            recipe_icon(&d, Some(&icons), &deps.items, Ask::New(&deps.commands), 0),
+            recipe_icon(
+                product(&d, &deps.items, Ask::New(&deps.commands), 0),
+                Some(&icons)
+            ),
             Some("ITEM".into()),
         );
     }
@@ -1038,7 +1001,10 @@ mod tests {
         let icons = landed_item(&mut deps);
         let d = recipe(SPELL_EFFECT_ENCHANT_ITEM, 777);
         assert_eq!(
-            recipe_icon(&d, Some(&icons), &deps.items, Ask::New(&deps.commands), 0),
+            recipe_icon(
+                product(&d, &deps.items, Ask::New(&deps.commands), 0),
+                Some(&icons)
+            ),
             Some("ITEM".into()),
         );
     }
@@ -1053,11 +1019,8 @@ mod tests {
         let none = recipe(SPELL_EFFECT_ENCHANT_ITEM, 0);
         assert_eq!(
             recipe_icon(
-                &none,
-                Some(&icons),
-                &deps.items,
-                Ask::New(&deps.commands),
-                0
+                product(&none, &deps.items, Ask::New(&deps.commands), 0),
+                Some(&icons)
             ),
             None,
         );
@@ -1066,21 +1029,15 @@ mod tests {
         let missing = recipe(SPELL_EFFECT_CREATE_ITEM, 999);
         assert_eq!(
             recipe_icon(
-                &missing,
-                Some(&icons),
-                &deps.items,
-                Ask::New(&deps.commands),
-                0
+                product(&missing, &deps.items, Ask::New(&deps.commands), 0),
+                Some(&icons)
             ),
             None,
         );
         assert_eq!(
             recipe_icon(
-                &missing,
-                Some(&icons),
-                &deps.items,
-                Ask::New(&deps.commands),
-                0
+                product(&missing, &deps.items, Ask::New(&deps.commands), 0),
+                Some(&icons)
             ),
             None,
         );
@@ -1089,7 +1046,7 @@ mod tests {
         // Template landed, `ItemDisplayInfo` missing: still nil.
         let d = recipe(SPELL_EFFECT_CREATE_ITEM, 777);
         assert_eq!(
-            recipe_icon(&d, None, &deps.items, Ask::New(&deps.commands), 0),
+            recipe_icon(product(&d, &deps.items, Ask::New(&deps.commands), 0), None),
             None
         );
     }
@@ -1276,15 +1233,13 @@ mod tests {
             .expect("the toggle runs");
     }
 
-    /// `CloseTradeSkill` signals `TRADE_SKILL_CLOSE` in the verb (`0x4fc884`), so the feed that
-    /// finds the book closed a frame later signals no second close; the opener's toggle signals
-    /// its own (`0x4fc930`).
+    /// `CloseTradeSkill` signals `TRADE_SKILL_CLOSE` in the verb (`0x4fc884`), and nothing signals
+    /// a second close a frame later; the opener's toggle signals its own (`0x4fc930`).
     #[test]
     fn a_verbs_close_is_signalled_once() {
         let (tx, _rx) = crossbeam_channel::unbounded();
         let mut app = App::new();
         app.init_resource::<TradeSkillOpen>()
-            .init_resource::<TradeSkillItemWaits>()
             .init_resource::<PlayerActions>()
             .init_resource::<crate::net::GuidIndex>()
             .init_resource::<Items>()
@@ -1306,7 +1261,6 @@ mod tests {
             )
             .unwrap();
         app.insert_non_send_resource(script);
-        app.add_systems(Update, feed_trade_skill);
         let closes = |app: &App| {
             app.world()
                 .non_send_resource::<UiScript>()
@@ -1324,7 +1278,7 @@ mod tests {
         // The host's half, which this harness has none of.
         app.world_mut().resource_mut::<TradeSkillOpen>().line = None;
         app.update();
-        assert_eq!(closes(&app), 1, "no second signal from the feed");
+        assert_eq!(closes(&app), 1, "no second signal");
 
         toggle_line(&mut app, 197);
         app.update();
@@ -1335,8 +1289,8 @@ mod tests {
 
     /// The open runs the build with flag 1 (`0x4fc985` → `0x4fca20`), whose tail signals
     /// `TRADE_SKILL_UPDATE` (`0x4fd164`), then `TRADE_SKILL_SHOW` while the list holds a row
-    /// (`0x4fc98a`-`0x4fc999`); a change no rebuild runs on, as a cooldown starting, pushes
-    /// silently: the getter reads it live (`0x4fda20`).
+    /// (`0x4fc98a`-`0x4fc999`); a change no rebuild runs on, as a cooldown starting, signals
+    /// nothing: the getter reads it at its call (`0x4fda20`).
     #[test]
     fn the_open_signals_update_then_show_and_a_bare_change_signals_nothing() {
         const SPELL: u32 = 18_560;
@@ -1352,7 +1306,6 @@ mod tests {
             ..Default::default()
         };
         app.init_resource::<TradeSkillOpen>()
-            .init_resource::<TradeSkillItemWaits>()
             .insert_resource(actions)
             .init_resource::<crate::net::GuidIndex>()
             .init_resource::<Items>()
@@ -1388,7 +1341,6 @@ mod tests {
             )
             .unwrap();
         app.insert_non_send_resource(script);
-        app.add_systems(Update, feed_trade_skill);
         let heard = |app: &mut App| {
             app.update();
             app.world()
@@ -1403,13 +1355,6 @@ mod tests {
             .resource_mut::<crate::spell::Cooldowns>()
             .start_spell(SPELL, &d, 0, Instant::now(), None);
         assert!(heard(&mut app).is_empty());
-        assert!(
-            app.world()
-                .non_send_resource::<UiScript>()
-                .eval::<bool>("return GetTradeSkillCooldown(2) ~= nil")
-                .unwrap(),
-            "pushed, silently"
-        );
     }
 
     /// The build refills the array from the line's list in learn order (`0x5e9d72` appends,
@@ -1442,7 +1387,6 @@ mod tests {
             trivial_high: 2,
         };
         app.init_resource::<TradeSkillOpen>()
-            .init_resource::<TradeSkillItemWaits>()
             .insert_resource(actions)
             .init_resource::<crate::net::GuidIndex>()
             .init_resource::<Items>()
@@ -1463,9 +1407,7 @@ mod tests {
         app.world_mut()
             .spawn((ObjectStore(Default::default()), SelfPlayer));
         app.insert_non_send_resource(UiScript::new().unwrap());
-        app.add_systems(Update, feed_trade_skill);
-        app.world_mut().resource_mut::<TradeSkillOpen>().line = Some(197);
-        app.update();
+        toggle_line(&mut app, 197);
         let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
         script.run("CollapseTradeSkillSubClass(0)").unwrap();
         script.rebuild_trade_skill(&mut |_| {});
@@ -1475,82 +1417,6 @@ mod tests {
             )
             .unwrap();
         assert_eq!(tail, ["Recipe 200", "Recipe 100", "Recipe 300"]);
-    }
-
-    /// The open's build with a product's record in flight counts it pending and leaves before its
-    /// update (`0x4fcd58`, `0x4fcf34`), the show still signalled for the rows it holds
-    /// (`0x4fc98a`); the record's arrival runs the build's callback, which rebuilds with flag 1
-    /// once the pending count is 0 (`0x4fc8e0`-`0x4fc900`), and that rebuild signals the update.
-    #[test]
-    fn a_product_in_flight_holds_the_update_until_its_record_lands() {
-        const SILK: u32 = 4305;
-        let (tx, _rx) = crossbeam_channel::unbounded();
-        let mut app = App::new();
-        let mut actions = PlayerActions::default();
-        actions.spells.insert(3839);
-        actions.profession_order.push(3839);
-        let mut effect_item_type = [0; 3];
-        effect_item_type[0] = SILK;
-        let bolt = SpellDisplay {
-            name: "Bolt of Silk Cloth".into(),
-            attributes: SPELL_ATTR_IS_TRADESKILL,
-            effects: [SPELL_EFFECT_CREATE_ITEM, 0, 0],
-            effect_item_type,
-            ..Default::default()
-        };
-        app.init_resource::<TradeSkillOpen>()
-            .init_resource::<TradeSkillItemWaits>()
-            .insert_resource(actions)
-            .init_resource::<crate::net::GuidIndex>()
-            .init_resource::<Items>()
-            .init_resource::<crate::spell::Cooldowns>()
-            .init_resource::<crate::ui_script::UiClock>()
-            .insert_resource(crate::net::NetCommands(tx))
-            .insert_resource(Spells {
-                catalog: benilla_formats::SpellCatalog::from_displays(
-                    [(3839, bolt)].into_iter().collect(),
-                ),
-                ..Spells::empty_for_tests()
-            })
-            .insert_resource(SkillLines {
-                catalog: benilla_formats::SkillLineCatalog::from_abilities([(
-                    3839,
-                    benilla_formats::SlaInfo {
-                        skill_id: 197,
-                        req_skill_value: 1,
-                        forward_spell_id: 0,
-                        trivial_low: 1,
-                        trivial_high: 2,
-                    },
-                )]),
-            });
-        app.world_mut()
-            .spawn((ObjectStore(Default::default()), SelfPlayer));
-        let script = UiScript::new().unwrap();
-        script
-            .run(
-                "HEARD = {} local f = CreateFrame('Frame') f:RegisterEvent('TRADE_SKILL_SHOW') \
-                 f:RegisterEvent('TRADE_SKILL_UPDATE') \
-                 f:SetScript('OnEvent', function() table.insert(HEARD, event) end)",
-            )
-            .unwrap();
-        app.insert_non_send_resource(script);
-        app.add_systems(Update, feed_trade_skill);
-        let heard = |app: &mut App| {
-            app.update();
-            app.world()
-                .non_send_resource::<UiScript>()
-                .eval::<Vec<String>>("local h = HEARD HEARD = {} return h")
-                .unwrap()
-        };
-        toggle_line(&mut app, 197);
-        assert_eq!(heard(&mut app), ["TRADE_SKILL_SHOW"]);
-        assert!(heard(&mut app).is_empty());
-        app.world_mut().resource_mut::<Items>().insert_template(
-            SILK,
-            Some(crate::items::test_template("Bolt of Silk Cloth")),
-        );
-        assert_eq!(heard(&mut app), ["TRADE_SKILL_UPDATE"]);
     }
 
     /// The window's show asks what the list build looks up, each recipe's product with the
@@ -1598,7 +1464,6 @@ mod tests {
             trivial_high: 2,
         };
         app.init_resource::<TradeSkillOpen>()
-            .init_resource::<TradeSkillItemWaits>()
             .init_resource::<crate::ui_craft::CraftOpen>()
             .insert_resource(actions)
             .init_resource::<crate::net::GuidIndex>()
@@ -1618,11 +1483,7 @@ mod tests {
         app.world_mut()
             .spawn((ObjectStore(Default::default()), SelfPlayer));
         app.insert_non_send_resource(UiScript::new().unwrap());
-        app.add_systems(Update, feed_trade_skill.in_set(crate::ui_script::UiFeed))
-            .insert_resource(State::new(crate::client_state::ClientState::InWorld));
-        app.world_mut().resource_mut::<TradeSkillOpen>().line = Some(197);
-        app.update();
-        app.update();
+        toggle_line(&mut app, 197);
         let asked: Vec<_> = crate::query_cache::queries(&rx)
             .into_iter()
             .filter(|c| matches!(c, crate::net::ClientCommand::ItemQuery { .. }))
@@ -1643,10 +1504,9 @@ mod tests {
 
     /// A learn or an unlearn of a profession spell rebuilds the open list once per packet
     /// (`0x5e9d79`, `0x5ea165`), whether or not the list moved, a supersede once for each half
-    /// (`0x5e6392`, `0x5e63a4`); another spell rebuilds nothing. A record a getter's call waited
-    /// on rebuilds it once per call (`0x4fdc30` → `0x4fdc3c`).
+    /// (`0x5e6392`, `0x5e63a4`); another spell rebuilds nothing.
     #[test]
-    fn each_packet_and_each_waited_record_signals_one_update() {
+    fn each_book_packet_signals_one_update() {
         const LINEN: u32 = 2589;
         const REAGENTS_LINEN: [(u32, u32); 8] = [
             (LINEN, 2),
@@ -1677,7 +1537,6 @@ mod tests {
             trivial_high: 2,
         };
         app.init_resource::<TradeSkillOpen>()
-            .init_resource::<TradeSkillItemWaits>()
             .init_resource::<crate::ui_craft::CraftOpen>()
             .insert_resource(actions)
             .init_resource::<crate::net::GuidIndex>()
@@ -1713,8 +1572,7 @@ mod tests {
                  f:SetScript('OnEvent', function() table.insert(HEARD, event) end)",
             )
             .unwrap();
-        app.insert_non_send_resource(script);
-        app.add_systems(Update, feed_trade_skill.in_set(crate::ui_script::UiFeed))
+        app.insert_non_send_resource(script)
             .insert_resource(State::new(crate::client_state::ClientState::InWorld));
         register_rebuild_triggers(&mut app);
         let heard = |app: &mut App| {
@@ -1754,34 +1612,6 @@ mod tests {
             vec![SessionEvent::SpellRemoved { spell_id: 2964 }],
         );
         assert!(heard(&mut app).is_empty());
-        let entries = {
-            let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
-            s.keep_calls();
-            s.run("GetTradeSkillReagentInfo(2, 1) GetTradeSkillReagentInfo(2, 1)")
-                .unwrap();
-            s.take_trade_skill_item_waits()
-        };
-        // The host's lookups inside the calls ([`super::ask_item_record`]).
-        app.world_mut()
-            .resource_scope(|world, mut waits: Mut<TradeSkillItemWaits>| {
-                for entry in entries {
-                    super::ask_item_record(
-                        world.resource::<Items>(),
-                        world.resource::<NetCommands>(),
-                        &mut waits,
-                        entry,
-                        0,
-                    );
-                }
-            });
-        assert!(heard(&mut app).is_empty());
-        app.world_mut()
-            .resource_mut::<Items>()
-            .insert_template(LINEN, Some(crate::items::test_template("Linen Cloth")));
-        assert_eq!(
-            heard(&mut app),
-            ["TRADE_SKILL_UPDATE", "TRADE_SKILL_UPDATE"]
-        );
     }
 
     /// The skill watches rebuild the open list, each at its place: the value watch on every run,
@@ -2287,7 +2117,6 @@ mod tests {
             trivial_high: 2,
         };
         app.init_resource::<TradeSkillOpen>()
-            .init_resource::<TradeSkillItemWaits>()
             .init_resource::<TradeSkillOpens>()
             .init_resource::<crate::ui_craft::CraftOpen>()
             .insert_resource(actions)
@@ -2312,7 +2141,6 @@ mod tests {
         app.world_mut()
             .spawn((ObjectStore(Default::default()), SelfPlayer));
         app.insert_non_send_resource(listening());
-        app.add_systems(Update, feed_trade_skill);
         app
     }
 
@@ -2357,19 +2185,19 @@ mod tests {
     }
 
     /// A `/reload` (`0x490bd0`): the leave sweep zeroes the pending count (`0x4fc8cb`), a new VM
-    /// replaces the old, and the world-enter init zeroes the list (`0x4fc750` at `0x4909bf`).
+    /// seeded as the load seeds it replaces the old, and the world-enter init zeroes the list
+    /// (`0x4fc750` at `0x4909bf`).
     fn reload(app: &mut App) {
         let mut old = app.world_mut().non_send_resource_mut::<UiScript>();
         old.trade_skill_cancel_waits();
         let mut script = listening();
+        seed_repeat(app.world(), &mut script);
         script.reset_crafts_on_world_enter();
         app.insert_non_send_resource(script);
     }
 
     /// A `/reload` with the book open keeps its line (`[0xbde040]`) and signals nothing, so the
-    /// new interface shows no window and reads an empty list under the line. The product record
-    /// the old build waited on still runs its callback (`0x4fc8e0`), whose rebuild signals the
-    /// update into the new interface (`0x4fc900`).
+    /// new interface shows no window and reads an empty list under the line.
     #[test]
     fn a_reload_keeps_the_book_open_unshown_until_a_rebuild() {
         let mut app = silk_book();
@@ -2377,23 +2205,12 @@ mod tests {
         reload(&mut app);
         assert!(heard(&mut app).is_empty(), "no update, no show");
         let script = app.world().non_send_resource::<UiScript>();
+        assert!(script.trade_skill_open());
         assert_eq!(
             script
                 .eval::<(i64, String)>("return GetNumTradeSkills(), (GetTradeSkillLine())")
                 .unwrap(),
             (0, "Tailoring".into())
-        );
-        app.world_mut().resource_mut::<Items>().insert_template(
-            4305,
-            Some(crate::items::test_template("Bolt of Silk Cloth")),
-        );
-        assert_eq!(heard(&mut app), ["TRADE_SKILL_UPDATE"]);
-        assert!(
-            app.world()
-                .non_send_resource::<UiScript>()
-                .eval::<i64>("return GetNumTradeSkills()")
-                .unwrap()
-                > 0
         );
     }
 
@@ -2432,28 +2249,5 @@ mod tests {
         assert!(heard(&mut app).is_empty());
         assert_eq!(open(&mut app), ["TRADE_SKILL_CLOSE"]);
         assert_eq!(open(&mut app), ["TRADE_SKILL_SHOW"]);
-    }
-
-    /// A frame that cannot resolve the book while its line stays open, as a worldport's purge of
-    /// our own player leaves it, closes nothing: only a close ends the line (`0x4fc870`,
-    /// `0x4fc920`), and the player's return signals no second open.
-    #[test]
-    fn a_frame_without_our_player_keeps_the_book_open() {
-        let mut app = silk_book();
-        assert_eq!(cast_opener(&mut app), ["TRADE_SKILL_SHOW"]);
-        let me = app
-            .world_mut()
-            .query_filtered::<Entity, With<SelfPlayer>>()
-            .single(app.world())
-            .unwrap();
-        app.world_mut().despawn(me);
-        assert!(heard(&mut app).is_empty(), "no close");
-        app.world_mut()
-            .spawn((ObjectStore(Default::default()), SelfPlayer));
-        assert!(heard(&mut app).is_empty(), "no second open");
-        assert!(app
-            .world()
-            .non_send_resource::<UiScript>()
-            .trade_skill_open());
     }
 }

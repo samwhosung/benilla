@@ -567,6 +567,15 @@ pub(crate) enum RecordCallback {
     /// A trainer row's product, asked by `GetTrainerServiceIcon` and `GetTrainerServiceDescription`
     /// (`0x4d907e` with `0x4d9140`, `0x4d9cef` with `0x4d9db0`), one per call.
     Trainer,
+    /// A profession getter's, asked by `GetTradeSkillIcon`, `GetTradeSkillItemStats`,
+    /// `GetTradeSkillReagentInfo` and `GetTradeSkillTools` (`0x4fdb90`, `0x4fdf77`, `0x4ff6cd`,
+    /// `0x4ffac6` with `0x4fdc30`), one per call.
+    TradeSkill,
+    /// A profession list build's product (`0x4fcd4d` with `0x4fc8e0`), one per row that missed.
+    TradeSkillBuild,
+    /// A craft getter's, asked by `GetCraftReagentInfo` and `GetCraftSpellFocus` (`0x4f75dd`,
+    /// `0x4f79f2` with `0x4f7710`), one per call.
+    Craft,
     /// A questgiver row's, asked by `GetQuestItemInfo` (`0x5017de` with `0x5018c0`), one per call.
     Quest,
     /// A turn-in's reward line whose item was not cached (`0x5dc647`, `0x5dc6a1` with

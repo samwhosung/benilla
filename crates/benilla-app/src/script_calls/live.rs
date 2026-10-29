@@ -119,6 +119,9 @@ live_reads! {
         dialogs: crate::ui_dialog_verbs::DialogLive<'static, 'static>,
         /// The trainer rows' icons, descriptions and ability tests.
         trainer: crate::ui_trainer::TrainerLive<'static, 'static>,
+        /// The open profession book as a build reads it, a recipe's reagents, tools and icon, and
+        /// its line's rank; absent in a harness without the window.
+        trade_skill: Option<crate::ui_tradeskill::TradeSkillLive<'static, 'static>>,
         /// The tabard designer's guild record and save latch.
         tabard: crate::ui_tabard::TabardLive<'static, 'static>,
         /// The stable's records, counts and the summoned pet's display.

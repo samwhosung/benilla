@@ -1468,11 +1468,21 @@ fn a_rebuild_counts_again_before_its_update() {
          local _, _, n = GetTradeSkillInfo(i) table.insert(N, n) end end)",
     )
     .unwrap();
-    s.rebuild_trade_skill(&mut |t| t.recount(&|entry| if entry == 2589 { 7 } else { 0 }));
+    // A harness's refresh in the host's place: each reagent's carried count from `count`
+    // (`0x622130`) and each recipe's makeable count from them (`0x4fcce0`-`0x4fcf19`).
+    let recount = |t: &mut TradeSkillState, count: &dyn Fn(u32) -> u32| {
+        for r in &mut t.recipes {
+            for re in &mut r.reagents {
+                re.have = count(re.item);
+            }
+            r.num_available = super::makeable(r.reagents.iter().map(|re| (re.have, re.need)));
+        }
+    };
+    s.rebuild_trade_skill(&mut |t| recount(t, &|entry| if entry == 2589 { 7 } else { 0 }));
     assert_eq!(s.eval::<Vec<u32>>("return N").unwrap(), [3, 3]);
     s.run("N = nil").unwrap();
     s.set_trade_skill(None);
-    s.rebuild_trade_skill(&mut |t| t.recount(&|_| 0));
+    s.rebuild_trade_skill(&mut |t| recount(t, &|_| 0));
     assert!(s.eval::<Option<Vec<u32>>>("return N").unwrap().is_none());
 }
 

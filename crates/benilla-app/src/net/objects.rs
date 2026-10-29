@@ -311,6 +311,12 @@ fn run_callback(
             // The tooltips' rebuilds for a found record only (`0x52e551`, `0x52f826`).
             Cb::Tooltip if answered => crate::ui_items::feed::tooltips_answered(world, entry),
             Cb::QuestLog | Cb::Tooltip => {}
+            // The profession and craft lists' rebuilds, for a found record only.
+            Cb::TradeSkill | Cb::TradeSkillBuild | Cb::Craft => {
+                if answered {
+                    crate::ui_tradeskill::record_answered(world, callback);
+                }
+            }
             _ => run_answer_step(world, run_record_callback, (entry, callback, answered)),
         }
     }
@@ -394,7 +400,10 @@ fn run_record_callback(
         | Cb::CooldownQuery
         | Cb::Stationery
         | Cb::QuestLog
-        | Cb::Tooltip => {}
+        | Cb::Tooltip
+        | Cb::TradeSkill
+        | Cb::TradeSkillBuild
+        | Cb::Craft => {}
         // The vendor's run for a record and a refusal alike (`0x4fb0f0`, `0x4fb570`).
         Cb::Merchant => sc.merchant.row_answered(),
         Cb::Buyback => sc.merchant.buyback_answered(),

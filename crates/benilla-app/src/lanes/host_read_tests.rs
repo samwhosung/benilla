@@ -44,7 +44,7 @@ use crate::game_plugins::schedule_tests::{census, type_names_available, SyncPoin
 /// The most rows [`super::guard_tests::READS_FRAME_FINAL`] may hold, and the most inputs across
 /// them: each only falls, so lower it when a row or an input goes.
 const FRAME_FINAL_FEEDS: usize = 14;
-const FRAME_FINAL_INPUTS: usize = 92;
+const FRAME_FINAL_INPUTS: usize = 89;
 
 /// The systems that may run after the dispatch (`apply_net_updates`) and run ahead of the drain
 /// (`fire_in_order`), by a suffix of the system's name, with what each writes of the state a
@@ -89,10 +89,6 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
         "recomputes the language skills off the book and the skill lines, which a page's show \
          reads inside its packet (`0x4e3856`), where the reference reads the skill live at the \
          show (`0x4e3837`)"),
-    ("::ui_craft::feed_craft", &["ui_craft::CraftItemWaits"],
-        "spends the craft getters' record waits as their records land and rebuilds the list, \
-         where the reference runs each callback (`OnCraftItemRecord` `0x4f7710`) in \
-         `ItemCacheReceive` `0x55bdb0`, inside the answer's handler (`0x555140`, `0x555160`)"),
     ("::ui_follow::feed_follow", &["ui_follow::FollowFeed"],
         "fires the engine's follow transitions off the followee memo the host's `FollowUnit` \
          tells too, where the reference signals inside the move's start and end (`0x611130`, \
@@ -109,10 +105,6 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
         "copies the interaction latch into the `npc` unit the token lookups read, where the \
          reference's `npc` is the latch itself (`0x515c00`), set inside the handlers through \
          `SetInteractionTarget` `0x4930d0`"),
-    ("::ui_tradeskill::feed_trade_skill", &["ui_tradeskill::TradeSkillItemWaits"],
-        "spends the profession getters' record waits as their records land and rebuilds the \
-         list, where the reference runs each callback (`OnTradeSkillItemRecord` `0x4fdc30`) in \
-         `ItemCacheReceive` `0x55bdb0`, inside the answer's handler (`0x555140`, `0x555160`)"),
 ];
 
 /// The systems between the dispatch and the drain that write what the host's live reads read,

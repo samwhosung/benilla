@@ -754,9 +754,6 @@ pub(crate) struct Model {
     pub(crate) trainer_filter: u32,
     /// The profession build's pending count (`0xbde048`).
     pub(crate) trade_skill_pending: u32,
-    /// The product records the builds missed, one per miss, each waiting with the callback
-    /// `0x4fc8e0` (`0x4fcd32`).
-    pub(crate) trade_skill_build_waits: Vec<u32>,
     /// Collapsed skill-line ids, kept across a re-push and cleared when the trainer closes.
     pub(crate) trainer_collapsed: HashSet<u32>,
     /// The skill-line filter `ds:0xb73a20`: bit n set shows header group n, every bit on a list.
@@ -1557,7 +1554,6 @@ impl Model {
             trainer_selection: None,
             trainer_filter: 7,
             trade_skill_pending: 0,
-            trade_skill_build_waits: Vec::new(),
             trainer_collapsed: HashSet::new(),
             trainer_line_filter: u32::MAX,
             trainer_rows: Vec::new(),

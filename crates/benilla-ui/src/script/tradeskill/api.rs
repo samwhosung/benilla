@@ -94,18 +94,35 @@ fn ask_item(lua: &Lua, entry: u32, spell_id: u32) -> mlua::Result<()> {
     )
 }
 
+/// The recipe at the 1-based `index` of the last build's list, its reagents, tools and icon read
+/// as they stand at the call ([`super::TradeSkillRecipeQuery`]); with no host to ask, the row's
+/// copy. `None` on a header or past the rows.
+fn recipe_now(lua: &Lua, index: usize) -> Option<super::TradeSkillRecipe> {
+    let held = {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        recipe_at(&model, index)?.clone()
+    };
+    Some(
+        crate::script::live::ask(lua, &super::TradeSkillRecipeQuery(held.spell_id)).unwrap_or(held),
+    )
+}
+
 pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
-    // GetTradeSkillLine(): ("UNKNOWN", 0, 0) with no window open, as the reference answers.
+    // GetTradeSkillLine() (`0x4fdd40`): the open line and the slot's words as they stand at the
+    // call; with no host to ask, the VM's copy, ("UNKNOWN", 0, 0) with none.
     g.set(
         "GetTradeSkillLine",
         lua.create_function(|lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let (name, rank, max_rank) = match &model.trade_skill {
-                Some(t) => (t.line_name.clone(), t.rank, t.max_rank),
-                None => ("UNKNOWN".to_string(), 0, 0),
-            };
+            let (name, rank, max_rank) = crate::script::live::ask(lua, &super::TradeSkillLineQuery)
+                .unwrap_or_else(|| {
+                    let model = lua.app_data_ref::<Model>().expect("model app_data");
+                    match &model.trade_skill {
+                        Some(t) => (t.line_name.clone(), t.rank, t.max_rank),
+                        None => ("UNKNOWN".to_string(), 0, 0),
+                    }
+                });
             Ok(MultiValue::from_vec(vec![
                 Value::String(lua.create_string(&name)?),
                 Value::Integer(i64::from(rank)),
@@ -338,12 +355,10 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, index: Value| {
             // `is-number` else `Usage: GetTradeSkillIcon(index)` (`0x84d3d0`, `0x4fdb11`).
             let index = binding_abi::index_arg(lua, index, "Usage: GetTradeSkillIcon(index)")?;
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let Some(r) = recipe_at(&model, index) else {
+            let Some(r) = recipe_now(lua, index) else {
                 return Ok(Value::Nil);
             };
-            let (icon, pending, spell_id) = (r.icon.clone(), r.icon_pending, r.spell_id);
-            drop(model);
+            let (icon, pending, spell_id) = (r.icon, r.icon_pending, r.spell_id);
             // A record in flight is asked with the callback `0x4fdc30` inside the call
             // (`0x4fdb90`).
             if let Some(entry) = pending {
@@ -378,13 +393,25 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, index: Value| {
             // `is-number` else `Usage: GetTradeSkillCooldown(index)` (`0x84e2e4`, `0x4fda37`).
             let index = binding_abi::index_arg(lua, index, "Usage: GetTradeSkillCooldown(index)")?;
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let left = recipe_at(&model, index)
-                .and_then(|r| r.cooldown)
-                .map(|(start_ms, duration_ms, enabled)| {
-                    let duration = f64::from(duration_ms) / 1000.0;
+            let (spell_id, held) = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                match recipe_at(&model, index) {
+                    Some(r) => (r.spell_id, r.cooldown),
+                    None => return Ok(Value::Nil),
+                }
+            };
+            // The player's list asked at the call (`0x4fda8b` → `0x6e2ea0`), as
+            // `GetSpellCooldown` asks it; with no host, the row's copy.
+            let cooldown = crate::script::cooldown_read::read_live(
+                lua,
+                crate::script::CooldownQuery::Spell(spell_id),
+            )
+            .unwrap_or_else(|| held.map(crate::script::cooldown_read::seconds));
+            let now = lua.app_data_ref::<Model>().expect("model app_data").now;
+            let left = cooldown
+                .map(|(start, duration, enabled)| {
                     if enabled {
-                        start_ms as f64 / 1000.0 + duration - model.now
+                        start + duration - now
                     } else {
                         duration
                     }
@@ -422,13 +449,10 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 reagent_index,
                 "Usage: GetTradeSkillReagentInfo(index, reagentIndex)",
             )?;
-            let reagent = {
-                let model = lua.app_data_ref::<Model>().expect("model app_data");
-                recipe_at(&model, index).and_then(|r| {
-                    let n = reagent_index.checked_sub(1)?;
-                    Some((r.reagents.get(n)?.clone(), r.spell_id))
-                })
-            };
+            let reagent = recipe_now(lua, index).and_then(|r| {
+                let n = reagent_index.checked_sub(1)?;
+                Some((r.reagents.get(n)?.clone(), r.spell_id))
+            });
             let Some((reagent, spell_id)) = reagent else {
                 return Ok(binding_abi::tuple(&[None; 4]));
             };
@@ -452,12 +476,10 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, index: Value| {
             // `is-number` else `Usage: GetTradeSkillTools(index)` (`0x84e668`, `0x4ff9ab`).
             let index = binding_abi::index_arg(lua, index, "Usage: GetTradeSkillTools(index)")?;
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let Some(r) = recipe_at(&model, index) else {
+            let Some(r) = recipe_now(lua, index) else {
                 return Ok(MultiValue::new());
             };
-            let (tools, pending, spell_id) = (r.tools.clone(), r.tools_pending.clone(), r.spell_id);
-            drop(model);
+            let (tools, pending, spell_id) = (r.tools, r.tools_pending, r.spell_id);
             // Each totem in flight is asked with the callback `0x4fdc30` inside the call
             // (`0x4ffac6`).
             for entry in pending {

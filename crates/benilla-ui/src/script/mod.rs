@@ -482,7 +482,8 @@ pub use trade::{
     TradeSlotQuery, TradeState, TRADE_SLOTS,
 };
 pub use tradeskill::{
-    TradeSkillCall, TradeSkillDifficulty, TradeSkillReagent, TradeSkillRecipe, TradeSkillState,
+    TradeSkillBookQuery, TradeSkillCall, TradeSkillDifficulty, TradeSkillLineQuery,
+    TradeSkillReagent, TradeSkillRecipe, TradeSkillRecipeQuery, TradeSkillState,
 };
 pub use trainer::{
     ProductWait, TrainerAbilityReq, TrainerCall, TrainerGroup, TrainerService,

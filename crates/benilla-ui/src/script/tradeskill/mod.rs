@@ -1,6 +1,8 @@
-//! The tradeskill bindings behind the stock `Blizzard_TradeSkillUI`: the app pushes a snapshot
-//! ([`UiScript::set_trade_skill`]) with recipes resolved from `Spell.dbc`, `SkillLineAbility.dbc`
-//! and bag counts, and applies the calls `DoTradeSkill` and `CloseTradeSkill` make. The engine
+//! The tradeskill bindings behind the stock `Blizzard_TradeSkillUI`: each build reads the book from
+//! the lent host as it stands ([`TradeSkillBookQuery`]), recipes resolved from `Spell.dbc`,
+//! `SkillLineAbility.dbc` and bag counts, the getters read what the reference reads at the call
+//! the same way, a harness pushes a snapshot ([`UiScript::set_trade_skill`]), and the host applies
+//! the calls `DoTradeSkill` and `CloseTradeSkill` make. The engine
 //! owns the grouped, filtered list (`0x4fca20`); every Lua index, `SetTradeSkillItem`'s included,
 //! is 1-based into its whole sorted array, the displayed rows first ([`recipe_at`]). The filter,
 //! fold, repeat and close verbs fire their events inside the call, as the reference's do.
@@ -27,29 +29,94 @@ mod itemstats;
 pub(crate) mod view;
 
 /// A build's lookups (`0x4fcd4d`): the pending count started again (`0x4fc8cb`) and taken up by
-/// each product whose record is in flight (`0x4fcd58`), each waited on with the callback
-/// `0x4fc8e0`, which no cancel removes (`0x4fc890`).
+/// each product whose record is in flight (`0x4fcd58`); the lookup that missed keeps the callback
+/// `0x4fc8e0` in the item cache, the host's ([`TradeSkillBookQuery`]).
 fn note_build(model: &mut super::Model) {
-    let misses: Vec<u32> = model
-        .trade_skill
-        .as_ref()
-        .map(|t| t.recipes.iter().filter_map(|r| r.icon_pending).collect())
-        .unwrap_or_default();
-    model.trade_skill_pending = misses.len() as u32;
-    model.trade_skill_build_waits.extend(misses);
+    model.trade_skill_pending = model.trade_skill.as_ref().map_or(0, |t| {
+        t.recipes
+            .iter()
+            .filter(|r| r.icon_pending.is_some())
+            .count() as u32
+    });
 }
 
-impl TradeSkillState {
-    /// Each reagent's carried count from `count` (`0x622130`) and each recipe's makeable count
-    /// from them (`0x4fcce0`-`0x4fcf19`).
-    pub fn recount(&mut self, count: &dyn Fn(u32) -> u32) {
-        for r in &mut self.recipes {
-            for re in &mut r.reagents {
-                re.have = count(re.item);
-            }
-            r.num_available = makeable(r.reagents.iter().map(|re| (re.have, re.need)));
+/// The open line's book as the build reads it there (`0x4fca20`): the line `[0xbde040]`, the
+/// player's known spells of it, its slot's rank, the bags and the item cache as they stand, each
+/// product looked up with the callback `0x4fc8e0`, one kept per miss (`0x4fcd4d`). The lent host
+/// answers; `None` with no line open or no player (`0x4fcaee`, `0x4fcb1b`), where the build keeps
+/// the list the VM holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TradeSkillBookQuery;
+
+impl super::live::LiveQuery for TradeSkillBookQuery {
+    type Answer = TradeSkillState;
+}
+
+/// One recipe of the open line as its getters read it at the call: the reagents' carried counts
+/// (`0x4ff7a2`), the totems held (`0x4ffb10`), and the names and icons off the item cache as it
+/// stands (`0x4ff6e2`, `0x4ffade`, `0x4fdb90`), none asked. `None` declines, where the getter
+/// reads the row the last build left.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TradeSkillRecipeQuery(pub u32);
+
+impl super::live::LiveQuery for TradeSkillRecipeQuery {
+    type Answer = TradeSkillRecipe;
+}
+
+/// `GetTradeSkillLine` at the call (`0x4fdd40`): the open line's name, then the slot's rank and
+/// maximum with the permanent bonus; `UNKNOWN`, 0, 0 for a line with no `SkillLine` row, a closed
+/// window's line 0 included (`0x4fde92`), and the name, 0, 0 with no player.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TradeSkillLineQuery;
+
+impl super::live::LiveQuery for TradeSkillLineQuery {
+    type Answer = (String, u32, u32);
+}
+
+/// Seat `s` as the list's state: a different skill line resets the filters, folds and selection
+/// ([`UiScript::set_trade_skill`]), the fold and subclass keys are pruned to live groups, and the
+/// templates the link getters read are asked of the cache. Whether the recipe set changed, which
+/// remakes the headers.
+fn seat(model: &mut super::Model, s: TradeSkillState) -> bool {
+    if model.trade_skill_last_line != s.line {
+        model.trade_skill_collapsed.clear();
+        model.trade_skill_subclass_hidden.clear();
+        model.trade_skill_invslot_mask = u32::MAX;
+        model.trade_skill_selected_spell = 0;
+        model.trade_skill_last_line = s.line;
+    }
+    let live: HashSet<(u32, u32)> = s
+        .recipes
+        .iter()
+        .map(|r| {
+            r.group
+                .as_ref()
+                .map_or((u32::MAX, u32::MAX), |(c, sc, _)| (*c, *sc))
+        })
+        .collect();
+    model.trade_skill_collapsed.retain(|k| live.contains(k));
+    model
+        .trade_skill_subclass_hidden
+        .retain(|k| live.contains(k));
+    // The templates the link verbs read, off the cache: they pass no callback (`0x4ff4b9`,
+    // `0x4ff8da`).
+    for id in s
+        .recipes
+        .iter()
+        .flat_map(|r| std::iter::once(r.product_item).chain(r.reagents.iter().map(|re| re.item)))
+    {
+        if id != 0 && !model.item_templates.contains_key(&id) {
+            model.item_stat_reads.insert(id);
         }
     }
+    let spells =
+        |recipes: &[TradeSkillRecipe]| recipes.iter().map(|r| r.spell_id).collect::<Vec<_>>();
+    let changed = model
+        .trade_skill
+        .as_ref()
+        .is_none_or(|t| spells(&t.recipes) != spells(&s.recipes));
+    model.trade_skill = Some(s);
+    changed
 }
 
 /// The build's makeable count (`0x4fcce0`-`0x4fcf19`): the least of each reagent's carried count
@@ -188,44 +255,30 @@ impl super::UiScript {
     pub fn set_trade_skill(&mut self, state: Option<TradeSkillState>) {
         let mut model = self.model_mut();
         model.trade_skill_open = state.is_some();
-        match state {
-            None => {}
-            Some(s) => {
-                if model.trade_skill_last_line != s.line {
-                    model.trade_skill_collapsed.clear();
-                    model.trade_skill_subclass_hidden.clear();
-                    model.trade_skill_invslot_mask = u32::MAX;
-                    model.trade_skill_selected_spell = 0;
-                    model.trade_skill_last_line = s.line;
-                }
-                let live: HashSet<(u32, u32)> = s
-                    .recipes
-                    .iter()
-                    .map(|r| {
-                        r.group
-                            .as_ref()
-                            .map_or((u32::MAX, u32::MAX), |(c, sc, _)| (*c, *sc))
-                    })
-                    .collect();
-                model.trade_skill_collapsed.retain(|k| live.contains(k));
-                model
-                    .trade_skill_subclass_hidden
-                    .retain(|k| live.contains(k));
-                // A changed recipe set remakes the headers, as a learn's or the open's build does
-                // (flag 1, `0x5e9d79`, `0x4fc985`).
-                let spells = |recipes: &[TradeSkillRecipe]| {
-                    recipes.iter().map(|r| r.spell_id).collect::<Vec<_>>()
-                };
-                let remake = model
-                    .trade_skill
-                    .as_ref()
-                    .is_none_or(|t| spells(&t.recipes) != spells(&s.recipes));
-                model.trade_skill = Some(s);
-                if !model.trade_skill_unbuilt {
-                    view::build(&mut model, remake);
-                }
+        if let Some(s) = state {
+            // A changed recipe set remakes the headers, as a learn's or the open's build does
+            // (flag 1, `0x5e9d79`, `0x4fc985`).
+            let remake = seat(&mut model, s);
+            if !model.trade_skill_unbuilt {
+                view::build(&mut model, remake);
             }
         }
+    }
+
+    /// A `/reload`'s new VM over a book the engine holds open (`[0xbde040]` outlives the VM): the
+    /// window marked open on `line` with no list, which the world-enter init leaves for the next
+    /// rebuild to fill (`0x4fc750`); `line_name` names it to a getter with no host to ask.
+    pub fn seed_trade_skill_open(&mut self, line: u32, line_name: String) {
+        let mut model = self.model_mut();
+        model.trade_skill_open = true;
+        model.trade_skill_unbuilt = true;
+        model.trade_skill = Some(TradeSkillState {
+            line,
+            line_name,
+            rank: 0,
+            max_rank: 0,
+            recipes: Vec::new(),
+        });
     }
 
     /// A rebuild with flag 0 (`0x4fca20(0)`), as the bag, item and skill watchers run one on each
@@ -238,26 +291,33 @@ impl super::UiScript {
         }
     }
 
-    /// A rebuild with `remake` as its flag (`0x4fca20`): while the window is open, the state read
-    /// again where `refresh` brings the caller's change in, the array refilled in add order and
-    /// sorted, its products' records in flight counted pending (`0xbde048`) and waited on with
-    /// the callback `0x4fc8e0` (`0x4fcd32`). Whether its `TRADE_SKILL_UPDATE` follows: an open
-    /// window with nothing pending, whether or not anything changed (`0x4fcf34`, `0x4fd164`). A
-    /// closed window builds nothing (`0x4fcaee`).
+    /// A rebuild with `remake` as its flag (`0x4fca20`): while the window is open, the book read
+    /// again as it stands ([`TradeSkillBookQuery`]; with no host to ask, the VM's copy where
+    /// `refresh` brings the caller's change in), the array refilled in add order and sorted, its
+    /// products' records in flight counted pending (`0xbde048`). Whether its `TRADE_SKILL_UPDATE`
+    /// follows: an open window with nothing pending, whether or not anything changed (`0x4fcf34`,
+    /// `0x4fd164`). A closed window builds nothing (`0x4fcaee`).
     pub fn rebuild_trade_skill_with(
         &mut self,
         remake: bool,
         refresh: &mut dyn FnMut(&mut TradeSkillState),
     ) -> bool {
-        let mut model = self.model_mut();
-        if !model.trade_skill_open {
+        if !self.model_ref().trade_skill_open {
             return false;
         }
-        if let Some(t) = model.trade_skill.as_mut() {
-            refresh(t);
-        }
+        let fresh = super::live::ask(&self.lua, &TradeSkillBookQuery);
+        let mut model = self.model_mut();
+        let changed = match fresh {
+            Some(s) => seat(&mut model, s),
+            None => {
+                if let Some(t) = model.trade_skill.as_mut() {
+                    refresh(t);
+                }
+                false
+            }
+        };
         model.trade_skill_unbuilt = false;
-        let complete = view::build(&mut model, remake);
+        let complete = view::build(&mut model, remake || changed);
         note_build(&mut model);
         complete
     }
@@ -288,9 +348,9 @@ impl super::UiScript {
         model.trade_skill_pending == 0
     }
 
-    /// The callback `0x4fc8e0` on a record a build waited on, answered: the pending count down by
-    /// one when above 0 (`0x4fc8f3`), and whether a rebuild with flag 1 follows, at 0 (`0x4fc8f9`,
-    /// `0x4fc900`).
+    /// The callback `0x4fc8e0` on a record a build waited on, found (`0x4fc8e3`): the pending count
+    /// down by one when above 0 (`0x4fc8f3`), and whether a rebuild with flag 1 follows, at 0
+    /// (`0x4fc8f9`, `0x4fc900`).
     pub fn trade_skill_record_landed(&mut self) -> bool {
         let mut model = self.model_mut();
         if model.trade_skill_pending > 0 {
@@ -303,11 +363,6 @@ impl super::UiScript {
     /// zeroed (`0x4fc8cb`); the callbacks stay, as the cancel's keys miss them.
     pub fn trade_skill_cancel_waits(&mut self) {
         self.model_mut().trade_skill_pending = 0;
-    }
-
-    /// The records the builds waited on since the last take, one per miss.
-    pub fn take_trade_skill_build_waits(&mut self) -> Vec<u32> {
-        std::mem::take(&mut self.model_mut().trade_skill_build_waits)
     }
 
     /// The item records the getters' calls missed that a harness's VM kept

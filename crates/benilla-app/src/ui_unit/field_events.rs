@@ -115,7 +115,7 @@ impl NoticeFiring<'_, '_> {
             return false;
         }
         if notice == FieldNotice::SkillMax {
-            script.rebuild_trade_skill(&mut |t| self.reband(t));
+            script.rebuild_trade_skill(&mut |_| {});
             script.rebuild_skills();
             return false;
         }
@@ -132,7 +132,7 @@ impl NoticeFiring<'_, '_> {
             return false;
         }
         if notice == FieldNotice::Professions {
-            script.rebuild_trade_skill(&mut |t| self.reband(t));
+            script.rebuild_trade_skill(&mut |_| {});
             return false;
         }
         if notice == FieldNotice::PetMacros {
@@ -239,11 +239,6 @@ impl NoticeFiring<'_, '_> {
             }
         });
         true
-    }
-
-    /// The profession list's rebuild by a skill watch, its bands and line rank read again.
-    fn reband(&self, t: &mut benilla_ui::script::TradeSkillState) {
-        crate::ui_tradeskill::reband(t, self.me.iter().next(), self.skill_lines.as_deref());
     }
 
     /// `0x5de180`'s line after its rebuild (`0x5de345`-`0x5de41c`), for a line with a `SkillLine`

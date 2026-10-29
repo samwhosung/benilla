@@ -36,24 +36,14 @@ pub(crate) struct CraftOpen {
     pub(crate) craft_type: u32,
 }
 
-/// The item records the craft getters' lookups missed, one per call, each the callback `0x4f7710`
-/// the item cache keeps, which outlives a VM and rebuilds the list when its record lands
-/// (`0x4f771a`); the lookups ask inside their calls ([`ask_item_record`]).
-#[derive(Resource, Default)]
-pub(crate) struct CraftItemWaits(pub(crate) Vec<u32>);
-
 /// A craft getter's lookup of a record in flight, inside its call
 /// ([`benilla_ui::script::ItemCallback::Craft`]): the item cache asks a miss, a refused entry
-/// again, and keeps one callback per call (`0x4f75dd`, `0x4f79f2`).
-pub(crate) fn ask_item_record(
-    items: &Items,
-    commands: &NetCommands,
-    waits: &mut CraftItemWaits,
-    entry: u32,
-    owner: u64,
-) {
-    let _ = items.template(entry, owner, Ask::Event(commands));
-    waits.0.push(entry);
+/// again, and keeps the callback `0x4f7710` on it, one per call, which outlives a VM and rebuilds
+/// the list when its record lands (`0x4f75dd`, `0x4f79f2`, `0x4f771a`).
+pub(crate) fn ask_item_record(items: &Items, commands: &NetCommands, entry: u32, owner: u64) {
+    if items.template(entry, owner, Ask::Event(commands)).is_none() {
+        items.wait(entry, crate::items::RecordCallback::Craft);
+    }
 }
 
 /// `EffectImplicitTargetA`/`B` 5, the pet (`0x4f632a`).
@@ -65,7 +55,6 @@ impl Plugin for UiCraftPlugin {
     fn build(&self, app: &mut App) {
         app.net_handler(SessionEventKind::Disconnected, on_session_end);
         app.init_resource::<CraftOpen>()
-            .init_resource::<CraftItemWaits>()
             .add_systems(Update, feed_craft.in_set(UnitFeed));
     }
 }
@@ -452,14 +441,10 @@ impl CraftReads<'_, '_> {
 /// Keep the VM's craft list as the engine holds it, silently; the open and the closes signal in
 /// their calls ([`crate::ui_tradeskill::TradeSkillSteps`]), the rebuilds at their packets.
 fn feed_craft(
-    mut vm: crate::script_calls::VmWith<(
-        CraftReads<'static, 'static>,
-        Res<'static, CraftOpen>,
-        ResMut<'static, CraftItemWaits>,
-    )>,
+    mut vm: crate::script_calls::VmWith<(CraftReads<'static, 'static>, Res<'static, CraftOpen>)>,
     mut memo: Local<crate::ui_script::VmMemo<CraftMemo>>,
 ) {
-    vm.feed(|script, (reads, open, mut waits), fires| {
+    vm.turn(|script, (reads, open)| {
         let Some(script) = script else {
             return;
         };
@@ -475,10 +460,6 @@ fn feed_craft(
             None if open.line.is_some() => memo.state.clone(),
             f => f,
         };
-        // The getters' item callbacks, kept inside their calls ([`ask_item_record`]); each record
-        // that landed rebuilds (`0x4f7710` → `0x4f771a`), and a refusal runs it with status 0,
-        // which does nothing.
-        let arrivals = crate::ui_tradeskill::landed(&mut waits.0, &reads.items);
         // Every push is silent: the rebuilds signal, and the getters read the state at their call.
         if fresh != memo.state {
             script.set_craft(fresh.clone());
@@ -490,13 +471,6 @@ fn feed_craft(
                         .iter()
                         .flat_map(|r| r.reagents.iter().map(|re| re.item)),
                 );
-            }
-        }
-        // Each landed record's rebuild signals the update; the packets' fire on their lane
-        // (`crate::ui_tradeskill::register_rebuild_triggers`).
-        if fresh.is_some() {
-            for _ in 0..arrivals {
-                fires.post("CRAFT_UPDATE", vec![]);
             }
         }
         memo.state = fresh;
@@ -562,7 +536,6 @@ mod tests {
         let (tx, _rx) = crossbeam_channel::unbounded();
         let mut app = App::new();
         app.init_resource::<CraftOpen>()
-            .init_resource::<CraftItemWaits>()
             .init_resource::<PlayerActions>()
             .init_resource::<crate::spell::SpellModifiers>()
             .init_resource::<crate::net::GuidIndex>()
@@ -675,7 +648,6 @@ mod tests {
         items.insert_template(DUST, Some(crate::items::test_template("Strange Dust")));
         items.insert_template(ROD, Some(crate::items::test_template("Runed Rod")));
         app.init_resource::<CraftOpen>()
-            .init_resource::<CraftItemWaits>()
             .insert_resource(actions)
             .init_resource::<crate::spell::SpellModifiers>()
             .init_resource::<crate::net::GuidIndex>()
@@ -786,7 +758,6 @@ mod tests {
         actions.profession_order.push(SPELL);
         actions.craft_order.push(SPELL);
         app.init_resource::<CraftOpen>()
-            .init_resource::<CraftItemWaits>()
             .insert_resource(actions)
             .init_resource::<crate::spell::SpellModifiers>()
             .init_resource::<crate::net::GuidIndex>()
@@ -940,7 +911,6 @@ mod tests {
         actions.profession_order.extend(known.iter().copied());
         actions.craft_order.extend(known.iter().copied());
         app.init_resource::<CraftOpen>()
-            .init_resource::<CraftItemWaits>()
             .insert_resource(actions)
             .init_resource::<crate::spell::SpellModifiers>()
             .init_resource::<crate::net::GuidIndex>()
@@ -1489,8 +1459,10 @@ mod tests {
         assert!(script.take_item_stat_asks().is_empty(), "no pre-ask");
     }
 
+    /// The pet book and a learn or an unlearn of a craft spell rebuild the open list once per
+    /// packet (`0x4bdafa`, `0x5e9e12`, `0x5ea240`); an unlearn the list does not hold, nothing.
     #[test]
-    fn each_packet_and_each_waited_record_signals_one_update() {
+    fn each_book_packet_signals_one_update() {
         const DUST: u32 = 10_940;
         let displays = vec![
             (
@@ -1559,30 +1531,6 @@ mod tests {
             vec![SessionEvent::SpellRemoved { spell_id: 7420 }],
         );
         assert!(heard(&mut app).is_empty());
-        let entries = {
-            let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
-            s.run("GetCraftReagentInfo(1, 1) GetCraftReagentInfo(1, 1)")
-                .unwrap();
-            s.take_craft_item_waits()
-        };
-        // The host's lookups inside the calls ([`super::ask_item_record`]).
-        app.world_mut()
-            .resource_scope(|world, mut waits: Mut<CraftItemWaits>| {
-                for entry in entries {
-                    super::ask_item_record(
-                        world.resource::<Items>(),
-                        world.resource::<NetCommands>(),
-                        &mut waits,
-                        entry,
-                        0,
-                    );
-                }
-            });
-        assert!(heard(&mut app).is_empty());
-        app.world_mut()
-            .resource_mut::<Items>()
-            .insert_template(DUST, Some(crate::items::test_template("Strange Dust")));
-        assert_eq!(heard(&mut app), ["CRAFT_UPDATE", "CRAFT_UPDATE"]);
     }
 
     /// The world-enter init `0x4f5ee0` (`0x4909c4`) zeroes the craft type (`[0xbdcfb8]`) and
@@ -1594,7 +1542,6 @@ mod tests {
         let (tx, _rx) = crossbeam_channel::unbounded();
         let mut app = App::new();
         app.init_resource::<CraftOpen>()
-            .init_resource::<CraftItemWaits>()
             .init_resource::<PlayerActions>()
             .init_resource::<crate::spell::SpellModifiers>()
             .init_resource::<crate::net::GuidIndex>()

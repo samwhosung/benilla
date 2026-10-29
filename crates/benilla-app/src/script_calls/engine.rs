@@ -64,8 +64,6 @@ pub(crate) struct RecordAsks<'w, 's> {
     /// The quest cache the rebuild's lookups ask, and the leaderboard's creature waits.
     quest_log: Option<ResMut<'w, crate::ui_quest_log::QuestLog>>,
     latch_refreshes: Option<ResMut<'w, crate::ui_quest::LatchRefreshes>>,
-    craft: Option<ResMut<'w, crate::ui_craft::CraftItemWaits>>,
-    trade_skill: Option<ResMut<'w, crate::ui_tradeskill::TradeSkillItemWaits>>,
     merchant: Option<ResMut<'w, crate::ui_merchant::MerchantOpen>>,
     stable: Option<ResMut<'w, crate::ui_stable::StableCreatureWaits>>,
     go_templates: Option<Res<'w, crate::go_templates::GameObjectTemplates>>,
@@ -174,16 +172,10 @@ impl RecordAsks<'_, '_> {
                         }
                     }
                     ItemCallback::Craft => {
-                        if let Some(waits) = self.craft.as_deref_mut() {
-                            crate::ui_craft::ask_item_record(items, &self.net, waits, entry, owner);
-                        }
+                        crate::ui_craft::ask_item_record(items, &self.net, entry, owner);
                     }
                     ItemCallback::TradeSkill => {
-                        if let Some(waits) = self.trade_skill.as_deref_mut() {
-                            crate::ui_tradeskill::ask_item_record(
-                                items, &self.net, waits, entry, owner,
-                            );
-                        }
+                        crate::ui_tradeskill::ask_item_record(items, &self.net, entry, owner);
                     }
                     // The VM counts the landing; the callback, one per entry as the VM keeps its
                     // waits, signals at its place in the entry's list.
