@@ -1079,9 +1079,11 @@ impl super::UiScript {
         hooked
     }
 
-    /// [`take_cursor_item_for_sale`], for the app's interact ladder.
+    /// [`take_cursor_item_for_sale`], for the app's interact ladder: its `ClearCursor(0, 1)`
+    /// signals before the call returns, inside the click, as `0x5df600` → `0x494b60` →
+    /// `0x495190` signals in the vendor arm.
     pub fn take_cursor_item_for_sale(&mut self) -> Option<CursorItem> {
-        take_cursor_item_for_sale(&mut self.model_mut())
+        super::tick::verb(&self.lua, take_cursor_item_for_sale)
     }
 
     /// `ClearCursor(1, 1)` (`0x495190`) from Rust, its events signalled as it runs, as an engine
@@ -1410,24 +1412,31 @@ mod tests {
         let mut s = UiScript::new().unwrap();
         s.set_container(0, Some(one_item_backpack()));
 
-        // The pickup's events fire inside it, so the queue holds only the host's sell clear.
+        // The pickup's events fire inside it.
         s.eval::<()>("PickupContainerItem(0, 1)").unwrap();
         assert!(s.cursor_item().is_some(), "the pickup did not take");
         assert!(s.model_ref().pending_events.is_empty());
 
+        s.run(
+            r#"heard = {}
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("CURSOR_UPDATE")
+            f:RegisterEvent("ITEM_LOCK_CHANGED")
+            f:SetScript("OnEvent", function() table.insert(heard, event) end)"#,
+        )
+        .unwrap();
         let sold = s.take_cursor_item_for_sale().expect("mode 1 is a sale");
         assert_eq!((sold.bag, sold.slot), (0, 1));
         assert!(
             s.cursor_payload().is_none(),
             "the cursor kept the sold item"
         );
+        assert!(
+            s.model_ref().pending_events.is_empty(),
+            "the clear signals in its call, queueing nothing for the tick"
+        );
 
-        let fired: Vec<String> = s
-            .model_ref()
-            .pending_events
-            .iter()
-            .map(|(e, _)| e.clone())
-            .collect();
+        let fired: Vec<String> = s.eval("return heard").unwrap();
         assert!(
             fired.iter().any(|e| e == "CURSOR_UPDATE"),
             "the sell clear must fire CURSOR_UPDATE — got {fired:?}"

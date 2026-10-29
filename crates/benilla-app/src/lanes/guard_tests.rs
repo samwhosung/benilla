@@ -433,6 +433,9 @@ pub(super) const FILLED_THROUGH_A_READ: &[&str] = &[
 /// in system order, or a system that pushes onto a lane off it at its own place, passes every
 /// check here unseen.
 pub(super) const READ_ONLY_TO_HANDLERS: &[&str] = &[
+    // `AreaPOI.dbc`, the landmark rows the gossip marker's re-select of the map reads
+    // (`0x6dac93` → `0x4a67a0`, its walk at `0x4a6819`).
+    "::area_poi::AreaPoiRes",
     // The character's language skills and word pools, which a page's show rewrites it by
     // (`0x4e3856`). Not read-only in substance: `feed_language_skills` recomputes the skills
     // every frame, after the dispatch, from the skill lines the handlers write, where the
@@ -633,7 +636,7 @@ pub(super) const READ_ONLY_TO_HANDLERS: &[&str] = &[
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.
-pub(super) fn lane_types() -> [TypeId; 41] {
+pub(super) fn lane_types() -> [TypeId; 42] {
     [
         // The views lane: what each packet changed in the stores.
         TypeId::of::<crate::ui_unit::views::ViewLog>(),
@@ -685,6 +688,7 @@ pub(super) fn lane_types() -> [TypeId; 41] {
         TypeId::of::<crate::ui_taxi::TaxiLane>(),
         // The world-state lane: each packet's map and readout signals.
         TypeId::of::<crate::world_state::WorldStateLane>(),
+        TypeId::of::<crate::ui_world_map::LandmarkLane>(),
         // The dialogs' lane: the service questions, the boot, the stone, the summon, the
         // lockouts, the duel and the ticket answers, at their packets.
         TypeId::of::<crate::ui_dialog_verbs::DialogLane>(),
@@ -719,7 +723,7 @@ pub(super) fn lane_types() -> [TypeId; 41] {
 
 /// [`lane_types`] by the lane that drains each: a queue is stripped only from its own lane's row,
 /// so another lane's read of the same type shows as the state it is.
-fn lane_queue_owners() -> [(&'static str, TypeId); 41] {
+fn lane_queue_owners() -> [(&'static str, TypeId); 42] {
     [
         ("unit views", TypeId::of::<crate::ui_unit::views::ViewLog>()),
         (
@@ -772,6 +776,10 @@ fn lane_queue_owners() -> [(&'static str, TypeId); 41] {
         (
             "world states",
             TypeId::of::<crate::world_state::WorldStateLane>(),
+        ),
+        (
+            "landmarks",
+            TypeId::of::<crate::ui_world_map::LandmarkLane>(),
         ),
         (
             "dialogs",
@@ -964,6 +972,7 @@ fn the_drain_runs_after_the_feeds_and_before_the_tick() {
             "guild",
             "item text",
             "item watchers",
+            "landmarks",
             "list rebuilds",
             "loot",
             "loot rolls",
@@ -1236,6 +1245,11 @@ const AT_THEIR_OWN_PLACE: &[(&str, &str)] = &[
     (
         "::ui_chat::channels::end_session_channels_on_disconnect",
         "a dead socket ends the channel session, and no packet follows it",
+    ),
+    (
+        "::poi_marker::expire_marker",
+        "the gossip marker's clears at its deadline and on arrival run in the minimap's update \
+         (`0x6d9411`, `0x6d9a4c`), past the frame's packets, not at the set's packet",
     ),
 ];
 
@@ -1969,27 +1983,6 @@ pub(super) const QUEUED_FOR_THE_TICK: &[(&str, &str, &str)] = &[
         "a capture's fixture, dev tooling outside any session: no packet raises it",
     ),
     (
-        "capture/probe_service.rs::service_probe",
-        "take_cursor_item_for_sale",
-        "a probe's scripted sale, dev tooling outside any session",
-    ),
-    (
-        "target/click.rs::talk",
-        "take_cursor_item_for_sale",
-        "the vendor arm's sale clears the cursor outside a verb segment, so its `CURSOR_UPDATE` \
-         waits for the tick, where the interact ladder's `ClearCursor(0, 1)` signals inside the \
-         click (`0x5df5d0`, `0x5df5fc` → `0x495190`), ahead of the packets (I2, #1988)",
-    ),
-    (
-        "ui_world_map.rs::feed_landmarks",
-        "set_world_map_landmark_sources",
-        "rebuilds the landmark list once a frame off its inputs and queues `WORLD_MAP_UPDATE` on a \
-         change, where the reference rebuilds and signals in `0x4a67a0` (`0x4a6ce4`) at each \
-         input's place: the gossip marker's set in its handler (`0x4e2840` → `0x6dac10`, \
-         `0x6dac93`) and its expiry in the minimap's frame update (`0x6d9411`); the explored \
-         bits' watcher (`0x4a6477`) is a field notice of its own",
-    ),
-    (
         "ui_world_map.rs::feed_world_map",
         "sync_world_map_to_player_zone",
         "the first world enter's selection, queued for the next tick (the module's deviation), \
@@ -2002,19 +1995,6 @@ pub(super) const QUEUED_FOR_THE_TICK: &[(&str, &str, &str)] = &[
         "installs benilla's own projection at a VM's first frame, whose first landmark list \
          queues `WORLD_MAP_UPDATE`; no reference fact, as the reference projects inside \
          `0x4a67a0`",
-    ),
-    (
-        "ui_world_map.rs::seed_world_map_catalog",
-        "set_world_map_catalog",
-        "the catalog's push at the interface load, ahead of the session's packets; its \
-         `WORLD_MAP_UPDATE` is benilla's own, as the reference's build (`0x4a5d00`, from \
-         `0x48f5d1`) signals nothing",
-    ),
-    (
-        "ui_world_map.rs::seed_world_map_catalog",
-        "set_world_map_direct_areas",
-        "the instance maps' push beside the catalog, from the same walk (`0x4a5d00`); its \
-         `WORLD_MAP_UPDATE` is benilla's own",
     ),
 ];
 

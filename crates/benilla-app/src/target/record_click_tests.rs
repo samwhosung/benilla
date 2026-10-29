@@ -132,6 +132,11 @@ fn client_bound(wtf: &str) -> App {
                     TurnOrActionStart();
                     TurnOrActionStop();
                 </Binding>
+                <Binding name="PROBEKEYSELL">
+                    TurnOrActionStart();
+                    TurnOrActionStop();
+                    LOG = LOG .. "after;"
+                </Binding>
                 <Binding name="PROBEKEYREAD">
                     CameraOrSelectOrMoveStart();
                     CameraOrSelectOrMoveStop();
@@ -919,4 +924,80 @@ fn a_right_press_that_drops_the_cursor_keeps_the_pending_target() {
         );
         assert!(targeting(&app), "freelook {freelook}: the target stands");
     }
+}
+
+/// The held item's guid, in our backpack's first slot.
+const HELD_ITEM: u64 = 0x4000_0000_0000_0001;
+
+/// The vendor arm's sale from the cursor (`0x5df5d0`): it sends the sale (`0x5df5f0`), then its
+/// `ClearCursor(0, 1)` (`0x5df600` → `0x494b60` → `0x495190`) signals `CURSOR_UPDATE` inside the
+/// click, so the line after the binding's `TurnOrActionStop` runs after it.
+#[test]
+fn a_vendor_sale_signals_the_cursor_inside_the_click() {
+    use benilla_protocol::field::FIELD_UNIT_NPC_FLAGS;
+    /// `PLAYER_FIELD_PACK_SLOT_1`, the backpack's first guid.
+    const PACK_SLOT_1: u16 = 532;
+    let mut app = client_with_f("PROBEKEYSELL");
+    aim(&mut app);
+    let world = app.world_mut();
+    let (me, mob) = {
+        let index = &world.resource::<GuidIndex>().0;
+        (index[&ME], index[&MOB])
+    };
+    world.entity_mut(mob).insert(crate::net::ObjectStore(
+        ObjectFields::from_pairs(&[
+            (2, 0x9),
+            (FIELD_UNIT_HEALTH, 100),
+            (FIELD_UNIT_MAXHEALTH, 100),
+            (FIELD_UNIT_NPC_FLAGS, 0x4),
+        ])
+        .into_created(ObjectType::Unit),
+    ));
+    world.entity_mut(me).insert(crate::net::ObjectStore(
+        ObjectFields::from_pairs(&[
+            (2, 0x19),
+            (FIELD_UNIT_HEALTH, 100),
+            (FIELD_UNIT_MAXHEALTH, 100),
+            (PACK_SLOT_1, HELD_ITEM as u32),
+            (PACK_SLOT_1 + 1, (HELD_ITEM >> 32) as u32),
+        ])
+        .into_created(ObjectType::Player),
+    ));
+    hold_an_item(&mut app);
+    app.world()
+        .non_send_resource::<UiScript>()
+        .run(
+            r#"local f = CreateFrame("Frame")
+            f:RegisterEvent("CURSOR_UPDATE")
+            f:SetScript("OnEvent", function() LOG = LOG .. "cursor;" end)"#,
+        )
+        .unwrap();
+    move_to(&mut app, ON_MOB);
+    app.update();
+    app.world()
+        .non_send_resource::<UiScript>()
+        .run("LOG = ''")
+        .unwrap();
+    press_f(&mut app);
+    app.update();
+    assert!(
+        app.world()
+            .resource::<Sent>()
+            .0
+            .try_iter()
+            .any(|c| matches!(
+                c,
+                crate::net::ClientCommand::SellItem {
+                    vendor: MOB,
+                    item_guid: HELD_ITEM,
+                    ..
+                }
+            )),
+        "control: the click sold the held item"
+    );
+    assert_eq!(
+        log(&app),
+        "cursor;after;",
+        "the clear signalled inside the click"
+    );
 }

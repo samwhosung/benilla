@@ -989,3 +989,72 @@ fn the_explored_watcher_rebuilds_then_signals_once() {
         "the signal is not queued to fire again on the tick"
     );
 }
+
+/// The catalog and the instance maps go in at the interface load with no signal, as
+/// `CGGameUI::InitializeGame` builds the lists (`0x48f5d1` → `0x4a5d00`) and signals nothing: a
+/// listener registered first hears nothing on the tick.
+#[test]
+fn the_catalog_push_signals_nothing() {
+    let mut s = script();
+    s.run(
+        r#"
+        seen = 0
+        local f = CreateFrame("Frame")
+        f:RegisterEvent("WORLD_MAP_UPDATE")
+        f:SetScript("OnEvent", function() seen = seen + 1 end)
+        "#,
+    )
+    .unwrap();
+    push_catalog(&mut s);
+    s.set_world_map_direct_areas(Vec::new());
+    s.tick(0.01);
+    assert_eq!(s.eval::<i64>("return seen").unwrap(), 0);
+    assert_eq!(
+        s.eval::<i64>("return table.getn({ GetMapContinents() })")
+            .unwrap(),
+        2,
+        "control: the catalog is in"
+    );
+}
+
+/// The gossip marker's set and clears re-select the shown map (`0x6dac93`, `0x6d9411`,
+/// `0x6d9a4c` → `0x4a67a0`): the list is rebuilt, then `WORLD_MAP_UPDATE` signals before the call
+/// returns, once, whether or not the list moved. A silent seed stores the sources alone, for the
+/// setter's next run.
+#[test]
+fn a_marker_change_rebuilds_then_signals_in_place() {
+    let mut s = script();
+    s.set_world_loc_projector(Box::new(|_, _, x, y| Some((x, y))));
+    s.tick(0.01);
+    s.run(
+        r#"
+        seen = {}
+        local f = CreateFrame("Frame")
+        f:RegisterEvent("WORLD_MAP_UPDATE")
+        f:SetScript("OnEvent", function() table.insert(seen, GetNumMapLandmarks()) end)
+        "#,
+    )
+    .unwrap();
+    let marker = WorldMapLandmarkSource {
+        name: "Stormwind Warrior Trainer".into(),
+        description: String::new(),
+        map: 0,
+        pos: (0.3, 0.3),
+        icons: [Some(6); 3],
+    };
+    let seen = |s: &UiScript| s.eval::<String>("return table.concat(seen, ',')").unwrap();
+    s.world_map_landmarks_changed(Some(vec![marker.clone()]));
+    assert_eq!(seen(&s), "1", "the handler read the marker");
+    s.world_map_landmarks_changed(None);
+    assert_eq!(seen(&s), "1,1", "an unmoved list signals too");
+    s.seed_world_map_landmark_sources(Vec::new());
+    s.tick(0.01);
+    assert_eq!(seen(&s), "1,1", "nothing queued for the tick");
+    assert_eq!(
+        s.eval::<i64>("return GetNumMapLandmarks()").unwrap(),
+        1,
+        "the seed leaves the list to the setter's next run"
+    );
+    s.world_map_landmarks_changed(None);
+    assert_eq!(seen(&s), "1,1,0", "which reads the seeded sources");
+}

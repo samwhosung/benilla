@@ -76,26 +76,40 @@ impl PoiMarker {
     }
 }
 
-/// Clears the marker on arrival or at its deadline, once a frame as the minimap driver does.
+/// Clears the marker on arrival or at its deadline, once a frame as the minimap driver does; each
+/// clear re-selects the shown map, which signals there (`0x6d9411`, `0x6d9a4c` → `0x4a67a0`).
 pub(crate) fn expire_marker(
-    mut marker: ResMut<PoiMarker>,
+    mut marker: ParamSet<(ResMut<PoiMarker>, crate::ui_world_map::LandmarkReads)>,
+    mut lane: Option<ResMut<crate::ui_world_map::LandmarkLane>>,
     player: Res<Player>,
     time: Res<Time<Real>>,
 ) {
-    let Some(poi) = &marker.poi else {
+    if !clear_if_due(&mut marker.p0(), &player, time.elapsed_secs_f64()) {
         return;
+    }
+    if let Some(lane) = lane.as_deref_mut() {
+        lane.push(marker.p1().sources_now());
+    }
+}
+
+/// [`expire_marker`]'s two clears; whether it cleared.
+fn clear_if_due(marker: &mut PoiMarker, player: &Player, now_secs: f64) -> bool {
+    let Some(poi) = &marker.poi else {
+        return false;
     };
-    if time.elapsed_secs_f64() >= marker.expires_at {
+    if now_secs >= marker.expires_at {
         debug!("poi: \"{}\" expired — clearing the marker", poi.name);
         marker.poi = None;
-        return;
+        return true;
     }
     let w = bevy_to_wow(player.pos);
     let d2 = (poi.pos[0] - w[0]).powi(2) + (poi.pos[1] - w[1]).powi(2);
     if d2 < ARRIVE_CLEAR_YD_SQ {
         debug!("poi: arrived at \"{}\" — clearing the marker", poi.name);
         marker.poi = None;
+        return true;
     }
+    false
 }
 
 /// World entry clears the slot (`zone_rebuild`): a worldport or a logout.
@@ -109,19 +123,25 @@ pub(crate) fn clear_on_world_entry(
     }
 }
 
+/// The handler `0x4e2840`: the marker's set (`0x4e28aa` → `0x6dac10`), whose re-select of the
+/// shown map (`0x6dac93` → `0x4a67a0`) signals `WORLD_MAP_UPDATE` at the packet's place.
 fn on_gossip_poi(
     In(ev): In<benilla_protocol::SessionEvent>,
-    mut marker: ResMut<PoiMarker>,
+    mut marker: ParamSet<(ResMut<PoiMarker>, crate::ui_world_map::LandmarkReads)>,
+    mut lane: Option<ResMut<crate::ui_world_map::LandmarkLane>>,
     current_map: Option<Res<benilla_world::world_map::CurrentMap>>,
     real_clock: Res<Time<Real>>,
 ) {
     if let benilla_protocol::SessionEvent::GossipPoi(poi) = ev {
         gossip_poi(
             &poi,
-            &mut marker,
+            &mut marker.p0(),
             current_map.as_ref().map_or(0, |m| m.0),
             real_clock.elapsed_secs_f64(),
         );
+        if let Some(lane) = lane.as_deref_mut() {
+            lane.push(marker.p1().sources_now());
+        }
     }
 }
 
@@ -153,7 +173,8 @@ impl Plugin for PoiMarkerPlugin {
             Update,
             (
                 // Both before the lanes, whose world-state firing rebuilds the landmarks off the
-                // marker.
+                // marker; the expiry after the net drain, as the minimap's update runs from its
+                // draw (`0x4ec950` → `0x6d93a0`), past the frame's packets.
                 expire_marker
                     .after(crate::player::ControlRestore)
                     .before(crate::lanes::UiLanes),
