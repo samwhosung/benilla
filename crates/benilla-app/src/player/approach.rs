@@ -186,9 +186,9 @@ pub(crate) fn cancel_move_action_on_ui_shutdown(
 /// It sends nothing.
 #[derive(SystemParam)]
 pub(crate) struct AutoMoveStop<'w> {
-    /// The active mover `0xc4da98`.
-    claim: Res<'w, crate::net::MoverClaim>,
-    /// Absent in a harness without the mover's state, which stops nothing.
+    /// The active mover `0xc4da98`. Each absent in a harness without the mover's state, which
+    /// stops nothing.
+    claim: Option<Res<'w, crate::net::MoverClaim>>,
     follow: Option<ResMut<'w, FollowState>>,
     approach: Option<ResMut<'w, Approach>>,
 }
@@ -201,7 +201,7 @@ impl AutoMoveStop<'_> {
         guid: u64,
         lane: Option<&mut crate::field_watch::NoticeLane>,
     ) -> bool {
-        self.claim.holds(guid) && self.end(lane)
+        self.claim.as_deref().is_some_and(|c| c.holds(guid)) && self.end(lane)
     }
 
     /// [`Self::stop`] unless the auto-move is the facing turn, mode 2: the swing report's gate
@@ -217,13 +217,13 @@ impl AutoMoveStop<'_> {
 
     /// The active mover `0xc4da98`.
     pub(crate) fn mover(&self) -> Option<u64> {
-        self.claim.get()
+        self.claim.as_deref().and_then(crate::net::MoverClaim::get)
     }
 
     /// `StopAutoMove` on the active mover, whoever it is: a mover switch's stop of the outgoing one
     /// (`0x600731`-`0x600742`); `None` names no mover, which stops nothing.
     pub(crate) fn stop_mover(&mut self, lane: Option<&mut crate::field_watch::NoticeLane>) -> bool {
-        self.claim.get().is_some() && self.end(lane)
+        self.mover().is_some() && self.end(lane)
     }
 
     /// The canceller past its gate: the follow's signal and end, then the walk's.
