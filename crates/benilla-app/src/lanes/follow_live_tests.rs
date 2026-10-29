@@ -317,3 +317,17 @@ fn a_near_teleport_closes_the_loot_window_after_the_follow() {
     ends_between_the_falls(&seen);
     assert_eq!(past_the_falls(&seen), ["AUTOFOLLOW_END", "LOOT_CLOSED"]);
 }
+
+/// A knockback runs the same guard ahead of its queue (`QueueKnockBack 0x602670`, `0x60267e`).
+#[test]
+fn a_knockback_ends_the_follow_and_closes_the_loot_window() {
+    let mut app = looting();
+    let knock = SessionEvent::KnockBack {
+        guid: ME,
+        counter: 1,
+        launch: Default::default(),
+    };
+    let seen = frame(&mut app, vec![fall(5), knock, fall(5)]);
+    ends_between_the_falls(&seen);
+    assert_eq!(past_the_falls(&seen), ["AUTOFOLLOW_END", "LOOT_CLOSED"]);
+}

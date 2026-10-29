@@ -370,11 +370,16 @@ fn on_mover_edge(
                 &mut e.teleports,
             );
         }
+        // `QueueKnockBack 0x602670` runs the same guard first (`0x60267e`), ahead of the queue
+        // (`0x617a30`).
         SessionEvent::KnockBack {
             guid,
             counter,
             launch,
-        } => knock_back(guid, counter, launch, &self_guid, &mut e.knockbacks),
+        } => {
+            moved.stop(guid, self_guid.0);
+            knock_back(guid, counter, launch, &self_guid, &mut e.knockbacks);
+        }
         _ => {}
     }
 }
