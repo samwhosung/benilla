@@ -155,11 +155,24 @@ impl super::live::LiveQuery for ActionUsableNow {
 
 /// `GetActionTexture`'s question to the lent host for a spell or item slot: `GetActionSlotTexture`
 /// `0x4e6a50` at the call, off the live player, the item cache and the spell's aura; `None` inside
-/// for no icon. A macro slot's icon is the VM's own macro record's (`0x4e6bf9` into `0x4f0fd0`).
+/// for no icon. A macro slot asks [`ActionAttackFaceNow`] first, then its icon is the VM's own
+/// macro record's (`0x4e6bf9` into `0x4f0fd0`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ActionTextureNow(pub u32);
 
 impl super::live::LiveQuery for ActionTextureNow {
+    type Answer = Option<String>;
+}
+
+/// `GetActionSlotTexture`'s two tests ahead of its kind arms, for a macro slot's bound spell: the
+/// slot resolves through its record (`0x4e5a50` → `0x4e5ba0`, `+0x564`), and a spell that is
+/// Attack shows the melee face (`0x4e6ab2` → `0x4e59b0`, then `0x4e6870`), one that is a ranged
+/// auto-repeat shot the ranged weapon's when it has one (`0x4e6acb` → `0x4e5a00`, then
+/// `0x4e6990`). `None` inside for neither, which leaves the macro's own icon.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ActionAttackFaceNow(pub u32);
+
+impl super::live::LiveQuery for ActionAttackFaceNow {
     type Answer = Option<String>;
 }
 
@@ -181,25 +194,36 @@ impl super::live::LiveQuery for ActionConsumableNow {
     type Answer = bool;
 }
 
-/// A spell or item slot's icon as the lent host reads it at the call ([`ActionTextureNow`]), a
-/// macro slot's off the VM's macro record; else the VM's copy of the slot; `None` for an empty
-/// slot. The pickup's cursor reads it too.
+/// A spell or item slot's icon as the lent host reads it at the call ([`ActionTextureNow`]); a
+/// macro slot's the attack faces of its bound spell ([`ActionAttackFaceNow`]), else its record's;
+/// else the VM's copy of the slot; `None` for an empty slot. The pickup's cursor reads it too.
 pub(super) fn slot_texture(lua: &Lua, action: u32) -> Option<String> {
-    let mirror = {
+    let (mirror, bound) = {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
         let slot = model.actions.get(&action)?;
-        // The arm formats the icon directory and the basename (`0x4f0ffa`) and the binding pushes
-        // the buffer (`0x4e6e42`), so a macro with no icon gives the directory alone.
-        if let Some(id) = macro_slot_id(slot.kind, slot.action) {
-            return model.macros.by_id(id).map(|m| {
-                m.texture
+        match macro_slot_id(slot.kind, slot.action) {
+            // The arm formats the icon directory and the basename (`0x4f0ffa`) and the binding
+            // pushes the buffer (`0x4e6e42`), so a macro with no icon gives the directory alone. A
+            // macro that is gone resolves to nothing (`0x4e5030`) and shows nil.
+            Some(id) => {
+                let m = model.macros.by_id(id)?;
+                let icon = m
+                    .texture
                     .clone()
-                    .unwrap_or_else(|| MACRO_ICON_DIR.to_string())
-            });
+                    .unwrap_or_else(|| MACRO_ICON_DIR.to_string());
+                // Both tests read the record's spell (`[rec+0x564]`), a positive id alone.
+                let spell = model.macro_bindings.get(&id).map_or(0, |b| b.spell);
+                (Some(icon), u32::try_from(spell).ok().filter(|&s| s != 0))
+            }
+            None => {
+                let mirror = slot.texture.clone();
+                return super::live::ask(lua, &ActionTextureNow(action)).unwrap_or(mirror);
+            }
         }
-        slot.texture.clone()
     };
-    super::live::ask(lua, &ActionTextureNow(action)).unwrap_or(mirror)
+    bound
+        .and_then(|spell| super::live::ask(lua, &ActionAttackFaceNow(spell)).flatten())
+        .or(mirror)
 }
 
 /// `action`'s state as the lent host reads it at the call ([`ActionStateNow`]), else the pushed

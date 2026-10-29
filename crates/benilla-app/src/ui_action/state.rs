@@ -30,8 +30,8 @@ use bevy::prelude::*;
 use benilla_formats::RangeTargets;
 use benilla_protocol::messages::{ACTION_KIND_ITEM, ACTION_KIND_SPELL};
 use benilla_ui::script::{
-    macro_slot_id, ActionConsumableNow, ActionCountNow, ActionSlot, ActionState, ActionStateNow,
-    ActionTextureNow, ActionUsableNow,
+    macro_slot_id, ActionAttackFaceNow, ActionConsumableNow, ActionCountNow, ActionSlot,
+    ActionState, ActionStateNow, ActionTextureNow, ActionUsableNow,
 };
 
 use crate::items::Items;
@@ -568,6 +568,11 @@ impl ActionStates<'_, '_> {
         self.walk.face(b, true)
     }
 
+    /// A macro slot's attack faces for its bound `spell` ([`ActionAttackFaceNow`]).
+    fn attack_face_now(&self, spell: u32) -> Option<String> {
+        self.walk.attack_face(spell)
+    }
+
     /// `GetActionCount`'s answer (`0x4e6c70`): the stored count for an item slot, else 0.
     fn count_now(&self, action: u32) -> u32 {
         match self.walk.button(action) {
@@ -742,6 +747,22 @@ impl ActionWalk<'_, '_> {
             }
             _ => None,
         }
+    }
+
+    /// `0x4e6a50`'s attack tests on `spell` (`0x4e59b0`, `0x4e5a00`) and their faces, off the
+    /// player as [`Self::face`] reads it: the melee face for Attack, the ranged weapon's for a
+    /// ranged shot while it has one; `None` otherwise.
+    fn attack_face(&self, spell: u32) -> Option<String> {
+        let spells = self.spells.as_deref()?;
+        let d = spells.catalog.get(spell)?;
+        super::weapon_icon::auto_attack_icon(
+            d,
+            self.me_view(),
+            &spells.forms,
+            &self.objects,
+            &self.items,
+            self.icons.as_deref(),
+        )
     }
 
     /// The VM's copy of word `b` holding `count`: its icon, its record's consumable test and
@@ -1132,6 +1153,7 @@ impl crate::script_calls::live::LiveFamily for ActionStates<'_, '_> {
         ask.answer(|q: &ActionStateNow| Some(self.state_now(q)))
             || ask.answer(|q: &ActionUsableNow| Some(self.usable_now(q.0)))
             || ask.answer(|q: &ActionTextureNow| Some(self.texture_now(q.0)))
+            || ask.answer(|q: &ActionAttackFaceNow| Some(self.attack_face_now(q.0)))
             || ask.answer(|q: &ActionCountNow| Some(self.count_now(q.0)))
             || ask.answer(|q: &ActionConsumableNow| Some(self.consumable_now(q.0)))
     }

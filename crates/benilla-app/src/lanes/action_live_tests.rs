@@ -36,6 +36,8 @@ const FROSTBOLT_2: u32 = 205;
 const CAT: u32 = 768;
 const BEAR: u32 = 5487;
 const ATTACK: u32 = 6603;
+/// A ranged auto-repeat shot (`Attributes & 0x2`, `AttributesEx2 & 0x20`), off the bar.
+const AUTO_SHOT: u32 = 75;
 /// Two reactive spells (`AttributesEx4 & 0x200`) that need the defense aura state, off the bar,
 /// which the login lists Overpower first.
 const OVERPOWER: u32 = 7384;
@@ -178,6 +180,10 @@ fn spells() -> crate::ui_action::Spells {
         row(BEAR, |d| d.shapeshift_form = Some(BEAR_FORM)),
         // `SPELL_EFFECT_ATTACK`, which makes the slot the Attack slot (`0x4e59de`).
         row(ATTACK, |d| d.effects[0] = 78),
+        row(AUTO_SHOT, |d| {
+            d.attributes = 0x2;
+            d.attributes_ex2 = 0x20;
+        }),
         row(OVERPOWER, reactive),
         row(REVENGE, reactive),
         row(TOGGLE, |d| {
@@ -880,6 +886,88 @@ fn an_equipped_listener_finds_an_item_a_later_packet_destroys() {
     };
     let seen: Vec<String> = c.seen(&["UNIT_MANA"]).iter().map(worn).collect();
     assert_eq!(seen, ["UNIT_MANA:1"]);
+}
+
+/// A macro slot's icon is its record's but where its bound spell is Attack or a ranged shot:
+/// `0x4e6a50` runs both tests on the slot's spell through the record (`0x4e6ab2` → `0x4e59b0`,
+/// `0x4e6acb` → `0x4e5a00`, each through `0x4e5a50` → `0x4e5ba0`) ahead of its kind arms, so a
+/// macro bound to Attack shows the main hand's icon and one bound to Auto Shot the bow's.
+#[test]
+fn a_macro_bound_to_an_attack_shows_its_weapons_icon() {
+    use crate::ui_macro::{Bound, BoundSpell};
+    const BOW_GUID: u64 = 0x4000_0000_0000_00F3;
+    const BOW: u32 = 2504;
+    const RANGED: u16 = 486 + 2 * 17;
+    const SWORD_ICON: &str = "Interface\\Icons\\INV_Sword_04";
+    const BOW_ICON: &str = "Interface\\Icons\\INV_Weapon_Bow_02";
+    let mut c = client_with(|world| {
+        crate::items::test_spawn_item(
+            world,
+            BOW_GUID,
+            ObjectFields::from_pairs(&[(3, BOW), (14, 1)]),
+            false,
+        );
+        let mut items = world.resource_mut::<crate::items::Items>();
+        for (entry, subclass, display) in [(SWORD, 7, 950), (BOW, 2, 951)] {
+            items.insert_template(
+                entry,
+                Some(benilla_protocol::messages::ItemInfo {
+                    class: 2,
+                    subclass,
+                    display_info_id: display,
+                    ..crate::items::test_template("Weapon")
+                }),
+            );
+        }
+        let display = |icon: &str| benilla_formats::ItemDisplay {
+            icon: Some(icon.to_string()),
+            ..Default::default()
+        };
+        world.insert_resource(crate::entities::ItemDisplays::icons_for_tests(
+            benilla_formats::ItemDisplayCatalog::from_displays(HashMap::from([
+                (950, display(SWORD_ICON)),
+                (951, display(BOW_ICON)),
+            ])),
+        ));
+    });
+    {
+        let world = c.app.world_mut();
+        crate::ui_macro::bind_for_test(
+            &mut world.non_send_resource_mut::<UiScript>(),
+            &[
+                (1, Bound::from(BoundSpell::Spell(ATTACK))),
+                (2, Bound::from(BoundSpell::Spell(AUTO_SHOT))),
+                (3, Bound::from(BoundSpell::Spell(FROSTBOLT))),
+            ],
+        );
+        for (action, id) in [(9, 1), (10, 2), (11, 3)] {
+            crate::ui_action::hold_for_test(
+                world,
+                action,
+                benilla_protocol::messages::ACTION_KIND_MACRO,
+                id,
+            );
+        }
+    }
+    c.frame(vec![vec![values(
+        ME,
+        &[
+            wield(true)[0],
+            wield(true)[1],
+            (RANGED, BOW_GUID as u32),
+            (RANGED + 1, (BOW_GUID >> 32) as u32),
+        ],
+    )]]);
+    let chunk = "return GetActionTexture(9), GetActionTexture(10), GetActionTexture(11)";
+    assert_eq!(
+        c.eval::<(String, String, String)>(true, chunk),
+        (
+            SWORD_ICON.to_string(),
+            BOW_ICON.to_string(),
+            "Interface\\Icons\\".to_string()
+        ),
+        "the weapons' icons, then the Frostbolt macro's own"
+    );
 }
 
 /// `SMSG_SUPERCEDED_SPELL` gives a bar macro that cast the old rank the new one in its record
