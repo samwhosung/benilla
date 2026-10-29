@@ -10,8 +10,9 @@
 //! one fires later inside the tick, and a held one inside the host's drain.
 //!
 //! The check runs only while the host has armed it ([`arm`]), around its frame's schedules, so a
-//! test that drives a VM by hand is not judged. Without `debug_assertions` every piece compiles to
-//! nothing.
+//! test that drives a VM by hand is not judged. How an unlisted raise fails is the host's
+//! [`Failure`]: a test panics, and a live run reports each site once and goes on. Without
+//! `debug_assertions` every piece compiles to nothing.
 
 /// A place a raise is right to come from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,17 +36,33 @@ pub struct Allow {
     pub why: &'static str,
 }
 
+/// How a raise from an unlisted origin fails.
+#[derive(Clone, Copy, Debug)]
+pub enum Failure {
+    /// A panic naming the event and its caller, for a test.
+    Panic,
+    /// The same line handed to the host's reporter, once per site (the raise's line and its
+    /// callers), for a live run that must go on.
+    Report(fn(&str)),
+}
+
+/// What the host armed: its allow list and how a raise outside it fails.
+type ArmedState = Option<(&'static [Allow], Failure)>;
+
 #[cfg(debug_assertions)]
 mod imp {
     use std::cell::{Cell, RefCell};
+    use std::collections::HashSet;
 
-    use super::{Allow, Origin};
+    use super::{ArmedState, Failure, Origin};
 
     thread_local! {
         /// The origins open on this thread, innermost last.
         static OPEN: RefCell<Vec<Origin>> = const { RefCell::new(Vec::new()) };
-        /// The host's allow list while the check is armed.
-        static ARMED: Cell<Option<&'static [Allow]>> = const { Cell::new(None) };
+        /// The host's allow list and failure while the check is armed.
+        static ARMED: Cell<ArmedState> = const { Cell::new(None) };
+        /// The sites reported so far ([`Failure::Report`]).
+        static REPORTED: RefCell<Option<HashSet<String>>> = const { RefCell::new(None) };
     }
 
     pub(super) fn within<R>(origin: Origin, f: impl FnOnce() -> R) -> R {
@@ -64,13 +81,13 @@ mod imp {
         OPEN.with_borrow(|open| open.last().copied())
     }
 
-    pub(super) fn set_armed(allow: Option<&'static [Allow]>) -> Option<&'static [Allow]> {
-        ARMED.replace(allow)
+    pub(super) fn set_armed(armed: ArmedState) -> ArmedState {
+        ARMED.replace(armed)
     }
 
     #[track_caller]
     pub(super) fn check(event: &str, lua: Option<&mlua::Lua>) {
-        let Some(allow) = ARMED.get() else {
+        let Some((allow, failure)) = ARMED.get() else {
             return;
         };
         if current().is_some() {
@@ -90,12 +107,24 @@ mod imp {
             return;
         }
         let at = std::panic::Location::caller();
-        panic!(
+        let from = callers(&symbols);
+        let line = format!(
             "`{event}` was raised outside every script call, lane firing and tick, at {at}, \
-             from {}: put it on a lane or inside the call that causes it, or give its origin a \
-             row on the host's allow list with its reason",
-            callers(&symbols)
+             from {from}: put it on a lane or inside the call that causes it, or give its origin \
+             a row on the host's allow list with its reason"
         );
+        match failure {
+            Failure::Panic => panic!("{line}"),
+            Failure::Report(report) => {
+                let fresh = REPORTED.with_borrow_mut(|seen| {
+                    seen.get_or_insert_with(HashSet::new)
+                        .insert(format!("{at} {from}"))
+                });
+                if fresh {
+                    report(&line);
+                }
+            }
+        }
     }
 
     /// Whether a frame of `symbols` is `frame`'s function, or a closure inside it.
@@ -190,28 +219,27 @@ pub fn current() -> Option<Origin> {
     }
 }
 
-/// Arm the check on this thread with `allow` until the guard drops, as the host does around its
-/// frame's schedules.
+/// Arm the check on this thread with `allow` and `failure` until the guard drops.
 #[must_use = "the check is armed while the guard lives"]
-pub fn arm(allow: &'static [Allow]) -> Armed {
+pub fn arm(allow: &'static [Allow], failure: Failure) -> Armed {
     #[cfg(debug_assertions)]
     {
-        Armed(imp::set_armed(Some(allow)))
+        Armed(imp::set_armed(Some((allow, failure))))
     }
     #[cfg(not(debug_assertions))]
     {
-        let _ = allow;
+        let _ = (allow, failure);
         Armed(None)
     }
 }
 
-/// Arm the check on this thread with `allow` until [`disarm`], for a host whose frame opens and
-/// closes in two calls.
-pub fn arm_until_disarmed(allow: &'static [Allow]) {
+/// Arm the check on this thread with `allow` and `failure` until [`disarm`], for a host whose
+/// frame opens and closes in two calls, as the host's schedules around its frame do.
+pub fn arm_until_disarmed(allow: &'static [Allow], failure: Failure) {
     #[cfg(debug_assertions)]
-    imp::set_armed(Some(allow));
+    imp::set_armed(Some((allow, failure)));
     #[cfg(not(debug_assertions))]
-    let _ = allow;
+    let _ = (allow, failure);
 }
 
 /// End what [`arm_until_disarmed`] began.
@@ -221,7 +249,7 @@ pub fn disarm() {
 }
 
 /// [`arm`]'s guard: puts back what was armed before.
-pub struct Armed(Option<&'static [Allow]>);
+pub struct Armed(ArmedState);
 
 impl Drop for Armed {
     fn drop(&mut self) {
@@ -269,7 +297,7 @@ mod tests {
     #[cfg_attr(not(debug_assertions), ignore = "the check compiles out")]
     fn a_raise_inside_a_segment_passes_and_one_outside_every_origin_fails_with_its_caller() {
         let s = UiScript::new().unwrap();
-        let _armed = arm(&[]);
+        let _armed = arm(&[], Failure::Panic);
         verb(&s.lua, |model| model.raise("CURSOR_UPDATE", Vec::new()));
         within(Origin::Lane, || {
             fire_event_into(&s.lua, "PLAYER_MONEY", Vec::new())
@@ -286,6 +314,33 @@ mod tests {
         assert!(
             message.contains("`PLAYER_MONEY`") && message.contains(&format!("origin.rs:{line}:")),
             "{message}"
+        );
+    }
+
+    thread_local! {
+        static REPORTS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn keep(line: &str) {
+        REPORTS.with_borrow_mut(|r| r.push(line.to_string()));
+    }
+
+    /// Armed for a live run, a raise outside every origin goes on, and each site is reported once
+    /// however often it raises.
+    #[test]
+    #[cfg_attr(not(debug_assertions), ignore = "the check compiles out")]
+    fn a_live_run_reports_each_site_once_and_goes_on() {
+        let s = UiScript::new().unwrap();
+        let _armed = arm(&[], Failure::Report(keep));
+        for _ in 0..3 {
+            fire_event_into(&s.lua, "PLAYER_MONEY", Vec::new());
+        }
+        fire_event_into(&s.lua, "PLAYER_MONEY", Vec::new());
+        let reports = REPORTS.with_borrow(Clone::clone);
+        assert_eq!(reports.len(), 2, "{reports:#?}");
+        assert!(
+            reports.iter().all(|r| r.contains("`PLAYER_MONEY`")),
+            "{reports:#?}"
         );
     }
 
@@ -307,7 +362,7 @@ mod tests {
             why: "the test's own",
         }];
         let s = UiScript::new().unwrap();
-        let _armed = arm(ALLOW);
+        let _armed = arm(ALLOW, Failure::Panic);
         fire_event_into(&s.lua, "PLAYER_MONEY", Vec::new());
     }
 

@@ -1,8 +1,9 @@
 //! The origins outside a script call, a lane's firing and the tick that may raise an event into
 //! the VM ([`benilla_ui::script::origin`]), and the arming of that check around each frame's
-//! schedules. A raise anywhere else fails in a debug build, naming its caller.
+//! schedules. In a debug build a raise anywhere else names its caller: the app's tests and a run
+//! under `BENILLA_RAISE_STRICT=1` panic, and a live run warns once per site and goes on.
 
-use benilla_ui::script::origin::Allow;
+use benilla_ui::script::origin::{Allow, Failure};
 use bevy::app::MainScheduleOrder;
 use bevy::ecs::schedule::{ExecutorKind, ScheduleLabel};
 use bevy::prelude::*;
@@ -76,10 +77,6 @@ pub(crate) const RAISES_AT_THEIR_OWN_PLACE: &[Allow] = &[
               `ACTIONBAR_SLOT_CHANGED` off",
     },
     Allow {
-        frame: "ui_action::state::fire_action_events",
-        why: "NOT_YET_ON_A_LANE: the usable cache's refresh, one pass a frame",
-    },
-    Allow {
         frame: "capture::fixtures::seed_ui_fixture",
         why: "QUEUED_FOR_THE_TICK: a capture's fixture",
     },
@@ -107,13 +104,9 @@ pub(crate) const RAISES_AT_THEIR_OWN_PLACE: &[Allow] = &[
         frame: "ui_world_map::seed_world_map_catalog",
         why: "QUEUED_FOR_THE_TICK: the catalog and the instance maps' push",
     },
-    // Remaining work no guard row names yet.
     Allow {
         frame: "ui_char::feed_char",
-        why: "remaining work: `set_inventory_slots` signals `UPDATE_INVENTORY_ALERTS` off the \
-              frame's doll, where the reference recomputes and signals (`0x4c7ee0`, `0x4c8085`) in \
-              the item field watchers (`0x5d952a`, `0x5d97aa`, `0x5d9920`, `0x5d9b2f`, \
-              `0x5dee7a`), inside the update packet",
+        why: "NOT_YET_ON_A_LANE: its push's `UPDATE_INVENTORY_ALERTS`, signalled at frame time",
     },
 ];
 
@@ -156,7 +149,30 @@ pub(crate) fn arm_each_frame(app: &mut App) {
 }
 
 fn arm(_: &mut World) {
-    benilla_ui::script::origin::arm_until_disarmed(RAISES_AT_THEIR_OWN_PLACE);
+    benilla_ui::script::origin::arm_until_disarmed(RAISES_AT_THEIR_OWN_PLACE, failure());
+}
+
+/// A panic under the app's tests or `BENILLA_RAISE_STRICT=1`; else a warning per site, so a
+/// developer's debug client goes on.
+fn failure() -> Failure {
+    static STRICT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let strict = *STRICT.get_or_init(|| {
+        std::env::var_os("BENILLA_RAISE_STRICT").is_some_and(|v| !v.is_empty() && v != "0")
+    });
+    if cfg!(test) || strict {
+        Failure::Panic
+    } else {
+        Failure::Report(report)
+    }
+}
+
+/// A live run's report of a raise from an unlisted origin: a warning, and a line on the trace
+/// (`WOW_MOVE_TRACE=<path>`, tag `raise`).
+fn report(line: &str) {
+    warn!("raise origin: {line}");
+    if benilla_assets::trace::enabled_for("raise") {
+        benilla_assets::trace::line("raise", line);
+    }
 }
 
 fn disarm(_: &mut World) {
@@ -175,6 +191,12 @@ mod tests {
         app.insert_non_send_resource(UiScript::new().expect("a VM"))
             .add_systems(Update, system);
         app
+    }
+
+    /// The app's tests panic on an unlisted raise.
+    #[test]
+    fn the_apps_tests_fail_hard() {
+        assert!(matches!(super::failure(), super::Failure::Panic));
     }
 
     fn raises_at_frame_time(world: &mut World) {
