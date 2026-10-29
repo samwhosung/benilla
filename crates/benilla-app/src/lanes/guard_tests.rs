@@ -75,6 +75,10 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // Quiet: the animations the handlers and the verbs ask for, which the model systems play; no
     // getter reads a model's sequence.
     "::creature_anim::PlaySeq",
+    // Quiet: the gestures a chat line's firing and a world click's greeting queue, which
+    // `drive_gestures` plays as the speaker's animation (`0x60bb30` → `0x5fcd20`); no getter
+    // reads a model's gesture, and no feed fires off it.
+    "::creature_anim::gesture::GestureQueue",
     // Read through the host by the set block, and quiet: a member's answer rebuilds the tooltip
     // waiting on it through the build's own wait, read as the tick runs.
     "::item_names::ItemNames",
@@ -269,6 +273,11 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // the logout bytes through the host in their calls, and quiet: the replies' handlers signal on
     // the notice lane at their packets.
     "::ui_logout::LogoutState",
+    // Quiet: what a session verb posts past its call, the exit `ForceQuit` posts (`0x48ab60` →
+    // `0x401560`), which `exit_on_logout_complete` takes in the drain, and the cinematic's stop
+    // (`0x48b970` → `0x48f050`), which the cinematic's chain takes at its head and fades at frame
+    // time; no feed fires off it.
+    "::ui_logout::SessionPosts",
     // Quiet: the connection's state, which the session's handlers write and the death getters'
     // body test reads through the host; no feed fires off it.
     "::net::NetStatus",
@@ -335,7 +344,13 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // The ammo getters' hits fire after the push that carries their record, whenever it runs.
     ("::ui_char::feed_char", &["items::Countdowns", "items::Items", "names::NameCache",
         "net::GuidIndex", "net::ObjectStore", "ui_char::AmmoRecordHits"]),
-    ("::ui_macro::load_macros", &["ui_action::ActionSlots"]),
+    // The account-data readers (#2448): each reruns off the sections a download stored through
+    // `&self`, read as the frame left them, where the reference runs each inside the settle that
+    // its section's digest or download handler makes (`0x5afaca`, `0x5afd19`): the bindings
+    // (`0x4b6240`), the layout (`0x490380`) and the macros (`0x4f0600`).
+    ("::bindings::reread_arrived_bindings", &["account_data::AccountData"]),
+    ("::ui_layout::load_layout", &["account_data::AccountData"]),
+    ("::ui_macro::load_macros", &["account_data::AccountData", "ui_action::ActionSlots"]),
     // The locks of the objects that went, forgotten as the frame left the index.
     ("::ui_items::locks::forget_gone_item_locks", &["net::GuidIndex"]),
     ("::ui_items::feed::feed_item_stats", &["items::Items", "net::HomeBind", "net::ObjectStore",
@@ -357,9 +372,8 @@ pub(super) const BUILT_OUTSIDE_THE_PACKETS_IN_THE_REFERENCE: &[(&str, &[&str], &
 
 /// The resources the handlers fill through a shared reference, which their declared access shows
 /// as a read: the account data a download stores and what a session verb posts. One the call host
-/// holds too is every hosted feed's read, so it is host-held, as a queue the host writes is: a
-/// [`Row::HostHeld`] row or a [`HOST_HELD_UNREAD`] entry once a handler apart from the host fills
-/// it. The lanes (the tutorials' and the ui errors' among them) and the host's two other sinks (the
+/// holds too is every hosted feed's read, so it is host-held, whichever handler fills it: a
+/// [`Row::HostHeld`] row or a [`HOST_HELD_UNREAD`] entry. The lanes (the tutorials' and the ui errors' among them) and the host's two other sinks (the
 /// message sounds and the unit edits, which raise no event) are not queues here.
 pub(super) const FILLED_THROUGH_A_READ: &[&str] = &[
     // The account-data sections, which the download's handler stores through `&self`.
@@ -794,27 +808,18 @@ fn call_host_access(world: &mut World) -> bevy::ecs::query::Access {
         .clone()
 }
 
-/// The resources a handler that does not lend the call host fills: what it writes, and what it
-/// reads of [`FILLED_THROUGH_A_READ`]. A handler that lends the host holds all the host holds, so
-/// its access names the host's state, not what its packet fills.
+/// The resources a handler that does not lend the call host writes: a handler that lends it
+/// holds all the host holds, so its access names the host's state, not what its packet fills.
 fn filled_apart_from_the_host(app: &mut App) -> std::collections::HashSet<ComponentId> {
     let host = call_host_access(app.world_mut());
     let host_writes: Vec<ComponentId> = host.resource_writes().collect();
-    let world = app.world();
-    let handlers = world.resource::<crate::net::handlers::NetHandlers>();
+    let handlers = app.world().resource::<crate::net::handlers::NetHandlers>();
     handlers
         .accesses()
         .iter()
         .map(|(_, a)| a.combined_access())
         .filter(|a| !host_writes.iter().all(|&id| a.has_resource_write(id)))
-        .flat_map(|a| {
-            let through_a_read = a
-                .resource_reads()
-                .filter(|id| ends_with_any(&name(world, *id), FILLED_THROUGH_A_READ));
-            a.resource_writes()
-                .chain(through_a_read)
-                .collect::<Vec<_>>()
-        })
+        .flat_map(|a| a.resource_writes().collect::<Vec<_>>())
         .collect()
 }
 
@@ -1048,7 +1053,13 @@ fn every_handler_queue_a_feed_takes_is_on_a_lane_or_listed() {
                 .filter(|&&id| Some(id) != vm && !lanes.contains(&id))
                 .filter(|&&id| !is_messages(world, id))
                 .filter(|&&id| host.has_resource_read(id))
-                .filter(|id| filled_apart.contains(id))
+                // A queue filled through a read is every handler's that holds the host, whichever
+                // fills it, so each the host reads is held; a written one is held once a handler
+                // apart from the host writes it.
+                .filter(|&&id| {
+                    filled_apart.contains(&id)
+                        || ends_with_any(&self::name(world, id), FILLED_THROUGH_A_READ)
+                })
                 .map(|&id| self::name(world, id))
                 .collect();
             for (key, system, _) in graph.systems.iter() {
@@ -1582,6 +1593,32 @@ pub(super) fn short_name(full: &str) -> String {
     }
 }
 
+/// What the handlers write, as [`READS_FRAME_FINAL`] counts it: each component a handler writes,
+/// and each resource one writes or fills through a shared reference ([`FILLED_THROUGH_A_READ`]),
+/// whose access shows a read, so a feed that reads such a queue's content is an input.
+fn handler_written(world: &World) -> (BTreeSet<ComponentId>, BTreeSet<ComponentId>) {
+    use bevy::ecs::query::ComponentAccessKind;
+    let handlers = world.resource::<crate::net::handlers::NetHandlers>();
+    let mut components = BTreeSet::new();
+    let mut resources = BTreeSet::new();
+    for (_, access) in handlers.accesses() {
+        let access = access.combined_access();
+        if let Ok(kinds) = access.try_iter_component_access() {
+            components.extend(kinds.filter_map(|k| match k {
+                ComponentAccessKind::Exclusive(id) => Some(id),
+                _ => None,
+            }));
+        }
+        resources.extend(access.resource_writes());
+        resources.extend(
+            access
+                .resource_reads()
+                .filter(|id| ends_with_any(&name(world, *id), FILLED_THROUGH_A_READ)),
+        );
+    }
+    (components, resources)
+}
+
 /// Every view push that reads what a handler writes has its row, whose inputs are exactly the
 /// handler-written state it reads: each component a handler writes and each resource one writes,
 /// past the VM, the message buffers and the lane queues. A feed's own reads are its declared
@@ -1589,25 +1626,10 @@ pub(super) fn short_name(full: &str) -> String {
 /// the host's.
 #[test]
 fn every_view_push_of_what_a_handler_writes_is_listed() {
-    use bevy::ecs::query::{ComponentAccessKind, FilteredAccess};
+    use bevy::ecs::query::FilteredAccess;
     use bevy::ecs::schedule::NodeId;
     let mut app = headless_client();
-    let (components, resources) = {
-        let handlers = app.world().resource::<crate::net::handlers::NetHandlers>();
-        let mut components = BTreeSet::new();
-        let mut resources = BTreeSet::new();
-        for (_, access) in handlers.accesses() {
-            let access = access.combined_access();
-            if let Ok(kinds) = access.try_iter_component_access() {
-                components.extend(kinds.filter_map(|k| match k {
-                    ComponentAccessKind::Exclusive(id) => Some(id),
-                    _ => None,
-                }));
-            }
-            resources.extend(access.resource_writes());
-        }
-        (components, resources)
-    };
+    let (components, resources) = handler_written(app.world());
     let (pushes, systems) = app.world_mut().schedule_scope(Update, |world, schedule| {
         schedule.graph_mut().systems.initialize(world);
         let vm = world
