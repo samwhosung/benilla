@@ -189,6 +189,10 @@ pub(crate) enum FieldNotice {
     /// A packet handler's `DisplayError(id)` (`0x496720`): the message row's line, by its
     /// `GlobalStrings` key, shown at once.
     Line { key: &'static str },
+    /// The active player's taxi flag raised (`0x5ff538`-`0x5ff552`): its auto-move stops
+    /// (`0x5ff55a` → `StopAutoMove(0, 1)`), which the notify walk runs at its place, ahead of the
+    /// rest of the flags watcher, and which reaches the lane only as the `AUTOFOLLOW_END` it owes.
+    TaxiStop,
 }
 
 /// The notice lane: each notice stamped as a handler writes it ([`crate::lanes::stamp`]), fired
@@ -859,6 +863,10 @@ pub(crate) fn placed_values(
                 id::PLAYER_REGEN_ENABLED
             };
             pass.push(at, FieldNotice::Global { id });
+        }
+        // Last in the active player's arm, the taxi flag's rise (`0x5ff538`-`0x5ff55a`).
+        if mine && flipped & flags & crate::player::UNIT_FLAG_TAXI_FLIGHT != 0 {
+            pass.push(at, FieldNotice::TaxiStop);
         }
         // The reaction on 0x4080 (`0x5ff71c`) and again on 0x1000 (`0x5ff72b`).
         if flipped & 0x4080 != 0 {

@@ -826,9 +826,33 @@ fn deactivate(sc: &mut Scene, guid: u64, script: Option<&UiScript>) {
             || crate::target::raid_member_or_pet(group, guid, me, &held),
         );
     }
+    // `0x5fbc26`-`0x5fbc3b`: the active mover's release stops its auto-move
+    // (`ReleaseActiveMover 0x6006b0` → `0x6006c2`); the global goes with the unit ([`release`]).
+    // The later `0x5fbcd7` finds no active mover left.
+    stop_auto_move(
+        sc.mover.as_deref(),
+        sc.follow.as_deref_mut(),
+        sc.approach.as_deref_mut(),
+        &mut sc.field_notices,
+        guid,
+    );
     // The release's `PARTY_MEMBER_DISABLE` for a party slot's player (`0x5e9b78`).
     if held(guid).is_some_and(|s| s.0.created_as() == Some(ObjectType::Player)) {
         sc.group.member_object(guid, false);
+    }
+}
+
+/// `StopAutoMove` (`0x60fb60`) on `guid`, a no-op unless it is the active mover
+/// ([`crate::player::AutoMoveStop`]): the scene's claim, auto-move and notice lane.
+fn stop_auto_move(
+    mover: Option<&crate::net::MoverClaim>,
+    follow: Option<&mut crate::player::FollowState>,
+    approach: Option<&mut crate::player::Approach>,
+    lane: &mut crate::field_watch::NoticeLane,
+    guid: u64,
+) {
+    if mover.is_some_and(|m| m.holds(guid)) {
+        crate::player::end_auto_move(follow, approach, Some(lane));
     }
 }
 
@@ -1109,6 +1133,17 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
             }
             crate::field_watch::Step::Notice(crate::field_watch::FieldNotice::TrainerPass) => {
                 sc.trainer.owed()
+            }
+            // The taxi flag's stop of our auto-move, its `AUTOFOLLOW_END` at this place
+            // (`0x5ff55a` → `0x60fb84`).
+            crate::field_watch::Step::Notice(crate::field_watch::FieldNotice::TaxiStop) => {
+                stop_auto_move(
+                    sc.mover.as_deref(),
+                    sc.follow.as_deref_mut(),
+                    sc.approach.as_deref_mut(),
+                    &mut sc.field_notices,
+                    guid,
+                );
             }
             // The ghost flag's clear (`0x5dea20`): `SetAreaSpiritHealer(0, 0)` runs at the packet,
             // a pending wave's `CMSG_CANCEL_AURA` going out here and its event on the lane ahead

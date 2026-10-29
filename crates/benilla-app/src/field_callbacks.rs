@@ -8,8 +8,6 @@
 //!   `0x5ff860`), [`crate::ui_chat::combat::watch`]'s;
 //! - the health watcher's death (`0x6046f0` → `OnDied 0x605860`), its line among its legs,
 //!   `crate::target`'s;
-//! - the flags watcher's taxi rise on the active player (`0x5ff580` → `0x5ff4e0`), which ends its
-//!   auto-move (`0x5ff538`-`0x5ff55a`, [`crate::player::AutoMoveStop`]);
 //! - the form watcher's latch release (`0x5de07f`) and the lost service flags' closes (`0x604a20`
 //!   → `0x60b420`), [`crate::ui_session`]'s;
 //! - the pet name stamp's re-ask and `LOCALPLAYER_PET_RENAMED` (`0x604aa0`), [`crate::ui_pet`]'s.
@@ -104,23 +102,9 @@ pub(crate) fn run(world: &mut World, edges: &[FieldChanged], calls: &[AuraFields
             // What the legs stamp nests under the edge, ahead of what the packet raised after it.
             crate::lanes::firing(e.at, || crate::target::died(world, e));
         }
-        if taxi_rose(world, &e) {
-            crate::lanes::firing(e.at, || crate::player::stop_auto_move(world, e.guid));
-        }
         crate::ui_session::on_field_edge(world, e);
         crate::ui_pet::on_field_edge(world, e);
     }
-}
-
-/// The active player's taxi flag raised (`0x5ff538`: the flipped bit 0x100000, `0x5ff540`-`0x5ff552`:
-/// set in the new flags), which `0x5ff580` passes on for the active player alone (`0x5ff5b4`).
-fn taxi_rose(world: &World, e: &FieldChanged) -> bool {
-    let taxi = crate::player::UNIT_FLAG_TAXI_FLIGHT;
-    e.unit_field(benilla_protocol::field::FIELD_UNIT_FLAGS)
-        && (e.old ^ e.new) & e.new & taxi != 0
-        && world
-            .get_resource::<crate::net::SelfGuid>()
-            .is_some_and(|me| me.0 == Some(e.guid))
 }
 
 /// A callback's deferred stretch on the world's VM: each leg's signals held as it runs and parked

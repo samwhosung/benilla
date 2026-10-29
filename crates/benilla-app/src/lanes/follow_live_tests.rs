@@ -1,7 +1,8 @@
 //! The follow's ends at their packets. Each handler that ends an auto-move calls the canceller
 //! `StopAutoMove` (`0x60fb60`), which signals `AUTOFOLLOW_END` for a follow first (`0x60fb84`),
 //! inside the handler: the taxi flag's watcher (`0x5ff55a`), our own death (`0x605938`), our own
-//! swing's report (`0x625a21`) and the mover switch of a control update (`0x600742`). The follow's
+//! swing's report (`0x625a21`), the mover switch of a control update (`0x600742`), the mover's
+//! release (`0x5fbc3b` → `0x6006c2`) and a near teleport (`0x60300e` → `0x60e9b5`). The follow's
 //! arm reads the follow as the packets left it (`0x611130` → `0x60fb60`).
 
 use benilla_protocol::field::{FIELD_UNIT_FLAGS, FIELD_UNIT_HEALTH, FIELD_UNIT_MAXHEALTH};
@@ -15,6 +16,7 @@ use super::unit_view_tests::{client, created, fall, frame, health, values};
 /// [`client`]'s active player and its target.
 const ME: u64 = 0x7;
 const WOLF: u64 = 0xF130_0000_0044_0001;
+const BOAR: u64 = 0xF130_0000_0045_0002;
 /// Another player, followed.
 const LEADER: u64 = 0x52;
 
@@ -28,6 +30,8 @@ fn following() -> App {
             local f = CreateFrame("Frame")
             f:RegisterEvent("AUTOFOLLOW_BEGIN")
             f:RegisterEvent("AUTOFOLLOW_END")
+            f:RegisterEvent("PLAYER_REGEN_DISABLED")
+            f:RegisterEvent("UNIT_AURA")
             f:SetScript("OnEvent", function() table.insert(Seen, event) end)
             "#,
         )
@@ -85,6 +89,56 @@ fn the_taxi_flag_ends_the_follow_at_its_packet() {
         app.world().resource::<crate::player::FollowState>().guid,
         None
     );
+}
+
+/// The flags watcher's active-player arm runs first (`0x5ff5b4` → `0x5ff4e0`), the taxi stop last
+/// in it, after the combat bit's `PLAYER_REGEN_DISABLED` (`0x5ff533`) and ahead of the watcher's
+/// `UNIT_AURA` on bit 0x8000000 (`0x5ff7e2`): one flags write, three signals in that order.
+#[test]
+fn the_taxi_stop_signals_in_the_flags_watchers_order() {
+    let mut app = following();
+    let flags = crate::player::UNIT_FLAG_TAXI_FLIGHT | 0x8_0000 | 0x0800_0000;
+    let seen = frame(&mut app, vec![values(ME, &[(FIELD_UNIT_FLAGS, flags)])]);
+    let ours: Vec<&str> = seen
+        .iter()
+        .map(String::as_str)
+        .filter(|e| !e.starts_with("UNIT_COMBAT") && !e.starts_with("UNIT_HEALTH"))
+        .collect();
+    assert_eq!(
+        ours,
+        ["PLAYER_REGEN_DISABLED", "AUTOFOLLOW_END", "UNIT_AURA"],
+        "{seen:?}"
+    );
+}
+
+/// A near teleport of our mover ends the follow inside its packet (`0x602fb0` → `0x60e990(1, 0)`
+/// at `0x60300e`), ahead of the move it queues.
+#[test]
+fn a_near_teleport_ends_the_follow_at_its_packet() {
+    let mut app = following();
+    let teleport = SessionEvent::Teleport {
+        guid: ME,
+        counter: 1,
+        position: [1.0, 2.0, 3.0],
+        orientation: 0.0,
+    };
+    ends_between_the_falls(&frame(&mut app, vec![fall(5), teleport, fall(5)]));
+}
+
+/// The active mover's release ends its auto-move (`0x5fbc26`-`0x5fbc3b` → `0x6006b0` →
+/// `0x6006c2`): a possessed boar destroyed under us.
+#[test]
+fn the_movers_release_ends_the_follow_at_its_packet() {
+    let mut app = following();
+    let world = app.world_mut();
+    let (tx, _rx) = crossbeam_channel::unbounded();
+    let net = crate::net::NetCommands(tx);
+    world
+        .resource_mut::<crate::net::MoverClaim>()
+        .claim(BOAR, &net);
+    let gone = SessionEvent::ObjectDestroyed(BOAR);
+    ends_between_the_falls(&frame(&mut app, vec![fall(5), gone, fall(5)]));
+    assert!(!app.world().resource::<crate::net::MoverClaim>().holds(BOAR));
 }
 
 /// Our death ends the follow in `OnDied`'s tail (`0x605938`), inside the health's packet.

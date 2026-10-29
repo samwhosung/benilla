@@ -335,23 +335,43 @@ fn log_teardown(view_log: Option<ResMut<crate::ui_unit::views::ViewLog>>, b: &Br
     }
 }
 
+/// What a near teleport's handler ends: the mover's auto-move, its `AUTOFOLLOW_END` on the notice
+/// lane.
+type TeleportStop<'w> = (
+    Option<ResMut<'w, crate::player::FollowState>>,
+    Option<ResMut<'w, crate::player::Approach>>,
+    Option<ResMut<'w, crate::field_watch::NoticeLane>>,
+);
+
 /// Teleport, knockback and client control, forwarded unjudged to the controller, which applies
-/// and answers them.
-fn on_mover_edge(In(ev): In<SessionEvent>, mut e: Edges, b: Bridge) {
+/// and answers them. A near teleport of the active mover ends its auto-move inside the packet
+/// (`OnForcedTeleport 0x602fb0` → `0x60e990(1, 0)` at `0x60300e` → `0x60fb60` at `0x60e9b5`),
+/// before the move is queued (`0x603029`); the echo's own stop (`0x60e3b1`) finds none left.
+fn on_mover_edge(In(ev): In<SessionEvent>, mut e: Edges, b: Bridge, stop: TeleportStop) {
     match ev {
         SessionEvent::Teleport {
             guid,
             counter,
             position,
             orientation,
-        } => teleport(
-            guid,
-            counter,
-            position,
-            orientation,
-            &b.self_guid,
-            &mut e.teleports,
-        ),
+        } => {
+            if b.mover.as_deref().is_some_and(|m| m.holds(guid)) {
+                let (mut follow, mut approach, mut lane) = stop;
+                crate::player::end_auto_move(
+                    follow.as_deref_mut(),
+                    approach.as_deref_mut(),
+                    lane.as_deref_mut(),
+                );
+            }
+            teleport(
+                guid,
+                counter,
+                position,
+                orientation,
+                &b.self_guid,
+                &mut e.teleports,
+            );
+        }
         SessionEvent::KnockBack {
             guid,
             counter,

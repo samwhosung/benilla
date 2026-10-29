@@ -177,13 +177,11 @@ pub(crate) fn cancel_move_action_on_ui_shutdown(
 }
 
 /// The canceller `CGUnit_C::StopAutoMove` (`0x60fb60`) where a packet's handler calls it on a unit:
-/// the taxi flag's rise (`0x5ff55a`), a death (`0x605938`), our own swing's report (`0x625a21`)
-/// and a mover switch (`0x600742`). It acts only on the active mover with an auto-move in flight
-/// (`IsAutoMoving 0x6103a0`, the early-out `0x60fb70`); a follow signals `AUTOFOLLOW_END` first,
-/// on the notice lane at the handler's place ([`super::follow::end`]), and the mode returns to 12
-/// (`0x60fc30`), so a walk ends too. Its release of the move, turn and pitch commands
-/// (`0x60fc05`-`0x60fc18`) needs nothing here: the synthesized forward goes with the auto-move.
-/// It sends nothing.
+/// the taxi flag's rise (`0x5ff55a`), a death (`0x605938`), our own swing's report (`0x625a21`),
+/// a mover switch (`0x600742`), the mover's release (`0x5fbc3b` → `0x6006c2`) and a near
+/// teleport (`0x60300e` → `0x60e9b5`). It acts only on the active mover with an auto-move in
+/// flight (`IsAutoMoving 0x6103a0`, the early-out `0x60fb70`); past that it is [`end_auto_move`].
+/// The handlers whose scene holds the mover's claim call that directly.
 #[derive(SystemParam)]
 pub(crate) struct AutoMoveStop<'w> {
     /// The active mover `0xc4da98`. Each absent in a harness without the mover's state, which
@@ -226,19 +224,34 @@ impl AutoMoveStop<'_> {
         self.mover().is_some() && self.end(lane)
     }
 
-    /// The canceller past its gate: the follow's signal and end, then the walk's.
     fn end(&mut self, lane: Option<&mut crate::field_watch::NoticeLane>) -> bool {
-        let walked = self.approach.as_deref_mut().is_some_and(|a| {
-            let active = a.active();
-            a.stop();
-            active
-        });
-        let followed = self
-            .follow
-            .as_deref_mut()
-            .is_some_and(|f| super::follow::end(f, lane));
-        walked || followed
+        end_auto_move(
+            self.follow.as_deref_mut(),
+            self.approach.as_deref_mut(),
+            lane,
+        )
     }
+}
+
+/// The canceller past its gate (`0x60fb76` on): a follow signals `AUTOFOLLOW_END` first, on the
+/// notice lane at the caller's place ([`super::follow::end`]), and the mode returns to 12
+/// (`0x60fc30`), so a walk ends too; `true` if either ended. Its release of the move, turn and
+/// pitch commands (`0x60fc05`-`0x60fc18`) needs nothing here: the synthesized forward goes with the
+/// auto-move. Its `face` leg (`0x60fb92`-`0x60fbe8`) turns no unit: it stores the target's heading
+/// for the camera (`0x60e8f0`, read only at `0x510904` through `0x611660`) and presses command
+/// 0x800000, which the release lets go of in the same call (`0x60fc10`). It sends nothing.
+pub(crate) fn end_auto_move(
+    follow: Option<&mut FollowState>,
+    approach: Option<&mut Approach>,
+    lane: Option<&mut crate::field_watch::NoticeLane>,
+) -> bool {
+    let walked = approach.is_some_and(|a| {
+        let active = a.active();
+        a.stop();
+        active
+    });
+    let followed = follow.is_some_and(|f| super::follow::end(f, lane));
+    walked || followed
 }
 
 /// [`AutoMoveStop::stop`] on `guid` from a handler's world, its signal on the notice lane at the

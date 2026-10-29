@@ -158,6 +158,9 @@ pub(crate) struct Scene<'w, 's> {
     place: crate::ui_party::net::SnapshotPlace<'w, 's>,
     /// The active mover, which its unit's release and destroy zero.
     mover: Option<ResMut<'w, super::MoverClaim>>,
+    /// The active mover's auto-move, which its release and the taxi flag's rise end.
+    follow: Option<ResMut<'w, crate::player::FollowState>>,
+    approach: Option<ResMut<'w, crate::player::Approach>>,
     /// Who we drive and whether we may, which our own arrival gives back.
     mover_lock: Option<ResMut<'w, crate::player::MoverLock>>,
     /// The area spirit healer the ghost flag's clear empties (`0x5dea20` → `0x4921c0`), and the

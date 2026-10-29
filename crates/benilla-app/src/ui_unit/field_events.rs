@@ -598,7 +598,7 @@ pub(crate) fn fire(
         | FieldNotice::PetMacros
         | FieldNotice::PetGuidSet { .. } => {}
         // Put on the trainer lane by the packet's handler ([`crate::ui_trainer::TrainerPasses`]).
-        FieldNotice::TrainerPass => {}
+        FieldNotice::TrainerPass | FieldNotice::TaxiStop => {}
         // Run at its place by the packet's handler ([`crate::net::objects`]), its signal written
         // there.
         FieldNotice::AreaSpiritHealerClear | FieldNotice::QuestAccepted { .. } => {}
