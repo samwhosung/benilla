@@ -318,8 +318,8 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
 ];
 
 /// The view pushes that read what a handler writes as the frame left it, not as each listener's
-/// packet did: each VM-holding feed of the `UiFeed` phase with the state the handlers write that
-/// it reads itself, past the call host's own reads. The reference's getters read the live object
+/// packet did: each system that writes the VM, in any schedule and any set, with the state the
+/// handlers write that it reads itself, past the call host's own reads. The reference's getters read the live object
 /// and caches at the listener's call (`UnitHealth` `0x5174d0`), and a handler runs whole before
 /// the next (`0x537ae5`), so a listener reads its own packet's state; a push here hands a lane's
 /// listener the frame's last. The list is the whole of that remaining work and only shrinks: a
@@ -356,6 +356,60 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     ("::ui_items::locks::forget_gone_item_locks", &["net::GuidIndex"]),
     ("::ui_items::feed::feed_item_stats", &["items::Items", "net::HomeBind", "net::ObjectStore",
         "spell::mods::SpellModifiers"]),
+    // Found once the scan took every system that writes the VM, not only the `UiFeed` phase's.
+    // The world map's feed, after the tick: our position, explored bits and corpse and the party's
+    // positions, which `GetPlayerMapPosition` (`0x4a8610`) and the setter read at the call.
+    ("::ui_world_map::feed_world_map", &["death::DeathNet", "net::GuidIndex", "net::ObjectStore",
+        "ui_party::GroupState"]),
+    // The landmark sources, after the tick, which the reference reads at the setter's next run
+    // (`0x4a67a0`).
+    ("::ui_world_map::feed_landmarks", &["net::ObjectStore", "poi_marker::PoiMarker",
+        "world_state::WorldStates"]),
+    // The readout's rows at the frame's end, where the reference rebuilds them at the packet or
+    // the defense channel's flip (`0x49bdc7`-`0x49bdcf`); the lane's firing builds them again
+    // ahead of its own signals.
+    ("::world_state_ui::feed_world_state_ui", &["ui_chat::edit::ChannelState",
+        "world_state::WorldStateLane", "world_state::WorldStates"]),
+    // The recruitment plan off our guild and the channels, which `SetGuildRecruitmentMode(1)`
+    // runs on inside its call.
+    ("::ui_chat::recruitment::guild_recruitment_cascade", &["net::ObjectStore",
+        "ui_chat::edit::ChannelState"]),
+    // The CVar mirror `GetCVar` (`0x488ba0`) reads: a write no call made (a handler's among them)
+    // reaches it at the next sync, where the reference's getter reads the registry. The inputs
+    // are the registry and its callbacks' targets.
+    ("::cvars::sync_cvars", &["ClutterConfig", "FfxSwitches", "MsaaSetting", "ParticleTuning",
+        "TexFilterSetting", "ViewDistance", "WeatherState", "chat_bubble::BubbleConfig",
+        "combat_text::law::DamageTextGates", "cvars::Cvars", "game_tip::GameTipSetting",
+        "minimap::MinimapZoom", "nameplates::NameConfig", "perf::journal::FpsJournalSetting",
+        "player::approach::Approach", "player::camera::FollowConfig", "player::camera::LookConfig",
+        "player::camera_dynamics::CameraOptions", "player::camera_zoom::ZoomLimit",
+        "portrait::PaneRate", "realmlist::Realmlist", "sound::SoundConfig",
+        "spell::cast_target::AutoSelfCast", "target::AssistAttack", "target::ClickConfig",
+        "text_filter::TextFilterSwitches", "ui_chat::combat::CombatLogRanges",
+        "ui_chat::combat::LogPeriodicSpells", "ui_gamma::DisplayGamma",
+        "ui_guild::GuildMemberNotify", "ui_loot::LootConfig", "ui_script::UiScaleCvar",
+        "ui_trade::BlockTrades", "video::SpellEffectLevel", "video::VideoConfig", "video::Widescreen",
+        "world_backdrop::RenderScale"]),
+    ("::cvars::sync_input_cvars", &["ClutterConfig", "FfxSwitches", "MsaaSetting", "ParticleTuning",
+        "TexFilterSetting", "ViewDistance", "WeatherState", "chat_bubble::BubbleConfig",
+        "combat_text::law::DamageTextGates", "cvars::Cvars", "game_tip::GameTipSetting",
+        "minimap::MinimapZoom", "nameplates::NameConfig", "perf::journal::FpsJournalSetting",
+        "player::approach::Approach", "player::camera::FollowConfig", "player::camera::LookConfig",
+        "player::camera_dynamics::CameraOptions", "player::camera_zoom::ZoomLimit",
+        "portrait::PaneRate", "realmlist::Realmlist", "sound::SoundConfig",
+        "spell::cast_target::AutoSelfCast", "target::AssistAttack", "target::ClickConfig",
+        "text_filter::TextFilterSwitches", "ui_chat::combat::CombatLogRanges",
+        "ui_chat::combat::LogPeriodicSpells", "ui_gamma::DisplayGamma",
+        "ui_guild::GuildMemberNotify", "ui_loot::LootConfig", "ui_script::UiScaleCvar",
+        "ui_trade::BlockTrades", "video::SpellEffectLevel", "video::VideoConfig", "video::Widescreen",
+        "world_backdrop::RenderScale"]),
+    // The plates seated off the units as the frame left them; whether the reference seats a
+    // plate's bars only in its render pass (`0x483ee0`) is not read.
+    ("::vplates::drive_vplates", &["Transform", "names::NameCache", "net::GuidIndex",
+        "net::ObjectStore", "net::SelfGuid", "net::reputations::Reputations",
+        "player::camera::CameraControl", "spell::group_relation::GroupRoster",
+        "spell::targeting::SpellTargeting", "target::Selection", "ui_party::GroupState",
+        "video::Widescreen", "vplates::PlateFlashes", "vplates::VPlateMode"]),
 ];
 
 /// The view pushes [`READS_FRAME_FINAL`]'s test finds whose build the reference too makes outside
@@ -369,6 +423,79 @@ pub(super) const BUILT_OUTSIDE_THE_PACKETS_IN_THE_REFERENCE: &[(&str, &[&str], &
         "net::GuidIndex", "net::ObjectStore"],
         "the minimap's probe `0x4eb0c0`, its slot `0x3c`, which the hover pick calls at a mouse \
          move and at the paint pass's repeat pick (`0x7660d0`, from `0x765650`)"),
+    ("::minimap::feed_minimap_arrows", &["death::DeathNet", "net::GuidIndex", "net::ObjectStore",
+        "poi_marker::PoiMarker", "ui_party::GroupState"],
+        "the arrow half of the minimap's render (`0x4ec950`), which aims them by bearing"),
+    ("::ui_chat::channels::auto_join_zone_channels", &["ui_chat::edit::ChannelState"],
+        "the zone walk, which `UpdateZoneText` (`0x494780`) runs at a zone change (`0x494931`)"),
+    ("::spell::targeting::feed_targeting_to_input", &["items::Items", "names::NameCache",
+        "net::GuidIndex", "net::ObjectStore", "net::UnitSpeeds", "net::motion::modes::UnitMoveModes",
+        "net::motion::remote::RemoteMotion", "net::reputations::Reputations",
+        "spell::group_relation::GroupRoster", "spell::mods::SpellModifiers",
+        "spell::targeting::SpellTargeting", "ui_party::GroupState", "ui_session::latch::InteractLatch"],
+        "the word as the frame began, for the input records' reads with no host to ask; a call's \
+         reads go live through the host (`SpellIsTargeting` `0x6e6cd0`)"),
+    ("::ui_script::extract::tick_script", &["ui_script::UiScaleCvar", "video::Widescreen"],
+        "the frame pass's `OnUpdate` walk (`0x764330` → `0x765650`), its screen and scale"),
+    ("::ui_script::extract::paint_script", &["video::Widescreen"],
+        "the UI pass's paint, after the walk, which no getter reads"),
+];
+
+/// The systems that write the VM and push no view a getter reads of what a handler writes, by a
+/// suffix of the system's name, with what they do: an input's dispatch and the requests its calls
+/// queued, a timer or a poll that signals in place, a session's end or the leave-world sweep's
+/// leg, a save no script reads, a draw no getter reads, or the glue VM's frame, which no lane
+/// fires into. The reference too does each outside every packet, so they stay after the flip;
+/// one that stops writing the VM fails as stale.
+#[rustfmt::skip]
+pub(super) const WRITES_NO_VIEW: &[(&str, &str)] = &[
+    ("::bindings::begin_dispatch", "the input pass's head: the binding calls Lua made, then the \
+        frame's key records"),
+    ("::bindings::end_dispatch", "the input pass's tail: the stuck keys' release"),
+    ("::bindings::drain_binding_requests", "`SaveBindings`' files, written at the interface's \
+        shutdown in the reference (`0x490bd0` → `0x4b65e0`)"),
+    ("::cursor::drive_displayed_cursor", "the cursor FrameXML set, and the world frame's hover \
+        (`0x481790`)"),
+    ("::death::poll_corpse", "`CheckCorpseRange` (`0x492130`) every frame after the pick \
+        (`0x4818c5`), signalling in place"),
+    ("::player::camera::apply_late_look_calls", "the look calls the frame's packets made, for \
+        the input tick (`0x514840`)"),
+    ("::player::camera::latch_world_mouse", "the world's mouse buttons, the input's latch"),
+    ("::sound::ui::drain_ui_sounds", "`PlaySound`'s queued plays"),
+    ("::sound::zone::lua_music", "`PlayMusic` and `StopMusic`'s queued verbs"),
+    ("::target::click::act_on_arrival", "the verb an approach owed, at its stop (`0x60fa20`)"),
+    ("::target::click::act_on_interact", "a plate right-click's interact (`0x492881`)"),
+    ("::target::click::select_on_plate_click", "a plate click (`0x7cb910`)"),
+    ("::ui_action::drain::attack_nearest_probe", "the melee probe's press"),
+    ("::ui_action::drain::drain_arrival_casts", "the cast a walk's arrival owed"),
+    ("::ui_action::drain::drain_click_casts", "the casts a plate click or a crate's `Interact` \
+        queued"),
+    ("::ui_action::drop_item::trade_on_plate_click", "a plate click's trade leg (`0x4925d0`)"),
+    ("::ui_billing::poll_play_time", "the frame time's poll (`0x420d63`)"),
+    ("::ui_bind_confirm::replay_equip_records", "the equip callbacks a cached lookup ran"),
+    ("::ui_chat::away::movement_clears_afk", "the movement keys' AFK clear (`0x513d36`, \
+        `0x514e23`, `0x514f0b`, `0x514fca`)"),
+    ("::ui_chat::channels::end_session_channels", "the session's end"),
+    ("::ui_chat::channels::end_session_channels_on_disconnect", "the session's end at a dead \
+        socket"),
+    ("::ui_chat::idle::idle_handler", "the idle timer of `WorldFrame::Render` (`0x482ea0`)"),
+    ("::ui_chat::input::drain_chat_input", "the chat line's input"),
+    ("::ui_chat::settings::save_chat_looks", "the chat looks' save"),
+    ("::ui_dialog_verbs::drain_meeting_stone_joins", "the meeting stone's use, at its click"),
+    ("::ui_dialog_verbs::poll_area_spirit_healer", "the healer scan every frame (`0x4818ca` → \
+        `0x4923b0`), signalling in place"),
+    ("::ui_dressup::compose_dressup", "the booth's pane, a draw"),
+    ("::ui_logout::leave_world", "the world load's first call (`0x401bd4`)"),
+    ("::ui_loot::close_loot_on_leave_world", "the sweep's loot leg (`0x490ab2`)"),
+    ("::ui_loot::drain_loot", "the loot closes the input pass owes"),
+    ("::ui_macro::save_dirty_macros", "the macros' save"),
+    ("::ui_mail::close_mail_on_leave_world", "the sweep's mail leg (`0x490b1b`)"),
+    ("::ui_models::sync_tiles", "the model panes' draw"),
+    ("::ui_script::glue_mgr::drive_glue_mgr", "the glue VM's `CGlueMgr::Update` (`0x46b930`), \
+        under the glue screens only"),
+    ("::ui_script::movie::upload_movie_pictures", "the movie's pictures, a draw"),
+    ("::ui_world_map::dev_map_jump", "a dev instrument's click"),
+    ("::video::drain_restart_gx", "the `RestartGx` asks no call took"),
 ];
 
 /// The resources the handlers fill through a shared reference, which their declared access shows
@@ -1633,68 +1760,76 @@ fn handler_written(world: &World) -> (BTreeSet<ComponentId>, BTreeSet<ComponentI
 
 /// Every view push that reads what a handler writes has its row, whose inputs are exactly the
 /// handler-written state it reads: each component a handler writes and each resource one writes,
-/// past the VM, the message buffers and the lane queues. A feed's own reads are its declared
-/// access less the call host's, entry by entry, as every feed that lends the host holds all of
-/// the host's.
+/// past the VM, the message buffers and the lane queues. A push is any system that writes the VM,
+/// in any schedule and any set, the feeds of the `UiFeed` phase and those after the tick alike.
+/// Its own reads are its declared access less the call host's, entry by entry, as every system
+/// that lends the host holds all of the host's.
 #[test]
 fn every_view_push_of_what_a_handler_writes_is_listed() {
     use bevy::ecs::query::FilteredAccess;
-    use bevy::ecs::schedule::NodeId;
     let mut app = headless_client();
     let (components, resources) = handler_written(app.world());
-    let (pushes, systems) = app.world_mut().schedule_scope(Update, |world, schedule| {
-        schedule.graph_mut().systems.initialize(world);
-        let vm = world
-            .components()
-            .get_resource_id(TypeId::of::<benilla_ui::script::UiScript>());
-        let host: Vec<FilteredAccess> = {
-            use bevy::ecs::system::System;
-            let mut host = IntoSystem::into_system(|_: crate::script_calls::ScriptCallHost| {});
-            System::initialize(&mut host, world)
-                .filtered_accesses()
-                .to_vec()
-        };
-        let input = |id: ComponentId| {
-            let n = name(world, id);
-            (Some(id) != vm && !n.contains("Messages<")).then(|| short_name(&n))
-        };
-        let graph = schedule.graph();
-        let mut pushes: HashMap<String, BTreeSet<String>> = HashMap::new();
-        let mut systems = BTreeSet::new();
-        for (key, system, _) in graph.systems.iter() {
-            let name = system.name().to_string();
-            systems.insert(name.clone());
-            if !in_feed(graph, NodeId::System(key)) || system.is_exclusive() {
-                continue;
-            }
-            let Some(with_access) = graph.systems.get(key) else {
-                continue;
+    let host: Vec<FilteredAccess> = {
+        use bevy::ecs::system::System;
+        let mut host = IntoSystem::into_system(|_: crate::script_calls::ScriptCallHost| {});
+        System::initialize(&mut host, app.world_mut())
+            .filtered_accesses()
+            .to_vec()
+    };
+    let labels: Vec<_> = app
+        .world()
+        .resource::<bevy::ecs::schedule::Schedules>()
+        .iter()
+        .map(|(_, schedule)| schedule.label())
+        .collect();
+    let mut pushes: HashMap<String, BTreeSet<String>> = HashMap::new();
+    let mut systems = BTreeSet::new();
+    for label in labels {
+        app.world_mut().schedule_scope(label, |world, schedule| {
+            schedule.graph_mut().systems.initialize(world);
+            let vm = world
+                .components()
+                .get_resource_id(TypeId::of::<benilla_ui::script::UiScript>());
+            let input = |id: ComponentId| {
+                let n = name(world, id);
+                (Some(id) != vm && !n.contains("Messages<")).then(|| short_name(&n))
             };
-            if !vm.is_some_and(|vm| with_access.access.combined_access().has_resource_write(vm)) {
-                continue;
-            }
-            let mut own: Vec<&FilteredAccess> =
-                with_access.access.filtered_accesses().iter().collect();
-            for h in &host {
-                if let Some(i) = own.iter().position(|o| *o == h) {
-                    own.remove(i);
+            let graph = schedule.graph();
+            for (key, system, _) in graph.systems.iter() {
+                let name = system.name().to_string();
+                systems.insert(name.clone());
+                if system.is_exclusive() {
+                    continue;
+                }
+                let Some(with_access) = graph.systems.get(key) else {
+                    continue;
+                };
+                if !vm.is_some_and(|vm| with_access.access.combined_access().has_resource_write(vm))
+                {
+                    continue;
+                }
+                let mut own: Vec<&FilteredAccess> =
+                    with_access.access.filtered_accesses().iter().collect();
+                for h in &host {
+                    if let Some(i) = own.iter().position(|o| *o == h) {
+                        own.remove(i);
+                    }
+                }
+                let mut inputs = BTreeSet::new();
+                for access in own.iter().map(|o| o.access()) {
+                    let read_c = components
+                        .iter()
+                        .filter(|&&id| access.has_component_read(id));
+                    let read_r = resources.iter().filter(|&&id| access.has_resource_read(id));
+                    inputs.extend(read_c.chain(read_r).filter_map(|&id| input(id)));
+                }
+                inputs.retain(|n| !QUEUES_NOT_VIEWS.contains(&n.as_str()));
+                if !inputs.is_empty() {
+                    pushes.entry(short_name(&name)).or_default().extend(inputs);
                 }
             }
-            let mut inputs = BTreeSet::new();
-            for access in own.iter().map(|o| o.access()) {
-                let read_c = components
-                    .iter()
-                    .filter(|&&id| access.has_component_read(id));
-                let read_r = resources.iter().filter(|&&id| access.has_resource_read(id));
-                inputs.extend(read_c.chain(read_r).filter_map(|&id| input(id)));
-            }
-            inputs.retain(|n| !QUEUES_NOT_VIEWS.contains(&n.as_str()));
-            if !inputs.is_empty() {
-                pushes.insert(short_name(&name), inputs);
-            }
-        }
-        (pushes, systems)
-    });
+        });
+    }
     if !systems.iter().any(|n| n.contains("benilla_app::")) {
         eprintln!("skipped: this build carries no type names");
         return;
@@ -1709,8 +1844,14 @@ fn every_view_push_of_what_a_handler_writes_is_listed() {
             .chain(built)
             .find(|(s, _)| format!("::{system}").ends_with(s))
     };
+    let no_view = |system: &str| {
+        WRITES_NO_VIEW
+            .iter()
+            .any(|(s, _)| format!("::{system}").ends_with(s))
+    };
     let mut wrong: Vec<String> = pushes
         .iter()
+        .filter(|(system, _)| !no_view(system))
         .filter(|(system, inputs)| {
             row(system).is_none_or(|(_, listed)| {
                 listed
@@ -1739,13 +1880,18 @@ fn every_view_push_of_what_a_handler_writes_is_listed() {
                 .any(|system| format!("::{system}").ends_with(s))
         })
         .map(|(s, _)| s)
+        .chain(WRITES_NO_VIEW.iter().map(|(s, _)| *s).filter(|s| {
+            !pushes
+                .keys()
+                .any(|system| format!("::{system}").ends_with(s))
+        }))
         .collect();
     assert!(
         wrong.is_empty(),
         "these feeds push views off state a handler writes, read as the frame left it: version \
          what they read through the views lane, or give each its row in READS_FRAME_FINAL as it \
          stands, or in BUILT_OUTSIDE_THE_PACKETS_IN_THE_REFERENCE for a build the reference too \
-         makes outside every packet:\n  {}",
+         makes outside every packet, or in WRITES_NO_VIEW for a system that pushes no view:\n  {}",
         wrong.join("\n  ")
     );
     assert!(stale.is_empty(), "stale rows: {stale:?}");

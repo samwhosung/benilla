@@ -4,11 +4,12 @@
 //! its sends go out in packet order. That move is right once five lists are empty, each the whole
 //! of its remaining work and only shrinking; [`flip_readiness`] prints where they stand.
 //!
-//! - [`super::guard_tests::READS_FRAME_FINAL`], held here to its count: the feeds that push a
-//!   view of what a handler writes, which a getter reads in place of the live state. A family's
-//!   getters going live ([`crate::script_calls::live`]) drops its feed's row; a hover's build the
-//!   reference too makes outside every packet is
-//!   [`super::guard_tests::BUILT_OUTSIDE_THE_PACKETS_IN_THE_REFERENCE`]'s, which stays.
+//! - [`super::guard_tests::READS_FRAME_FINAL`], held here to its count: the systems, in any
+//!   schedule or set, that push a view of what a handler writes, which a getter reads in place of
+//!   the live state. A family's getters going live ([`crate::script_calls::live`]) drops its
+//!   feed's row; a build the reference too makes outside every packet is
+//!   [`super::guard_tests::BUILT_OUTSIDE_THE_PACKETS_IN_THE_REFERENCE`]'s, and a system that
+//!   writes the VM and pushes no view is [`super::guard_tests::WRITES_NO_VIEW`]'s; both stay.
 //! - [`BETWEEN_THE_DISPATCH_AND_THE_DRAIN`]: the systems after the dispatch and ahead of the drain
 //!   that write what a call or a handler reads inside a packet (the host's live reads, the rest of
 //!   the call host's state, and what the handlers read without writing), or push a view the drain
@@ -43,8 +44,8 @@ use crate::game_plugins::schedule_tests::{census, type_names_available, SyncPoin
 
 /// The most rows [`super::guard_tests::READS_FRAME_FINAL`] may hold, and the most inputs across
 /// them: each only falls, so lower it when a row or an input goes.
-const FRAME_FINAL_FEEDS: usize = 8;
-const FRAME_FINAL_INPUTS: usize = 33;
+const FRAME_FINAL_FEEDS: usize = 15;
+const FRAME_FINAL_INPUTS: usize = 133;
 
 /// The systems that may run after the dispatch (`apply_net_updates`) and run ahead of the drain
 /// (`fire_in_order`), by a suffix of the system's name, with what each writes of the state a
@@ -485,6 +486,11 @@ fn flip_readiness() {
         (
             "BUILT_OUTSIDE_THE_PACKETS_IN_THE_REFERENCE (stays)",
             g::BUILT_OUTSIDE_THE_PACKETS_IN_THE_REFERENCE.len(),
+            String::new(),
+        ),
+        (
+            "WRITES_NO_VIEW (stays)",
+            g::WRITES_NO_VIEW.len(),
             String::new(),
         ),
         (
