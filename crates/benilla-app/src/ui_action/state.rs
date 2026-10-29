@@ -1,6 +1,7 @@
-//! Each action slot's per-frame state behind `IsUsableAction`, `IsActionInRange`,
-//! `IsCurrentAction` and `GetActionCooldown`, diff-pushed into the VM ahead of the world-enter
-//! events ([`feed_action_state`]). The usable cache's refresh `0x4e5c00` alone, with its
+//! Each action slot's state behind `IsUsableAction`, `IsActionInRange`, `IsCurrentAction` and
+//! `GetActionCooldown`, read at the getter's call through the lent host
+//! ([`ActionStates`]'s live family), as the reference's getters resolve the slot and test the live
+//! player inside the call (`0x4e5a50`). The usable cache's refresh `0x4e5c00` alone, with its
 //! `ACTIONBAR_UPDATE_USABLE` when a pair changed, runs in its callers' places
 //! ([`ActionStates::cache_refresh`]): the world entry's cascade, `EditMacro`'s call and each
 //! `RaiseBagUpdate` of an item watcher's run. The usable refresh `0x4b31c0`, with each reactive
@@ -194,7 +195,7 @@ fn pet_book_state(leg: PetBookLeg) -> ActionState {
 
 /// `0x622270` at mask 1, `IsEquippedAction`'s walk (`0x4e5380`): whether the worn slots of the
 /// player `store` hold a whole item of `entry`. A broken copy is not worn (`0x6224f4`-`0x62250e`).
-/// The feed's snapshot and the lent host's read at the call are this one walk.
+/// The lent host's read at the call and the states the bar's writes push are this one walk.
 pub(crate) fn wears_entry(
     store: &ObjectStore,
     objects: &(impl crate::ui_items::ItemObjects + ?Sized),
@@ -365,7 +366,6 @@ impl ActionStates<'_, '_> {
             script,
             &self.memory,
             Instant::now(),
-            false,
             self.reactive.as_mut().map(|r| &mut r.0),
         );
         let usable_changed = self.memory.cache.refresh(pairs(&fresh));
@@ -381,10 +381,7 @@ impl ActionStates<'_, '_> {
     /// `RaiseBagUpdate`'s (`0x4f9374`). Every slot's state recomputed and pushed and its pair
     /// stored; whether a pair changed, which signals `ACTIONBAR_UPDATE_USABLE` (`0x4e5c53`).
     pub(crate) fn cache_refresh(&mut self, script: &mut benilla_ui::script::UiScript) -> bool {
-        let fresh = self
-            .walk
-            .all(script, &self.memory, Instant::now(), false, None)
-            .0;
+        let fresh = self.walk.all(script, &self.memory, Instant::now(), None).0;
         let changed = self.memory.cache.refresh(pairs(&fresh));
         push(script, &fresh, &self.memory.cache, None);
         changed
@@ -405,14 +402,7 @@ impl ActionStates<'_, '_> {
         };
         let fresh = self
             .walk
-            .slots_states(
-                script,
-                &self.memory,
-                Some(slot),
-                Instant::now(),
-                false,
-                None,
-            )
+            .slots_states(script, &self.memory, Some(slot), Instant::now(), None)
             .0;
         let pair = fresh
             .get(&action)
@@ -448,10 +438,7 @@ impl ActionStates<'_, '_> {
             }
             self.mirror(script, action);
         }
-        let fresh = self
-            .walk
-            .all(script, &self.memory, Instant::now(), false, None)
-            .0;
+        let fresh = self.walk.all(script, &self.memory, Instant::now(), None).0;
         for &action in loaded {
             let pair = fresh
                 .get(&action)
@@ -468,10 +455,7 @@ impl ActionStates<'_, '_> {
         for action in 1..=120u32 {
             self.mirror(script, action);
         }
-        let fresh = self
-            .walk
-            .all(script, &self.memory, Instant::now(), false, None)
-            .0;
+        let fresh = self.walk.all(script, &self.memory, Instant::now(), None).0;
         push(script, &fresh, &self.memory.cache, None);
     }
 
@@ -807,10 +791,9 @@ impl ActionWalk<'_, '_> {
         script: &benilla_ui::script::UiScript,
         memory: &ActionStateMemory,
         now: Instant,
-        trace_cd: bool,
         reactive: Option<&mut super::reactive::ReactiveList>,
     ) -> (HashMap<u32, ActionState>, Vec<String>) {
-        self.slots_states(script, memory, None, now, trace_cd, reactive)
+        self.slots_states(script, memory, None, now, reactive)
     }
 
     /// The states of the occupied slots, or of `only`, as the VM's macro records and the bar's
@@ -821,7 +804,6 @@ impl ActionWalk<'_, '_> {
         memory: &ActionStateMemory,
         only: Option<u8>,
         now: Instant,
-        trace_cd: bool,
         reactive: Option<&mut super::reactive::ReactiveList>,
     ) -> (HashMap<u32, ActionState>, Vec<String>) {
         let bound = &crate::ui_macro::MacroBoundSpells::of(
@@ -838,7 +820,6 @@ impl ActionWalk<'_, '_> {
             only,
             now,
             clock: self.clock_pair_at(now, script.now()),
-            trace_cd,
         };
         self.slot_states(walk, reactive)
     }
@@ -862,7 +843,6 @@ impl ActionWalk<'_, '_> {
             only: Some(slot),
             now,
             clock: self.clock_pair_at(now, q.ui_now),
-            trace_cd: false,
         };
         self.slot_states(walk, None).0.remove(&q.action)
     }
@@ -880,7 +860,6 @@ impl ActionWalk<'_, '_> {
             only,
             now,
             clock: (anchor, ui_now),
-            trace_cd,
         } = walk;
         let Self {
             cooldowns,
@@ -1033,16 +1012,6 @@ impl ActionWalk<'_, '_> {
                     (st.has_range, st.in_range) = range;
                     let info = cooldowns.info(button.action, 0, Some(d), now);
                     st.cooldown = info.ui_triple(anchor, ui_now);
-                    if st.cooldown.is_some() && trace_cd {
-                        // The store's clock against the widget's; the sink stamps wall time.
-                        benilla_assets::trace::line(
-                            "cd",
-                            &format!(
-                                "tick action={} rem={}ms dur={}ms engine_now={ui_now:.3}",
-                                button.action, info.remaining_ms, info.duration_ms,
-                            ),
-                        );
-                    }
                 }
                 ACTION_KIND_ITEM => {
                     // Only the `Copy` on-use spell, not a clone of the template per slot per frame.
@@ -1150,7 +1119,6 @@ struct Walk<'a> {
     only: Option<u8>,
     now: Instant,
     clock: (Instant, f64),
-    trace_cd: bool,
 }
 
 impl crate::script_calls::live::LiveFamily for ActionStates<'_, '_> {
@@ -1162,31 +1130,6 @@ impl crate::script_calls::live::LiveFamily for ActionStates<'_, '_> {
             || ask.answer(|q: &ActionCountNow| Some(self.count_now(q.0)))
             || ask.answer(|q: &ActionConsumableNow| Some(self.consumable_now(q.0)))
     }
-}
-
-/// Pushes every slot's state ([`ActionWalk`]) and its stored pair into the VM, for a getter with
-/// no host lent; it stores nothing.
-pub(super) fn feed_action_state(
-    mut vm: crate::script_calls::VmWith<(
-        ActionWalk<'static, 'static>,
-        Res<'static, ActionStateMemory>,
-    )>,
-    // The cooldown-clock trace's last line (`WOW_MOVE_TRACE` sink, tag "cd").
-    mut last_cd_trace: Local<Option<Instant>>,
-) {
-    let now = Instant::now();
-    let trace_cd = benilla_assets::trace::enabled()
-        && last_cd_trace.is_none_or(|t| now.duration_since(t).as_secs_f32() >= 1.0);
-    if trace_cd {
-        *last_cd_trace = Some(now);
-    }
-    vm.turn(|script, (walk, memory)| {
-        let Some(script) = script else {
-            return;
-        };
-        let fresh = walk.all(script, &memory, now, trace_cd, None).0;
-        push(script, &fresh, &memory.cache, None);
-    })
 }
 
 #[cfg(test)]

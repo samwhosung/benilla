@@ -1,6 +1,6 @@
-//! `ActionHasRange` (`0x4e5810`) and `IsActionInRange` (`0x4e56f0`) through
-//! [`super::feed_action_state`] and a real Lua VM: both resolve the slot with `0x4e5a50` and test
-//! the spell it stands for.
+//! `ActionHasRange` (`0x4e5810`) and `IsActionInRange` (`0x4e56f0`) read through the lent host
+//! ([`super::ActionStates`]) by a real Lua VM: both resolve the slot with `0x4e5a50` and test the
+//! spell it stands for.
 
 use super::*;
 use crate::net::SelfPlayer;
@@ -23,7 +23,7 @@ const BOLT_RANGE: u32 = 4;
 /// An item whose first trigger-0 block casts [`BOLT`].
 const GRENADE: u32 = 4390;
 
-/// What one pass of the feed answers for slot 1: `ActionHasRange(1)` and `IsActionInRange(1)`.
+/// What the getters answer for slot 1 at the call: `ActionHasRange(1)` and `IsActionInRange(1)`.
 fn range_answers(
     button: ActionButton,
     items: Items,
@@ -101,13 +101,10 @@ fn range_answers(
         lit: None,
     });
     app.insert_non_send_resource(UiScript::new().unwrap());
-    app.init_resource::<ActionStateMemory>()
-        .add_systems(Update, feed_action_state);
-    app.update();
-    app.world()
-        .non_send_resource::<UiScript>()
-        .eval::<(bool, Option<i64>)>("return ActionHasRange(1) == 1, IsActionInRange(1)")
-        .unwrap()
+    crate::ui_action::eval_live(
+        app.world_mut(),
+        "return ActionHasRange(1) == 1, IsActionInRange(1)",
+    )
 }
 
 fn spell_slot() -> ActionButton {

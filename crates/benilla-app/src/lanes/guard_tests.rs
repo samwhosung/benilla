@@ -182,7 +182,7 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     "::ui_action::ReactiveSpells",
     // Quiet: the bar's usable cache, which the game entry's handler zeroes (`0x48f5a4` →
     // `0x4e4f50`) and the host's slot writes and refreshes store in place (`0x4e590a`,
-    // `0x4e5c00`); the action-state feed pushes its pairs silently.
+    // `0x4e5c00`); the getters read it at the call.
     "::ui_action::state::ActionStateMemory",
     // Quiet: the known spells and the book's lists, which the learn, unlearn and supersede handlers
     // write at their packet beside the bar's clears and replaces, whose signals go on the notice
@@ -353,17 +353,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // The ammo getters' hits fire after the push that carries their record, whenever it runs.
     ("::ui_char::feed_char", &["items::Countdowns", "items::Items", "names::NameCache",
         "net::GuidIndex", "net::ObjectStore", "ui_char::AmmoRecordHits"]),
-    ("::ui_action::state::feed_action_state", &["Transform",
-        "creature_anim::sheath::CommittedSheath", "items::Countdowns", "items::Items",
-        "names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
-        "net::UnitSpeeds", "net::game_time::ServerTime", "net::motion::modes::UnitMoveModes",
-        "net::motion::remote::RemoteMotion", "net::reputations::Reputations",
-        "player::state::OwnControlLost", "player::state::StandPending",
-        // `autoSelfCast`, which picks the unit the range check measures: a listener's `SetCVar`
-        // moves it inside its call, and the push reads it as the frame left it.
-        "spell::cast_target::AutoSelfCast", "spell::cooldowns::Cooldowns",
-        "spell::group_relation::GroupRoster", "spell::mods::SpellModifiers", "target::Selection",
-        "ui_action::ActionSlots", "ui_action::state::ActionStateMemory", "ui_pet::PetBar"]),
     // The resolver's guids, pushed before the drain and read with the host lent too: the
     // mouseover, the group rows past a token's own, the pet records and every row of the field
     // events' fan-out, which the `UNIT_HAPPINESS` gate reads. The aura getters walk each unit

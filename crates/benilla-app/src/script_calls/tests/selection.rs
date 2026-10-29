@@ -34,11 +34,6 @@ fn seen(f: &mut Frame) -> String {
     eval(f, "return SEEN")
 }
 
-/// The action-state feed.
-fn feeds(f: &mut Frame) {
-    crate::ui_action::run_feed_action_state_once(f.app.world_mut());
-}
-
 /// The pet stops and the selection sends, in order.
 fn stops_and_selections(f: &Frame) -> Vec<String> {
     f.rx.try_iter()
@@ -85,11 +80,10 @@ fn with_pet_attacking(f: &mut Frame, possessed: bool) {
 
 /// `SetSelection` refreshes the usable states (`0x493892`) and signals `PLAYER_TARGET_CHANGED`
 /// (`0x49389c`) before it returns, and so does its release (`0x493a69`, `0x493a73`): the chunk's
-/// next line has heard both, in that order, and the feeds signal no change of their own.
+/// next line has heard both, in that order, once.
 #[test]
 fn a_selection_call_signals_its_target_change_inside_the_call() {
     let mut f = frame(true);
-    feeds(&mut f);
     record_events(&mut f);
     run(
         &mut f,
@@ -97,7 +91,6 @@ fn a_selection_call_signals_its_target_change_inside_the_call() {
     );
     assert_eq!(selected(&f), Some(NEW));
     assert_eq!(seen(&mut f), "SPELL_UPDATE_USABLE,PLAYER_TARGET_CHANGED");
-    feeds(&mut f);
     assert_eq!(
         events(&mut f),
         ["SPELL_UPDATE_USABLE", "PLAYER_TARGET_CHANGED"],
@@ -106,12 +99,7 @@ fn a_selection_call_signals_its_target_change_inside_the_call() {
     run(&mut f, r#"ClearTarget() SEEN = table.concat(EVENTS, ",")"#);
     assert_eq!(selected(&f), None);
     assert_eq!(seen(&mut f), "SPELL_UPDATE_USABLE,PLAYER_TARGET_CHANGED");
-    feeds(&mut f);
     assert_eq!(events(&mut f).len(), 2, "the release's, once");
-    // The feeds signal no change: every writer of the selection signals its own.
-    f.app.world_mut().resource_mut::<Selection>().guid = Some(NEW);
-    feeds(&mut f);
-    assert_eq!(events(&mut f), Vec::<String>::new());
 }
 
 /// The release `0x493910` calls a possessed unit off (`0x4bd650` at `0x493a18`) behind
@@ -122,7 +110,6 @@ fn a_selection_call_signals_its_target_change_inside_the_call() {
 fn a_deselect_calls_a_possessed_unit_off_before_it_deselects() {
     let mut f = frame(true);
     with_pet_attacking(&mut f, true);
-    feeds(&mut f);
     f.rx.try_iter().for_each(drop);
     record_events(&mut f);
     run(&mut f, r#"ClearTarget() SEEN = table.concat(EVENTS, ",")"#);
@@ -148,10 +135,8 @@ fn a_deselect_calls_a_possessed_unit_off_before_it_deselects() {
 fn a_deselect_without_a_possession_leaves_the_pets_attack() {
     let mut f = frame(true);
     with_pet_attacking(&mut f, false);
-    feeds(&mut f);
     f.rx.try_iter().for_each(drop);
     run(&mut f, "ClearTarget()");
-    feeds(&mut f);
     assert_eq!(stops_and_selections(&f), ["SetSelection 0x0"]);
     assert!(f
         .app
@@ -179,7 +164,6 @@ pub(super) fn swinging_at_old(f: &mut Frame) {
     world
         .entity_mut(me)
         .insert(crate::creature_anim::Engaged(OLD));
-    feeds(f);
     f.rx.try_iter().for_each(drop);
 }
 
@@ -291,7 +275,6 @@ fn an_assists_swing_follows_its_target_change_handlers() {
         .unwrap()
         .0
         .merge(benilla_protocol::ObjectFields::from_pairs(&[(2, 0x9)]));
-    feeds(&mut f);
     f.rx.try_iter().for_each(drop);
     on_target_changed(&mut f, "RandomRoll(1, 100)");
     run(&mut f, r#"AssistUnit("target")"#);
@@ -314,7 +297,6 @@ fn a_called_off_pets_bar_update_handlers_send_ahead_of_the_selection() {
     ] {
         let mut f = frame(true);
         with_pet_attacking(&mut f, true);
-        feeds(&mut f);
         f.rx.try_iter().for_each(drop);
         run(
             &mut f,
@@ -380,7 +362,6 @@ fn a_nested_switch_off_a_friend_latches_no_swing_of_its_own() {
 fn a_clear_sends_the_unit_a_pet_bar_update_listener_selected() {
     let mut f = frame(true);
     with_pet_attacking(&mut f, true);
-    feeds(&mut f);
     f.rx.try_iter().for_each(drop);
     run(
         &mut f,
@@ -676,7 +657,6 @@ fn a_strikes_pick_signals_its_target_change_before_the_cast() {
     spawn_mob(&mut f, &[]);
     with_named_mob(&mut f);
     with_strike(&mut f);
-    feeds(&mut f);
     f.rx.try_iter().for_each(drop);
     on_target_changed(
         &mut f,
@@ -717,7 +697,6 @@ fn an_attacks_pick_signals_its_target_change_before_the_swing() {
                     kind: ACTION_KIND_SPELL,
                 },
             );
-        feeds(&mut f);
         f.rx.try_iter().for_each(drop);
         record_events(&mut f);
         on_target_changed(&mut f, "RandomRoll(1, 100)");
@@ -732,7 +711,6 @@ fn an_attacks_pick_signals_its_target_change_before_the_swing() {
             "SPELL_UPDATE_USABLE,PLAYER_TARGET_CHANGED",
             "{lua}"
         );
-        feeds(&mut f);
         assert_eq!(events(&mut f).len(), 2, "{lua}: heard once, in the call");
     }
 }
@@ -763,7 +741,6 @@ fn an_assists_own_select_signals_inside_the_call_after_a_listener_retargets() {
         .unwrap()
         .0
         .merge(benilla_protocol::ObjectFields::from_pairs(&[(2, 0x9)]));
-    feeds(&mut f);
     f.rx.try_iter().for_each(drop);
     record_events(&mut f);
     on_target_changed(
@@ -789,7 +766,6 @@ fn an_assists_own_select_signals_inside_the_call_after_a_listener_retargets() {
     );
     let heard = seen(&mut f);
     assert_eq!(heard.matches("PLAYER_TARGET_CHANGED").count(), 3, "{heard}");
-    feeds(&mut f);
     let again = events(&mut f);
     assert_eq!(
         again
@@ -882,7 +858,6 @@ fn a_pet_attacks_pick_signals_its_target_change_before_the_order() {
     with_factions(&mut f, FRIEND, &[]);
     spawn_mob(&mut f, &[(TEMPLATE, FOE)]);
     with_pet(&mut f, false, attack);
-    feeds(&mut f);
     f.rx.try_iter().for_each(drop);
     on_target_changed(&mut f, "RandomRoll(1, 100)");
     run_pressed(&mut f, "PetAttack()");
@@ -904,7 +879,6 @@ fn a_possessed_attacks_latch_signals_its_bar_before_the_order() {
     with_factions(&mut f, FRIEND, &[]);
     spawn_mob(&mut f, &[(TEMPLATE, FOE)]);
     with_pet(&mut f, true, attack);
-    feeds(&mut f);
     f.rx.try_iter().for_each(drop);
     run(
         &mut f,
@@ -941,7 +915,6 @@ fn a_possessed_attacks_bind_goes_ahead_of_its_bar_update() {
     let mut f = frame(true);
     with_factions(&mut f, FOE, &[]);
     with_pet(&mut f, true, attack);
-    feeds(&mut f);
     f.rx.try_iter().for_each(drop);
     run(
         &mut f,
@@ -1005,7 +978,6 @@ fn a_unit_casters_pick_signals_its_target_change_before_the_cast_and_the_order()
         ),
         ..crate::ui_action::Spells::empty_for_tests()
     });
-    feeds(&mut f);
     f.rx.try_iter().for_each(drop);
     on_target_changed(&mut f, "RandomRoll(1, 100)");
     run_pressed(&mut f, "CastPetAction(1)");

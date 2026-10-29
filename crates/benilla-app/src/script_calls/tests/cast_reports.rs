@@ -61,7 +61,6 @@ fn is_current_action_on_the_next_line_reads_the_use_just_made() {
                 kind: ACTION_KIND_SPELL,
             },
         );
-    crate::ui_action::run_feed_action_state_once(world);
     run_hosted(
         &mut f,
         "BEFORE = IsCurrentAction(1) UseAction(1) AFTER = IsCurrentAction(1)",

@@ -1,6 +1,6 @@
 //! The app side of the action bar: the action table, the spell catalogs and the plugin. [`feed`]
-//! pushes each slot's identity into the VM and [`state`] its per-frame cooldown, usability, range
-//! and checked state; [`drain`] sends `UseAction` as a cast, swing, item use or macro, and
+//! shows the engine's refusals and seeds a reloaded VM's copy of the bar, and [`state`] answers
+//! each slot's cooldown, usability, range and checked state at the getter's call; [`drain`] sends `UseAction` as a cast, swing, item use or macro, and
 //! `PickupAction`/`PlaceAction` as `CMSG_SET_ACTION_BUTTON`.
 
 use std::collections::{BTreeSet, HashMap};
@@ -350,14 +350,36 @@ pub(crate) fn hold_for_test(world: &mut World, action: u32, kind: u8, id: u32) {
     }
 }
 
-/// One pass of the action-state feed, for a test that reads a slot's pushed state.
+/// `chunk`'s answer with the bar's live reads lent as the call host lends them ([`ActionStates`],
+/// and the worn walk `IsEquippedAction` asks), for a test without the whole host.
 #[cfg(test)]
-pub(crate) fn run_feed_action_state_once(world: &mut World) {
-    use bevy::ecs::system::RunSystemOnce;
+pub(crate) fn eval_live<T: benilla_ui::mlua::FromLuaMulti>(world: &mut World, chunk: &str) -> T {
+    use crate::script_calls::live::LiveFamily;
+    type Reads = (
+        state::ActionStates<'static, 'static>,
+        crate::script_calls::live::StatsLive<'static, 'static>,
+    );
+    struct Lent<'a, A, B>(&'a mut A, &'a mut B);
+    impl<A: LiveFamily, B: LiveFamily> benilla_ui::script::LiveReader for Lent<'_, A, B> {
+        fn read_live(&mut self, ask: &mut benilla_ui::script::live::LiveAsk<'_>) -> bool {
+            self.0.answer(ask) || self.1.answer(ask)
+        }
+    }
     world.init_resource::<state::ActionStateMemory>();
-    world
-        .run_system_once(state::feed_action_state)
-        .expect("the action-state feed runs as a one-shot system");
+    let mut script = world
+        .remove_non_send_resource::<benilla_ui::script::UiScript>()
+        .expect("a VM");
+    let mut state = bevy::ecs::system::SystemState::<Reads>::new(world);
+    let r = {
+        let (mut states, mut stats) = state.get_mut(world);
+        script.reading(&mut Lent(&mut states, &mut stats), |s| {
+            s.eval::<T>(chunk)
+                .unwrap_or_else(|e| panic!("{chunk}: {e}"))
+        })
+    };
+    state.apply(world);
+    world.insert_non_send_resource(script);
+    r
 }
 
 /// A field watcher's usable refresh (`0x4b31c0`), as its notice runs it inside the drain
@@ -503,16 +525,8 @@ impl Plugin for UiActionPlugin {
             .add_systems(Startup, load_spell_mechanics.after(AssetSet::Open))
             .add_systems(
                 Update,
-                (
-                    // The feeds ride with the unit feed, before the VM ticks.
-                    feed::feed_actions.in_set(UnitFeed),
-                    // A seat: the world-enter events' handlers read the slots' state, which the
-                    // reference's arrival stores before its enter cascade (`0x5deafc`, `0x5deb60`).
-                    state::feed_action_state
-                        .in_set(UnitFeed)
-                        .after(crate::player::ControlRestore)
-                        .after(feed::feed_actions),
-                ),
+                // The refusals ride with the unit feed, before the VM ticks.
+                feed::feed_actions.in_set(UnitFeed),
             );
     }
 }

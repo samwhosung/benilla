@@ -80,8 +80,9 @@ pub struct ActionSlot {
 }
 
 /// One action's state, read by `IsUsableAction`, `IsActionInRange`, `GetActionCooldown` and kin;
-/// kept apart from [`ActionSlot`] so its churn never fires `ACTIONBAR_SLOT_CHANGED`. The app pushes
-/// it each frame and at every usable refresh, the field watchers' inside their packets.
+/// kept apart from [`ActionSlot`] so its churn never fires `ACTIONBAR_SLOT_CHANGED`. With a host
+/// lent the getters read it at the call ([`ActionStateNow`]); the app pushes it at every slot write
+/// and usable refresh, for a getter with none.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ActionState {
     /// `IsUsableAction`'s first return: the bar's cached usable flag (`0xbc6b60`), which only a

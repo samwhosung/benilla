@@ -22,7 +22,7 @@ const AURA_STATE: u16 = 125;
 const ME: u64 = 0x10;
 
 /// The book holds the three, registered in learn order, the bar nothing; the player alive, its
-/// aura state 0, the feed's first frame run.
+/// aura state 0, its first frame run.
 fn app() -> App {
     let revenge = |id, rank: &str| {
         (
@@ -91,7 +91,6 @@ fn app() -> App {
     seat(&mut app);
     arrive(&mut app);
     app.insert_non_send_resource(listener());
-    app.add_systems(Update, super::state::feed_action_state);
     // The VM's first frame, which meets the state as it stands and hears no refresh.
     app.update();
     app
@@ -146,8 +145,8 @@ fn listener() -> UiScript {
     script
 }
 
-/// Set the player's aura state, run the feed once, and on a change its watch's usable refresh
-/// (`0x6048b6`), as the drain after the feed runs it: what the VM heard.
+/// Set the player's aura state, run a frame, and on a change its watch's usable refresh
+/// (`0x6048b6`), as the drain runs it: what the VM heard.
 fn step(app: &mut App, aura_state: u32) -> Vec<String> {
     let mut q = app
         .world_mut()
@@ -290,7 +289,7 @@ fn learn(app: &mut App, id: u32) {
 }
 
 /// Select `guid` in the frame [`step`] runs at `aura_state`: its usable refresh runs inside the
-/// select (`0x493892`), after the frame's feed.
+/// select (`0x493892`).
 fn select_step(app: &mut App, guid: u64, aura_state: u32) -> Vec<String> {
     app.insert_resource(crate::target::Selection {
         target: None,

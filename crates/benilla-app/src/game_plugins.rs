@@ -1382,7 +1382,6 @@ pub(crate) mod schedule_tests {
             "::player::controller::control",
             // The drain, which fires the notices the restore signals.
             "::lanes::fire_in_order",
-            "::ui_action::state::feed_action_state",
             "::player::camera_saved::load_camera_pose",
             "::tutorial::watch_self",
             "::poi_marker::expire_marker",

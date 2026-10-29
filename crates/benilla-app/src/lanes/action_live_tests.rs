@@ -5,8 +5,7 @@
 //! read the active player's object inside the call: `IsCurrentAction`'s form arm the form byte
 //! (`0x4e558b`, `[unit+0x110]+0x212`) and `IsEquippedAction` the worn slots (`0x4e5310` →
 //! `0x622270` at mask 1). The bonus bar's offset is stored where the form watcher runs
-//! (`0x5de01b` → `0x4e4fc0`), off that packet's form. The live answer and the frame's snapshot
-//! agree on every getter wherever the snapshot is current.
+//! (`0x5de01b` → `0x4e4fc0`), off that packet's form. Every getter reads through the lent host.
 
 use std::collections::HashMap;
 
@@ -343,18 +342,14 @@ fn form(form: u32) -> [(u16, u32); 1] {
     [(BYTES_1, form << 16)]
 }
 
-/// Wherever the frame's snapshots are current, every census getter answers the same live as off
-/// the snapshot, for every slot: at load, in each form, with the sword worn and short of mana.
+/// Every census getter answers through the lent host for every slot, each leg the fixture means to
+/// reach: at load, in each form, with the sword worn and short of mana.
 #[test]
-fn every_action_getter_answers_the_same_live_as_off_the_snapshot() {
+fn every_action_getter_reads_its_leg_live() {
     let mut c = client();
     let agree = |c: &mut Client, why: &str| -> Vec<String> {
-        let snapshot = c.answers(false);
         let live = c.answers(true);
-        assert_eq!(snapshot.len(), SLOTS.len() * 14 + 1, "{why}");
-        let differ: Vec<(&String, &String)> =
-            snapshot.iter().zip(&live).filter(|(s, l)| s != l).collect();
-        assert!(differ.is_empty(), "{why}: snapshot vs live: {differ:#?}");
+        assert_eq!(live.len(), SLOTS.len() * 14 + 1, "{why}");
         live
     };
     let at_load = agree(&mut c, "at load");
@@ -390,9 +385,8 @@ fn every_action_getter_answers_the_same_live_as_off_the_snapshot() {
     }
 }
 
-/// A store a packet moved after the frame's pushes reads as the object holds it, through the
-/// host: the form byte for `IsCurrentAction`, the main hand for `IsEquippedAction`; the snapshot
-/// still holds the push.
+/// A store a packet moved reads as the object holds it, through the host: the form byte for
+/// `IsCurrentAction`, the main hand for `IsEquippedAction`.
 #[test]
 fn the_object_getters_read_the_player_as_they_run() {
     let mut c = client();
@@ -401,8 +395,6 @@ fn the_object_getters_read_the_player_as_they_run() {
     let chunk = "return IsCurrentAction(2), IsEquippedAction(4)";
     let live: (Option<i64>, Option<i64>) = c.eval(true, chunk);
     assert_eq!(live, (Some(1), Some(1)));
-    let snapshot: (Option<i64>, Option<i64>) = c.eval(false, chunk);
-    assert_eq!(snapshot, (None, None));
 }
 
 /// Two power packets in one frame, the first leaving the player short of Frostbolt's 50 mana and
@@ -758,7 +750,7 @@ fn an_aura_packet_notifies_its_spells_slots_between_its_neighbours() {
 
 /// `GameTooltip:SetAction` runs the slot's cooldown query at the call (`0x5323a6` → `0x4e6ca0`),
 /// so a hover inside the packet that armed a two-minute cooldown builds the remaining time and
-/// answers 1 (`0x532597`, `0x5325a9`), where the frame's push still holds none.
+/// answers 1 (`0x532597`, `0x5325a9`).
 #[test]
 fn set_action_reads_the_slots_cooldown_at_the_call() {
     let mut c = client_with(|world| {
@@ -797,11 +789,6 @@ fn set_action_reads_the_slots_cooldown_at_the_call() {
         c.eval::<Option<i64>>(true, hover),
         Some(1),
         "live: the armed cooldown"
-    );
-    assert_eq!(
-        c.eval::<Option<i64>>(false, hover),
-        None,
-        "the frame's push holds none"
     );
 }
 
@@ -1036,7 +1023,7 @@ fn a_macro_bound_to_an_attack_shows_its_weapons_icon() {
 /// (`0x5e6356` → `0x4e5e60`, `0x4e5ec4`), with no signal; `GetActionCooldown` resolves the slot
 /// through that record at the call (`0x4e6ca0` → `0x4e5a50` → `0x4e5ba0`) and queries the new
 /// rank's cooldown (`0x6e2ea0`). So a getter inside the packet that rewrote the record reads the
-/// new rank's 10 s, where the frame's push still names the old rank.
+/// new rank's 10 s.
 #[test]
 fn a_superseded_macro_slots_cooldown_reads_the_new_rank_inside_its_packet() {
     use crate::ui_macro::{Bound, BoundSpell};
@@ -1068,11 +1055,6 @@ fn a_superseded_macro_slots_cooldown_reads_the_new_rank_inside_its_packet() {
         }],
     );
     assert_eq!(c.eval::<f64>(true, chunk), 10.0, "live: the new rank's");
-    assert_eq!(
-        c.eval::<f64>(false, chunk),
-        0.0,
-        "the frame's push names rank 1"
-    );
 }
 
 /// The bar's getters' per-call cost with the host lent and off the snapshots: 10k calls of each.
