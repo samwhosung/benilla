@@ -33,7 +33,9 @@ pub(crate) mod idle;
 mod input;
 /// The language gate: the exemptions and fluency lookup behind the chat garble.
 mod language;
-pub(crate) use language::ChatLanguages;
+pub(crate) use language::LanguageReads;
+#[cfg(test)]
+pub(crate) use language::{test_speaker, ChatLanguages};
 /// `LoggingChat`/`LoggingCombat`: the two log files `/chatlog` and `/combatlog` toggle.
 pub(crate) mod logging;
 #[cfg(test)]
@@ -160,13 +162,12 @@ impl Plugin for UiChatPlugin {
             )
             // The slash-command table needs the VM's globals and the emote catalog, both `Startup`.
             .add_systems(PostStartup, commands::build_slash_commands)
-            // The language gate's feeds, ahead of the chat lane that reads them; with the frame's
-            // packets, ahead of the resumed pass, as a page turn's show reads them inside its call.
+            // The word pools and the default language, ahead of the chat lane that reads them;
+            // with the frame's packets, ahead of the resumed pass.
             .add_systems(
                 Update,
                 (
                     language::load_language_words,
-                    language::feed_language_skills,
                     language::feed_default_language,
                 )
                     .after(benilla_world::schedule::WorldStage::Net)

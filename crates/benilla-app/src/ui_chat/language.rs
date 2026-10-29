@@ -27,11 +27,26 @@ const ALWAYS_UNIVERSAL: [u8; 4] = [
     benilla_protocol::messages::CHAT_MSG_RAID_BOSS_EMOTE,
 ];
 
-/// The garble word pool and the character's fluency per language.
+/// The garble word pools, `LanguageWords.dbc`, loaded once; the character's side of the gate is
+/// read where a line or a page is shown ([`LanguageReads`]).
 #[derive(Resource, Default)]
 pub(crate) struct ChatLanguages {
     /// `LanguageWords.dbc`; while `None`, nothing garbles.
     words: Option<LanguageWords>,
+}
+
+impl ChatLanguages {
+    /// The word pools `words`, for a test.
+    #[cfg(test)]
+    pub(crate) fn for_test(words: LanguageWords) -> Self {
+        Self { words: Some(words) }
+    }
+}
+
+/// The language gate as the character stands where it is read: the word pools, this character's
+/// skill per language, the GM bit and whether a local player is held at all.
+pub(crate) struct Gate<'a> {
+    words: Option<&'a LanguageWords>,
     /// language id → this character's skill in it. Absent = 0 = never understood.
     skill: HashMap<u32, u32>,
     /// `PLAYER_FLAGS & 0x8`: a GM reads every line plain, with no `[Language]` header.
@@ -40,7 +55,7 @@ pub(crate) struct ChatLanguages {
     have_player: bool,
 }
 
-impl ChatLanguages {
+impl Gate<'_> {
     /// This character's skill in `language`, the second argument of `0x49b560`.
     pub(crate) fn skill(&self, language: u32) -> u32 {
         self.skill.get(&language).copied().unwrap_or(0)
@@ -61,20 +76,18 @@ impl ChatLanguages {
 
     /// The line as this character hears it: unchanged for language 0, fluency, or no word pool.
     pub(crate) fn garble(&self, language: u32, text: &str) -> String {
-        let Some(words) = self.words.as_ref() else {
+        let Some(words) = self.words else {
             return text.to_string();
         };
         benilla_formats::garble_chat(words, language, self.skill(language), text)
     }
-}
 
-impl ChatLanguages {
     /// A readable's page text as this character reads it (`0x4e3856` → `0x49b560`, `keepAngle`
     /// and `keepPunct` set, 0x1f40 bytes): the character's skill in `language`, or 0 when the show
     /// is not `translate`d (a reason-1 read reply, `0x4e37b3`/`0x4e3808`). Unchanged for language
     /// 0, full skill, and no local player (`0x49b597`).
     pub(crate) fn garble_item_text(&self, language: u32, translate: bool, text: &str) -> String {
-        let Some(words) = self.words.as_ref().filter(|_| self.have_player) else {
+        let Some(words) = self.words.filter(|_| self.have_player) else {
             return text.to_string();
         };
         let skill = if translate { self.skill(language) } else { 0 };
@@ -85,17 +98,6 @@ impl ChatLanguages {
             text,
             benilla_formats::Garble::ITEM_TEXT,
         )
-    }
-
-    /// A character with `words` and its `skill` per language, for a test.
-    #[cfg(test)]
-    pub(crate) fn for_test(words: LanguageWords, skill: &[(u32, u32)]) -> Self {
-        Self {
-            words: Some(words),
-            skill: skill.iter().copied().collect(),
-            gm: false,
-            have_player: true,
-        }
     }
 }
 
@@ -123,60 +125,61 @@ pub(super) fn load_language_words(
     }
 }
 
-/// Recompute the per-language skill map and the GM bit when the spell book, the catalogs or our
-/// descriptor change; the reference keeps the same map at spell add.
-pub(super) fn feed_language_skills(
-    mut langs: ResMut<ChatLanguages>,
-    actions: Option<Res<PlayerActions>>,
-    spells: Option<Res<Spells>>,
-    skill_lines: Option<Res<SkillLines>>,
-    self_q: Query<Ref<ObjectStore>, With<SelfPlayer>>,
-) {
-    let Ok(store) = self_q.single() else {
-        // No body: every line renders plain.
-        if !langs.skill.is_empty() || langs.gm || langs.have_player {
-            langs.skill.clear();
-            langs.gm = false;
-            langs.have_player = false;
-        }
-        return;
-    };
-    let inputs_moved = store.is_changed()
-        || actions.as_ref().is_some_and(|a| a.is_changed())
-        || spells.as_ref().is_some_and(|s| s.is_changed())
-        || skill_lines.as_ref().is_some_and(|l| l.is_changed());
-    if !inputs_moved && langs.have_player {
-        return;
-    }
-    let gm = store.0.player_flags() & PLAYER_FLAGS_GM != 0;
+/// What the language gate reads where a line or a page is shown: the reference reads the skill
+/// live at the show (`0x4e3837` → `GetIndexedSpellSkill`) and at the garble (`0x5ec720`), off the
+/// language table its spell add keeps (`0x4b2656`), so a show inside a packet reads the skill an
+/// earlier packet of its frame wrote.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct LanguageReads<'w, 's> {
+    /// Absent in a harness without chat, where nothing garbles.
+    langs: Option<Res<'w, ChatLanguages>>,
+    actions: Option<Res<'w, PlayerActions>>,
+    spells: Option<Res<'w, Spells>>,
+    skill_lines: Option<Res<'w, SkillLines>>,
+    me: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
+}
 
-    let mut skill = HashMap::new();
-    if let (Some(actions), Some(spells), Some(lines)) = (actions, spells, skill_lines) {
-        for &known in &actions.spells {
-            let Some(language) = spells.catalog.declared_language(known) else {
-                continue;
+impl LanguageReads<'_, '_> {
+    /// The gate as the character stands now: the language table folded over the known spells,
+    /// the later spell id winning, as the reference's plain store `[0xb700ac][lang] = spellId`
+    /// over the sorted initial spell batch, and each language's skill off the skill line's
+    /// `PLAYER_SKILL_INFO` value.
+    pub(crate) fn gate(&self) -> Gate<'_> {
+        let words = self.langs.as_deref().and_then(|l| l.words.as_ref());
+        let Ok(store) = self.me.single() else {
+            // No body: every line renders plain.
+            return Gate {
+                words,
+                skill: HashMap::new(),
+                gm: false,
+                have_player: false,
             };
+        };
+        let mut skill = HashMap::new();
+        if let (Some(actions), Some(spells), Some(lines)) = (
+            self.actions.as_deref(),
+            self.spells.as_deref(),
+            self.skill_lines.as_deref(),
+        ) {
             let (race, class) = store.race_class();
-            let Some(line) = lines.catalog.spell_to_line(known, race, class) else {
-                // Spell 25674 declares Draconic but has no `SkillLineAbility` row (`0x6de040`),
-                // so Draconic is never understood.
-                continue;
-            };
-            // The later spell id wins, as the reference's plain store `[0xb700ac][lang] = spellId`
-            // over the sorted initial spell batch.
-            skill.insert(language, skill_value(&store, line));
+            for &known in &actions.spells {
+                let Some(language) = spells.catalog.declared_language(known) else {
+                    continue;
+                };
+                let Some(line) = lines.catalog.spell_to_line(known, race, class) else {
+                    // Spell 25674 declares Draconic but has no `SkillLineAbility` row
+                    // (`0x6de040`), so Draconic is never understood.
+                    continue;
+                };
+                skill.insert(language, skill_value(store, line));
+            }
         }
-    }
-
-    if skill != langs.skill || gm != langs.gm || !langs.have_player {
-        // Logged on change: a wrong gate looks like plain chat, and `gm=true` means nothing
-        // garbles.
-        let mut named: Vec<String> = skill.iter().map(|(l, v)| format!("{l}:{v}")).collect();
-        named.sort();
-        info!("ui_chat: language fluency {{{}}} gm={gm}", named.join(" "));
-        langs.skill = skill;
-        langs.gm = gm;
-        langs.have_player = true;
+        Gate {
+            words,
+            skill,
+            gm: store.0.player_flags() & PLAYER_FLAGS_GM != 0,
+            have_player: true,
+        }
     }
 }
 
@@ -218,6 +221,46 @@ fn skill_value(store: &ObjectStore, line: u32) -> u32 {
     0
 }
 
+/// A character who knows a language, for the tests that read the gate through the world.
+#[cfg(test)]
+pub(crate) mod test_speaker {
+    use super::*;
+    use benilla_formats::{SkillLineCatalog, SpellCatalog, SpellDisplay};
+
+    /// Language: Orcish, which declares the language its caller names.
+    pub(crate) const SPELL: u32 = 669;
+    /// Its skill line, Language: Orcish.
+    pub(crate) const LINE: u32 = 109;
+
+    /// The tables of a character who knows `language` through [`SPELL`] on [`LINE`]: the spell's
+    /// declaration, its line, and the spell known. The skill is the player's own field
+    /// ([`skill_fields`]).
+    pub(crate) fn know(world: &mut World, language: u32) {
+        let mut d = SpellDisplay {
+            id: SPELL,
+            name: "Language".into(),
+            ..Default::default()
+        };
+        d.effects[0] = 39;
+        d.effect_misc_value[0] = language as i32;
+        world.insert_resource(Spells {
+            catalog: SpellCatalog::from_displays([(SPELL, d)].into_iter().collect()),
+            ..Spells::empty_for_tests()
+        });
+        world.insert_resource(SkillLines {
+            catalog: SkillLineCatalog::from_spell_lines([(SPELL, LINE)]),
+        });
+        world.init_resource::<PlayerActions>();
+        world.resource_mut::<PlayerActions>().spells.insert(SPELL);
+    }
+
+    /// `PLAYER_SKILL_INFO`'s first slot holding [`LINE`] at `value`, as an update's fields.
+    pub(crate) fn skill_fields(value: u16) -> [(u16, u32); 2] {
+        let base = benilla_protocol::field::FIELD_PLAYER_SKILL_INFO_1_1;
+        [(base, LINE), (base + 1, u32::from(value) | 300 << 16)]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,8 +269,8 @@ mod tests {
         CHAT_MSG_SAY, CHAT_MSG_SYSTEM,
     };
 
-    fn langs(skill: &[(u32, u32)], gm: bool) -> ChatLanguages {
-        ChatLanguages {
+    fn langs(skill: &[(u32, u32)], gm: bool) -> Gate<'static> {
+        Gate {
             words: None,
             skill: skill.iter().copied().collect(),
             gm,

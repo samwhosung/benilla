@@ -8,7 +8,7 @@ use benilla_protocol::SessionEvent;
 use benilla_ui::script::UiScript;
 use bevy::prelude::*;
 
-use super::unit_view_tests::{client, fall, frame};
+use super::unit_view_tests::{client, fall, frame, values};
 
 /// A fall's `UNIT_COMBAT`, as [`client`]'s spy records it.
 const FELL: &str = "UNIT_COMBAT:player:100";
@@ -397,4 +397,39 @@ fn the_caches_file_each_answer_ahead_of_the_readers_handler() {
             "{kind:?}: {order:?}"
         );
     }
+}
+
+/// A page's show rewrites it to the player's skill as the show runs (`0x4e3837` →
+/// `GetIndexedSpellSkill`, `0x4e3856`): a skill an earlier packet of the same frame raised to 300
+/// lets the tablet's page through whole, with no frame between, where a skill copied at the frame
+/// would still scramble it.
+#[test]
+fn a_pages_show_reads_the_skill_its_frames_earlier_packet_wrote() {
+    use crate::ui_chat::test_speaker::{know, skill_fields};
+    let mut app = client();
+    tablets(&mut app);
+    let world = app.world_mut();
+    // The tablets' template, its pages in language 1 (`data[8]`, `0x4e37fc`).
+    let mut data = [0i32; 24];
+    data[7] = 358;
+    data[8] = 1;
+    world
+        .resource_mut::<crate::go_templates::GameObjectTemplates>()
+        .insert(17188, 10, "The Lay of Ameth'Aran".into(), &data);
+    world
+        .resource_mut::<crate::ui_item_text::PageTexts>()
+        .insert(358, "hello".into(), 0);
+    world.insert_resource(crate::ui_chat::ChatLanguages::for_test(
+        benilla_formats::LanguageWords::from_rows([(1, "kazum".to_string())]),
+    ));
+    know(world, 1);
+    frame(&mut app, vec![values(ME, &skill_fields(0))]);
+    crate::net::handlers::dispatch(
+        app.world_mut(),
+        vec![values(ME, &skill_fields(300)), page_text(TABLET)],
+    );
+    assert_eq!(
+        eval::<String>(&mut app, true, "return ItemTextGetText()"),
+        "hello"
+    );
 }

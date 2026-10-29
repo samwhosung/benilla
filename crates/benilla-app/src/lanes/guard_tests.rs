@@ -384,12 +384,8 @@ pub(super) const READ_ONLY_TO_HANDLERS: &[&str] = &[
     // `AreaPOI.dbc`, the landmark rows the gossip marker's re-select of the map reads
     // (`0x6dac93` → `0x4a67a0`, its walk at `0x4a6819`).
     "::area_poi::AreaPoiRes",
-    // The character's language skills and word pools, which a page's show rewrites it by
-    // (`0x4e3856`). Not read-only in substance: `feed_language_skills` recomputes the skills
-    // every frame, after the dispatch, from the skill lines the handlers write, where the
-    // reference reads the skill live at the show (`0x4e3837` → `GetIndexedSpellSkill`). A show
-    // inside a packet reads them as the last frame left them: a frame-final read the flip must
-    // make live (#2168), its row in `BETWEEN_THE_DISPATCH_AND_THE_DRAIN`.
+    // The language word pools, which a page's show rewrites it by (`0x4e3856`), loaded once at
+    // startup; the show reads the character's skill live (`0x4e3837` → `GetIndexedSpellSkill`).
     "::ui_chat::language::ChatLanguages",
     // The usable stationery list, whose first paper the list parse gives a row with none
     // (`0x4ad565`); the paper callback writes it in the item answer's list, through its own
@@ -1795,10 +1791,11 @@ pub(super) const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // `SetSelection`.
     ("tutorials", &["names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
         "spell::group_relation::GroupRoster"]),
-    // With the bubble and filter switches, which a listener's `SetCVar` moves inside its call.
+    // With the bubble and filter switches, which a listener's `SetCVar` moves inside its call, and
+    // the known spells the language gate folds (`0x5ec720`).
     ("chat", &["chat_bubble::BubbleConfig", "go_templates::GameObjectTemplates", "items::Items",
         "names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
-        "text_filter::TextFilterSwitches", "ui_chat::edit::ChannelState",
+        "text_filter::TextFilterSwitches", "ui_action::PlayerActions", "ui_chat::edit::ChannelState",
         "world_state::WorldStates"]),
 ];
 

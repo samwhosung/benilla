@@ -988,8 +988,8 @@ pub(crate) struct ItemTextShow<'w, 's> {
     unit_names: crate::ui_unit::NameTables<'w>,
     filter: Option<Res<'w, crate::text_filter::TextFilter>>,
     switches: Option<Res<'w, crate::text_filter::TextFilterSwitches>>,
-    // The character's skill per language and the word pools, absent in a harness without chat.
-    languages: Option<Res<'w, crate::ui_chat::ChatLanguages>>,
+    // The word pools and the character's skill per language as the show runs (`0x4e3837`).
+    languages: crate::ui_chat::LanguageReads<'w, 's>,
 }
 
 impl ItemTextShow<'_, '_> {
@@ -1090,10 +1090,11 @@ impl ItemTextShow<'_, '_> {
         // single item text is not (`0x4e3666`-`0x4e3677`).
         let language = readable(object, &self.objects, &self.items, &self.go_templates)
             .and_then(|r| r.language);
-        if let (false, Some(language), Some(languages)) =
-            (is_letter, language, self.languages.as_deref())
-        {
-            text = languages.garble_item_text(language, translate, &text);
+        if let (false, Some(language)) = (is_letter, language) {
+            text = self
+                .languages
+                .gate()
+                .garble_item_text(language, translate, &text);
         }
         sess.text = text;
         true
@@ -1633,8 +1634,15 @@ mod tests {
         benilla_formats::LanguageWords::from_rows([(1, "kazum".to_string())])
     }
 
-    /// The reader's resources over a character who knows language 1 to `skill`.
-    fn reading_app(skill: u32) -> (App, crossbeam_channel::Receiver<ClientCommand>) {
+    /// Our player in [`reading_app`].
+    const READER: u64 = 0x10;
+
+    /// The reader's resources over our player, who knows language 1 to `skill` and holds `fields`
+    /// besides.
+    fn reading_app(
+        skill: u16,
+        fields: &[(u16, u32)],
+    ) -> (App, crossbeam_channel::Receiver<ClientCommand>) {
         let (tx, rx) = crossbeam_channel::unbounded();
         let mut app = App::new();
         app.insert_resource(NetCommands(tx))
@@ -1647,12 +1655,24 @@ mod tests {
             .init_resource::<GameObjectTemplates>()
             .init_resource::<crate::net::GuidIndex>()
             .init_resource::<crate::world_state::WorldStates>()
-            .insert_resource(crate::ui_chat::ChatLanguages::for_test(
-                orcish(),
-                &[(1, skill)],
-            ))
+            .insert_resource(crate::ui_chat::ChatLanguages::for_test(orcish()))
             .add_systems(Update, apply_reads);
         net::register(&mut app);
+        let world = app.world_mut();
+        crate::ui_chat::test_speaker::know(world, 1);
+        let mut pairs = crate::ui_chat::test_speaker::skill_fields(skill).to_vec();
+        pairs.extend_from_slice(fields);
+        let player = world
+            .spawn((
+                crate::net::Guid(READER),
+                crate::net::SelfPlayer,
+                crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&pairs)),
+            ))
+            .id();
+        world
+            .resource_mut::<crate::net::GuidIndex>()
+            .0
+            .insert(READER, player);
         app.insert_non_send_resource(UiScript::new().unwrap());
         (app, rx)
     }
@@ -1667,7 +1687,7 @@ mod tests {
     fn a_game_objects_page_is_rewritten_in_its_language() {
         const TABLET: u64 = 0xF110_0043_2400_0001;
         for (skill, language, want) in [(0, 1, "kazum <br> kazum."), (150, 1, PAGE), (0, 0, PAGE)] {
-            let (mut app, _rx) = reading_app(skill);
+            let (mut app, _rx) = reading_app(skill, &[]);
             let mut data = [0i32; 24];
             data[7] = 358;
             data[8] = language;
@@ -1707,7 +1727,7 @@ mod tests {
     #[test]
     fn a_letters_text_is_not_rewritten() {
         const LETTER: u64 = 0x4000_0000_0000_0009;
-        let (mut app, _rx) = reading_app(0);
+        let (mut app, _rx) = reading_app(0, &[]);
         let mut template = crate::items::test_template("Letter");
         template.language_id = 1;
         app.world_mut()
@@ -1740,7 +1760,7 @@ mod tests {
     fn a_bag_books_page_is_rewritten_unless_read_and_untranslated_on_reason_1() {
         use benilla_protocol::SessionEvent as E;
         const BOOK: u64 = 0x4000_0000_0000_0021;
-        const ME: u64 = 0x10;
+        const ME: u64 = READER;
         const PACK_SLOT_1: u16 = 532;
         const SCRAMBLED: &str = "kazum <br> kazum.";
         for (skill, reply, want) in [
@@ -1751,7 +1771,13 @@ mod tests {
             // Skill 150 passes "hello" whole: only the untranslated show scrambles it.
             (150, "reason 1", SCRAMBLED),
         ] {
-            let (mut app, _rx) = reading_app(skill);
+            let (mut app, _rx) = reading_app(
+                skill,
+                &[
+                    (PACK_SLOT_1 + 6, BOOK as u32),
+                    (PACK_SLOT_1 + 7, (BOOK >> 32) as u32),
+                ],
+            );
             let world = app.world_mut();
             let mut template = crate::items::test_template("Gnarled Book");
             template.page_text = 358;
@@ -1762,20 +1788,6 @@ mod tests {
             world
                 .resource_mut::<PageTexts>()
                 .insert(358, PAGE.into(), 0);
-            let player = world
-                .spawn((
-                    crate::net::Guid(ME),
-                    crate::net::SelfPlayer,
-                    crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
-                        (PACK_SLOT_1 + 6, BOOK as u32),
-                        (PACK_SLOT_1 + 7, (BOOK >> 32) as u32),
-                    ])),
-                ))
-                .id();
-            world
-                .resource_mut::<crate::net::GuidIndex>()
-                .0
-                .insert(ME, player);
             crate::items::test_spawn_item(
                 world,
                 BOOK,

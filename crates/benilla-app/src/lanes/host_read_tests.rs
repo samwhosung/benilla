@@ -70,10 +70,6 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
         "a field event's listeners read its push, and it takes the ammo getters' record hits, a \
          `UNIT_INVENTORY_CHANGED` each behind it, where the reference's hit registers no callback \
          and the call reads the record itself (`0x4c83bc`, `0x4c89cf`)"),
-    ("::ui_chat::language::feed_language_skills", &["ui_chat::language::ChatLanguages"],
-        "recomputes the language skills off the book and the skill lines, which a page's show \
-         reads inside its packet (`0x4e3856`), where the reference reads the skill live at the \
-         show (`0x4e3837`)"),
     ("::ui_item_text::apply_reads", &["ui_item_text::ItemTextOpen"],
         "a click's or a bag use's read, queued in its input or its call, which the reference \
          opens inside them (`0x5f58c0`, `0x4e32e0`), ahead of the packets (`0x420d23`)"),

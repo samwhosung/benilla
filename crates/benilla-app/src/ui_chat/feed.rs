@@ -1416,8 +1416,9 @@ pub(super) struct ChatReads<'w, 's> {
     guids: Res<'w, GuidIndex>,
     stores: Query<'w, 's, &'static ObjectStore>,
     states: Res<'w, crate::world_state::WorldStates>,
-    // The language gate: the word pool, this character's fluency and the GM bit.
-    langs: Res<'w, super::language::ChatLanguages>,
+    // The language gate: the word pool, and this character's fluency and GM bit as the line
+    // shows.
+    langs: super::language::LanguageReads<'w, 's>,
     // Item names for `TRADESKILL_LOG`, `FEEDPET_LOG`, `ITEMENCHANTMENT*`, `SPELLDURABILITYDAMAGE`,
     // and with the game object records the names of a combat line's held objects.
     items: Res<'w, crate::items::Items>,
@@ -1810,6 +1811,7 @@ fn fire_one(
                 // The language gate: the garble writes the one buffer the line, `arg1` and the
                 // bubble read, as `0x49a870` fills `[ebp-0xd0c]` once (`0x49a9f0` copy,
                 // `0x49aa7c` garble) and never reads the wire text again.
+                let langs = langs.gate();
                 let language = langs.effective_language(msg.chat_type, msg.language);
                 let mut text = langs.garble(language, &plain);
 
