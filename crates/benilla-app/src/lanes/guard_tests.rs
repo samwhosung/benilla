@@ -2058,13 +2058,13 @@ fn every_call_that_queues_for_the_tick_is_listed() {
     assert!(empty.is_empty(), "rows with no reason: {empty:?}");
 }
 
-/// Each entry of the raise check's allow list ([`crate::raise_origin::RAISES_AT_THEIR_OWN_PLACE`])
+/// Each entry of the raise check's allow list ([`crate::ui_script::raise_origin::RAISES_AT_THEIR_OWN_PLACE`])
 /// names a function that exists and gives its reason; one that cites a guard list has that list's
 /// row for it; and every call that queues for the tick has its entry, as each raises at its own
 /// place in the frame.
 #[test]
 fn every_raise_origin_allowed_names_its_function_and_its_row() {
-    use crate::raise_origin::{RAISES_AT_THEIR_OWN_PLACE, ROW_LISTS};
+    use crate::ui_script::raise_origin::{RAISES_AT_THEIR_OWN_PLACE, ROW_LISTS};
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let module = |file: &str| file.trim_end_matches(".rs").replace('/', "::");
     let queued: BTreeSet<String> = QUEUED_FOR_THE_TICK

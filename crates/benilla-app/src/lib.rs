@@ -92,7 +92,6 @@ mod probe_shield;
 mod query_cache;
 mod quest_markers;
 mod raid_marks;
-mod raise_origin;
 mod ranged_flex;
 mod realmlist;
 mod run_mode;

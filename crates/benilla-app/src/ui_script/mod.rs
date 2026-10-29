@@ -25,6 +25,7 @@ pub(crate) mod glue_mgr;
 pub(crate) mod glue_scene;
 mod input;
 mod movie;
+pub(crate) mod raise_origin;
 mod records;
 /// The server alert's fetch and `LaunchURL`'s browser, for the stock glue screens.
 pub(crate) mod server_alert;
@@ -448,7 +449,7 @@ fn console_reload_ui(steps: &mut crate::console::ConsoleSteps, _args: &str) -> V
 impl Plugin for UiScriptPlugin {
     fn build(&self, app: &mut App) {
         use crate::console::ConsoleCommandApp;
-        crate::raise_origin::arm_each_frame(app);
+        crate::ui_script::raise_origin::arm_each_frame(app);
         // Category 1 with no help (`0x402ba6`-`0x402bb4`).
         app.console_command_in_call(
             "reloadUI",

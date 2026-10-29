@@ -386,7 +386,7 @@ impl LaneApp for App {
         begin: Option<fn(&World)>,
     ) -> &mut Self {
         if self.world().get_resource::<Lanes>().is_none() {
-            crate::raise_origin::arm_each_frame(self);
+            crate::ui_script::raise_origin::arm_each_frame(self);
             self.init_resource::<Lanes>()
                 .configure_sets(
                     Update,
