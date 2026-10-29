@@ -56,11 +56,6 @@ pub(crate) const RAISES_AT_THEIR_OWN_PLACE: &[Allow] = &[
               and `PLAYER_LOGOUT` (`0x490c2a`) itself, at a logout's, a disconnect's or a \
               reload's root",
     },
-    Allow {
-        frame: "ui_social::feed::feed_social",
-        why: "a new VM's seed, which no packet makes: the list events the handlers raised before \
-              it was up (`0x5ae867`, `0x5ae92d`)",
-    },
     // Rows of the guard's lists.
     Allow {
         frame: "ui_script::glue_mgr::drive_glue_mgr",

@@ -29,8 +29,8 @@ struct Social {
 }
 
 /// The whole client, headless, with the stock class names, two areas, and a VM that counts
-/// `FRIENDLIST_UPDATE` in `UPDATES` and defines the strings `GetFriendInfo` reads. The first feed,
-/// which stands for every list's packet, has run.
+/// `FRIENDLIST_UPDATE` in `UPDATES` and defines the strings `GetFriendInfo` reads. Its first feed
+/// has run.
 fn client() -> Social {
     let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
     let (tx, rx) = crossbeam_channel::unbounded();
@@ -89,8 +89,7 @@ fn client() -> Social {
         )
         .expect("the recorder installs");
     app.world_mut().insert_non_send_resource(script);
-    // A new VM's first feed stands for every list's signal; the lane fires what the handlers
-    // raise.
+    // A new VM's first feed; the lane fires what the handlers raise.
     let seed = app.world_mut().register_system(super::feed::feed_social);
     app.world_mut()
         .run_system(seed)
@@ -269,6 +268,31 @@ fn info(s: &mut Social, index: i64) -> [String; 6] {
     );
     let (a, b, c, d, e, f): (String, String, String, String, String, String) = eval(s, &lua);
     [a, b, c, d, e, f]
+}
+
+/// A new VM's first feed signals no list event: `FRIENDLIST_UPDATE` and `IGNORELIST_UPDATE` have
+/// one site each, the sorts (`0x5ae867`, `0x5ae92d`), which the list handlers' name callbacks and
+/// the ignore removal run, never a world entry, and no handler runs before a new VM is up.
+#[test]
+fn a_new_vms_first_feed_signals_no_list_event() {
+    let mut s = client();
+    let script = UiScript::new().expect("a VM");
+    script
+        .run(
+            r#"HEARD = 0
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("FRIENDLIST_UPDATE")
+            f:RegisterEvent("IGNORELIST_UPDATE")
+            f:SetScript("OnEvent", function() HEARD = HEARD + 1 end)"#,
+        )
+        .expect("the recorder installs");
+    s.app.world_mut().insert_non_send_resource(script);
+    s.app
+        .world_mut()
+        .run_system_cached(super::feed::feed_social)
+        .expect("the social feed runs");
+    feed_once(&mut s);
+    assert_eq!(eval::<i64>(&mut s, "return HEARD"), 0);
 }
 
 /// The list frees every slot's name and fills one only from a cached name (`0x5ae35e`-`0x5ae388`,

@@ -297,25 +297,6 @@ pub(crate) const GROUPTYPE_RAID: u8 = 1;
 /// The subgroup bits (0-2) of a member's flags byte; `0x80` is the assistant bit.
 pub(crate) const GROUP_MEMBER_SUBGROUP: u8 = 0x07;
 
-/// Each frame: the ready-check summary lines the timeout tick composed, pushed as system chat. The
-/// tick runs on the frame clock (`CheckReadyCheckTime`, from stock `UIParent.xml`'s `OnUpdate`).
-pub(crate) fn push_ready_check_lines(
-    mut vm: crate::script_calls::VmWith<()>,
-    chat: Res<crate::ui_chat::ChatLog>,
-) {
-    vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        for line in script.take_ready_check_lines() {
-            chat.push_event(crate::ui_chat::ChatEvent::text_only(
-                crate::ui_chat::ChatEventKind::System,
-                line,
-            ));
-        }
-    })
-}
-
 /// `GetLootMethod`'s method word, its second return and `GetLootThreshold`, off the stored cells
 /// with no group test (`0x4e91b6`, `0x4e91fb`, `0x4e94e0`).
 pub(super) fn loot_read(

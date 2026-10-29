@@ -1,5 +1,4 @@
-//! The social feed: the dungeon table and a new VM's list signals; and the rows the getters read
-//! and the `/who` lines, which the reference resolves engine-side too, races, classes and zones,
+//! The social feed: a new VM's dungeon table; and the rows the getters read and the `/who` lines, which the reference resolves engine-side too, races, classes and zones,
 //! before Lua sees a row (`0x5ae160`).
 
 use benilla_formats::AreaTableCatalog;
@@ -32,16 +31,15 @@ const WHO_CHAT_MAX: u32 = 3;
 /// What the feed has given the VM it serves.
 #[derive(Default)]
 pub(super) struct FedSocial {
-    /// Whether the VM has heard the list events its first feed stands for.
-    seeded: bool,
     /// Whether the VM has been given the dungeon table.
     lfg_pushed: bool,
 }
 
-/// Give a new VM the dungeon table, and fire the list events its first feed stands for: the lists
-/// the handlers left before it was up. The getters read the lists through the call host
-/// ([`super::SocialLive`]), and what the handlers raise fires on the social lane
-/// ([`super::SocialLane`]).
+/// Give a new VM the dungeon table. The getters read the lists through the call host
+/// ([`super::SocialLive`]), and the list events fire on the social lane where the handlers and
+/// the name callbacks raise them ([`super::SocialLane`]): their only sites are the sorts
+/// `0x5ae867` and `0x5ae92d`, which no world entry runs, and no handler runs before a new VM is
+/// up (`net::apply::InboundHold`), so a new VM is told of no list it did not see signalled.
 pub(super) fn feed_social(
     mut vm: HostedVm,
     dungeons: Option<Res<super::LfgDungeonsRes>>,
@@ -57,11 +55,6 @@ pub(super) fn feed_social(
                 script.set_lfg_dungeons(d.0.clone());
                 fed.lfg_pushed = true;
             }
-        }
-        if !fed.seeded {
-            fed.seeded = true;
-            script.fire_event("FRIENDLIST_UPDATE", Vec::new());
-            script.fire_event("IGNORELIST_UPDATE", Vec::new());
         }
     })
 }

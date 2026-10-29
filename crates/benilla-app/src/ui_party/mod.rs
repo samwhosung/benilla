@@ -12,8 +12,6 @@ use benilla_protocol::messages::{
 };
 use bevy::prelude::*;
 
-use crate::ui_script::UiFeed;
-
 #[cfg(test)]
 mod call_tests;
 mod calls;
@@ -55,15 +53,9 @@ impl Plugin for UiPartyPlugin {
             .init_resource::<calls::GroupEdits>()
             .init_resource::<crate::sound::MessageSounds>()
             .init_resource::<crate::field_watch::NoticeLane>()
-            .add_systems(
-                Update,
-                (
-                    // The ready check's timeout lines. The getters read the group at the call
-                    // (`live`), and a new VM is seeded at its birth (`feed::seed_vm_party`).
-                    feed::push_ready_check_lines.in_set(UiFeed),
-                    feed::drain_party.in_set(crate::ui_script::UiDrain),
-                ),
-            );
+            // The getters read the group at the call (`live`), a new VM is seeded at its birth
+            // (`feed::seed_vm_party`), and the ready check prints its lines in place.
+            .add_systems(Update, feed::drain_party.in_set(crate::ui_script::UiDrain));
     }
 }
 
