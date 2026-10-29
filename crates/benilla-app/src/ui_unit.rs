@@ -22,6 +22,7 @@ pub(crate) mod control_gate;
 pub(crate) mod field_events;
 mod held;
 pub(crate) mod live;
+pub(crate) mod reach;
 #[cfg(test)]
 mod relations;
 pub(crate) mod tooltip_facts;
@@ -502,6 +503,27 @@ impl UnitTokens<'_, '_> {
     /// `GetUnitFromToken 0x515940`: the object of the guid `token` names ([`Self::guid`]), held.
     pub(crate) fn resolve(&self, token: &str, selection: &Selection) -> Option<(Entity, u64)> {
         self.held(self.guid(token, selection)?)
+    }
+
+    /// Every unit a token can name now ([`reach::reach`]), with `published` the mouseover
+    /// `[0xb4e2c8]` as the publisher last wrote it: the objects as of the drain's place.
+    pub(crate) fn reach(
+        &self,
+        selection: &Selection,
+        published: Option<u64>,
+    ) -> benilla_ui::script::UnitGuids {
+        let objects = self.objects();
+        let held = |guid: u64| objects.store(guid);
+        let me = objects.me.map_or(0, |(_, guid)| guid);
+        reach::reach(reach::Inputs {
+            group: Some(&self.group),
+            me,
+            pet: pet_token_guid(held(me)),
+            target: selection.guid.unwrap_or(0),
+            mouseover: reach::mouseover_unit(published, held),
+            npc: self.interact.as_ref().and_then(|i| i.1).unwrap_or(0),
+            held,
+        })
     }
 
     /// What the resolver reads off the objects, as of the drain's place.
@@ -1297,9 +1319,9 @@ fn warn_sideless_template(
 }
 
 /// The VM's copies of the four tokens' units, `"player"`, `"target"`, `"targettarget"` and
-/// `"npc"`, as the stores stand, which the getters read with no host free to ask and no frame
-/// feed pushes in game: for a test that drives the stock unit frames off engine state with no
-/// host lent.
+/// `"npc"`, and the resolver's stand-in, as the stores stand, which the getters read with no host
+/// free to ask and no frame feed pushes in game: for a test that drives the stock unit frames off
+/// engine state with no host lent.
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)] // the snapshots' inputs, as the live reads take them
 pub(crate) fn seat_tokens(
@@ -1348,6 +1370,18 @@ pub(crate) fn seat_tokens(
     script.set_unit("target", target);
     script.set_unit("targettarget", tot);
     script.set_unit("npc", npc);
+    // And the resolver's stand-in: every unit a token reaches, as the stores stand.
+    let me = self_q.iter().next();
+    let published = script.world_mouseover();
+    script.set_unit_guids(&reach::reach(reach::Inputs {
+        group: Some(&group),
+        me: me.map_or(0, |(_, g)| g.0),
+        pet: pet_token_guid(me.map(|(s, _)| s)),
+        target: selection.guid.unwrap_or(0),
+        mouseover: reach::mouseover_unit(published, object),
+        npc: interact.as_deref().and_then(|i| i.1).unwrap_or(0),
+        held: &object,
+    }));
 }
 
 /// [`seat_tokens`] once, for a test that reads the four tokens with no host lent.
@@ -2074,8 +2108,8 @@ mod tests {
         }
     }
 
-    /// The range verbs end to end, with the resolver feed that pushes its inputs and the
-    /// host that measures the unit each names at the call: `CheckInteractDistance` and `CanInspect`
+    /// The range verbs end to end, with the host that resolves each token and measures the unit it
+    /// names at the call: `CheckInteractDistance` and `CanInspect`
     /// answer for a `target` chain (`0x48ba00` and `0x48a1b0` resolve their token through
     /// `0x515970`), on the unit the chain names and not on the base.
     #[test]
@@ -2106,6 +2140,7 @@ mod tests {
             .init_resource::<crate::ui_party::GroupState>()
             .insert_resource(factions())
             .insert_resource(NetCommands(tx))
+            .init_resource::<crate::ui_session::InteractLatch>()
             .add_plugins(crate::ui_aura::UiAuraPlugin);
         app.insert_non_send_resource(UiScript::new().unwrap());
 
@@ -2162,7 +2197,7 @@ mod tests {
         app.update();
 
         let answers = |app: &mut App, expr: &str| -> bool {
-            live::eval_lent(app.world_mut(), &format!("return {expr} ~= nil"))
+            live::eval_lent_objects(app.world_mut(), &format!("return {expr} ~= nil")).0
         };
         // The base and each hop, at their own distances: the 10-yard row is `1`, the 30-yard `4`.
         for (token, kind, want) in [
@@ -2419,7 +2454,7 @@ mod tests {
                 guid: Some(target.guid),
                 ..Default::default()
             });
-            // The resolver's inputs its feed would push: us and the target, both held.
+            // The resolver's stand-in: us and the target, both held.
             app.world_mut()
                 .non_send_resource_mut::<UiScript>()
                 .set_unit_guids(&benilla_ui::script::UnitGuids {

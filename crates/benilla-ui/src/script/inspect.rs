@@ -56,12 +56,6 @@ impl super::UiScript {
         self.model_mut().unit_reach.insert(guid, reach);
     }
 
-    /// The guids of the held units the resolver's inputs reach ([`Self::set_unit_guids`]): every
-    /// unit a token can name, the `target` chains included, that the object manager holds.
-    pub fn held_unit_guids(&self) -> Vec<u64> {
-        self.model_ref().unit_guids.held.keys().copied().collect()
-    }
-
     /// The unit tokens that name a unit now ([`super::unit::bound_tokens_in`]): the set a field's
     /// change is fanned out to (`0x515e50`). The objects, the target and the interaction globals
     /// and the party and raid rows (`0x491920`, `0x491940`) are read through the lent host as of

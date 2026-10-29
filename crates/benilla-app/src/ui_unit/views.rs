@@ -226,7 +226,7 @@ pub(crate) struct FrameStart {
 }
 
 /// [`FrameStart`]'s snapshot, of the stores and records the lane's rewind starts from: the four
-/// tokens' units and every held unit the resolver's inputs reach.
+/// tokens' units and every held unit a token reaches ([`super::reach`]).
 #[cfg(debug_assertions)]
 #[allow(clippy::too_many_arguments)] // what the tokens name, each read as the frame begins
 pub(crate) fn mark_frame_start(
@@ -263,7 +263,21 @@ pub(crate) fn mark_frame_start(
             .entry(guid)
             .or_insert_with(|| (entity, store(entity)));
     }
-    for guid in script.iter().flat_map(|s| s.held_unit_guids()) {
+    let held = |g: u64| by_guid(g).and_then(|e| all.get(e).ok());
+    let mine = me.iter().next();
+    let reached = super::reach::reach(super::reach::Inputs {
+        group: group.as_deref(),
+        me: mine.map_or(0, |(_, g)| g.0),
+        pet: super::pet_token_guid(mine.and_then(|(e, _)| all.get(e).ok())),
+        target: selection.as_deref().and_then(|s| s.guid).unwrap_or(0),
+        mouseover: super::reach::mouseover_unit(
+            script.as_deref().and_then(UiScript::world_mouseover),
+            held,
+        ),
+        npc: interact.as_deref().and_then(|i| i.1).unwrap_or(0),
+        held,
+    });
+    for &guid in reached.held.keys() {
         let e = by_guid(guid);
         stores.entry(guid).or_insert_with(|| (e, store(e)));
     }
@@ -677,8 +691,8 @@ impl Seats {
     }
 }
 
-/// The guids some view reads as the drain begins: every unit the resolver's last inputs can name
-/// (`0x515970`), the target chains' ends among them, the seats, our pet, and each group
+/// The guids some view reads as the drain begins: every unit a token can name (`0x515970`,
+/// [`super::reach`]), the target chains' ends among them, the seats, our pet, and each group
 /// member with every pet its descriptor or record names (`0x4e81d0`, `0x491960`).
 fn readable_guids<'a>(
     script: &UiScript,
@@ -687,7 +701,16 @@ fn readable_guids<'a>(
     pet: u64,
     live: &impl Fn(u64) -> Option<&'a ObjectStore>,
 ) -> Readable {
-    let g = script.unit_guids_view();
+    let guid = |seat: Option<(u64, Option<Entity>)>| seat.map_or(0, |(g, _)| g);
+    let g = super::reach::reach(super::reach::Inputs {
+        group: Some(group),
+        me: guid(seats.me),
+        pet,
+        target: guid(seats.target),
+        mouseover: super::reach::mouseover_unit(script.world_mouseover(), live),
+        npc: guid(seats.npc),
+        held: live,
+    });
     let mut out: HashSet<u64> = [g.player, g.pet, g.target, g.mouseover, g.npc, pet]
         .into_iter()
         .chain(g.party)

@@ -4,13 +4,13 @@
 //! 0x64a4c0`, first at `0x5159b4`).
 //!
 //! What it reads splits in two, and [`resolve_unit_in`] is the one derivation over both. The
-//! client's own state ([`UnitTokenGlobals`]): the target, mouseover and interaction globals and
-//! the group tables, which the VM holds as the app pushes them ([`UnitGuids`]) and moves itself
-//! where a call does, and which a getter reads through the lent host where it answers: the target
-//! and the interaction globals ([`super::selection_read`]) and the group rows. The objects ([`UnitTokenObjects`]): the active player's, our pet off our
-//! descriptor, a member's pet off its, the mouseover's, and each hop's `UNIT_FIELD_TARGET`, which
-//! a getter reads through the lent host as of the place it runs ([`resolve_token`]), and off the
-//! snapshot with no host to ask.
+//! client's own state ([`UnitTokenGlobals`]): the target and interaction globals
+//! ([`super::selection_read`]) and the group rows, which a getter reads through the lent host, and
+//! the mouseover global, the VM's own, which its publisher writes. The objects
+//! ([`UnitTokenObjects`]): the active player's, our pet off our descriptor, a member's pet off its,
+//! the mouseover's, and each hop's `UNIT_FIELD_TARGET`, which a getter reads through the lent host
+//! as of the place it runs ([`resolve_token`]). With no host to ask, both come off the VM's
+//! stand-in ([`UnitGuids`]).
 
 use std::collections::HashMap;
 
@@ -331,7 +331,8 @@ pub(crate) fn live_parsed(
 
 /// The client's globals, each read live where the lent host answered for it: the selection's and
 /// the interaction's ([`super::SelectionQuery`]), and one group row, the row its base names
-/// ([`RowQuery`]), or every row ([`GroupRowsQuery`]); every other global as `guids` holds it.
+/// ([`RowQuery`]), or every row ([`GroupRowsQuery`]); the mouseover, and any the host did not
+/// answer, as `guids` holds it.
 pub(crate) struct LiveGlobals<'a> {
     guids: &'a UnitGuids,
     row: Option<(UnitBase, GroupRow)>,
@@ -371,6 +372,8 @@ impl UnitTokenGlobals for LiveGlobals<'_> {
     fn target(&self) -> u64 {
         self.selection.map_or(self.guids.target, |s| s.target)
     }
+    /// The VM's own global: only the publisher writes it, at the pick (`0x492890`), and a token
+    /// tests it against the objects as it resolves (`0x515bd2`, `0x515e14`).
     fn mouseover(&self) -> u64 {
         self.guids.mouseover
     }
@@ -442,10 +445,12 @@ pub(crate) fn token_guid(lua: &Lua, guids: &UnitGuids, token: &str) -> mlua::Res
         .map_err(|()| mlua::Error::runtime(format!("Unknown unit name: {token}")))
 }
 
-/// What the resolver reads, as the app pushes it: the guid globals, the group tables and, for each
-/// unit a token can reach, whether it is held and whom it targets. The snapshot's half of
-/// [`UnitTokenGlobals`] and [`UnitTokenObjects`], and the client's globals the live read takes. A
-/// zero guid is nobody.
+/// What the resolver reads with no host to ask: the guid globals, the group tables and, for each
+/// unit a token can reach, whether it is held and whom it targets, as the VM's own seats last wrote
+/// them (the player at the world entry, the selection at a selecting call, the mouseover at its
+/// publish) or a harness set them. The stand-in's half of [`UnitTokenGlobals`] and
+/// [`UnitTokenObjects`]; the live read takes the mouseover from it, which no packet writes. A zero
+/// guid is nobody.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct UnitGuids {
     /// The local player's guid; 0 without the player object, when `player` and `pet` answer nil
@@ -455,7 +460,8 @@ pub struct UnitGuids {
     pub pet: u64,
     /// The target global `[0xb4e2d8]`.
     pub target: u64,
-    /// The mouseover global `[0xb4e2c8]`, read only while it is a held unit (`0x515bd2`).
+    /// The mouseover global `[0xb4e2c8]` as its publisher last wrote it (`0x492890`): a unit's
+    /// guid, else 0. A token reads it only while that unit is held (`0x515bd2`).
     pub mouseover: u64,
     /// The interaction NPC `[0xb4e2d0]`.
     pub npc: u64,

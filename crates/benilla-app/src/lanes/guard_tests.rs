@@ -348,12 +348,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // The ammo getters' hits fire after the push that carries their record, whenever it runs.
     ("::ui_char::feed_char", &["items::Countdowns", "items::Items", "names::NameCache",
         "net::GuidIndex", "net::ObjectStore", "ui_char::AmmoRecordHits"]),
-    // The resolver's guids, pushed before the drain and read with the host lent too: the
-    // mouseover, the group rows past a token's own, the pet records and every row of the field
-    // events' fan-out, which the `UNIT_HAPPINESS` gate reads. The aura getters walk each unit
-    // live, and the world entry's rebuild runs in its cascade (`0x490983`).
-    ("::ui_aura::feed_unit_guids", &["net::GuidIndex", "net::ObjectStore", "target::Selection",
-        "ui_party::GroupState"]),
     ("::ui_macro::load_macros", &["ui_action::ActionSlots"]),
     // The locks of the objects that went, forgotten as the frame left the index.
     ("::ui_items::locks::forget_gone_item_locks", &["net::GuidIndex"]),

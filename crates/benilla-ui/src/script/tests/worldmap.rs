@@ -374,8 +374,8 @@ fn worldmap_current_zone_and_player_feed() {
         Some((0.25, 0.75)),
         1.5,
         None,
-        vec![Some((0.1, 0.2)), None],
-        vec![Some((0.3, 0.4)), Some((0.25, 0.75))],
+        vec![(10, Some((0.1, 0.2))), (11, None)],
+        vec![(20, Some((0.3, 0.4))), (1, Some((0.25, 0.75)))],
     );
     s.run("SetMapToCurrentZone()").unwrap();
     assert_eq!(
@@ -424,6 +424,53 @@ fn worldmap_current_zone_and_player_feed() {
     s.set_world_map_feed(None, None, 0.0, None, Vec::new(), Vec::new());
     s.run("SetMapToCurrentZone()").unwrap();
     assert_eq!(s.eval::<i64>("return GetCurrentMapContinent()").unwrap(), 0);
+}
+
+/// With a host lent, `GetPlayerMapPosition` tests the guid's membership at the call (`0x4a8675` →
+/// `0x4e7f70`) and reads its position by guid (`0x4a8698` → `0x4a7870`): here `party1` is the
+/// member a list just seated, whom the stand-in's party table does not hold.
+#[test]
+fn a_member_the_live_roster_holds_reads_its_position_by_guid() {
+    struct Roster;
+    impl CallHost for Roster {
+        fn apply(&mut self, _: &mut UiScript, _: ScriptCall) -> Option<CallTail> {
+            None
+        }
+        fn read_live(&mut self, ask: &mut crate::script::live::LiveAsk<'_>) -> bool {
+            ask.answer(|q: &RowQuery| {
+                (q.0 == UnitBase::Party(0)).then_some(GroupRow {
+                    member: 12,
+                    pet_record: 0,
+                })
+            }) || ask.answer(|q: &MemberQuery| {
+                Some(Membership {
+                    party: q.0 == 12,
+                    raid: false,
+                    rank: None,
+                })
+            })
+        }
+    }
+    let mut s = script();
+    push_catalog(&mut s);
+    s.set_unit_guids(&crate::script::UnitGuids {
+        player: 1,
+        party: [10, 0, 0, 0],
+        ..Default::default()
+    });
+    s.set_world_map_feed(
+        Some((1, 2)),
+        Some((0.25, 0.75)),
+        0.0,
+        None,
+        vec![(10, Some((0.1, 0.2))), (12, Some((0.6, 0.7)))],
+        Vec::new(),
+    );
+    let (x, y) = s.hosted(&mut Roster, |s| {
+        s.eval::<(f64, f64)>(r#"return GetPlayerMapPosition("party1")"#)
+            .unwrap()
+    });
+    assert!((x - 0.6).abs() < 1e-6 && (y - 0.7).abs() < 1e-6, "{x},{y}");
 }
 
 /// The engine moves the selection with no Lua in the loop: the reference's second writer of

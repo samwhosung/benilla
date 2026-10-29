@@ -440,11 +440,6 @@ impl super::UiScript {
         self.model_ref().pushed_unit(token).cloned()
     }
 
-    /// The unit-token resolver's inputs as last pushed ([`Self::set_unit_guids`]).
-    pub fn unit_guids_view(&self) -> UnitGuids {
-        self.model_ref().unit_guids.clone()
-    }
-
     /// Push the player's copper (`PLAYER_FIELD_COINAGE`), read by `GetMoney`.
     pub fn set_money(&mut self, copper: u64) {
         self.model_mut().money = copper;

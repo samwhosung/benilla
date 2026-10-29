@@ -103,15 +103,20 @@ pub(super) fn publish(lua: &Lua, guid: Option<u64>) -> bool {
         }
         let prev = std::mem::replace(&mut model.world_mouseover, guid);
         // The token resolver reads the pair (`0x515970`), so `"mouseover"` names a unit only while
-        // it is the published guid; the app pushes the new unit after the publish.
+        // it is the published guid; the app pushes the new unit after the publish. The old unit's
+        // stand-in entry goes with it, unless the target still names it.
         if model
             .pushed_unit("mouseover")
             .is_some_and(|u| Some(u.guid) != guid)
         {
             model.units_by_lower.remove("mouseover");
         }
-        if model.unit_guids.mouseover != 0 && Some(model.unit_guids.mouseover) != guid {
+        let old = model.unit_guids.mouseover;
+        if old != 0 && Some(old) != guid {
             model.unit_guids.mouseover = 0;
+            if old != model.unit_guids.target {
+                model.unit_guids.held.remove(&old);
+            }
         }
         (prev, model.arena.lookup("GameTooltip"))
     };
@@ -159,7 +164,8 @@ impl UiScript {
 
     /// Seat a published unit in the token resolver, held with its `UNIT_FIELD_TARGET`: the
     /// publisher writes the pair (`0x492890`) before it signals (`0x4929b3`), so `"mouseover"`
-    /// names the unit inside its `UPDATE_MOUSEOVER_UNIT`. The app's next token push carries it on.
+    /// names the unit inside its `UPDATE_MOUSEOVER_UNIT`, and it stays the global until the next
+    /// publish.
     pub fn seat_world_mouseover_unit(&mut self, guid: u64, target: u64) {
         let mut model = self.model_mut();
         if model.world_mouseover == Some(guid) {

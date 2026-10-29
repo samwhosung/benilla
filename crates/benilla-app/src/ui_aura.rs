@@ -1,13 +1,15 @@
 //! The auras: the `UNIT_FIELD_AURA` blocks of the player and of every unit a token can name as
-//! the ordered [`AuraState`] lists the aura bindings read, with the player's durations, and the
-//! unit-token resolver's inputs the bindings reach them through ([`units`]). The player's buff
-//! cache keeps the reference's insertion order (`0xbc6040`, repacked by `PlayerAuras_Update
-//! 0x4e4170`) and is pushed where it is rebuilt; any other unit's list reads its descriptor by
-//! ascending slot, or, for a group member or pet with no live object, its roster record.
+//! the ordered [`AuraState`] lists the aura bindings read, with the player's durations. The
+//! player's buff cache keeps the reference's insertion order (`0xbc6040`, repacked by
+//! `PlayerAuras_Update 0x4e4170`) and is pushed where it is rebuilt; any other unit's list reads
+//! its descriptor by ascending slot, or, for a group member or pet with no live object, its roster
+//! record.
 //!
 //! A unit's list is one derivation off its slots ([`UnitAuraSource`]), which the lent host's walk
-//! reads as each getter runs ([`AuraLive`]): nothing of a unit's list is pushed.
+//! reads as each getter runs ([`AuraLive`]): nothing of a unit's list is pushed, and the token it
+//! names resolves at the call too.
 
+#[cfg(test)]
 mod units;
 
 use std::collections::HashMap;
@@ -21,8 +23,8 @@ use benilla_protocol::messages::{
 use benilla_ui::script::{AuraListRead, AuraRead, AuraState, TrackingState, UiScript};
 
 use crate::client_state::ClientState;
-use crate::net::{ClientCommand, Guid, GuidIndex, NetCommands, ObjectStore, SelfPlayer};
-use crate::target::{RelUnit, Relations, Selection};
+use crate::net::{ClientCommand, GuidIndex, NetCommands, ObjectStore, SelfPlayer};
+use crate::target::{RelUnit, Relations};
 use crate::ui_action::Spells;
 use crate::ui_unit::UnitFeed;
 
@@ -95,28 +97,16 @@ pub(crate) struct PlayerAuraCache {
     auras: Vec<CachedAura>,
 }
 
-/// [`feed_unit_guids`] seats the unit tokens the field events fan out over, which a feed that
-/// reads the resolver's snapshot runs `.after`.
-#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct UnitGuidPush;
-
-/// Adds the resolver's feed and the session end's teardown of the aura state.
+/// Adds the aura trace and the session end's teardown of the aura state.
 pub(crate) struct UiAuraPlugin;
 
 impl Plugin for UiAuraPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<AuraDurations>()
             .init_resource::<PlayerAuraCache>()
-            .init_resource::<AuraFeedMemory>()
+            .init_resource::<AuraTraceMemory>()
             .init_resource::<benilla_world::frame_pace::FrameStep>()
-            // After this frame's world publish, so the gain names the unit in the same frame.
-            .add_systems(
-                Update,
-                feed_unit_guids
-                    .in_set(UnitFeed)
-                    .in_set(UnitGuidPush)
-                    .after(crate::ui_tooltip::MouseoverPublish),
-            )
+            .add_systems(Update, trace_player_auras.in_set(UnitFeed))
             // Torn down only at the session's end, not with the avatar, which a worldport drops.
             // After the shutdown's `PLAYER_LOGOUT` and before the glue VM goes in.
             .add_systems(
@@ -159,23 +149,14 @@ fn reconcile(cache: &mut Vec<CachedAura>, live: &[UnitAuraSlot], now: f64) {
 /// What a frame repaints on; not the countdown, which the button polls.
 type AuraProjection = (u32, u8, bool, Option<String>);
 
-/// The resolver feed's memory of what each VM holds. Behind a [`crate::ui_script::VmMemo`], so a
-/// `/reload`'s new VM is pushed whole.
+/// What the aura trace remembers ([`trace_player_auras`]).
 #[derive(Resource, Default)]
-struct AuraFeedMemory {
-    /// What this VM was last told.
-    vm: crate::ui_script::VmMemo<AuraFeedMemo>,
+struct AuraTraceMemory {
+    /// The player's projection as last dumped for `BENILLA_AURA_DUMP`, per VM, so a `/reload`'s
+    /// new VM dumps whole.
+    vm: crate::ui_script::VmMemo<Vec<AuraProjection>>,
     /// When [`trace_timers`] last printed: host state, outliving any one VM.
     traced_at: f64,
-}
-
-/// One VM's: the player's projection as last dumped and the resolver's inputs.
-#[derive(Default)]
-struct AuraFeedMemo {
-    /// The player's projection as last dumped, for `BENILLA_AURA_DUMP`.
-    last: Vec<AuraProjection>,
-    /// The resolver's inputs as last pushed.
-    guids: units::UnitGuidFeed,
 }
 
 /// The `BENILLA_AURA_TRACE` period in seconds; a set value that is not a positive number means 1 s.
@@ -675,81 +656,42 @@ fn tracking_state_of(
     })
 }
 
-/// The units the resolver's guid globals name, from `UnitTokens`' own sources; the mouseover is
-/// the VM's published one.
-#[derive(bevy::ecs::system::SystemParam)]
-struct GuidSources<'w> {
-    selection: Res<'w, Selection>,
-    // `Option`: a UI-only harness lacks their plugins; without the party's no group token names
-    // anyone.
-    group: Option<Res<'w, crate::ui_party::GroupState>>,
-    interact: Option<Res<'w, crate::ui_session::InteractNpc>>,
-}
-
-/// The unit-token resolver's inputs ([`benilla_ui::script::UnitGuids`]) as the VM holds them, the
-/// snapshot a getter reads with no host to ask and the app's readers of the held units walk. The
-/// aura getters read the units' slots at the call through the host ([`AuraLive`]), and the
-/// player's buff cache is pushed where it is rebuilt: at the world entry ([`enter_world`]) and in
-/// each aura watcher's run ([`PlayerAuraWatch::run`]).
-fn feed_unit_guids(
-    mut vm: crate::script_calls::VmWith<GuidSources<'static>>,
-    self_q: Query<(&ObjectStore, &Guid), With<SelfPlayer>>,
-    stores: Query<&ObjectStore>,
-    index: Res<GuidIndex>,
-    mut mem: ResMut<AuraFeedMemory>,
+/// The `BENILLA_AURA_TRACE` and `BENILLA_AURA_DUMP` instruments over the player's buff cache: the
+/// timers beside each button's text every period, and the cache on each change. Both read; neither
+/// pushes anything into the VM.
+fn trace_player_auras(
+    script: Option<NonSend<UiScript>>,
+    mut mem: ResMut<AuraTraceMemory>,
     cache: Res<PlayerAuraCache>,
     spells: Option<Res<Spells>>,
     time: Res<Time<Real>>,
 ) {
-    vm.turn(|script, units| {
-        let Some(script) = script else {
-            return;
-        };
-        let mem = &mut *mem;
-        let Ok((store, self_guid)) = self_q.single() else {
-            // No avatar keeps the last inputs: a worldport re-streams the avatar mid-session.
-            return;
-        };
-        let bevy_now = time.elapsed_secs_f64();
-        let catalog = spells.as_ref().map(|s| &s.catalog);
-        if let Some(period) = trace_period() {
-            if bevy_now - mem.traced_at >= period {
-                mem.traced_at = bevy_now;
-                let list =
-                    player_list(&cache.auras, catalog, spells.as_ref().map(|s| &s.durations));
-                trace_timers(script, &cache.auras, &list, bevy_now);
-            }
+    let Some(script) = script else {
+        return;
+    };
+    let dump = std::env::var_os("BENILLA_AURA_DUMP").is_some();
+    let period = trace_period();
+    if !dump && period.is_none() {
+        return;
+    }
+    let mem = &mut *mem;
+    let bevy_now = time.elapsed_secs_f64();
+    let catalog = spells.as_ref().map(|s| &s.catalog);
+    let list = || player_list(&cache.auras, catalog, spells.as_ref().map(|s| &s.durations));
+    if let Some(period) = period {
+        if bevy_now - mem.traced_at >= period {
+            mem.traced_at = bevy_now;
+            trace_timers(&script, &cache.auras, &list(), bevy_now);
         }
-        let memo = mem.vm.get(script);
-        if std::env::var_os("BENILLA_AURA_DUMP").is_some() {
-            let list = player_list(&cache.auras, catalog, spells.as_ref().map(|s| &s.durations));
-            let projection = projection_of(&list);
-            if projection != memo.last {
-                dump_cache(&cache.auras, catalog);
-            }
-            memo.last = projection;
+    }
+    if dump {
+        let last = mem.vm.get(&script);
+        let projection = projection_of(&list());
+        if projection != *last {
+            dump_cache(&cache.auras, catalog);
         }
-        let held = |guid: u64| index.0.get(&guid).and_then(|&e| stores.get(e).ok());
-        // The resolver reads the published pair `[0xb4e2c8]` (`0x515bb6`, `0x515bdb`), not the
-        // pick, and takes it only as a unit (`0x515bca mov ecx,8`, `0x515bd9 je`): a GameObject, a
-        // corpse or nothing names nobody.
-        let mouseover = script
-            .world_mouseover()
-            .filter(|&guid| held(guid).is_some_and(|s| s.is_unit()))
-            .unwrap_or(0);
-        memo.guids.feed(
-            script,
-            units::Inputs {
-                group: units.group.as_deref(),
-                me: self_guid.0,
-                pet: crate::ui_unit::pet_token_guid(Some(store)),
-                target: units.selection.guid.unwrap_or(0),
-                mouseover,
-                npc: units.interact.as_deref().and_then(|i| i.1).unwrap_or(0),
-                held,
-            },
-        );
-    })
+        *last = projection;
+    }
 }
 
 /// `BENILLA_AURA_DUMP`'s print of the player's cache, on a change.
@@ -1054,14 +996,6 @@ impl AuraLive<'_, '_> {
     }
 }
 
-/// [`feed_unit_guids`] once, for a test that drives the feeds by hand.
-#[cfg(test)]
-pub(crate) fn run_feed_unit_guids_once(world: &mut World) {
-    world
-        .run_system_cached(feed_unit_guids)
-        .expect("the resolver's feed runs as a one-shot system");
-}
-
 /// Joins a slot's stamp to the aura in that slot as `(duration, expirationTime)` on the script
 /// clock, `(0, 0)` for none. The reference's reader (`0x4e4450`) returns `expiry - now` for the
 /// slot with no freshness test, so a stamp from before its aura joins it: a login's durations go
@@ -1087,7 +1021,7 @@ fn end_session_aura_state(
             script.set_tracking(None);
         }
         cache.auras.clear();
-        // No `AuraFeedMemory` reset: its edge keys die with the VM.
+        // No `AuraTraceMemory` reset: its edge keys die with the VM.
     })
 }
 
@@ -1274,7 +1208,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
             .insert_state(ClientState::InWorld)
-            .init_resource::<Selection>()
+            .init_resource::<crate::target::Selection>()
             .init_resource::<crate::ui_pet::PetBar>()
             .init_resource::<GuidIndex>()
             // A required system parameter, unlike `Factions`.

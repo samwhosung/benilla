@@ -1,10 +1,9 @@
 //! The interface events of the field watches and the packet handlers that signal unit events
 //! ([`crate::field_watch`]): the notice lane, whose notices fire their callbacks' signals in the
 //! packets' order among the other lanes ([`crate::lanes`]), after every snapshot those events'
-//! handlers read is pushed ([`FieldEventPushes`]) and the unit tokens are seated
-//! ([`crate::ui_aura::UnitGuidPush`]), as the update handler's notify pass follows its two write
-//! passes over every block of the packet (`0x465277` after `0x46520e`, `0x465222`). The unit
-//! tokens' views the drain then steps back to each packet's state ([`super::views`]).
+//! handlers read is pushed ([`FieldEventPushes`]), as the update handler's notify pass follows its
+//! two write passes over every block of the packet (`0x465277` after `0x46520e`, `0x465222`). The
+//! unit tokens' views the drain then steps back to each packet's state ([`super::views`]).
 
 use bevy::prelude::*;
 

@@ -391,7 +391,7 @@ pub(crate) struct Model {
     /// Every unit's auras by guid, the player's too, ascending aura slot: one list per unit,
     /// whatever token names it.
     pub(crate) unit_auras: HashMap<u64, super::UnitAuraList>,
-    /// The unit-token resolver's inputs (`0x515970`), which the aura bindings resolve through.
+    /// The unit-token resolver's no-host stand-in and its mouseover global (`0x515970`).
     pub(crate) unit_guids: super::UnitGuids,
     /// The player's active tracking aura, behind `GetTrackingTexture`.
     pub(crate) tracking: Option<super::aura::TrackingState>,
@@ -1228,7 +1228,7 @@ impl Model {
 
     /// The state of the unit `token` names off the snapshots alone: the snapshot the app pushed
     /// under the token, else, for a token with a `target` hop or for `target` itself, what the
-    /// getters read for the guid the pushed resolver inputs name. A getter reads it through
+    /// getters read for the guid the resolver's stand-in names. A getter reads it through
     /// [`super::unit::view`], which resolves at the call.
     pub(crate) fn snapshot_unit(&self, token: &str) -> Option<&UnitState> {
         self.pushed_unit(token).or_else(|| self.chained_unit(token))

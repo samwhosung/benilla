@@ -270,7 +270,11 @@ fn party_blips_sit_at_their_map_positions_and_hide_when_absent() {
         Some((0.5, 0.5)),
         0.0,
         None,
-        vec![Some((0.25, 0.75)), None, Some((0.5, 0.125))],
+        vec![
+            (0x11, Some((0.25, 0.75))),
+            (0x12, None),
+            (0x13, Some((0.5, 0.125))),
+        ],
         Vec::new(),
     );
     update(&mut s);

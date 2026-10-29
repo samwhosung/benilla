@@ -241,7 +241,8 @@ impl super::UiScript {
         model.unit_auras.clear();
     }
 
-    /// Push the unit-token resolver's inputs, copied only when they moved.
+    /// Set the unit-token resolver's no-host stand-in ([`super::UnitGuids`]) whole, copied only
+    /// when it moved: a harness's units, or the session end's clear.
     pub fn set_unit_guids(&mut self, guids: &super::UnitGuids) {
         let mut model = self.model_mut();
         if model.unit_guids != *guids {
@@ -249,8 +250,8 @@ impl super::UiScript {
         }
     }
 
-    /// Seat the player's own guid in the unit-token resolver ahead of a full
-    /// [`Self::set_unit_guids`] push, so `"player"` names us from the world-enter cascade on.
+    /// Seat the player's own guid in the unit-token resolver's stand-in at the world entry, so
+    /// `"player"` names us from the world-enter cascade on with no host to ask too.
     pub fn seat_player_guid(&mut self, guid: u64) {
         let mut model = self.model_mut();
         if model.unit_guids.player != guid {

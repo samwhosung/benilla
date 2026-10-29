@@ -293,10 +293,11 @@ pub struct WorldMapState {
     /// The arrow frames' wrapper ids, built once per session; `None` until created.
     pub arrow_world: Option<u32>,
     pub arrow_mini: Option<u32>,
-    /// `party1`..`party4` in `party_slots` order; `None` or missing answers `(0, 0)`.
-    pub party_uv: Vec<Option<(f32, f32)>>,
-    /// `raid1`..`raid40` in roster order, fed like [`Self::party_uv`].
-    pub raid_uv: Vec<Option<(f32, f32)>>,
+    /// Each party slot's member by guid with its position, as the frame's projection left it;
+    /// `None` or missing answers `(0, 0)`.
+    pub party_uv: Vec<(u64, Option<(f32, f32)>)>,
+    /// Each raid row's member by guid, fed like [`Self::party_uv`].
+    pub raid_uv: Vec<(u64, Option<(f32, f32)>)>,
     /// Radians, 0 north, counterclockwise-positive; `UpdateWorldMapArrowFrames` turns the arrows.
     pub player_facing: f32,
     /// `GetCorpseMapPosition()` on the displayed map; `None` is no corpse or off the map.
@@ -638,8 +639,8 @@ impl super::UiScript {
         player_uv: Option<(f32, f32)>,
         player_facing: f32,
         corpse_uv: Option<(f32, f32)>,
-        party_uv: Vec<Option<(f32, f32)>>,
-        raid_uv: Vec<Option<(f32, f32)>>,
+        party_uv: Vec<(u64, Option<(f32, f32)>)>,
+        raid_uv: Vec<(u64, Option<(f32, f32)>)>,
     ) {
         let mut model = self.model_mut();
         model.worldmap.player_zone = player_zone;
@@ -960,8 +961,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // GetPlayerMapPosition(unit) → map UV, or (0, 0) off the map (`0x4a8610`): a string or number
     // else the usage line (`0x4a861e`, `0x4a8627`), the token's guid through `GetGUIDFromName`
     // (`0x4a8658` → `0x515970`: any case, the `target` hops, "Unknown unit name" raised), and the
-    // position by guid only for the player (`0x4a8668`), a party member (`0x4a8675`) or a raid
-    // member (`0x4a8681`); anyone else leaves (0, 0).
+    // position by guid (`0x4a8698` → `0x4a7870`) only for the player (`0x4a8668`), a party member
+    // (`0x4a8675` → `0x4e7f70`) or a raid member (`0x4a8681` → `0x4baee0`), each tested at the call
+    // through the lent host; anyone else leaves (0, 0).
     g.set(
         "GetPlayerMapPosition",
         lua.create_function(|lua, unit: Value| {
@@ -970,18 +972,21 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let guid = crate::script::unit::guid_of(lua, &model, &token)?.unwrap_or(0);
             let (guids, wm) = (&model.unit_guids, &model.worldmap);
-            let at = |members: &[u64], uv: &[Option<(f32, f32)>]| {
-                members
-                    .iter()
-                    .position(|g| *g == guid)
-                    .and_then(|n| uv.get(n).copied().flatten())
+            let member = || match crate::script::roster_read::live_membership(lua, guid) {
+                Some(m) => m.party || m.raid,
+                None => guids.party.contains(&guid) || guids.raid.contains(&guid),
+            };
+            let at = |uv: &[(u64, Option<(f32, f32)>)]| {
+                uv.iter().find(|(g, _)| *g == guid).and_then(|(_, uv)| *uv)
             };
             let (x, y) = if guid == 0 {
                 None
             } else if guid == guids.player {
                 wm.player_uv
+            } else if member() {
+                at(&wm.party_uv).or_else(|| at(&wm.raid_uv))
             } else {
-                at(&guids.party, &wm.party_uv).or_else(|| at(&guids.raid, &wm.raid_uv))
+                None
             }
             .unwrap_or((0.0, 0.0));
             Ok((f64::from(x), f64::from(y)))

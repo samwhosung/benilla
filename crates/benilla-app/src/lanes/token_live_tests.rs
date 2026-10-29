@@ -2,9 +2,9 @@
 //! lent host: the active player's object (`0x51598d`), our pet off our `UNIT_FIELD_CHARM` else
 //! `UNIT_FIELD_SUMMON` (`0x515a5e`-`0x515a6e`), a group member's pet off the member's descriptor
 //! (`0x4e8204`, `0x491993`), the mouseover's object (`0x515bd2`), and each `target` hop off the
-//! held unit's `UNIT_FIELD_TARGET` (`0x515a1c`-`0x515a25`). The live answer and the frame's
-//! snapshot agree on every token form wherever the snapshot is current, and a listener resolves a
-//! chain as its own packet left it.
+//! held unit's `UNIT_FIELD_TARGET` (`0x515a1c`-`0x515a25`). A listener resolves a chain, and the
+//! verbs that take a token resolve it, as its own packet left them, with no copy pushed ahead of
+//! the drain.
 
 use benilla_protocol::field::{FIELD_UNIT_HEALTH, FIELD_UNIT_MAXHEALTH};
 use benilla_protocol::messages::{member_status, GroupMemberEntry, PartyMemberStatsInfo};
@@ -96,7 +96,7 @@ const GETTERS: &str = "
 struct Client {
     app: App,
     inbound: Sender<SessionEvent>,
-    _sent: Receiver<ClientCommand>,
+    sent: Receiver<ClientCommand>,
 }
 
 impl Client {
@@ -163,6 +163,26 @@ fn unit(hp: u32, extra: &[(u16, u32)]) -> Vec<(u16, u32)> {
 /// `UNIT_FIELD_SUMMON` naming `guid`.
 fn summons(guid: u64) -> [(u16, u32); 2] {
     [(SUMMON, guid as u32), (SUMMON + 1, (guid >> 32) as u32)]
+}
+
+/// `SMSG_GROUP_LIST` for a raid of us, leading, and `members` in our subgroup, in that order: the
+/// party slots and the raid rows.
+fn raid_of(members: &[u64]) -> SessionEvent {
+    SessionEvent::GroupList {
+        group_type: crate::ui_party::GROUPTYPE_RAID,
+        own_flags: 0,
+        members: members
+            .iter()
+            .map(|&guid| GroupMemberEntry {
+                name: if guid == MATE { "Mate" } else { "Far" }.into(),
+                guid,
+                status: member_status::ONLINE,
+                flags: 0,
+            })
+            .collect(),
+        leader: ME,
+        loot: None,
+    }
 }
 
 /// The client in the world as [`ME`] (90 health, some XP) with [`PET`] (70), in a raid with
@@ -235,25 +255,8 @@ fn client() -> Client {
         );
     }
     crate::ui_unit::TestNames::english().insert(&mut app);
-    let mut c = Client {
-        app,
-        inbound,
-        _sent: sent,
-    };
-    let roster = SessionEvent::GroupList {
-        group_type: crate::ui_party::GROUPTYPE_RAID,
-        own_flags: 0,
-        members: [("Mate", MATE), ("Far", FAR)]
-            .map(|(name, guid)| GroupMemberEntry {
-                name: name.into(),
-                guid,
-                status: member_status::ONLINE,
-                flags: 0,
-            })
-            .into(),
-        leader: ME,
-        loot: None,
-    };
+    let mut c = Client { app, inbound, sent };
+    let roster = raid_of(&[MATE, FAR]);
     let far = SessionEvent::PartyMemberStats {
         guid: FAR,
         full: true,
@@ -505,6 +508,59 @@ fn a_chunk_that_targets_resolves_the_new_targets_target() {
         "TargetUnit('party1') return UnitHealth('targettargettarget')",
     );
     assert_eq!(wolf, 80, "we target the wolf");
+}
+
+/// Two group lists in one frame, the second swapping the party's slots: each list's
+/// `PARTY_MEMBERS_CHANGED` listener trades with `party1` as its own list wrote the slots, as
+/// `InitiateTrade` resolves its token inside the call (`0x48a120` → `0x515970`), not the frame's
+/// last.
+#[test]
+fn a_listeners_trade_goes_to_party1_as_its_own_list_left_it() {
+    let mut c = client();
+    c.eval::<()>(
+        true,
+        r#"local f = CreateFrame("Frame")
+        f:RegisterEvent("PARTY_MEMBERS_CHANGED")
+        f:SetScript("OnEvent", function() InitiateTrade("party1") end)"#,
+    );
+    c.sent.try_iter().for_each(drop);
+    c.frame(vec![
+        vec![raid_of(&[MATE, FAR])],
+        vec![raid_of(&[FAR, MATE])],
+    ]);
+    let mut traded: Vec<u64> = c
+        .sent
+        .try_iter()
+        .filter_map(|cmd| match cmd {
+            ClientCommand::InitiateTrade { target } => Some(target),
+            _ => None,
+        })
+        .collect();
+    traded.dedup();
+    assert_eq!(traded, [MATE, FAR]);
+}
+
+/// Two group lists in one frame, the second dropping [`FAR`], who is out of view: the first list's
+/// listener finds `party2` friendly and cooperative through the verbs' group fallback, which tests
+/// the slots at the call (`0x516961`-`0x516a1d`, `0x516aa1`-`0x516b5c` → `0x491900` → `0x4e80a0`),
+/// and the second's `party2` names nobody.
+#[test]
+fn a_listeners_friend_test_reads_its_own_lists_slots() {
+    let mut c = client();
+    c.eval::<()>(
+        true,
+        r#"Friends = {}
+        local f = CreateFrame("Frame")
+        f:RegisterEvent("PARTY_MEMBERS_CHANGED")
+        f:SetScript("OnEvent", function()
+            table.insert(Friends, tostring(UnitIsFriend("player", "party2")) .. ","
+                .. tostring(UnitCanCooperate("party2", "player")))
+        end)"#,
+    );
+    c.frame(vec![vec![raid_of(&[MATE, FAR])], vec![raid_of(&[MATE])]]);
+    let mut seen: Vec<String> = c.eval(false, "return Friends");
+    seen.dedup();
+    assert_eq!(seen, ["1,1", "nil,nil"]);
 }
 
 /// The resolver's per-call cost with the host lent and off the snapshots: 10k calls of a getter

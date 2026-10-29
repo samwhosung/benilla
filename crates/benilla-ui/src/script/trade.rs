@@ -1134,15 +1134,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "InitiateTrade",
         lua.create_function(|lua, unit: Value| {
             let token = binding_abi::string_arg(lua, unit, "Usage: InitiateTrade(\"unit\")")?;
-            super::unit::check_unit_token(&Some(token.clone()))?;
-            let guid = lua
-                .app_data_ref::<Model>()
-                .expect("model app_data")
-                .unit_guids
-                .resolve(&token)
-                .ok()
-                .flatten()
-                .filter(|&g| g != 0);
+            // The token resolves at the call, as of the place it runs.
+            let guid = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                super::unit::guid_of(lua, &model, &token)?
+            };
             match guid {
                 Some(guid) => submit(lua, TradeCall::Initiate(guid)),
                 None => Ok(()),

@@ -817,15 +817,17 @@ fn feed_world_map(
                 .unwrap_or(map.0);
             project(member_map, px, py).filter(|uv| *uv != (0.0, 0.0))
         };
-        let party_uv: Vec<Option<(f32, f32)>> =
-            group.party_slots().map(|m| member_uv(m.guid)).collect();
+        let party_uv: Vec<(u64, Option<(f32, f32)>)> = group
+            .party_slots()
+            .map(|m| (m.guid, member_uv(m.guid)))
+            .collect();
 
-        // The `raid1..40` blips in the stored rows' order, so `raidN` matches: the members, then
-        // our own row; the stock map skips our own slot by `UnitIsUnit` (`WorldMapFrame.lua:381`).
-        let raid_uv: Vec<Option<(f32, f32)>> = group
+        // The raid rows' members, our own row at our position; the stock map skips our own slot
+        // by `UnitIsUnit` (`WorldMapFrame.lua:381`).
+        let raid_uv: Vec<(u64, Option<(f32, f32)>)> = group
             .raid
             .iter()
-            .map(|row| if row.own { uv } else { member_uv(row.guid) })
+            .map(|row| (row.guid, if row.own { uv } else { member_uv(row.guid) }))
             .collect();
 
         script.set_world_map_feed(

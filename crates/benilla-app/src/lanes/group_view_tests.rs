@@ -226,7 +226,7 @@ fn a_party_pet_replaced_mid_frame_reads_the_old_pet_before_the_swap() {
         .run(r#"function Look(event, unit) return UnitHealth("partypet1") end"#)
         .unwrap();
     frame(&mut app, vec![]);
-    // The resolver's inputs as the feeds push them ahead of the drain: the frame's last pet.
+    // The resolver's stand-in as the frame left it: the frame's last pet.
     let seat_new_pet = |world: &mut World| {
         world
             .non_send_resource_mut::<UiScript>()

@@ -588,12 +588,13 @@ pub(crate) fn feed_targeting_to_input(
         Res<'static, SpellTargeting>,
         crate::ui_unit::UnitTokens<'static, 'static>,
         BindChecks<'static, 'static>,
+        Res<'static, crate::target::Selection>,
     )>,
 ) {
-    vm.turn(|script, (targeting, tokens, checks)| {
+    vm.turn(|script, (targeting, tokens, checks, selection)| {
         if let Some(script) = script {
             script.set_spell_targeting(targeting.active());
-            push_targeting_view(script, &targeting, &checks, &tokens);
+            push_targeting_view(script, &targeting, &checks, &tokens, &selection);
         }
     })
 }
@@ -606,16 +607,18 @@ fn push_targeting_view(
     targeting: &SpellTargeting,
     checks: &BindChecks,
     tokens: &crate::ui_unit::UnitTokens,
+    selection: &crate::target::Selection,
 ) {
     script.set_item_pick_armed(targeting.wants(TargetingWants::Item));
     // `SpellTargetWantsLocation` (`0x6e6320`), which `Minimap:PingLocation` asks (`0x4eee74`).
     script.set_location_pick_armed(targeting.wants(TargetingWants::Location));
     // `SpellCanTargetUnit(unit)`: the VM resolves the token to a guid (`0x6e6d3a`), and
-    // `0x6e6460`'s unit leg answers for that guid. The units to ask are the held ones the
-    // resolver's inputs list, the `target` chains' included.
-    let targetable: Vec<u64> = script
-        .held_unit_guids()
-        .into_iter()
+    // `0x6e6460`'s unit leg answers for that guid. The units to ask are the held ones a token
+    // reaches, the `target` chains' included.
+    let targetable: Vec<u64> = tokens
+        .reach(selection, script.world_mouseover())
+        .held
+        .into_keys()
         .filter(|&guid| {
             tokens
                 .held(guid)
@@ -700,7 +703,13 @@ impl ScriptCursor<'_, '_> {
     /// Push the targeting view into the VM after a script call, inside the call, as the reference's
     /// `SpellIsTargeting` (`0x6e6cd0`) reads the word the call left.
     pub(crate) fn push_view(&self, script: &mut benilla_ui::script::UiScript) {
-        push_targeting_view(script, &self.ladder.ground, &self.checks, &self.tokens);
+        push_targeting_view(
+            script,
+            &self.ladder.ground,
+            &self.checks,
+            &self.tokens,
+            &self.selection,
+        );
     }
 
     /// `SpellTargetUnit(unit)` (`0x6e6d90`). The binding already raised the usage and
@@ -861,8 +870,14 @@ mod tests {
             (114, row(8.0, 35.0)),
         ]));
         world.insert_resource(spells);
-        // `UNIT_FIELD_HEALTH` 100: a store with no health reads dead to `BindTarget`'s gates.
-        let live = || ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(22, 100)]));
+        // `UNIT_FIELD_HEALTH` 100: a store with no health reads dead to `BindTarget`'s gates. A
+        // unit's `OBJECT_FIELD_TYPE`, which the tokens' walk finds it by (`0x468460`, `ecx = 8`).
+        let live = || {
+            ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (2, 0x9),
+                (22, 100),
+            ]))
+        };
         let me = world
             .spawn((SelfPlayer, Guid(ME), GlobalTransform::default(), live()))
             .id();
@@ -897,10 +912,10 @@ mod tests {
         );
     }
 
-    /// What the resolver feed pushes each frame for the units this world holds, us and the
-    /// selection: the resolver's inputs, and the object manager's index of them.
-    /// `SpellCanTargetUnit` resolves its token through the inputs, and the feed asks the verdict of
-    /// each unit they list.
+    /// The resolver's stand-in for the units this world holds, us and the selection, and the
+    /// object manager's index of them.
+    /// `SpellCanTargetUnit` resolves its token through it, and the feed asks the verdict of each
+    /// unit a token reaches.
     fn publish_guids(world: &mut World) {
         let me = world
             .query_filtered::<Entity, With<SelfPlayer>>()
@@ -1156,7 +1171,7 @@ mod tests {
             let mut index = world.resource_mut::<crate::net::GuidIndex>();
             index.0.insert(PET, pet);
             arm(&mut world, HEAL, 0x0002);
-            // The index of us and the ally, then the resolver feed's inputs with the chain's units:
+            // The index of us and the ally, then the resolver's stand-in with the chain's units:
             // each held unit and the target it names.
             publish_guids(&mut world);
             world.non_send_resource_mut::<UiScript>().set_unit_guids(
@@ -1341,7 +1356,9 @@ mod tests {
             } else {
                 (ally, ALLY, "target")
             };
-            let store = ObjectStore(ObjectFields::from_pairs(&fields));
+            // A unit, as the tokens' walk finds it (`OBJECT_FIELD_TYPE`).
+            let mut store = ObjectStore(ObjectFields::from_pairs(&fields));
+            store.0.merge(ObjectFields::from_pairs(&[(2, 0x9)]));
             world.entity_mut(entity).insert(store.clone());
             let word = cast_target_mask(&make_def());
             let mut spells = world.resource_mut::<crate::ui_action::Spells>();

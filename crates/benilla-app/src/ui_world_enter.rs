@@ -319,8 +319,8 @@ fn tutorial(world: &mut World, id: u32) {
 }
 
 /// `"player"` names us for the sequence's listeners: the stock windows bind their model panes to
-/// it at `PLAYER_ENTERING_WORLD` (`PaperDollFrame.lua:39`), ahead of the resolver feed's full push
-/// (`feed_unit_guids`).
+/// it at `PLAYER_ENTERING_WORLD` (`PaperDollFrame.lua:39`), with no host to ask too: a getter with
+/// one resolves it off the live player.
 fn seat_player(mut vm: crate::script_calls::VmWith<()>, me: Query<&Guid, With<SelfPlayer>>) {
     let Some(me) = me.iter().next().map(|g| g.0) else {
         return;

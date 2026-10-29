@@ -141,7 +141,7 @@ impl super::super::UiScript {
         self.model_mut().unit_relations = relations;
     }
 
-    /// Whether `guid` is the active player's (`0x468550`), as the resolver's inputs hold it.
+    /// Whether `guid` is the active player's (`0x468550`), as the world entry seats it.
     pub fn is_active_player(&self, guid: u64) -> bool {
         guid != 0 && guid == self.model_ref().unit_guids.player
     }
@@ -172,12 +172,25 @@ fn held(rel: &dyn UnitRelations, guid: u64) -> Option<u64> {
     (guid != 0 && rel.holds(guid)).then_some(guid)
 }
 
-/// `0x491900`: a nonzero guid that is the player, his pet, a party member or a party member's pet
-/// (`0x4e80a0`), or a raid member or a raid member's pet (`0x4bafd0`): the player or his pet, else
-/// a group row ([`UnitGuids::roster_token`]). It reads the group tables by guid, so a member out of
-/// view counts.
-fn member_or_pet(guids: &UnitGuids, guid: u64) -> bool {
-    guid != 0 && (guid == guids.player || guid == guids.pet || guids.roster_token(guid).is_some())
+/// `0x491900`: a nonzero guid that is the active player (`0x468550`), his pet off his object's
+/// descriptor (`0x4e80e1`), a party member or a party member's pet (`0x4e80a0`), or a raid member
+/// or a raid member's pet (`0x4bafd0`), each read through the lent host at the call; with no host
+/// to ask, off the stand-in ([`UnitGuids::roster_token`]). It reads the group tables by guid, so a
+/// member out of view counts.
+fn member_or_pet(lua: &Lua, guids: &UnitGuids, guid: u64) -> bool {
+    if guid == 0 {
+        return false;
+    }
+    let pet =
+        super::with_live_objects(lua, |o| o.pet_of(guids.player).unwrap_or(0)).unwrap_or(guids.pet);
+    if guid == guids.player || guid == pet {
+        return true;
+    }
+    let row = |raid| crate::script::roster_read::live_member_or_pet(lua, guid, raid);
+    match (row(false), row(true)) {
+        (Some(party), Some(raid)) => party || raid,
+        _ => guids.roster_token(guid).is_some(),
+    }
 }
 
 /// The two string arguments every relation verb takes, both `lua_isstring`-gated (`0x6f3510`), so a
@@ -228,7 +241,9 @@ fn predicate_or_group(
     .unwrap_or(false);
     let player = |t: &str| t.eq_ignore_ascii_case("player");
     let guids = &model.unit_guids;
-    Ok(hit || player(a) && member_or_pet(guids, gb) || player(b) && member_or_pet(guids, ga))
+    Ok(hit
+        || player(a) && member_or_pet(lua, guids, gb)
+        || player(b) && member_or_pet(lua, guids, ga))
 }
 
 /// `UnitIsPVP(unit)` (`0x516460`): a unit the host holds answers `IsPvP` (`0x5164d1`), so a pet

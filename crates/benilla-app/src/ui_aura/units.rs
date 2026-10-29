@@ -1,107 +1,8 @@
-//! The unit-token resolver's inputs (`0x515970`, [`UnitGuids`]) as the VM holds them: the guid
-//! globals, the group tables, and each held unit a `target` chain can reach. The aura getters
-//! resolve a token through them and read the unit's slots at the call ([`super::AuraLive`]); the
-//! host's own lookups read them too (the mouseover, the group rows, the pet records, the field
-//! events' fan-out), and the app's readers of the held units (the targeting feed's hover verdict)
-//! walk them.
+//! The aura lists of the units each token names: the player, the group's members and pets, in
+//! view or off their records, the target and the mouseover, and any `target` chain off them, read
+//! through the units the tokens reach ([`crate::ui_unit::reach`]) as the aura getters walk them
+//! ([`super::AuraLive`]).
 
-use benilla_ui::script::{UiScript, UnitGuids};
-
-use crate::net::ObjectStore;
-use crate::ui_party::{raid_row_guids, GroupState};
-
-/// The group tables of [`UnitGuids`]: `party1..4` are the own subgroup's slots and `partypetN`
-/// their pets (`0x4e81d0`); `raidN` is `GetRaidRosterInfo` row N, as every other raid-token reader
-/// resolves it, and `raidpetN` that row's pet (`0x491960`).
-fn fill_group<'a>(
-    g: &mut UnitGuids,
-    group: Option<&GroupState>,
-    held: impl Fn(u64) -> Option<&'a ObjectStore>,
-) {
-    g.party = [0; 4];
-    g.party_pets = [0; 4];
-    g.raid.clear();
-    g.raid_pets.clear();
-    let Some(group) = group else {
-        return;
-    };
-    let live = |m: u64| held(m).map(|s| &s.0);
-    for (i, m) in group.party_slots().take(4).enumerate() {
-        g.party[i] = m.guid;
-        g.party_pets[i] = group.party_pet_guid(m.guid, live(m.guid)).unwrap_or(0);
-    }
-    g.raid = raid_row_guids(group);
-    g.raid_pets.extend(
-        g.raid
-            .iter()
-            .map(|&m| group.raid_pet_guid(m, live(m)).unwrap_or(0)),
-    );
-}
-
-/// What [`UnitGuidFeed::feed`] reads this frame.
-pub(super) struct Inputs<'g, H> {
-    pub(super) group: Option<&'g GroupState>,
-    /// Our guid.
-    pub(super) me: u64,
-    /// `pet`, `target`, `mouseover` and `npc`'s guids, 0 for none.
-    pub(super) pet: u64,
-    pub(super) target: u64,
-    pub(super) mouseover: u64,
-    pub(super) npc: u64,
-    /// The object manager's lookup (`0x468460`).
-    pub(super) held: H,
-}
-
-/// The resolver's inputs as last built, for one VM.
-#[derive(Default)]
-pub(super) struct UnitGuidFeed {
-    guids: UnitGuids,
-    /// Kept to save the allocations: the walk over the guids a token can name.
-    walk: Vec<u64>,
-}
-
-impl UnitGuidFeed {
-    /// Build the resolver's inputs and push them: the bases, the group tables, then each held
-    /// unit their `target` chains reach. Pushing fires nothing.
-    pub(super) fn feed<'a, H>(&mut self, script: &mut UiScript, inputs: Inputs<'_, H>)
-    where
-        H: Fn(u64) -> Option<&'a ObjectStore>,
-    {
-        let Inputs {
-            group,
-            me,
-            pet,
-            target,
-            mouseover,
-            npc,
-            held,
-        } = inputs;
-        let mut g = std::mem::take(&mut self.guids);
-        let mut walk = std::mem::take(&mut self.walk);
-        (g.player, g.pet, g.target, g.mouseover, g.npc) = (me, pet, target, mouseover, npc);
-        fill_group(&mut g, group, &held);
-        g.held.clear();
-        walk.clear();
-        walk.extend([me, pet, target, mouseover, npc]);
-        walk.extend(g.party.iter().chain(&g.party_pets).copied());
-        walk.extend(g.raid.iter().chain(&g.raid_pets).copied());
-        while let Some(guid) = walk.pop() {
-            if guid == 0 || g.held.contains_key(&guid) {
-                continue;
-            }
-            if let Some(unit) = held(guid).filter(|s| s.is_unit()) {
-                let next = unit.0.unit_target().unwrap_or(0);
-                g.held.insert(guid, next);
-                walk.push(next);
-            }
-        }
-        script.set_unit_guids(&g);
-        self.guids = g;
-        self.walk = walk;
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use benilla_protocol::messages::{
         member_status, GroupMemberEntry, ObjectFields, PartyMemberStatsInfo,
@@ -122,8 +23,7 @@ mod tests {
     /// `UNIT_FIELD_FLAGS`; bit 27 is `UNIT_FLAG_AURAS_VISIBLE`, which opens `UnitBuff`'s gate.
     const FLAGS: u16 = 46;
 
-    /// The resolver's feed on a bare app with a VM, us, and a party of one, `MEMBER`, with no
-    /// record.
+    /// The aura plugin on a bare app with a VM, us, and a party of one, `MEMBER`, with no record.
     fn party_app() -> App {
         let (tx, _) = crossbeam_channel::unbounded();
         let mut app = App::new();
@@ -192,16 +92,44 @@ mod tests {
             .apply_stats(guid, full, info);
     }
 
-    /// The list of the unit `token` names through the pushed resolver inputs, as the lent host's
-    /// walk reads it at a getter's call ([`super::super::AuraLive`]), its roster record standing
-    /// in for a unit not held.
-    fn list_of(app: &mut App, token: &str) -> Option<benilla_ui::script::UnitAuraList> {
+    /// The guid `token` names off the units the tokens reach now ([`crate::ui_unit::reach`]).
+    fn guid_of(app: &mut App, token: &str) -> Option<u64> {
         use bevy::ecs::system::RunSystemOnce;
-        let guid = app
+        let published = app
             .world()
             .non_send_resource::<UiScript>()
-            .unit_guids_view()
-            .guid_of(token)?;
+            .world_mouseover();
+        let token = token.to_string();
+        app.world_mut()
+            .run_system_once(
+                move |selection: Res<crate::target::Selection>,
+                      group: Option<Res<GroupState>>,
+                      me: Query<(&ObjectStore, &Guid), With<SelfPlayer>>,
+                      index: Res<GuidIndex>,
+                      stores: Query<&ObjectStore>| {
+                    use crate::ui_unit::reach::{mouseover_unit, reach, Inputs};
+                    let held = |guid: u64| index.0.get(&guid).and_then(|&e| stores.get(e).ok());
+                    let (store, me) = me.single().ok()?;
+                    reach(Inputs {
+                        group: group.as_deref(),
+                        me: me.0,
+                        pet: crate::ui_unit::pet_token_guid(Some(store)),
+                        target: selection.guid.unwrap_or(0),
+                        mouseover: mouseover_unit(published, held),
+                        npc: 0,
+                        held,
+                    })
+                    .guid_of(&token)
+                },
+            )
+            .expect("the walk runs as a one-shot system")
+    }
+
+    /// The list of the unit `token` names, as the lent host's walk reads it at a getter's call
+    /// ([`super::super::AuraLive`]), its roster record standing in for a unit not held.
+    fn list_of(app: &mut App, token: &str) -> Option<benilla_ui::script::UnitAuraList> {
+        use bevy::ecs::system::RunSystemOnce;
+        let guid = guid_of(app, token)?;
         app.world_mut()
             .run_system_once(
                 move |views: super::super::AuraViews,
@@ -868,11 +796,11 @@ mod tests {
         );
     }
 
-    /// The feed fires nothing: `UNIT_AURA` is the aura fields' watches and the stats packet's
-    /// record diff (`crate::field_watch`), so neither a record's new block nor a token's first look
-    /// at one reaches a handler from here; the walk reads each record as it stands.
+    /// A frame fires nothing of itself: `UNIT_AURA` is the aura fields' watches and the stats
+    /// packet's record diff (`crate::field_watch`), so neither a record's new block nor a token's
+    /// first look at one reaches a handler from here; the walk reads each record as it stands.
     #[test]
-    fn the_feed_fires_nothing_and_the_walk_reads_each_record_as_it_stands() {
+    fn a_frame_fires_nothing_and_the_walk_reads_each_record_as_it_stands() {
         let mut app = raid_app();
         stats_of(&mut app, MATE, true, online(vec![(32, 589)]));
         stats_of(&mut app, FAR, true, online(vec![(32, 770)]));

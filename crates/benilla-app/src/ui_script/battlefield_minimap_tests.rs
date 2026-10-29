@@ -531,7 +531,7 @@ fn the_battleground_blips_and_the_flag_follow_the_position_family() {
         Some((0.5, 0.25)),
         0.0,
         None,
-        vec![Some((0.1, 0.2)), None],
+        vec![(0x11, Some((0.1, 0.2))), (0x12, None)],
         Vec::new(),
     );
     update(&mut s, 0.1);

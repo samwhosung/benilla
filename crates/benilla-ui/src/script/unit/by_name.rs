@@ -326,6 +326,11 @@ impl super::super::UiScript {
     /// object has no target to read.
     pub fn seat_selection(&mut self, selected: Option<SeatedSelection>) {
         let mut model = self.model_mut();
+        // The old target's stand-in entry goes, unless the mouseover still names it.
+        let old = model.unit_guids.target;
+        if old != 0 && selected.is_none_or(|s| s.guid != old) && old != model.unit_guids.mouseover {
+            model.unit_guids.held.remove(&old);
+        }
         match selected {
             Some(s) if !s.held => model.show_unheld_selection(s.guid),
             _ => {

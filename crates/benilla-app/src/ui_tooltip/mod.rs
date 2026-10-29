@@ -197,8 +197,8 @@ fn go_lock_lines(
 /// A fresh hover's unit, seated where it is published: the publisher writes the mouseover pair
 /// (`0x492890`) before it signals (`0x4929b3`), and `CanInspect` (`0x48a1b0`),
 /// `CheckInteractDistance` (`0x48ba00`) and the slot getters (`0x4c8328`) read the object it names
-/// at once. So the resolver holds it ahead of the frame's token feed; the range verbs measure it
-/// and the slot getters read its visible items through the lent host as they run.
+/// at once. So the resolver holds it from the publish on; the range verbs measure it and the slot
+/// getters read its visible items through the lent host as they run.
 fn seat_fresh_hover(
     script: &mut benilla_ui::script::UiScript,
     guid: u64,
