@@ -338,7 +338,8 @@ impl super::UiScript {
         self.model_mut().player_control = in_control;
     }
 
-    /// Set the player's far-sight bit (`+0x1c70` bit 0), which `HasFullControl` reads.
+    /// Set the player's far-sight bit (`+0x1c70` bit 0), which `HasFullControl` reads with no host
+    /// to ask ([`super::FarSightOnQuery`]).
     pub fn set_far_sight_on(&mut self, on: bool) {
         self.model_mut().far_sight_on = on;
     }

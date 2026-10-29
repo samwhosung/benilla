@@ -3,7 +3,8 @@
 //! ([`benilla_ui::script::HeldCandidatesQuery`]), the six relation verbs' functions over the units
 //! as of the call ([`benilla_ui::script::RelationQuery`]), the range verbs' reach
 //! ([`benilla_ui::script::UnitReachQuery`]), the item use's control exemption
-//! ([`benilla_ui::script::ControlBypassQuery`]) and the language walk
+//! ([`benilla_ui::script::ControlBypassQuery`]), the far-sight bit `HasFullControl` refuses on
+//! ([`benilla_ui::script::FarSightOnQuery`]), the language walk
 //! ([`benilla_ui::script::KnownLanguagesQuery`], [`benilla_ui::script::DefaultLanguageQuery`])
 //! and the zone's faction masks ([`benilla_ui::script::PlayerFactionMasksQuery`]).
 //! Each store reads as of the drain's place ([`super::views::ViewStores`]), as the unit getters'
@@ -14,9 +15,10 @@ use bevy::prelude::*;
 
 use benilla_ui::script::live::LiveAsk;
 use benilla_ui::script::{
-    ControlBypassQuery, DefaultLanguageQuery, HeldCandidatesQuery, KnownLanguagesQuery,
-    LiveCandidate, LiveCandidates, PlayerFactionMasksQuery, RelationQuery, UnitHeld, UnitHeldQuery,
-    UnitReach, UnitReachQuery, UnitRelations, UnitStateAnswer, UnitStateQuery,
+    ControlBypassQuery, DefaultLanguageQuery, FarSightOnQuery, HeldCandidatesQuery,
+    KnownLanguagesQuery, LiveCandidate, LiveCandidates, PlayerFactionMasksQuery, RelationQuery,
+    UnitHeld, UnitHeldQuery, UnitReach, UnitReachQuery, UnitRelations, UnitStateAnswer,
+    UnitStateQuery,
 };
 
 use benilla_ui::script::UnitState;
@@ -61,6 +63,8 @@ pub(crate) struct UnitFeedLive<'w, 's> {
     skill_lines: Option<Res<'w, crate::ui_spellbook::SkillLines>>,
     languages: Option<Res<'w, super::LanguagesRes>>,
     default_languages: Option<Res<'w, super::DefaultLanguagesRes>>,
+    /// The far-sight machine whose bit `HasFullControl` refuses on (`0x51a142`).
+    far_sight: Option<Res<'w, crate::player::FarSight>>,
     state: StateSources<'w, 's>,
 }
 
@@ -436,6 +440,7 @@ impl crate::script_calls::live::LiveFamily for UnitFeedLive<'_, '_> {
             || ask.answer(|q: &RelationQuery| Some(q.answer(&*self)))
             || ask.answer(|q: &UnitReachQuery| Some(self.reach(q.0)))
             || ask.answer(|q: &ControlBypassQuery| Some(self.exempts(q.0)))
+            || ask.answer(|_: &FarSightOnQuery| self.far_sight.as_deref().map(|f| f.on()))
             || ask.answer(|_: &KnownLanguagesQuery| self.known_languages())
             || ask.answer(|_: &DefaultLanguageQuery| self.default_language())
             || ask.answer(|_: &PlayerFactionMasksQuery| Some(self.faction_masks()))

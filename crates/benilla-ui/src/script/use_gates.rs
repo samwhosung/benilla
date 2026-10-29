@@ -55,6 +55,18 @@ impl super::live::LiveQuery for ControlBypassQuery {
     type Answer = bool;
 }
 
+/// The active player's far-sight bit (`+0x1c70` bit 0), which `HasFullControl` refuses on
+/// (`0x51a142`), read where the getter runs: the buff cancel's `UpdateFarSight` (`0x6e70ad` →
+/// `0x5ee290`) and the clear's handler (`0x5e441d`) move it inside their call and packet.
+/// Declined with no far-sight machine, where the seat answers
+/// ([`super::UiScript::set_far_sight_on`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FarSightOnQuery;
+
+impl super::live::LiveQuery for FarSightOnQuery {
+    type Answer = bool;
+}
+
 /// Whether `use_spell` passes the lost-control gate now: the lent host's answer, else the seat
 /// ([`super::UiScript::set_control_bypass`]).
 fn control_bypass(lua: &mlua::Lua, model: &Model, use_spell: u32) -> bool {

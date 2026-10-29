@@ -496,3 +496,35 @@ fn the_pets_happiness_signals_at_its_packet() {
         [FELL, "UNIT_HAPPINESS:pet", FELL, "UNIT_HAPPINESS:pet"]
     );
 }
+
+/// `SMSG_CLEAR_FAR_SIGHT_IMMEDIATE` ends far sight inside its handler (`0x5e441d` → `0x5ee590`),
+/// and `HasFullControl` reads the bit where it runs (`0x51a142`): with no frame after the packet
+/// the getter answers 1 again through the host, where the VM's seat, which nothing pushes, holds
+/// what it was.
+#[test]
+fn has_full_control_reads_the_far_sight_bit_at_the_call() {
+    /// The far-sight object, a unit the index holds.
+    const EYE: u64 = 0xF130_0000_0044_0001;
+    let mut app = client();
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .set_player_control(true);
+    let live = |app: &mut App| {
+        crate::script_calls::with_hosted_vm(app.world_mut(), |s| {
+            s.expect("a VM")
+                .eval::<Option<i64>>("return HasFullControl()")
+                .expect("runs")
+        })
+    };
+    assert_eq!(live(&mut app), Some(1));
+    {
+        let world = app.world_mut();
+        let net = crate::net::NetCommands(world.resource::<crate::net::NetCommands>().0.clone());
+        world
+            .resource::<crate::player::FarSight>()
+            .update(Some(EYE), |_| true, &net);
+    }
+    assert_eq!(live(&mut app), None, "far sight on refuses");
+    crate::net::handlers::dispatch(app.world_mut(), vec![SessionEvent::FarSightCleared]);
+    assert_eq!(live(&mut app), Some(1), "the clear's handler ended it");
+}

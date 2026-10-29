@@ -80,10 +80,7 @@ impl Plugin for UiUnitPlugin {
         .init_resource::<crate::ui_chat::ChatLog>()
         .add_message::<crate::net::WorldportMessage>()
         .init_world_leave_sweep()
-        .add_systems(
-            Update,
-            (warn_sideless_template, feed_far_sight_bit).in_set(UnitFeed),
-        )
+        .add_systems(Update, warn_sideless_template.in_set(UnitFeed))
         // `load_exhaustion_rows` pushes into the VM, so it runs per VM; the rest are one-shots.
         .add_systems(
             Update,
@@ -640,19 +637,6 @@ fn dist_sq(q: Vec3, p: Vec3) -> f64 {
     let dy = f64::from(q.y) - f64::from(p.y);
     let dz = f64::from(q.z) - f64::from(p.z);
     (dz * dz + dx * dx) + dy * dy
-}
-
-/// Seat the far-sight bit `HasFullControl` refuses on (`0x51a142`). Its event,
-/// `PLAYER_FARSIGHT_FOCUS_CHANGED`, is the field watch's (`0x5de0d0`, `crate::field_watch`).
-fn feed_far_sight_bit(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    far_sight: Option<Res<crate::player::FarSight>>,
-) {
-    hosted_vm.run(|script| {
-        if let Some(script) = script {
-            script.set_far_sight_on(far_sight.as_deref().is_some_and(|f| f.on()));
-        }
-    })
 }
 
 /// The client tables [`snapshot`] reads beside a descriptor, as one parameter for the feeders that

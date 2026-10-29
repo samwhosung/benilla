@@ -513,7 +513,7 @@ pub use unit::{
     UnitRelations, UnitState, UnitStateAnswer, UnitStateQuery, UnitTokenGlobals, UnitTokenObjects,
     UnitTokenParse,
 };
-pub use use_gates::ControlBypassQuery;
+pub use use_gates::{ControlBypassQuery, FarSightOnQuery};
 pub use weapon_enchant::WeaponEnchant;
 pub use who_sort::{WhoSortChain, WhoSortKey};
 pub use worldmap::{

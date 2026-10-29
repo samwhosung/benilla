@@ -470,9 +470,10 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "HasFullControl",
         lua.create_function(|lua, ()| {
+            let far_sight = super::super::live::ask(lua, &super::super::FarSightOnQuery);
             let ours = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                model.player_control && !model.far_sight_on
+                model.player_control && !far_sight.unwrap_or(model.far_sight_on)
             };
             let alive = ours
                 && with_object(lua, &Some("player".to_string()), false, |u, o| {

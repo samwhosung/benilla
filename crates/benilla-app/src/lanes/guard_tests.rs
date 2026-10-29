@@ -46,29 +46,10 @@ pub(super) enum Row {
 /// lane, and a row whose queue, feed or system is gone fails as stale.
 pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
     (
-        Row::Queue,
+        Row::HostHeld,
         "::account_data::AccountData",
         "the account-data sections a download replaced, whose readers (the binding sets, the \
          macros, the layout) run again off it; the chat setup's fires on its lane",
-    ),
-    (
-        Row::Queue,
-        "::player::view_subject::FarSight",
-        "the far-sight machine a handler's Lua runs through the host's buff cancel; every feed \
-         that lends the host reads it, and none fires from it",
-    ),
-    (
-        Row::Queue,
-        "::creature_anim::gesture::GestureQueue",
-        "the gestures a chat line or a world click's greeting queues, which `drive_gestures` \
-         plays; every feed that lends the host reads it, as the click's select queues the \
-         greeting's in its call, and none fires from it",
-    ),
-    (
-        Row::Queue,
-        "::ui_logout::SessionPosts",
-        "the exit and the cinematic stop a session verb posts, which nothing the script reads \
-         waits on",
     ),
     (
         Row::HostHeld,
@@ -128,6 +109,11 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // Read through the host by the world click's legs (who we drive, the gathering skills its
     // cursor forks on), and quiet: no feed fires off them.
     "::player::state::MoverLock",
+    // Read through the host by `HasFullControl` (`0x51a142`), and quiet: the clear's handler ends
+    // far sight in place (`0x5e441d`), the buff cancel runs `UpdateFarSight` in its call
+    // (`0x6e70ad`), `PLAYER_FARSIGHT_FOCUS_CHANGED` is the field watch's (`0x5de0d0`), and no feed
+    // fires off it.
+    "::player::view_subject::FarSight",
     // Read, and quiet: the follow's arm reads them in its call (`0x611130` → `0x60fb60`), and the
     // handlers that end an auto-move signal its `AUTOFOLLOW_END` on the notice lane in place
     // (`0x60fb84`).
@@ -370,13 +356,16 @@ pub(super) const BUILT_OUTSIDE_THE_PACKETS_IN_THE_REFERENCE: &[(&str, &[&str], &
 ];
 
 /// The resources the handlers fill through a shared reference, which their declared access shows
-/// as a read: the close counts a window's core adds to and what a session verb posts. The lanes
-/// (the tutorials' and the ui errors' among them) and the host's two other sinks (the message
-/// sounds and the unit edits, which raise no event) are not queues here.
+/// as a read: the account data a download stores and what a session verb posts. One the call host
+/// holds too is every hosted feed's read, so it is host-held, as a queue the host writes is: a
+/// [`Row::HostHeld`] row or a [`HOST_HELD_UNREAD`] entry once a handler apart from the host fills
+/// it. The lanes (the tutorials' and the ui errors' among them) and the host's two other sinks (the
+/// message sounds and the unit edits, which raise no event) are not queues here.
 pub(super) const FILLED_THROUGH_A_READ: &[&str] = &[
     // The account-data sections, which the download's handler stores through `&self`.
     "::account_data::AccountData",
-    // The far-sight machine the call host's buff cancel runs (`0x6e70ad`).
+    // The far-sight machine the clear's handler ends (`0x5e441d`) and the call host's buff cancel
+    // runs (`0x6e70ad`).
     "::player::view_subject::FarSight",
     "::ui_logout::SessionPosts",
     // The gestures a chat line or a world click's greeting plays, which `drive_gestures` takes.
@@ -809,18 +798,27 @@ fn call_host_access(world: &mut World) -> bevy::ecs::query::Access {
         .clone()
 }
 
-/// The resources a handler that does not lend the call host writes: a handler that lends it
-/// holds all the host holds, so its access names the host's state, not what its packet fills.
+/// The resources a handler that does not lend the call host fills: what it writes, and what it
+/// reads of [`FILLED_THROUGH_A_READ`]. A handler that lends the host holds all the host holds, so
+/// its access names the host's state, not what its packet fills.
 fn filled_apart_from_the_host(app: &mut App) -> std::collections::HashSet<ComponentId> {
     let host = call_host_access(app.world_mut());
     let host_writes: Vec<ComponentId> = host.resource_writes().collect();
-    let handlers = app.world().resource::<crate::net::handlers::NetHandlers>();
+    let world = app.world();
+    let handlers = world.resource::<crate::net::handlers::NetHandlers>();
     handlers
         .accesses()
         .iter()
         .map(|(_, a)| a.combined_access())
         .filter(|a| !host_writes.iter().all(|&id| a.has_resource_write(id)))
-        .flat_map(|a| a.resource_writes().collect::<Vec<_>>())
+        .flat_map(|a| {
+            let through_a_read = a
+                .resource_reads()
+                .filter(|id| ends_with_any(&name(world, *id), FILLED_THROUGH_A_READ));
+            a.resource_writes()
+                .chain(through_a_read)
+                .collect::<Vec<_>>()
+        })
         .collect()
 }
 
@@ -1053,7 +1051,6 @@ fn every_handler_queue_a_feed_takes_is_on_a_lane_or_listed() {
                 .iter()
                 .filter(|&&id| Some(id) != vm && !lanes.contains(&id))
                 .filter(|&&id| !is_messages(world, id))
-                .filter(|&&id| !ends_with_any(&self::name(world, id), FILLED_THROUGH_A_READ))
                 .filter(|&&id| host.has_resource_read(id))
                 .filter(|id| filled_apart.contains(id))
                 .map(|&id| self::name(world, id))
@@ -1082,7 +1079,8 @@ fn every_handler_queue_a_feed_takes_is_on_a_lane_or_listed() {
                     let n = self::name(world, id);
                     let through_a_read = ends_with_any(&n, FILLED_THROUGH_A_READ);
                     let takes = if through_a_read {
-                        access.has_resource_read(id)
+                        // One the host holds too is every hosted feed's read: a host-held queue.
+                        access.has_resource_read(id) && !host.has_resource_read(id)
                     } else if is_messages(world, id) {
                         // A reader, not a writer: the host's own messages are pushes.
                         access.has_resource_read(id)
