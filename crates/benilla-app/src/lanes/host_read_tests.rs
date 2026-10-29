@@ -44,8 +44,8 @@ use crate::game_plugins::schedule_tests::{census, type_names_available, SyncPoin
 
 /// The most rows [`super::guard_tests::READS_FRAME_FINAL`] may hold, and the most inputs across
 /// them: each only falls, so lower it when a row or an input goes.
-const FRAME_FINAL_FEEDS: usize = 15;
-const FRAME_FINAL_INPUTS: usize = 133;
+const FRAME_FINAL_FEEDS: usize = 17;
+const FRAME_FINAL_INPUTS: usize = 136;
 
 /// The systems that may run after the dispatch (`apply_net_updates`) and run ahead of the drain
 /// (`fire_in_order`), by a suffix of the system's name, with what each writes of the state a
@@ -193,10 +193,7 @@ fn writers_between(app: &mut App) -> Option<BTreeMap<String, BTreeSet<String>>> 
     // What the handlers and the host fill through a shared reference: a system's read of one is
     // a write, which its access shows as a read.
     let through_a_read = |world: &World, id: ComponentId| {
-        super::guard_tests::ends_with_any(
-            &super::guard_tests::name(world, id),
-            super::guard_tests::FILLED_THROUGH_A_READ,
-        )
+        super::guard_tests::filled_through_a_read(&super::guard_tests::name(world, id)).is_some()
     };
     let handlers = world.resource::<crate::net::handlers::NetHandlers>();
     let mut handler_reads = HashSet::new();
@@ -509,4 +506,33 @@ fn flip_readiness() {
         out += &format!("  {n:>4}  {list}{extra}\n");
     }
     eprint!("{out}");
+}
+
+/// No list here names a system twice, and no row lists an input twice.
+#[test]
+fn no_host_read_list_names_an_entry_twice() {
+    use super::guard_tests::named_twice;
+    let mut twice = Vec::new();
+    for (list, rows) in [
+        (
+            "BETWEEN_THE_DISPATCH_AND_THE_DRAIN",
+            BETWEEN_THE_DISPATCH_AND_THE_DRAIN,
+        ),
+        (
+            "AFTER_THE_PACKETS_IN_THE_REFERENCE",
+            AFTER_THE_PACKETS_IN_THE_REFERENCE,
+        ),
+    ] {
+        twice.extend(named_twice(
+            list,
+            rows.iter().map(|(s, _, _)| s.to_string()),
+        ));
+        for (s, inputs, _) in rows {
+            twice.extend(named_twice(
+                &format!("{list} {s}"),
+                inputs.iter().map(|i| i.to_string()),
+            ));
+        }
+    }
+    assert!(twice.is_empty(), "named twice:\n  {}", twice.join("\n  "));
 }
