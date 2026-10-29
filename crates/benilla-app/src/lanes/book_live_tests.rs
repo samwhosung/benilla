@@ -568,3 +568,84 @@ fn the_respec_question_needs_its_trainer_in_range() {
     assert_eq!(c.seen(), ["CONFIRM_TALENT_WIPE:10000"]);
     assert_eq!(c.eval::<Option<i64>>(true, dist), Some(1));
 }
+
+/// The learn line's strings and a spy for its `CHAT_MSG_SYSTEM`, beside the family's.
+fn hear_learn_lines(c: &mut Client) {
+    c.app
+        .world_mut()
+        .non_send_resource::<UiScript>()
+        .run(
+            r#"
+            ERR_LEARN_SPELL_S = "You have learned a new spell: %s."
+            local g = CreateFrame("Frame")
+            g:RegisterEvent("CHAT_MSG_SYSTEM")
+            g:SetScript("OnEvent", function() table.insert(Seen, event .. ":" .. arg1) end)
+            "#,
+        )
+        .unwrap();
+}
+
+/// The registrar shows a learn's line after its form list's edge (`0x4b2904`) and ahead of the
+/// book's signals (`0x4b29b7`, then `0x4b2b5a`); a rank-up's between its old rank's removal
+/// (`0x4b2f5b` → `0x4b2f3f`) and its new rank's add (`0x4b2f68`).
+#[test]
+fn a_learns_line_falls_between_the_form_list_and_the_book() {
+    let mut c = client();
+    hear_learn_lines(&mut c);
+    c.app
+        .world()
+        .resource::<crate::tutorial::Tutorials>()
+        .lock()
+        .apply_flags(&[0u8; 8]);
+    c.frame(vec![vec![SessionEvent::SpellLearned { spell_id: BEAR }]]);
+    assert_eq!(
+        c.seen(),
+        [
+            "UPDATE_SHAPESHIFT_FORMS:nil",
+            "CHAT_MSG_SYSTEM:You have learned a new spell: Bear Form.",
+            "SPELLS_CHANGED:nil",
+            "LEARNED_SPELL_IN_TAB:1",
+            "TUTORIAL_TRIGGER:40",
+        ]
+    );
+    c.know(KINDLING_1);
+    c.frame(vec![vec![SessionEvent::SpellSuperceded {
+        old_spell_id: KINDLING_1,
+        new_spell_id: KINDLING_2,
+    }]]);
+    assert_eq!(
+        c.seen(),
+        [
+            "SPELLS_CHANGED:nil",
+            "CHAT_MSG_SYSTEM:You have learned a new spell: Kindling (Rank 2).",
+            "SPELLS_CHANGED:nil",
+            "LEARNED_SPELL_IN_TAB:1",
+        ]
+    );
+}
+
+/// A rank-up reaches the registrar ahead of its player test (`0x5e6363`, then `0x5e6385`), so it
+/// shows its line with no player held; a learn joins the initial list and shows none
+/// (`0x5e61fb`).
+#[test]
+fn a_rank_up_shows_its_line_with_no_player_held() {
+    let mut c = client();
+    hear_learn_lines(&mut c);
+    let world = c.app.world_mut();
+    let me = world.resource::<crate::net::GuidIndex>().0[&ME];
+    world.entity_mut(me).remove::<crate::net::SelfPlayer>();
+    c.know(KINDLING_1);
+    c.frame(vec![
+        vec![SessionEvent::SpellLearned {
+            spell_id: FROSTBOLT,
+        }],
+        vec![SessionEvent::SpellSuperceded {
+            old_spell_id: KINDLING_1,
+            new_spell_id: KINDLING_2,
+        }],
+    ]);
+    assert_eq!(
+        c.seen(),
+        ["CHAT_MSG_SYSTEM:You have learned a new spell: Kindling (Rank 2)."]
+    );
+}

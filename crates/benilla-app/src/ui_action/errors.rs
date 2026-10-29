@@ -309,14 +309,21 @@ impl UiErrorKeys {
     }
 }
 
-/// The ui-error lane and its drop at the world's end ([`UiErrorKeys`]): a line still queued, held
-/// under the cover or waiting for the interface, dies with the world's interface, as the
-/// reference's, drawn at once by `0x4945b0`, dies in the UI teardown (`0x490bd0`). One queued
-/// before the in-game interface is up waits for it.
+/// The ui-error lane and its drops ([`UiErrorKeys`]): a line still queued, held under the cover
+/// or waiting for the interface, dies with the world's interface, as the reference's, drawn at
+/// once by `0x4945b0`, dies in the UI teardown (`0x490bd0`). One queued before the in-game
+/// interface is up waits for it. A world session's start drops what is left too: a session that
+/// ends before the world is entered releases its held packets (`net::apply`'s `InboundHold`)
+/// with no world left to clear their lines, and the next session's interface must not show them.
 pub(super) fn add_ui_error_lane(app: &mut App) {
     use crate::lanes::LaneApp;
+    use crate::net::handlers::NetHandlerApp;
     app.init_resource::<UiErrorKeys>()
         .add_lane("ui errors", peek_ui_errors, fire_ui_errors, None)
+        .net_handler(
+            benilla_protocol::SessionEventKind::Connected,
+            drop_on_connect,
+        )
         .add_systems(
             OnExit(crate::client_state::ClientState::InWorld),
             drop_ui_errors.in_set(crate::ui_script::SessionEnd::Clears),
@@ -325,6 +332,13 @@ pub(super) fn add_ui_error_lane(app: &mut App) {
 
 fn drop_ui_errors(errors: Res<UiErrorKeys>) {
     errors.clear();
+}
+
+/// `Connected`: a new world session, which no earlier session's line reaches.
+fn drop_on_connect(In(ev): In<benilla_protocol::SessionEvent>, errors: Res<UiErrorKeys>) {
+    if let benilla_protocol::SessionEvent::Connected { .. } = ev {
+        errors.clear();
+    }
 }
 
 /// Whether the loading cover is up.

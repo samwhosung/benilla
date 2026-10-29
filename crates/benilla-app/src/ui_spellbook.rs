@@ -106,7 +106,8 @@ impl BookSignals<'_, '_> {
     /// The Spellbook's tutorial (`0x4b2ba1`), none of them for a spell the gates keep out of the
     /// book (`0x4b2911`, `0x4b2944`, `0x4b29c4`). The learn's `line` shows between the form edge
     /// and the book's (`0x4b2936`, `0x4b29b7`). With no player held a fresh learn joins the
-    /// initial list, which the arrival learns (`0x5e61fb` → `0x5e621e`), and signals nothing.
+    /// initial list, which the arrival learns (`0x5e61fb` → `0x5e621e`), and signals nothing; a
+    /// rank-up still shows its line.
     pub(crate) fn entered(
         &mut self,
         spell_id: u32,
@@ -116,8 +117,15 @@ impl BookSignals<'_, '_> {
         line: Option<crate::ui_action::UiError>,
     ) {
         let Ok(store) = self.me.single() else {
-            if matches!(how, Learned::Fresh) {
-                actions.initial.push(spell_id);
+            match how {
+                Learned::Fresh => actions.initial.push(spell_id),
+                // A rank-up reaches the registrar ahead of its player test (`0x5e6363` →
+                // `0x4b2f68`, then `0x5e6385`), whose line reads no player (`0x4b29b7`).
+                Learned::Rank { .. } => {
+                    if let Some(line) = line {
+                        self.errors.push(line);
+                    }
+                }
             }
             return;
         };

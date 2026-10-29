@@ -4,7 +4,9 @@
 //! signals: the ticket answer's line ahead of its `UPDATE_TICKET` (`0x5e4504`, `0x5e4527`), the
 //! mount result's (`0x5ec6f3`), the tame failure's (`0x6e6ab4`), the notification's and the area
 //! trigger's (`0x401828`, `0x48f921`), the guild invite's after its popup (`0x5e6f53`,
-//! `0x5e6f65`), and a disband's ahead of the party's end (`0x5e688b`, `0x5e6898`).
+//! `0x5e6f65`), a guild event's ahead of its roster update (`0x5e745f`-`0x5e74c4`), a disband's
+//! ahead of the party's end (`0x5e688b`, `0x5e6898`), and a ready check's ahead of its popup
+//! (`0x4ba51e`, `0x4ba53a`).
 
 use benilla_protocol::field::FIELD_UNIT_HEALTH;
 use benilla_protocol::messages::{member_status, GroupMemberEntry};
@@ -47,14 +49,18 @@ const SPY: &str = r#"
     PETTAME_TOOHIGHLEVEL = "Creature is too high level for you to tame"
     ERR_INVITED_TO_GUILD_SS = "%s invites you to join %s"
     ERR_GROUP_DISBANDED = "Your group has been disbanded."
+    ERR_GUILD_JOIN_S = "%s has joined the guild."
+    ERR_RAID_LEADER_READY_CHECK_START_S = "%s has initiated a ready check."
     local f = CreateFrame("Frame")
     for _, e in ipairs({"UI_ERROR_MESSAGE", "UI_INFO_MESSAGE", "CHAT_MSG_SYSTEM",
             "CHAT_MSG_MONSTER_SAY", "UPDATE_TICKET", "GUILD_INVITE_REQUEST",
-            "PARTY_MEMBERS_CHANGED"}) do
+            "PARTY_MEMBERS_CHANGED", "GUILD_ROSTER_UPDATE", "READY_CHECK"}) do
         f:RegisterEvent(e)
     end
+    local bare = {UPDATE_TICKET = 1, PARTY_MEMBERS_CHANGED = 1, GUILD_ROSTER_UPDATE = 1,
+        READY_CHECK = 1}
     f:SetScript("OnEvent", function()
-        if event == "UPDATE_TICKET" or event == "PARTY_MEMBERS_CHANGED" then
+        if bare[event] then
             table.insert(Seen, event)
         else
             table.insert(Seen, event .. ":" .. tostring(arg1))
@@ -220,20 +226,7 @@ fn a_guild_invite_shows_its_line_after_its_popup() {
 #[test]
 fn a_disband_shows_its_line_ahead_of_the_partys_end() {
     let mut c = client();
-    c.frame(vec![vec![SessionEvent::GroupList {
-        group_type: 0,
-        own_flags: 0,
-        members: vec![GroupMemberEntry {
-            name: "Dorn".into(),
-            guid: MATE,
-            status: member_status::ONLINE,
-            flags: 0,
-        }],
-        leader: ME,
-        loot: None,
-    }]]);
-    c.frame(vec![]);
-    c.seen();
+    grouped(&mut c, ME);
     let seen = between(&mut c, SessionEvent::GroupDestroyed);
     assert_eq!(
         seen.first().map(String::as_str),
@@ -253,5 +246,127 @@ fn a_disband_shows_its_line_ahead_of_the_partys_end() {
         seen.last().map(String::as_str),
         Some("CHAT_MSG_MONSTER_SAY:b"),
         "{seen:?}"
+    );
+}
+
+/// A party of us and Dorn, [`MATE`], led by `leader`, the spy emptied.
+fn grouped(c: &mut Client, leader: u64) {
+    c.frame(vec![vec![SessionEvent::GroupList {
+        group_type: 0,
+        own_flags: 0,
+        members: vec![GroupMemberEntry {
+            name: "Dorn".into(),
+            guid: MATE,
+            status: member_status::ONLINE,
+            flags: 0,
+        }],
+        leader,
+        loot: None,
+    }]]);
+    c.frame(vec![]);
+    c.seen();
+}
+
+/// A guild event's arm shows its line (`0x5e745f`-`0x5e74b7`), then the roster update every arm
+/// but the sign-on pair's ends in (`0x5e74c4`).
+#[test]
+fn a_guild_event_shows_its_line_ahead_of_its_roster_update() {
+    let mut c = client();
+    let joined = SessionEvent::GuildEvent(benilla_protocol::messages::GuildEventNotice {
+        event: benilla_protocol::messages::guild_event::JOINED,
+        params: vec!["Brisca".into()],
+        guid: None,
+    });
+    assert_eq!(
+        between(&mut c, joined),
+        [
+            "CHAT_MSG_MONSTER_SAY:a",
+            "CHAT_MSG_SYSTEM:Brisca has joined the guild.",
+            "GUILD_ROSTER_UPDATE",
+            "CHAT_MSG_MONSTER_SAY:b",
+        ]
+    );
+}
+
+/// A ready check another leads shows the leader's line (`0x4ba51e`), then `READY_CHECK`
+/// (`0x4ba53a`).
+#[test]
+fn a_ready_check_shows_its_line_ahead_of_its_popup() {
+    let mut c = client();
+    grouped(&mut c, MATE);
+    assert_eq!(
+        between(&mut c, SessionEvent::ReadyCheckRequest),
+        [
+            "CHAT_MSG_MONSTER_SAY:a",
+            "CHAT_MSG_SYSTEM:Dorn has initiated a ready check.",
+            "READY_CHECK",
+            "CHAT_MSG_MONSTER_SAY:b",
+        ]
+    );
+}
+
+/// A world session that ends before the world is entered releases what it held behind its entry
+/// load (`net::apply`'s `InboundHold`), its notice's line among them, with no world left to clear
+/// it; the next session's start drops it, so that session's interface never shows it.
+#[test]
+fn a_session_that_ends_before_the_world_leaves_no_line_for_the_next() {
+    let mut app = crate::game_plugins::schedule_tests::headless_client();
+    app.insert_resource(bevy::ecs::error::DefaultErrorHandler(
+        bevy::ecs::error::ignore,
+    ));
+    let (tx, _sent) = crossbeam_channel::unbounded();
+    app.insert_resource(crate::net::NetCommands(tx));
+    let (inbound, rx) = crossbeam_channel::unbounded();
+    app.insert_resource(crate::net::NetEvents::for_test(rx));
+    app.update();
+    let connected = || SessionEvent::Connected {
+        self_guid: ME,
+        name: "Me".into(),
+        billing: Default::default(),
+        tutorial_flags: None,
+        addon_info: None,
+    };
+    for ev in [
+        connected(),
+        SessionEvent::Notification {
+            text: "stale".into(),
+        },
+        SessionEvent::Disconnected {
+            reason: "lost".into(),
+            end: benilla_protocol::SessionEnd::Lost,
+        },
+    ] {
+        inbound.send(ev).unwrap();
+    }
+    app.update();
+    app.update();
+    assert_eq!(
+        app.world()
+            .resource::<crate::ui_action::UiErrorKeys>()
+            .texts()
+            .len(),
+        1,
+        "the released notice is queued, with no world to clear it"
+    );
+
+    inbound.send(connected()).unwrap();
+    app.update();
+    assert!(
+        app.world()
+            .resource::<crate::ui_action::UiErrorKeys>()
+            .texts()
+            .is_empty(),
+        "the next session's start drops it"
+    );
+    // The next session's interface up: its lane fires nothing of the last session's.
+    let script = UiScript::new().expect("a VM");
+    script.run(SPY).unwrap();
+    app.insert_non_send_resource(script);
+    crate::ui_action::fire_ui_error_lane(app.world_mut());
+    let seen: Vec<String> =
+        crate::script_calls::eval_in_vm(app.world(), "local s = Seen Seen = {} return s");
+    assert!(
+        seen.is_empty(),
+        "no stale line in the next session: {seen:?}"
     );
 }
