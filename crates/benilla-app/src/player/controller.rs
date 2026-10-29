@@ -39,7 +39,7 @@ pub(super) fn body_gates(
     self_driven: bool,
     pending: &super::StandPending,
     lock: &super::MoverLock,
-    view_subject: &view_subject::ViewSubject,
+    far_sight: &view_subject::FarSight,
 ) -> BodyGates {
     let (stunned, dead, stand_byte) = store
         .map(|s| {
@@ -56,14 +56,12 @@ pub(super) fn body_gates(
         stand_byte
     };
     // The shared precondition `0x5144e0`, once per tick. Its far-sight conjunct,
-    // `!(IsActivePlayer(mover) && [mover+0x1c70] & 1)`, reads the resolved subject (`0x5ee290`
-    // latches only once resolved) and spares a possessed mover, which sets the same field.
+    // `!(IsActivePlayer(mover) && [mover+0x1c70] & 1)` (`0x514537`, `0x514540`), reads the latch,
+    // not the camera: a field naming an object no longer held puts the camera home and keeps the
+    // bit (`0x5ee324`-`0x5ee360`). It spares a possessed mover, which sets the same field.
     let mover = state::MoverInput {
         dead,
-        view_is_out: state::view_is_out(
-            lock.foreign_mover.is_none(),
-            view_subject.remote.is_some(),
-        ),
+        view_is_out: state::view_is_out(lock.foreign_mover.is_none(), far_sight.on()),
     };
     BodyGates {
         stunned,
@@ -133,7 +131,8 @@ pub(super) fn sample_look(
     gates: (
         Res<InspectMode>,
         Res<crate::bindings::BindingsState>,
-        Res<view_subject::ViewSubject>,
+        // The far-sight latch, the input tick's far-sight term.
+        Res<view_subject::FarSight>,
         Res<scoped_view::ScopedView>,
         // The loading cover blanks input at the source; a gesture in flight is unwound below.
         Res<crate::loading_screen::LoadingScreen>,
@@ -160,7 +159,7 @@ pub(super) fn sample_look(
         return;
     };
     let (mut window, mut cursor_opts) = window.into_inner();
-    let (inspect, binds, view_subject, scoped) = (&gates.0, &gates.1, &gates.2, &gates.3);
+    let (inspect, binds, far_sight, scoped) = (&gates.0, &gates.1, &gates.2, &gates.3);
     let input::LookInput {
         both_buttons,
         follow_command,
@@ -186,7 +185,7 @@ pub(super) fn sample_look(
         gates.6.single().unwrap_or(false),
         &gates.5,
         &lock,
-        view_subject,
+        far_sight,
     );
     // `0x5145e0`: `0x5145b0` and standing; a turn key stands a seated body up instead.
     let mouse_turns_body = mover.mouse_may_turn_body(stunned, stand_state);
@@ -309,6 +308,8 @@ pub(super) fn control(
         Option<Res<crate::chr_classes::ChrClassTable>>,
         // The predicted stand state `[player+0x1d68]`, which the posture verbs write.
         ResMut<super::StandPending>,
+        // The far-sight latch, the input tick's far-sight term.
+        Res<view_subject::FarSight>,
     ),
     mut commands: Commands,
     mut player: ResMut<Player>,
@@ -415,7 +416,7 @@ pub(super) fn control(
             .is_some_and(|(.., embodied)| embodied),
         &speed_capsule.11,
         &world_q.6,
-        view_subject,
+        &speed_capsule.12,
     );
     // `0x5145b0` now, for the key turn; its translate sibling waits for this frame's root edge.
     let may_turn = mover.may_turn(stunned);

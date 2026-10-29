@@ -104,7 +104,7 @@ pub(super) fn press_tick(
     net: Res<NetCommands>,
     gates: (
         ResMut<super::StandPending>,
-        Res<view_subject::ViewSubject>,
+        Res<view_subject::FarSight>,
         Query<Has<Embodied>, With<crate::net::SelfPlayer>>,
         Query<Option<&crate::net::ObjectStore>, With<Embodied>>,
         SelfPosture,
@@ -112,7 +112,7 @@ pub(super) fn press_tick(
     // The loot window's move-start close.
     mut loot: ResMut<crate::ui_loot::LootMoveStart>,
 ) {
-    let (mut pending, view_subject, self_driven, store, me) = gates;
+    let (mut pending, far_sight, self_driven, store, me) = gates;
     let word = input::command_word(&binds, &rig);
     let changed = std::mem::replace(&mut player.input_word, word) != word
         || binds.fired(crate::bindings::Input::ToggleAutoRun);
@@ -138,7 +138,7 @@ pub(super) fn press_tick(
         self_driven.single().unwrap_or(false),
         &pending,
         &lock,
-        &view_subject,
+        &far_sight,
     );
     // `0x514560` and `0x5145b0` as the mover stands before this frame's packets.
     let may_translate = mover.may_translate(player.modes.rooted);

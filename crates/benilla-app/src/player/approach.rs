@@ -794,7 +794,7 @@ mod tests {
             .init_resource::<ButtonInput<MouseButton>>()
             .init_resource::<crate::bindings::BindingsState>()
             .init_resource::<super::super::camera::CameraControl>()
-            .init_resource::<super::super::view_subject::ViewSubject>()
+            .init_resource::<super::super::view_subject::FarSight>()
             .insert_resource(MoveSpeed {
                 value: 7.0,
                 env_override: false,

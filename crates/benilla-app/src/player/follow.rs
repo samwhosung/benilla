@@ -198,8 +198,8 @@ pub(super) struct FollowInput<'w, 's> {
     rig: Res<'w, CameraControl>,
     /// The mover's descriptor block, for the cancel terms that are state: health and stun.
     mover: Query<'w, 's, &'static crate::net::ObjectStore, With<crate::net::Embodied>>,
-    /// What the camera orbits, for the far-sight term; possibly a frame behind its publisher.
-    view_subject: Res<'w, super::view_subject::ViewSubject>,
+    /// The far-sight latch, the input tick's far-sight term (`0x514540`).
+    far_sight: Res<'w, super::view_subject::FarSight>,
     /// Whether we drive our own body.
     lock: Res<'w, super::MoverLock>,
 }
@@ -248,10 +248,7 @@ impl FollowInput<'_, '_> {
         self.mover.single().is_ok_and(|s| {
             super::state::MoverInput {
                 dead: s.0.unit_is_dead(),
-                view_is_out: super::state::view_is_out(
-                    driving_own_body,
-                    self.view_subject.remote.is_some(),
-                ),
+                view_is_out: super::state::view_is_out(driving_own_body, self.far_sight.on()),
             }
             .torn_down(rooted, s.0.unit_flags() & super::UNIT_FLAG_STUNNED != 0)
         })
@@ -383,6 +380,81 @@ pub(super) fn plugin(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Far sight on, its object gone: the render's update (`0x483054` → `0x5ee290`) finds the field
+    /// naming no held object, puts the camera back on the player and returns with the bit still
+    /// set (`0x5ee324`-`0x5ee360`), so the input tick's teardown leg still ends a follow
+    /// (`0x514540`, `0x5146d6`), though the camera is home.
+    #[test]
+    fn a_lost_far_sight_object_still_ends_a_follow() {
+        use super::super::view_subject::{publish_view_subject, FarSight, ViewSubject};
+        use crate::net::{Embodied, NetCommands, ObjectStore, SelfPlayer};
+        /// `PLAYER_FARSIGHT`, the guid's low word.
+        const FARSIGHT: u16 = 712;
+        const EYE: u64 = 0xF130_0000_0000_0043;
+        const LEADER: u64 = 0x52;
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.init_resource::<Time>()
+            .init_resource::<FollowState>()
+            .init_resource::<Player>()
+            .init_resource::<super::super::MoverLock>()
+            .init_resource::<GuidIndex>()
+            .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<crate::bindings::BindingsState>()
+            .init_resource::<CameraControl>()
+            .init_resource::<ViewSubject>()
+            .init_resource::<FarSight>()
+            .insert_resource(NetCommands(tx))
+            .insert_resource(MoveSpeed {
+                value: 7.0,
+                env_override: false,
+            })
+            .add_systems(Update, (publish_view_subject, steer_follow).chain());
+        let world = app.world_mut();
+        world.spawn((
+            SelfPlayer,
+            Embodied,
+            Transform::default(),
+            ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (22, 100),
+                (28, 100),
+                (FARSIGHT, EYE as u32),
+                (FARSIGHT + 1, (EYE >> 32) as u32),
+            ])),
+        ));
+        let eye = world.spawn(Transform::from_xyz(30.0, 0.0, 0.0)).id();
+        let leader = world.spawn(Transform::from_xyz(10.0, 0.0, 0.0)).id();
+        let mut index = world.resource_mut::<GuidIndex>();
+        index.0.insert(EYE, eye);
+        index.0.insert(LEADER, leader);
+        let world = app.world();
+        let index = world.resource::<GuidIndex>();
+        world.resource::<FarSight>().start(
+            Some(EYE),
+            |g| index.0.contains_key(&g),
+            world.resource::<NetCommands>(),
+        );
+        app.world_mut().resource_mut::<GuidIndex>().0.remove(&EYE);
+        app.update();
+        let world = app.world();
+        let far_sight = world.resource::<FarSight>();
+        assert!(far_sight.on() && far_sight.camera().is_none());
+        assert!(
+            world.resource::<ViewSubject>().remote.is_none(),
+            "the camera is home"
+        );
+
+        app.world_mut()
+            .resource_mut::<FollowState>()
+            .start(LEADER, "Leader".into());
+        app.update();
+        assert_eq!(
+            app.world().resource::<FollowState>().guid,
+            None,
+            "the bit still tears the input down"
+        );
+    }
 
     #[test]
     fn the_band_is_three_and_four_point_five_yards_at_normal_speed() {

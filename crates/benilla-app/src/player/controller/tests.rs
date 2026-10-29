@@ -732,6 +732,54 @@ fn following(client: &mut Client) -> bool {
         .is_some()
 }
 
+/// Far sight on, its object gone: the render's update (`0x483054` → `0x5ee290`) finds the field
+/// naming no held object, puts the camera back on the player and returns with the bit still set
+/// (`0x5ee324`-`0x5ee360`), so the input tick's precondition still refuses (`0x514540`): a forward
+/// press starts nothing, though the camera is home.
+#[test]
+fn a_lost_far_sight_object_keeps_the_input_torn_down() {
+    use crate::player::{FarSight, ViewSubject};
+    use benilla_protocol::field::FIELD_UNIT_HEALTH;
+    /// `PLAYER_FARSIGHT`, the guid's low word.
+    const FARSIGHT: u16 = 712;
+    const EYE: u64 = 0xF130_0000_0000_0043;
+    let mut client = Client::standing(Body::Own);
+    let world = client.app.world_mut();
+    let me = world.resource::<GuidIndex>().0[&ME];
+    world.entity_mut(me).insert(crate::net::ObjectStore(
+        benilla_protocol::ObjectFields::from_pairs(&[
+            (FIELD_UNIT_HEALTH, 100),
+            (FARSIGHT, EYE as u32),
+            (FARSIGHT + 1, (EYE >> 32) as u32),
+        ]),
+    ));
+    let eye = world.spawn(Transform::from_xyz(30.0, 0.0, 0.0)).id();
+    world.resource_mut::<GuidIndex>().0.insert(EYE, eye);
+    let index = world.resource::<GuidIndex>();
+    world.resource::<FarSight>().start(
+        Some(EYE),
+        |g| index.0.contains_key(&g),
+        world.resource::<NetCommands>(),
+    );
+    world.resource_mut::<GuidIndex>().0.remove(&EYE);
+    world
+        .run_system_once(super::super::view_subject::publish_view_subject)
+        .expect("the render's update runs");
+    let far_sight = world.resource::<FarSight>();
+    assert!(far_sight.on() && far_sight.camera().is_none());
+    assert!(
+        world.resource::<ViewSubject>().remote.is_none(),
+        "the camera is home"
+    );
+    let sent = client.traced(vec![], forward(), |_| {});
+    assert!(
+        !sent
+            .iter()
+            .any(|(_, s)| matches!(s, Sent::Move(crate::net::MoveKind::StartForward, _))),
+        "{sent:?}"
+    );
+}
+
 /// A stun that lands before its root: the stun's tick finds the mover free to translate, and the
 /// root's ack runs the tick again (`0x60e33d` → `0x60e347`), which now takes the teardown leg
 /// (`0x5146d6`): the follow ends and autorun clears at the ack.
