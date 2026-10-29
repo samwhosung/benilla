@@ -1,6 +1,6 @@
 //! The action bar's feed: the engine's own by-key refusals (the handlers' and the verbs' fire from
 //! their lane, [`super::UiErrorKeys`]; a refused cast's line rides the cast's reports,
-//! [`crate::ui_cast`]), and a new VM's copy of the bar ([`super::ActionStates::seed`]). The slots'
+//! [`crate::ui_cast`]), and a `/reload`'s VM's copy of the bar ([`seed_reloaded_vm`]). The slots'
 //! icons, counts and consumable tests are read at the call through the host
 //! ([`super::ActionStates`]); the VM's copy is written where the bar is: our player's arrival
 //! ([`super::recount::arrival_slot_pass`]), the verbs in their calls, the spell packets' clears
@@ -31,14 +31,12 @@ pub(crate) fn bonus_bar_offset(store: Option<&ObjectStore>, spells: Option<&Spel
         .unwrap_or(0) as u8
 }
 
-pub(super) fn feed_actions(
-    mut vm: crate::script_calls::VmWith<()>,
-    mut seeded: Local<crate::ui_script::VmMemo<bool>>,
-    mut sink: MessageSink,
-) {
+pub(super) fn feed_actions(mut vm: crate::script_calls::VmWith<()>, mut sink: MessageSink) {
     // The engine's refusals, with the host lent: `UI_ERROR_MESSAGE`'s handlers may make calls.
-    let fresh = vm.run(|script| {
-        let script = script?;
+    vm.run(|script| {
+        let Some(script) = script else {
+            return;
+        };
         // The engine's own by-key refusals (`ERR_PASSIVE_ABILITY`): `benilla_ui` cannot reach
         // [`super::UiErrorKeys`], so it queues keys that show here, one frame late.
         let engine_keys = script.take_ui_errors_with_input();
@@ -51,12 +49,23 @@ pub(super) fn feed_actions(
             })
             .collect();
         show_messages(script, &mut sink, "ui_action", engine_lines);
-        Some(seeded.claim(script))
     });
-    // A new VM's copy of the bar, its counts and its states, as a `/reload`'s interface finds the
-    // bar it left (`0x4e4f50` runs only at the game entry).
-    if fresh == Some(true) {
-        vm.engine_seed_action_slots();
+}
+
+/// A `/reload`'s VM seeded with the bar before its first file runs, its counts and its states,
+/// with nothing signalled: the bar and its tables outlive the interface (`0x4e4f50` runs only at
+/// the game entry, `0x48f5a4`), so the new interface's `OnLoad`, `ADDON_LOADED` and
+/// `VARIABLES_LOADED` handlers read the bar it left ([`super::ActionStates::seed`]).
+pub(crate) fn seed_reloaded_vm(world: &mut World, script: &mut benilla_ui::script::UiScript) {
+    let seeded = world.run_system_cached_with(
+        |bevy::ecs::system::InMut(script): bevy::ecs::system::InMut<
+            benilla_ui::script::UiScript,
+        >,
+         mut states: super::ActionStates| states.seed(script),
+        script,
+    );
+    if let Err(e) = seeded {
+        debug!("ui_action: the reload's VM is not seeded with the bar: {e}");
     }
 }
 

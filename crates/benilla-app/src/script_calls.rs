@@ -357,14 +357,6 @@ impl ScriptCallHost<'_, '_> {
         }
     }
 
-    /// A new VM's copy of the bar, its counts and its states, with nothing signalled
-    /// ([`crate::ui_action::ActionStates::seed`]).
-    pub(crate) fn engine_seed_action_slots(&mut self, script: &mut UiScript) {
-        if let Some(states) = self.appliers.action_states().as_mut() {
-            states.seed(script);
-        }
-    }
-
     /// `0x4e6d20(entry)`, a recount's one count of its entry (`0x4e5c75`); `None` in a harness
     /// without the action feed's inputs.
     pub(crate) fn engine_item_count(&mut self, entry: u32) -> Option<u32> {
@@ -1371,15 +1363,6 @@ impl<P: SystemParam + 'static> VmWith<'_, '_, P> {
         if let Some(script) = self.script.as_deref_mut() {
             if let Some(host) = self.set.p1().as_mut() {
                 host.engine_arrival_slots(script);
-            }
-        }
-    }
-
-    /// A new VM's seed of the bar with the host ([`ScriptCallHost::engine_seed_action_slots`]).
-    pub(crate) fn engine_seed_action_slots(&mut self) {
-        if let Some(script) = self.script.as_deref_mut() {
-            if let Some(host) = self.set.p1().as_mut() {
-                host.engine_seed_action_slots(script);
             }
         }
     }

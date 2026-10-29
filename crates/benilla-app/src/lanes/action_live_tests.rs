@@ -801,11 +801,37 @@ fn set_action_reads_the_slots_cooldown_at_the_call() {
     );
 }
 
-/// A new VM's copy of the bar is the bar's own, its counts as the last recount stored them: the
-/// tables outlive a VM (`0x4e4f50` runs only at the game entry), so a stack that moved with no
-/// recount reads the stored count after a reload too, and no slot signals.
+/// A `/reload` keeps the bar in the engine (`0xbc6980`, `0xbc6390`; `0x4e4f50` runs only at the
+/// game entry), so the new interface reads it from its first file: an addon's file scope finds the
+/// bar's words and icons, and the counts as the last recount stored them, a stack that moved with
+/// no recount included; no slot signals.
 #[test]
-fn a_new_vm_is_seeded_with_the_bars_words_and_stored_counts() {
+fn a_reloads_files_read_the_bar_it_left() {
+    use crate::local_state::test_env::{EnvGuard, ENV_LOCK};
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let tmp = std::env::temp_dir().join(format!("benilla-bar-reload-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let home = tmp.join("benilla-config");
+    let dir = home.join("AddOns").join("BarProbe");
+    std::fs::create_dir_all(&dir).expect("probe addon dir");
+    std::fs::write(
+        dir.join("BarProbe.toc"),
+        "## Interface: 11200\nBarProbe.lua\n",
+    )
+    .expect("probe toc");
+    std::fs::write(
+        dir.join("BarProbe.lua"),
+        "BarProbe = { HasAction(1), HasAction(6), GetActionCount(7), GetActionTexture(1) } \
+         BarProbeSlotSignals = 0 \
+         local f = CreateFrame('Frame') f:RegisterEvent('ACTIONBAR_SLOT_CHANGED') \
+         f:SetScript('OnEvent', function() BarProbeSlotSignals = BarProbeSlotSignals + 1 end)",
+    )
+    .expect("probe lua");
+    let _capture = EnvGuard::unset("WOW_CAPTURE");
+    let _home = EnvGuard::set("BENILLA_HOME", home.to_str().expect("utf-8 temp path"));
+
     let mut c = client();
     let potions = c.app.world().resource::<crate::net::GuidIndex>().0[&POTION_GUID];
     c.app
@@ -814,29 +840,25 @@ fn a_new_vm_is_seeded_with_the_bars_words_and_stored_counts() {
         .expect("the potions")
         .0
         .merge(ObjectFields::from_pairs(&[(STACK_COUNT, 5)]));
-    c.app
-        .world_mut()
-        .insert_non_send_resource(UiScript::new().expect("a VM"));
-    c.eval::<()>(
+    let world = c.app.world_mut();
+    world.resource_mut::<crate::ui_script::ReloadUiPending>().0 = true;
+    crate::ui_script::run_pending_reload(world);
+    let probe: (Option<i64>, Option<i64>, i64, String, i64) = c.eval(
         false,
-        "Seen = {} local f = CreateFrame('Frame') f:RegisterEvent('ACTIONBAR_SLOT_CHANGED') \
-         f:SetScript('OnEvent', function() table.insert(Seen, event) end)",
+        "return BarProbe[1], BarProbe[2], BarProbe[3], BarProbe[4], BarProbeSlotSignals",
     );
-    c.frame(vec![]);
-    let chunk = "return HasAction(1), HasAction(6), GetActionCount(7), GetActionTexture(1)";
-    let seeded: (Option<i64>, Option<i64>, i64, String) = c.eval(false, chunk);
     assert_eq!(
-        seeded,
+        probe,
         (
             Some(1),
             None,
             2,
-            format!("Interface\\Icons\\Spell_{FROSTBOLT}")
+            format!("Interface\\Icons\\Spell_{FROSTBOLT}"),
+            0
         )
     );
-    let live: (Option<i64>, Option<i64>, i64, String) = c.eval(true, chunk);
-    assert_eq!(live, seeded);
-    assert!(c.seen(&["ACTIONBAR_SLOT_CHANGED"]).is_empty());
+    drop(c);
+    let _ = std::fs::remove_dir_all(&tmp);
 }
 
 /// Our create's arrival empties the reactive list and its registrar runs take the initial spells in

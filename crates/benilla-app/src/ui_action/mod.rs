@@ -33,7 +33,7 @@ pub(crate) mod drop_item;
 mod drop_item_tests;
 mod errors;
 mod feed;
-pub(crate) use feed::{bonus_bar_offset, spell_action_icon, MISSING_ITEM_ICON};
+pub(crate) use feed::{bonus_bar_offset, seed_reloaded_vm, spell_action_icon, MISSING_ITEM_ICON};
 #[cfg(test)]
 mod feed_tests;
 mod net;
@@ -479,8 +479,7 @@ impl Plugin for UiActionPlugin {
             .add_systems(
                 Update,
                 (
-                    // The feeds ride with the unit feed, before the VM ticks: the state feed
-                    // after the seed, so a new VM's slots have their states the same frame.
+                    // The feeds ride with the unit feed, before the VM ticks.
                     feed::feed_actions.in_set(UnitFeed),
                     // A seat: the world-enter events' handlers read the slots' state, which the
                     // reference's arrival stores before its enter cascade (`0x5deafc`, `0x5deb60`).
