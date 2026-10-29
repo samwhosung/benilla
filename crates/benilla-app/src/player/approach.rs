@@ -1,11 +1,12 @@
 //! Click to Move's walks (`AutoInteract`, "Toggles auto-move to interact target"). With the option
 //! on, a right-click on an NPC, a body to loot or skin, or a GameObject beyond the verb's reach
 //! walks the player there and the verb runs on arrival; a right-click on the ground walks to the
-//! point (mode 4), one on the sky walks that way until stopped (mode 8), and an attack on an enemy
+//! point (mode 4, the click-to-move walk), one on the sky walks that way until stopped (mode 8), and an attack on an enemy
 //! out of melee walks to where it stood (mode 10). It is [`super::follow`]'s auto-move: one cell
 //! holds either (mode `0xc4d888`, guid `0xc4d980`), so arming one ends the other (`0x611130` calls
 //! the canceller `0x60fb60` first), the same input cancels both, and nothing goes on the wire but
-//! the movement; an attack on an enemy already in melee only turns to face it (mode 2).
+//! the movement; an attack on an enemy already in melee only turns to face it (mode 2, the facing
+//! turn).
 
 use std::f32::consts::{FRAC_PI_2, PI};
 
@@ -87,14 +88,14 @@ pub(crate) struct Approach {
 enum Toward {
     /// Modes 5-7 and 9: the object's live position.
     Object { verb: ApproachVerb, guid: u64 },
-    /// Mode 4.
-    Ground(Anchor),
+    /// Mode 4, the click-to-move walk: a right-click on the ground (`0x6102b0`).
+    ClickToMove(Anchor),
     /// Mode 10.
     Melee(Anchor),
     /// Mode 8: a facing (`0xc4d9a8`), with no stop.
     Sky(f32),
-    /// Mode 2: a facing, turned to and done.
-    Face(f32),
+    /// Mode 2, the facing turn: an attack on an enemy in melee turns to it and is done (`0x6100a0`).
+    FacingTurn(f32),
 }
 
 /// A point fixed at the arm (`0xc4d890`), held in the frame of the transport the player stands on
@@ -158,10 +159,10 @@ impl Approach {
     }
 
     /// Mode 2, the facing turn (`0x6100a0`).
-    pub(crate) fn facing(&self) -> bool {
+    pub(crate) fn facing_turn(&self) -> bool {
         self.goal
             .as_ref()
-            .is_some_and(|g| matches!(g.toward, Toward::Face(_)))
+            .is_some_and(|g| matches!(g.toward, Toward::FacingTurn(_)))
     }
 }
 
@@ -202,14 +203,14 @@ impl AutoMoveStop<'_> {
         self.claim.as_deref().is_some_and(|c| c.holds(guid)) && self.end(lane)
     }
 
-    /// [`Self::stop`] unless the auto-move is the facing turn, mode 2: the swing report's gate
-    /// `IsAutoMovingInModes(4)` (`0x625a0e`-`0x625a19`).
-    pub(crate) fn stop_unless_facing(
+    /// [`Self::stop`] unless the auto-move is mode 2, the facing turn: the swing report's gate
+    /// `IsAutoMovingInModes` with the mode mask 4, bit 2 (`0x625a0e`-`0x625a19`).
+    pub(crate) fn stop_unless_facing_turn(
         &mut self,
         guid: u64,
         lane: Option<&mut crate::field_watch::NoticeLane>,
     ) -> bool {
-        let facing = self.approach.as_deref().is_some_and(Approach::facing);
+        let facing = self.approach.as_deref().is_some_and(Approach::facing_turn);
         !facing && self.stop(guid, lane)
     }
 
@@ -255,7 +256,7 @@ pub(crate) fn end_auto_move(
 ) -> bool {
     // Mode 2, the facing turn, has no forward release.
     let (walked, faced) = approach.map_or((false, false), |a| {
-        let ended = (a.active(), a.facing());
+        let ended = (a.active(), a.facing_turn());
         a.stop();
         ended
     });
@@ -370,7 +371,7 @@ impl AutoMove<'_, '_> {
             return false;
         }
         let anchor = self.anchor(at);
-        self.arm(Toward::Ground(anchor), at, GROUND_STOP, stand)
+        self.arm(Toward::ClickToMove(anchor), at, GROUND_STOP, stand)
             .is_ok()
     }
 
@@ -426,7 +427,7 @@ impl AutoMove<'_, '_> {
         }
         let delta = at - self.player.pos;
         let facing = follow::bearing_to(Vec3::new(delta.x, 0.0, delta.z));
-        self.arm(Toward::Face(facing), at, 0.0, stand).is_ok()
+        self.arm(Toward::FacingTurn(facing), at, 0.0, stand).is_ok()
     }
 
     /// Deviation: the reference converts back through the transport the player stands on each
@@ -589,7 +590,7 @@ pub(super) fn steer_approach(
             }
             Some(tf.translation)
         }
-        Toward::Ground(anchor) | Toward::Melee(anchor) => match anchor.frame {
+        Toward::ClickToMove(anchor) | Toward::Melee(anchor) => match anchor.frame {
             None => Some(anchor.at),
             Some(frame) => {
                 let Ok((tf, ..)) = targets.get(frame) else {
@@ -600,7 +601,7 @@ pub(super) fn steer_approach(
                 Some(tf.transform_point(anchor.at))
             }
         },
-        Toward::Sky(_) | Toward::Face(_) => None,
+        Toward::Sky(_) | Toward::FacingTurn(_) => None,
     };
     let delta = target.map(|t| t - player.pos);
     let d2 = delta.map(|d| goal_distance_sq(toward, goal.stop, d, speed, player.swimming));
@@ -621,7 +622,7 @@ pub(super) fn steer_approach(
         }
     }
     let bearing = match (toward, delta) {
-        (Toward::Sky(facing) | Toward::Face(facing), _) => facing,
+        (Toward::Sky(facing) | Toward::FacingTurn(facing), _) => facing,
         (_, Some(d)) => follow::bearing_to(Vec3::new(d.x, 0.0, d.z)),
         (_, None) => player.face_yaw,
     };
@@ -630,14 +631,14 @@ pub(super) fn steer_approach(
     if turning {
         let rate = *goal.turn_rate.get_or_insert_with(|| turn_rate(remaining));
         player.face_yaw = follow::steer(player.face_yaw, bearing, rate, time.delta_secs());
-    } else if let Toward::Face(_) = toward {
+    } else if let Toward::FacingTurn(_) = toward {
         // `0x6108c3`: the facing walk ends once lined up, never holding forward.
         approach.goal = None;
         return;
     } else {
         goal.aligned = true;
     }
-    if let Toward::Face(_) = toward {
+    if let Toward::FacingTurn(_) = toward {
         return;
     }
     if let (Some(d2), Some(delta)) = (d2, delta) {
@@ -721,11 +722,11 @@ mod tests {
     #[test]
     fn the_ground_stop_scales_with_speed_and_the_melee_stop_does_not() {
         assert_eq!(
-            arrive_distance(Toward::Ground(POINT), GROUND_STOP, 7.0),
+            arrive_distance(Toward::ClickToMove(POINT), GROUND_STOP, 7.0),
             0.5
         );
         assert_eq!(
-            arrive_distance(Toward::Ground(POINT), GROUND_STOP, 14.0),
+            arrive_distance(Toward::ClickToMove(POINT), GROUND_STOP, 14.0),
             1.0
         );
         assert_eq!(arrive_distance(Toward::Melee(POINT), 1.9, 14.0), 1.9);

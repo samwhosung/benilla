@@ -187,12 +187,13 @@ fn on_attacker_state(
             &mut sinks,
             play_seq.next(),
         );
-        // A held attacker's auto-move other than the facing turn ends (`0x625a03`-`0x625a21` →
-        // `StopAutoMove(1, 1)`), after the self-defence acquire (`0x6259fe`) and ahead of the
-        // packet's line (`0x625a2c`); it acts only on the active mover, so only on our own swing.
+        // A held attacker's auto-move other than mode 2, the facing turn, ends (`0x625a03`-
+        // `0x625a21` → `StopAutoMove(1, 1)`), after the self-defence acquire (`0x6259fe`) and ahead
+        // of the packet's line (`0x625a2c`); it acts only on the active mover, so only on our own
+        // swing.
         if index.0.contains_key(&attacker) {
             let (stop, lane) = &mut auto_move;
-            stop.stop_unless_facing(attacker, lane.as_deref_mut());
+            stop.stop_unless_facing_turn(attacker, lane.as_deref_mut());
         }
     }
 }

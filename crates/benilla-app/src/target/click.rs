@@ -4461,7 +4461,7 @@ mod tests {
     #[test]
     fn an_enemy_in_melee_is_faced_without_a_walk() {
         let (world, rx) = attack_wolf_at(Vec3::new(0.0, 0.0, -6.0), 4.0);
-        assert!(world.resource::<crate::player::Approach>().facing());
+        assert!(world.resource::<crate::player::Approach>().facing_turn());
         assert!(rx
             .try_iter()
             .any(|c| matches!(c, ClientCommand::AttackSwing { guid: WOLF })));
