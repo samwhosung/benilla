@@ -15,8 +15,6 @@
 
 use bevy::prelude::*;
 
-use super::approach::Approach;
-use super::follow::FollowState;
 use crate::creature_anim::MovementState;
 use crate::net::{ActiveMover, Embodied, GuidIndex, RemoteMotion, SelfGuid, SelfPlayer};
 
@@ -25,8 +23,6 @@ use crate::net::{ActiveMover, Embodied, GuidIndex, RemoteMotion, SelfGuid, SelfP
 pub(super) fn maintain_embodiment(
     mut commands: Commands,
     mut lock: ResMut<super::MoverLock>,
-    mut follow: ResMut<FollowState>,
-    mut approach: ResMut<Approach>,
     guids: (Res<SelfGuid>, Res<GuidIndex>),
     self_body: Query<Entity, With<SelfPlayer>>,
     attached: Query<Entity, With<Embodied>>,
@@ -47,10 +43,9 @@ pub(super) fn maintain_embodiment(
         if want_guid.is_some() {
             // `Player` holds the old body's pose; the controller adopts the new one's first.
             lock.reseat = true;
-            // `SetActiveMover` `0x6006e0` cancels click-to-move and follow on the outgoing mover,
-            // through `0x6103a0` → `0x60fb60(0, 1)`.
-            follow.stop();
-            approach.stop();
+            // `SetActiveMover` `0x6006e0` cancels click-to-move and follow on the outgoing mover
+            // (`0x600742`), inside the control update's handler
+            // ([`crate::player::AutoMoveStop::stop_mover`]).
         }
     }
 
@@ -94,8 +89,6 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<Player>()
             .init_resource::<super::super::MoverLock>()
-            .init_resource::<FollowState>()
-            .init_resource::<Approach>()
             .init_resource::<SelfGuid>()
             .init_resource::<GuidIndex>()
             .add_systems(Update, maintain_embodiment);

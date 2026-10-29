@@ -136,6 +136,11 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // Read through the host by the world click's legs (who we drive, the gathering skills its
     // cursor forks on), and quiet: no feed fires off them.
     "::player::state::MoverLock",
+    // Read, and quiet: the follow's arm reads them in its call (`0x611130` → `0x60fb60`), and the
+    // handlers that end an auto-move signal its `AUTOFOLLOW_END` on the notice lane in place
+    // (`0x60fb84`).
+    "::player::approach::Approach",
+    "::player::follow::FollowState",
     // Quiet: the cast ladder's per-call state, which the cast result's, the loot response's and the
     // go's handlers hold with the ladder and never write. A press holds the first and its call resumes it before it returns
     // (`0x6e4efb`), each call sets and puts back the second, and the pet press applies the third
@@ -344,8 +349,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // members' names and objects as the frame left them; the tokens read live at the call.
     ("::ui_party::feed::feed_party", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
         "ui_party::GroupState"]),
-    // The engine's follow transitions, which a `FollowUnit` a handler's listener makes arms.
-    ("::ui_follow::feed_follow", &["player::follow::FollowState", "ui_follow::FollowFeed"]),
     // The ammo getters' hits fire after the push that carries their record, whenever it runs.
     ("::ui_char::feed_char", &["items::Countdowns", "items::Items", "names::NameCache",
         "net::GuidIndex", "net::ObjectStore", "ui_char::AmmoRecordHits"]),
@@ -502,6 +505,9 @@ pub(super) const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::ui_trade::BlockTrades",
     // Who we drive, which the loot response reads; our own create's arrival writes it.
     "::player::state::MoverLock",
+    // The active mover, which the handlers that end an auto-move test (`0x6103a0`); our own
+    // create's arrival claims it (`0x4958a0`).
+    "::net::MoverClaim",
     "::player::state::StandPending",
     // The page cache the host's page turns read.
     "::ui_item_text::PageTexts",

@@ -541,6 +541,8 @@ mod dialog_live_tests;
 #[cfg(test)]
 mod duration_live_tests;
 #[cfg(test)]
+mod follow_live_tests;
+#[cfg(test)]
 mod gossip_live_tests;
 #[cfg(test)]
 mod group_live_tests;

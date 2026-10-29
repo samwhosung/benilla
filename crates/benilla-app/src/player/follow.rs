@@ -14,7 +14,16 @@
 //! The reference's turn-away cancel (160°-220°, `0x80c604`, `0x80c600`) runs only while drunk,
 //! gated at `0x610a3d` on the drunk fraction, armed as the turn converges and disarmed at random
 //! (`0x61092e`); it is not built. The start gate (who may be followed) is
-//! [`crate::target::by_name`]'s.
+//! [`crate::target::by_name`]'s, and the start signals `AUTOFOLLOW_BEGIN` inside its call
+//! (`0x610071`, [`crate::script_calls::ScriptCallHost`]).
+//!
+//! Every end goes through the canceller `0x60fb60`, which signals `AUTOFOLLOW_END` for a follow
+//! first (`0x60fb76`-`0x60fb84`), where the end runs ([`end`]): the packet handlers' ends at their
+//! packets ([`super::AutoMoveStop`]), the input's and the steer's at their place in the frame.
+//!
+//! Deviation: every end signals `END`, because the reference's three silent ends are a bug: two
+//! writers reset the follow mode cell `0xc4d888` directly (`0x5fb646`, `0x60396f`), leaving a
+//! stale guid at `0xc4d980`, and the canceller's early-out (`0x60fb70`) fires nothing.
 
 use std::f32::consts::PI;
 
@@ -71,6 +80,24 @@ impl FollowState {
         self.moving = false;
         self.guid.take().is_some()
     }
+}
+
+/// The canceller's follow leg (`0x60fb60`): a follow in flight signals `AUTOFOLLOW_END` (`0x60fb84`)
+/// on the notice lane at the caller's place, then ends (`0x60fc1e`); `true` if one ended. With no
+/// lane, in a harness without the unit feed, it ends silently.
+pub(crate) fn end(
+    follow: &mut FollowState,
+    lane: Option<&mut crate::field_watch::NoticeLane>,
+) -> bool {
+    if follow.guid.is_none() {
+        return false;
+    }
+    if let Some(lane) = lane {
+        lane.write(crate::field_watch::FieldNotice::Global {
+            id: crate::field_watch::id::AUTOFOLLOW_END,
+        });
+    }
+    follow.stop()
 }
 
 /// A start-following request: `FollowUnit` or `FollowByName`. A name finds players only; the start
@@ -218,7 +245,9 @@ impl FollowInput<'_, '_> {
 
 /// Cancel, re-resolve the followee, steer, and set [`Player::auto_forward`] for `control`. The
 /// cancel comes first, as the reference's start emitters run ahead of the axis math (`0x5150a7` vs
-/// the emitter tail `0x5151a0`).
+/// the emitter tail `0x5151a0`). Each end here is frame time's (`0x5146d6`, `0x6106b0`), after the
+/// packets, and signals behind them ([`end`]).
+#[allow(clippy::too_many_arguments)] // a Bevy system's full input set
 pub(super) fn steer_follow(
     time: Res<Time>,
     mut follow: ResMut<FollowState>,
@@ -227,6 +256,7 @@ pub(super) fn steer_follow(
     index: Res<GuidIndex>,
     transforms: Query<&Transform>,
     input: FollowInput,
+    mut lane: Option<ResMut<crate::field_watch::NoticeLane>>,
 ) {
     player.auto_forward = false;
     if follow.guid.is_none() {
@@ -234,7 +264,7 @@ pub(super) fn steer_follow(
     }
     if input.cancels(&player) {
         info!("follow: cancelled by the player's own movement input");
-        follow.stop();
+        end(&mut follow, lane.as_deref_mut());
         return;
     }
     let Some(guid) = follow.guid else { return };
@@ -246,14 +276,14 @@ pub(super) fn steer_follow(
         .map(|t| t.translation)
     else {
         info!("follow: the followee is gone — follow ends");
-        follow.stop();
+        end(&mut follow, lane.as_deref_mut());
         return;
     };
     let delta = target - player.pos;
     // On the full 3D delta, before the bearing flattens it.
     if vertically_degenerate(delta) {
         info!("follow: the followee is within 1° of straight overhead — follow ends");
-        follow.stop();
+        end(&mut follow, lane.as_deref_mut());
         return;
     }
     let flat = Vec3::new(delta.x, 0.0, delta.z);

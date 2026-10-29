@@ -315,6 +315,7 @@ pub(crate) mod id {
     pub(crate) const PLAYER_CAMPING: u16 = 276;
     pub(crate) const PLAYER_QUITING: u16 = 277;
     pub(crate) const LOGOUT_CANCEL: u16 = 278;
+    pub(crate) const AUTOFOLLOW_END: u16 = 368;
 }
 
 /// `CGPlayer_C::RefreshGuildTag` (`0x5e08e0`) on the player `guid`: `TABARD_CANSAVE_CHANGED` bare

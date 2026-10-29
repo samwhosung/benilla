@@ -46,7 +46,13 @@ pub(super) fn press_commands(
     active: Query<Has<crate::net::SelfPlayer>, With<crate::net::ActiveMover>>,
     // The cast bar's self-cancel, which `crate::spell::LocalCancel` sends next.
     mut cancel: ResMut<crate::spell::LocalMoveStart>,
-    auto_move: (FollowInput, ResMut<FollowState>, ResMut<Approach>),
+    auto_move: (
+        FollowInput,
+        ResMut<FollowState>,
+        ResMut<Approach>,
+        // Where the stop's `AUTOFOLLOW_END` goes, ahead of the frame's packets.
+        Option<ResMut<crate::field_watch::NoticeLane>>,
+    ),
 ) {
     if !player.active || player.detached {
         return;
@@ -76,9 +82,9 @@ pub(super) fn press_commands(
     }
     // The start emitters' first call, `0x60e990`, stops an auto-move the input did not start, so
     // the tick's axis nets without `/follow`'s or Click to Move's forward.
-    let (input, mut follow, mut approach) = auto_move;
+    let (input, mut follow, mut approach, mut lane) = auto_move;
     if input.cancels(&player) {
-        if follow.stop() {
+        if super::follow::end(&mut follow, lane.as_deref_mut()) {
             info!("follow: cancelled by the player's own movement input");
         }
         approach.stop();

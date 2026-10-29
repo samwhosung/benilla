@@ -166,8 +166,14 @@ fn on_attacker_state(
     tutorials: Option<Res<crate::tutorial::Tutorials>>,
     // The self-defence acquire the swing owes, absent in a harness without the target plugin.
     acquires: Option<ResMut<crate::target::OwedSelects>>,
+    // The attacker's auto-move, which the swing ends, and the lane its `AUTOFOLLOW_END` goes on.
+    mut auto_move: (
+        crate::player::AutoMoveStop,
+        Option<ResMut<crate::field_watch::NoticeLane>>,
+    ),
 ) {
     if let SessionEvent::AttackerState(s) = ev {
+        let attacker = s.attacker;
         attacker_state(
             tutorials.as_deref(),
             acquires.map(|a| a.into_inner()),
@@ -181,6 +187,14 @@ fn on_attacker_state(
             &mut sinks,
             play_seq.next(),
         );
+        // A held attacker's auto-move other than the facing turn ends (`0x625a03`-`0x625a21` →
+        // `StopAutoMove(1, 1)`), after the self-defence acquire (`0x6259fe`) and ahead of the
+        // packet's line (`0x625a2c`); it acts only on the active mover, so only on our own swing.
+        // Not built: the stop's turn toward the followee (`face`, `0x60fb92`-`0x60fbe8`).
+        if index.0.contains_key(&attacker) {
+            let (stop, lane) = &mut auto_move;
+            stop.stop_unless_facing(attacker, lane.as_deref_mut());
+        }
     }
 }
 

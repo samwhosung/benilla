@@ -136,7 +136,6 @@ mod ui_craft;
 mod ui_dialog_verbs;
 mod ui_dressup;
 mod ui_duel;
-mod ui_follow;
 mod ui_gamma;
 mod ui_gm_ticket;
 mod ui_gossip;

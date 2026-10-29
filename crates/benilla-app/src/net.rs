@@ -466,6 +466,16 @@ impl MoverClaim {
         true
     }
 
+    /// The guid the global names.
+    pub(crate) fn get(&self) -> Option<u64> {
+        self.0
+    }
+
+    /// Whether the global names `guid` (`0x6103a0`'s first test).
+    pub(crate) fn holds(&self, guid: u64) -> bool {
+        self.0 == Some(guid)
+    }
+
     /// The unit `guid` gone or stopped: the global is zeroed when it names it.
     pub(crate) fn forget(&mut self, guid: u64) {
         if self.0 == Some(guid) {

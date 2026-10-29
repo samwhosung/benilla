@@ -27,19 +27,12 @@ impl ScriptCallHost<'_, '_> {
                 crate::player::FollowRequest::Name { name, exact }
             }
         };
-        let name = match self.appliers.follow().start(&request) {
+        let (name, replaced) = match self.appliers.follow().start(&request) {
             FollowStart::Refused(key) => return self.appliers.chat().display_error(script, key),
             FollowStart::Silent => return,
-            FollowStart::Started { name } => name,
+            FollowStart::Started { name, replaced } => (name, replaced),
         };
-        let guid = self.appliers.follow().followee();
-        let told = match self.appliers.follow_feed().as_deref_mut() {
-            Some(feed) => feed.tell(script, guid),
-            None => None,
-        };
-        // Deviation: the feed's stops fire `END` for every follow ([`crate::ui_follow`]), so the
-        // arm's stop fires it for the follow this VM was last told of.
-        if told.is_some() {
+        if replaced {
             script.fire_event("AUTOFOLLOW_END", vec![]);
             self.at_point(script, mark);
         }

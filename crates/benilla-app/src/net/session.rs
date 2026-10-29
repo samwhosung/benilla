@@ -362,12 +362,14 @@ fn on_mover_edge(In(ev): In<SessionEvent>, mut e: Edges, b: Bridge) {
 }
 
 /// What [`on_client_control`] holds beside the host: the cast its fall cancels, our guid, the flag,
-/// and the notice lane its signals go on (absent in a harness without the unit feed).
+/// the notice lane its signals go on (absent in a harness without the unit feed), and the
+/// outgoing mover's auto-move.
 type ControlSet = (
     crate::spell::SelfCancel<'static>,
     Res<'static, SelfGuid>,
     ResMut<'static, crate::player::OwnControlLost>,
     Option<ResMut<'static, crate::field_watch::NoticeLane>>,
+    crate::player::AutoMoveStop<'static>,
 );
 
 /// `SMSG_CLIENT_CONTROL_UPDATE` (`0x5fa6b1` → `SetPlayerControl 0x4958e0`), its movement judged by
@@ -375,7 +377,10 @@ type ControlSet = (
 /// (`0x4958ea`); its fall drops the cursor's payload and the cast (`0x4958e8`-`0x495901` →
 /// `0x495920`), and the change signals on the notice lane at this packet's place, then runs the
 /// usable refresh (`0x4958f7`/`0x49590b`, `0x4958fc`/`0x495910`). A store that changes nothing does
-/// nothing (`0x4958e6`).
+/// nothing (`0x4958e6`). Ahead of it the unit's control moves the active mover (`0x5fa600`): a
+/// grant claims the unit (`0x5fa696`) and a stop of the mover zeroes it (`0x5fa678`-`0x5fa696`),
+/// and the switch ends the outgoing mover's auto-move first (`SetActiveMover`, `0x600731`-
+/// `0x600742`), its `AUTOFOLLOW_END` on the notice lane ahead of the flag's signal.
 fn on_client_control(
     In(ev): In<SessionEvent>,
     mut e: Edges,
@@ -388,7 +393,11 @@ fn on_client_control(
     e.client_control
         .write(ClientControlMessage { mover, allow_move });
     {
-        let (_, self_guid, mut own, _) = vm.own();
+        let (_, self_guid, mut own, mut lane, mut stop) = vm.own();
+        let switches = stop.mover().is_some_and(|m| (m == mover) != allow_move);
+        if switches {
+            stop.stop_mover(lane.as_deref_mut());
+        }
         if self_guid.0 != Some(mover) || own.0 == !allow_move {
             return;
         }
@@ -397,7 +406,7 @@ fn on_client_control(
     if !allow_move {
         crate::spell::drop_hold(&mut vm, |(mut cancel, ..)| cancel.abort_cast());
     }
-    if let (.., Some(mut lane)) = vm.own() {
+    if let (_, _, _, Some(mut lane), _) = vm.own() {
         use crate::field_watch::FieldNotice;
         lane.write(FieldNotice::PlayerControl {
             in_control: allow_move,

@@ -104,8 +104,8 @@ pub(crate) use follow::{FollowRequest, FollowState};
 // Click to Move: `crate::target`'s dispatchers start it and run the verb it owes on arrival.
 pub(crate) use approach::on_cvar as approach_on_cvar;
 pub(crate) use approach::{
-    can_auto_interact, cancel_move_action_on_ui_shutdown, Approach, ApproachVerb, AutoMove,
-    Refused, Subject, RANGE_STOP_FRACTION, TALK_STOP,
+    can_auto_interact, cancel_move_action_on_ui_shutdown, stop_auto_move, Approach, ApproachVerb,
+    AutoMove, AutoMoveStop, Refused, Subject, RANGE_STOP_FRACTION, TALK_STOP,
 };
 /// `SetStandState` run inside a script call.
 pub(crate) use posture::{stand_up_for_attack, stand_up_refused, StandSetter};

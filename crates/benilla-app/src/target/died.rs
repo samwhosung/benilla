@@ -17,7 +17,8 @@
 //! - when the unit is the selection (`0xb4e2d8`), `SetSelection(0, 0)` (`0x605901`) and then
 //!   `StopAutoRepeatSpell 0x6ea080` (`0x605906`);
 //! - the tail from `0x60590b`: the quest marker, the missiles, the effects, a sound, the auto-move
-//!   stop and `0x4931c0` on the unit's guid (`0x605950`).
+//!   stop (`0x605938`, [`crate::player::AutoMoveStop`]) and `0x4931c0` on the unit's guid
+//!   (`0x605950`).
 //!
 //! The health watcher runs it inside the update packet that wrote the health (`0x6046f0` at
 //! `0x6047a3`). Here the packet's end runs each death's legs in place ([`crate::field_callbacks`]),
@@ -75,6 +76,9 @@ pub(crate) fn died(world: &mut World, e: FieldChanged) {
         parked.leg(world, crate::death::signal_death_state);
     }
     parked.leg(world, |world| step(world, unit_died, e));
+    // The tail's auto-move stop (`0x605938` → `StopAutoMove(0, 1)`), which acts only on the active
+    // mover: our own death ends a follow, its `AUTOFOLLOW_END` at this place.
+    parked.leg(world, |world| crate::player::stop_auto_move(world, e.guid));
     // The tail's `0x4931c0` on the unit's guid (`0x605950`, `dl = 1`): no goodbye.
     parked.leg(world, |world| {
         crate::ui_session::release_cell(world, e.guid, false)

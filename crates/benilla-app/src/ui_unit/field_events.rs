@@ -768,6 +768,7 @@ fn global_event(id: u16) -> Option<&'static str> {
     Some(match id {
         id::PLAYER_REGEN_DISABLED => "PLAYER_REGEN_DISABLED",
         id::PLAYER_REGEN_ENABLED => "PLAYER_REGEN_ENABLED",
+        id::AUTOFOLLOW_END => "AUTOFOLLOW_END",
         id::PET_ATTACK_START => "PET_ATTACK_START",
         id::PET_ATTACK_STOP => "PET_ATTACK_STOP",
         id::PLAYER_GUILD_UPDATE => "PLAYER_GUILD_UPDATE",

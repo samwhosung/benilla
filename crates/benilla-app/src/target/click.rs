@@ -1248,6 +1248,7 @@ impl ClickDispatch<'_, '_> {
                 }
                 _ => {}
             }
+            dispatch.auto.signal_follow_end(script);
             return None;
         }
         interact(dispatch, script, &press).map(ActOwed)
@@ -1323,8 +1324,20 @@ pub(super) fn act_on_right_click(mut c: ClickDispatch, held: Option<Res<PayloadH
 /// reach ([`Dispatch::in_service_reach`]); a GameObject's and a corpse's still ride the range gray
 /// the press latched (`unable`). Out of reach every send but attack is suppressed, the server
 /// holds attack until in reach; with Click to Move on, each dispatcher walks there instead
-/// (`CanAutoInteract` is their approach flag, `0x60c170`, `0x5d6c6f`).
+/// (`CanAutoInteract` is their approach flag, `0x60c170`, `0x5d6c6f`). A walk that ended a follow
+/// signals its `AUTOFOLLOW_END` as the dispatcher returns.
 fn interact(
+    dispatch: &mut Dispatch,
+    mut script: Option<&mut benilla_ui::script::UiScript>,
+    press: &PressPick,
+) -> Option<Owed> {
+    let owed = interact_legs(dispatch, script.as_deref_mut(), press);
+    dispatch.auto.signal_follow_end(script);
+    owed
+}
+
+/// [`interact`]'s legs.
+fn interact_legs(
     dispatch: &mut Dispatch,
     script: Option<&mut benilla_ui::script::UiScript>,
     press: &PressPick,
@@ -1677,7 +1690,10 @@ pub(super) fn act_on_arrival(
     index: Res<crate::net::GuidIndex>,
     kinds: Query<&crate::net::NetEntity>,
 ) {
-    vm.turn(|script, mut dispatch| act_on_arrival_with(&mut dispatch, script, &index, &kinds));
+    vm.turn(|mut script, mut dispatch| {
+        act_on_arrival_with(&mut dispatch, script.as_deref_mut(), &index, &kinds);
+        dispatch.auto.signal_follow_end(script);
+    });
 }
 
 fn act_on_arrival_with(

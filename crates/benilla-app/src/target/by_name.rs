@@ -493,8 +493,10 @@ pub(crate) enum FollowStart {
     Refused(&'static str),
     /// The gate's silent return (`0x60ff8a`): the mover itself.
     Silent,
-    /// Armed (`0x611130`): the followee's name, `AUTOFOLLOW_BEGIN`'s argument (`0x610061`).
-    Started { name: String },
+    /// Armed (`0x611130`): the followee's name, `AUTOFOLLOW_BEGIN`'s argument (`0x610061`), and
+    /// whether the arm's stop (`0x61113e` → `0x60fb60`) ended a follow, which owes
+    /// `AUTOFOLLOW_END` (`0x60fb84`) first.
+    Started { name: String, replaced: bool },
 }
 
 /// The follow's start, from `FollowUnit` and `FollowByName`, the stock `/follow`'s, inside their
@@ -511,11 +513,6 @@ pub(crate) struct FollowSteps<'w, 's> {
 }
 
 impl FollowSteps<'_, '_> {
-    /// Whom the follow follows, 0 for none.
-    pub(crate) fn followee(&self) -> u64 {
-        self.follow.as_deref().and_then(|f| f.guid).unwrap_or(0)
-    }
-
     /// `request` through the start gate, and the follow armed when it passes.
     pub(crate) fn start(&mut self, request: &crate::player::FollowRequest) -> FollowStart {
         use crate::player::FollowRequest;
@@ -580,10 +577,12 @@ impl FollowSteps<'_, '_> {
                 if let Some(approach) = self.approach.as_deref_mut() {
                     approach.stop();
                 }
-                if let Some(follow) = self.follow.as_deref_mut() {
+                let replaced = self.follow.as_deref_mut().is_some_and(|follow| {
+                    let replaced = follow.stop();
                     follow.start(guid, name.clone());
-                }
-                FollowStart::Started { name }
+                    replaced
+                });
+                FollowStart::Started { name, replaced }
             }
         }
     }

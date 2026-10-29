@@ -43,8 +43,8 @@ use crate::game_plugins::schedule_tests::{census, type_names_available, SyncPoin
 
 /// The most rows [`super::guard_tests::READS_FRAME_FINAL`] may hold, and the most inputs across
 /// them: each only falls, so lower it when a row or an input goes.
-const FRAME_FINAL_FEEDS: usize = 12;
-const FRAME_FINAL_INPUTS: usize = 73;
+const FRAME_FINAL_FEEDS: usize = 11;
+const FRAME_FINAL_INPUTS: usize = 71;
 
 /// The systems that may run after the dispatch (`apply_net_updates`) and run ahead of the drain
 /// (`fire_in_order`), by a suffix of the system's name, with what each writes of the state a
@@ -85,10 +85,6 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
         "recomputes the language skills off the book and the skill lines, which a page's show \
          reads inside its packet (`0x4e3856`), where the reference reads the skill live at the \
          show (`0x4e3837`)"),
-    ("::ui_follow::feed_follow", &["ui_follow::FollowFeed"],
-        "fires the engine's follow transitions off the followee memo the host's `FollowUnit` \
-         tells too, where the reference signals inside the move's start and end (`0x611130`, \
-         `0x60fb60`)"),
     ("::ui_item_text::apply_reads", &["ui_item_text::ItemTextOpen"],
         "a click's or a bag use's read, queued in its input or its call, which the reference \
          opens inside them (`0x5f58c0`, `0x4e32e0`), ahead of the packets (`0x420d23`)"),

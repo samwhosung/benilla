@@ -77,6 +77,9 @@ pub(crate) struct Approach {
     goal: Option<Goal>,
     /// The pending cells `0x60f940` fills (`0xc4da28`, `0xc4da78`, `0xc4d950`, `0xc4da20`).
     pub(crate) arrived: Option<(ApproachVerb, u64)>,
+    /// A walk's arm ended a follow, whose `AUTOFOLLOW_END` (`0x611130` → `0x60fb84`) the
+    /// dispatcher that armed it signals as it returns ([`AutoMove::signal_follow_end`]).
+    owes_follow_end: bool,
 }
 
 /// What a walk heads for, by its mode in `0xc4d888`.
@@ -154,7 +157,7 @@ impl Approach {
         self.goal.as_ref().map(|g| g.stop)
     }
 
-    #[cfg(test)]
+    /// Mode 2, the facing turn (`0x6100a0`).
     pub(crate) fn facing(&self) -> bool {
         self.goal
             .as_ref()
@@ -162,7 +165,6 @@ impl Approach {
     }
 }
 
-/// `CanAutoInteract` (`0x60f900`): alive, driving our own body, and the option on.
 /// The canceller `0x60fb60(0, 1)` as the UI shutdown's `/reload` guard calls it (`0x490c1b`): a
 /// follow or a walk in flight ends and the mover stops (`0x60fc05`-`0x60fc18`, the mode reset
 /// `0x60fc30`). `true` when it ended a follow, mode 3, which owes `AUTOFOLLOW_END` (`0x60fb84`).
@@ -174,6 +176,89 @@ pub(crate) fn cancel_move_action_on_ui_shutdown(
     follow.stop()
 }
 
+/// The canceller `CGUnit_C::StopAutoMove` (`0x60fb60`) where a packet's handler calls it on a unit:
+/// the taxi flag's rise (`0x5ff55a`), a death (`0x605938`), our own swing's report (`0x625a21`)
+/// and a mover switch (`0x600742`). It acts only on the active mover with an auto-move in flight
+/// (`IsAutoMoving 0x6103a0`, the early-out `0x60fb70`); a follow signals `AUTOFOLLOW_END` first,
+/// on the notice lane at the handler's place ([`super::follow::end`]), and the mode returns to 12
+/// (`0x60fc30`), so a walk ends too. Its release of the move, turn and pitch commands
+/// (`0x60fc05`-`0x60fc18`) needs nothing here: the synthesized forward goes with the auto-move.
+/// It sends nothing.
+#[derive(SystemParam)]
+pub(crate) struct AutoMoveStop<'w> {
+    /// The active mover `0xc4da98`.
+    claim: Res<'w, crate::net::MoverClaim>,
+    /// Absent in a harness without the mover's state, which stops nothing.
+    follow: Option<ResMut<'w, FollowState>>,
+    approach: Option<ResMut<'w, Approach>>,
+}
+
+impl AutoMoveStop<'_> {
+    /// `StopAutoMove` on `guid`, a no-op unless `guid` is the active mover; `true` if it ended an
+    /// auto-move.
+    pub(crate) fn stop(
+        &mut self,
+        guid: u64,
+        lane: Option<&mut crate::field_watch::NoticeLane>,
+    ) -> bool {
+        self.claim.holds(guid) && self.end(lane)
+    }
+
+    /// [`Self::stop`] unless the auto-move is the facing turn, mode 2: the swing report's gate
+    /// `IsAutoMovingInModes(4)` (`0x625a0e`-`0x625a19`).
+    pub(crate) fn stop_unless_facing(
+        &mut self,
+        guid: u64,
+        lane: Option<&mut crate::field_watch::NoticeLane>,
+    ) -> bool {
+        let facing = self.approach.as_deref().is_some_and(Approach::facing);
+        !facing && self.stop(guid, lane)
+    }
+
+    /// The active mover `0xc4da98`.
+    pub(crate) fn mover(&self) -> Option<u64> {
+        self.claim.get()
+    }
+
+    /// `StopAutoMove` on the active mover, whoever it is: a mover switch's stop of the outgoing one
+    /// (`0x600731`-`0x600742`); `None` names no mover, which stops nothing.
+    pub(crate) fn stop_mover(&mut self, lane: Option<&mut crate::field_watch::NoticeLane>) -> bool {
+        self.claim.get().is_some() && self.end(lane)
+    }
+
+    /// The canceller past its gate: the follow's signal and end, then the walk's.
+    fn end(&mut self, lane: Option<&mut crate::field_watch::NoticeLane>) -> bool {
+        let walked = self.approach.as_deref_mut().is_some_and(|a| {
+            let active = a.active();
+            a.stop();
+            active
+        });
+        let followed = self
+            .follow
+            .as_deref_mut()
+            .is_some_and(|f| super::follow::end(f, lane));
+        walked || followed
+    }
+}
+
+/// [`AutoMoveStop::stop`] on `guid` from a handler's world, its signal on the notice lane at the
+/// place it runs.
+pub(crate) fn stop_auto_move(world: &mut World, guid: u64) {
+    if let Err(e) = world.run_system_cached_with(stop_auto_move_of, guid) {
+        // A harness without the mover's claim stops nothing.
+        debug!("auto-move: the stop did not run: {e}");
+    }
+}
+
+fn stop_auto_move_of(
+    In(guid): In<u64>,
+    mut stop: AutoMoveStop,
+    mut lane: Option<ResMut<crate::field_watch::NoticeLane>>,
+) {
+    stop.stop(guid, lane.as_deref_mut());
+}
+
+/// `CanAutoInteract` (`0x60f900`): alive, driving our own body, and the option on.
 pub(crate) fn can_auto_interact(
     enabled: bool,
     me: Option<&ObjectStore>,
@@ -198,6 +283,16 @@ pub(crate) struct AutoMove<'w, 's> {
 }
 
 impl AutoMove<'_, '_> {
+    /// The `AUTOFOLLOW_END` a walk's arm owes, signalled on `script`, in the call or the click
+    /// that armed it.
+    pub(crate) fn signal_follow_end(&mut self, script: Option<&mut benilla_ui::script::UiScript>) {
+        if std::mem::take(&mut self.approach.owes_follow_end) {
+            if let Some(script) = script {
+                script.fire_event("AUTOFOLLOW_END", vec![]);
+            }
+        }
+    }
+
     pub(crate) fn can_auto_interact(&self) -> bool {
         can_auto_interact(
             self.approach.enabled,
@@ -332,7 +427,10 @@ impl AutoMove<'_, '_> {
             .me
             .single()
             .is_ok_and(|(_, s)| s.0.unit_stand_state() == 0);
-        self.follow.stop();
+        // The canceller first (`0x61113e` → `0x60fb60(0, 0)`), whose follow leg owes `END`.
+        if self.follow.stop() {
+            self.approach.owes_follow_end = true;
+        }
         self.approach.stop();
         if toward.leashed() && self.player.pos.distance_squared(at) >= LEASH_SQ {
             return Err(Refused::TooFar);
