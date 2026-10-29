@@ -116,8 +116,8 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // Read through the host by `HasFullControl` (`0x51a142`), and quiet: the update handler
     // starts or ends far sight in place at the field's change (`0x5de0d0`) and starts it at its
     // object's create (`0x5fbb1a`, `0x5d552d`), the clear's handler ends it (`0x5e441d`), the
-    // buff cancel runs `UpdateFarSight` in its call (`0x6e70ad`), `PLAYER_FARSIGHT_FOCUS_CHANGED`
-    // is the field watch's, and no feed fires off it.
+    // teardowns free it with our player, the buff cancel runs `UpdateFarSight` in its call
+    // (`0x6e70ad`), `PLAYER_FARSIGHT_FOCUS_CHANGED` is the field watch's, and no feed fires off it.
     "::player::view_subject::FarSight",
     // Read, and quiet: the follow's arm reads them in its call (`0x611130` → `0x60fb60`), and the
     // handlers that end an auto-move signal its `AUTOFOLLOW_END` on the notice lane in place
@@ -380,8 +380,8 @@ pub(super) const FILLED_THROUGH_A_READ: &[&str] = &[
     // The account-data sections, which the download's handler stores through `&self`.
     "::account_data::AccountData",
     // The far-sight machine the update handler starts and ends (`0x5de0d0`, `0x5fbb1a`,
-    // `0x5d552d`), the clear's handler ends (`0x5e441d`) and the call host's buff cancel runs
-    // (`0x6e70ad`).
+    // `0x5d552d`), the clear's handler ends (`0x5e441d`), the teardowns free and the call host's
+    // buff cancel runs (`0x6e70ad`).
     "::player::view_subject::FarSight",
     "::ui_logout::SessionPosts",
     // The gestures a chat line or a world click's greeting plays, which `drive_gestures` takes.

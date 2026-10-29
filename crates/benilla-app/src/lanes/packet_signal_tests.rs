@@ -657,3 +657,54 @@ fn a_far_sight_focus_we_cast_starts_far_sight_at_its_create() {
     assert!(!starts(ME, 1, true), "an area spell's object");
     assert!(!starts(ME, 2, false), "a focus the field does not name");
 }
+
+/// Our player goes with every object at a world's end and at a cross-map load (`0x467800`), its
+/// far-sight bit with it, and the next player's constructor zeroes it (`0x5dd33d`): a world left
+/// far-sighted owes the next one no `CMSG_FAR_SIGHT` 0 at the clear packet (`0x5e441d` →
+/// `0x5ee590`), and the next start sends its 1.
+#[test]
+fn a_world_left_far_sighted_starts_the_next_with_far_sight_off() {
+    let ends = [
+        SessionEvent::LoggedOut,
+        SessionEvent::Disconnected {
+            reason: String::new(),
+            end: benilla_protocol::SessionEnd::Lost,
+        },
+        SessionEvent::Worldport {
+            map_id: 1,
+            position: [0.0; 3],
+            orientation: 0.0,
+            needs_ack: false,
+        },
+    ];
+    for end in ends {
+        let label = format!("{end:?}");
+        let (mut app, rx) = far_sight_client("UNIT_COMBAT");
+        frame(&mut app, vec![far_sight_field(WOLF)]);
+        assert_eq!(far_sight_votes(&rx), [true], "{label}");
+        frame(&mut app, vec![end]);
+        assert!(
+            far_sight_votes(&rx).is_empty(),
+            "{label}: the end sends nothing"
+        );
+        // The next world: our player and the wolf again.
+        app.world_mut().resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
+        frame(
+            &mut app,
+            vec![
+                created(ME, EntityKind::Player, &[]),
+                created(WOLF, EntityKind::Unit, &[]),
+            ],
+        );
+        let world = app.world_mut();
+        let me = world.resource::<crate::net::GuidIndex>().0[&ME];
+        world.entity_mut(me).insert(crate::net::SelfPlayer);
+        frame(&mut app, vec![SessionEvent::FarSightCleared]);
+        assert!(
+            far_sight_votes(&rx).is_empty(),
+            "{label}: the new player's far sight is off"
+        );
+        frame(&mut app, vec![far_sight_field(WOLF)]);
+        assert_eq!(far_sight_votes(&rx), [true], "{label}: and starts again");
+    }
+}

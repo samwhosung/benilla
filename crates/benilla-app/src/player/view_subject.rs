@@ -48,7 +48,8 @@ impl RemoteView {
 /// through `&self` as a shared sink of the VM pass ([`crate::vm_pass::shared_sinks`]): the buff
 /// cancel runs it inside its call (`0x6e70ad`); the update handler at the field's change
 /// (`0x5de0d0`) and at the arrival of the object it names (`0x5fbb1a`, `0x5d552d`); the clear's
-/// handler (`0x5e441d`); and [`publish_view_subject`] for the camera's lost object.
+/// handler (`0x5e441d`); and [`publish_view_subject`] for the camera's lost object. Our player's
+/// free takes the latch with it ([`Self::free`]).
 ///
 /// Not built: the mover switch (`SetActiveMover` `0x6006e0` at `0x5ee35b`, `0x5ee477`,
 /// `0x5ee573`), which possession already moves by the control update; the attack stop at a
@@ -129,6 +130,13 @@ impl FarSight {
     /// Whether far sight is on (`+0x1c70` bit 0).
     pub(crate) fn on(&self) -> bool {
         self.state().on
+    }
+
+    /// Our player freed with every object, at a world's end or a cross-map load (`0x467800`): the
+    /// bit goes with it, and the next player's constructor zeroes it (`0x5dd33d`), so the next
+    /// world owes the server no `CMSG_FAR_SIGHT` 0 and sends its first start's 1.
+    pub(crate) fn free(&self) {
+        *self.state() = FarSightState::default();
     }
 }
 
