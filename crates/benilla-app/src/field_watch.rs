@@ -182,6 +182,9 @@ pub(crate) enum FieldNotice {
     /// VM's statics store the point, then `MINIMAP_PING` with the token the packet resolved
     /// (`0x4ee48d`).
     MinimapPing(crate::minimap::MemberPing),
+    /// A packet handler's `DisplayError(id)` (`0x496720`): the message row's line, by its
+    /// `GlobalStrings` key, shown at once.
+    Line { key: &'static str },
 }
 
 /// The notice lane: each notice stamped as a handler writes it ([`crate::lanes::stamp`]), fired
@@ -305,6 +308,9 @@ pub(crate) mod id {
     pub(crate) const PET_BAR_UPDATE: u16 = 353;
     pub(crate) const AREA_SPIRIT_HEALER_IN_RANGE: u16 = 527;
     pub(crate) const AREA_SPIRIT_HEALER_OUT_OF_RANGE: u16 = 528;
+    pub(crate) const PLAYER_CAMPING: u16 = 276;
+    pub(crate) const PLAYER_QUITING: u16 = 277;
+    pub(crate) const LOGOUT_CANCEL: u16 = 278;
 }
 
 /// `CGPlayer_C::RefreshGuildTag` (`0x5e08e0`) on the player `guid`: `TABARD_CANSAVE_CHANGED` bare

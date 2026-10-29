@@ -91,12 +91,6 @@ pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
          call, through the host's bar verbs",
     ),
     (
-        Row::HostHeld,
-        "::ui_logout::LogoutState",
-        "the logout state, which `feed_logout` fires from; the session verbs, acting in their \
-         calls, hold it in the host",
-    ),
-    (
         Row::Queue,
         "::ui_logout::SessionPosts",
         "the exit and the cinematic stop a session verb posts, which nothing the script reads \
@@ -306,6 +300,10 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // the world frame's update, after the packets. `feed_interact_npc` copies it as
     // `InteractNpc` right after the dispatch, for the engine's own token reads.
     "::ui_session::latch::InteractLatch",
+    // Moved here from `NOT_YET_ON_A_LANE`, so neither list grew: the session verbs read and write
+    // the logout bytes through the host in their calls, and quiet: the replies' handlers signal on
+    // the notice lane at their packets.
+    "::ui_logout::LogoutState",
     // Read through the host by the taxi getters, and quiet: its events fire on the taxi lane at
     // their handlers.
     "::ui_taxi::TaxiState",
@@ -367,7 +365,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // members' names and objects as the frame left them; the tokens read live at the call.
     ("::ui_party::feed::feed_party", &["names::NameCache", "net::GuidIndex", "net::ObjectStore",
         "ui_party::GroupState"]),
-    ("::ui_logout::feed_logout", &["ui_logout::LogoutState"]),
     // The engine's follow transitions, which a `FollowUnit` a handler's listener makes arms.
     ("::ui_follow::feed_follow", &["player::follow::FollowState", "ui_follow::FollowFeed"]),
     // The ammo getters' hits fire after the push that carries their record, whenever it runs.

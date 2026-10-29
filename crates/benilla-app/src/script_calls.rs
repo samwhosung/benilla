@@ -4757,7 +4757,7 @@ mod tests {
             writers.len()
         );
         if writers.iter().any(|w| w.contains("benilla_app::")) {
-            for name in ["feed_logout", "feed_death", "poll_area_spirit_healer"] {
+            for name in ["feed_framerate", "feed_death", "poll_area_spirit_healer"] {
                 assert!(
                     writers.iter().any(|w| w.contains(name)),
                     "the census reads the client's VM writers, `{name}` among them"

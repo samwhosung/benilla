@@ -43,7 +43,7 @@ use crate::game_plugins::schedule_tests::{census, type_names_available, SyncPoin
 
 /// The most rows [`super::guard_tests::READS_FRAME_FINAL`] may hold, and the most inputs across
 /// them: each only falls, so lower it when a row or an input goes.
-const FRAME_FINAL_FEEDS: usize = 17;
+const FRAME_FINAL_FEEDS: usize = 16;
 const FRAME_FINAL_INPUTS: usize = 106;
 
 /// The systems that may run after the dispatch (`apply_net_updates`) and run ahead of the drain
@@ -100,9 +100,6 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
     ("::ui_item_text::apply_reads", &["ui_item_text::ItemTextOpen"],
         "a click's or a bag use's read, queued in its input or its call, which the reference \
          opens inside them (`0x5f58c0`, `0x4e32e0`), ahead of the packets (`0x420d23`)"),
-    ("::ui_logout::feed_logout", &["ui_logout::LogoutState"],
-        "fires and clears the signals the logout replies queue, which the session verbs read in \
-         their calls, where the reference's handlers signal in place (`0x5aaef0`, `0x5aaf60`)"),
     ("::ui_macro::load_macros", &["ui_action::ActionSlots"],
         "the macro reader (`LoadMacroFiles` `0x4f0600`), run as its sections settle, moves a \
          character's buttons off benilla's older numbering through the bar verbs, a move with no \

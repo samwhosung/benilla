@@ -623,6 +623,11 @@ pub(crate) fn fire(
             vec![ScriptValue::Int(i64::from(free_repop))],
         ),
         FieldNotice::MinimapPing(ping) => ping.fire(script),
+        FieldNotice::Line { key } => {
+            if let Some(line) = crate::ui_action::keyed_line(script, key) {
+                crate::ui_action::show_now(script, sink, "ui_unit", line);
+            }
+        }
         FieldNotice::PvpPreference { on } => {
             let (toast, verbose) = super::pvp_announcement(on);
             // The verbose sentence is no catalog row, so it goes `unkeyed` to chat:
@@ -780,6 +785,9 @@ fn global_event(id: u16) -> Option<&'static str> {
         id::PET_BAR_UPDATE => "PET_BAR_UPDATE",
         id::AREA_SPIRIT_HEALER_IN_RANGE => "AREA_SPIRIT_HEALER_IN_RANGE",
         id::AREA_SPIRIT_HEALER_OUT_OF_RANGE => "AREA_SPIRIT_HEALER_OUT_OF_RANGE",
+        id::PLAYER_CAMPING => "PLAYER_CAMPING",
+        id::PLAYER_QUITING => "PLAYER_QUITING",
+        id::LOGOUT_CANCEL => "LOGOUT_CANCEL",
         id::INSPECT_HONOR_UPDATE => "INSPECT_HONOR_UPDATE",
         id::PLAYERBANKBAGSLOTS_CHANGED => "PLAYERBANKBAGSLOTS_CHANGED",
         id::PLAYER_FARSIGHT_FOCUS_CHANGED => "PLAYER_FARSIGHT_FOCUS_CHANGED",

@@ -561,6 +561,8 @@ mod item_tests;
 #[cfg(test)]
 mod item_text_live_tests;
 #[cfg(test)]
+mod logout_live_tests;
+#[cfg(test)]
 mod loot_live_tests;
 #[cfg(test)]
 mod loot_roll_live_tests;
