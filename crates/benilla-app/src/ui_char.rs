@@ -629,23 +629,30 @@ fn ammo_count(store: &ObjectStore, objects: &Objects, ammo_id: u32) -> u32 {
 const ALERT_REGIONS: [u8; 11] = [0, 2, 4, 5, 6, 7, 8, 9, 15, 16, 17];
 
 /// What the alert recompute `0x4c7ee0` reads off the active player `me`, each item found through
-/// `items`: the item in each worn region's slot (`0x6228a0`), and with `PLAYER_AMMO_ID` set
-/// (`[+0xe68]+0x102c`, `0x4c7f53`), the carried count of that ammunition (`0x622130(id, 0)`,
-/// `0x4c7f73`).
+/// `items`: the item in each worn region's slot (`0x6228a0`), its record's flags as cached
+/// (`records`, 0 uncached), and its temporary enchantment's milliseconds left (`left`, by guid);
+/// and with `PLAYER_AMMO_ID` set (`[+0xe68]+0x102c`, `0x4c7f53`), the carried count of that
+/// ammunition (`0x622130(id, 0)`, `0x4c7f73`).
 pub(crate) fn alert_inputs(
     me: &ObjectFields,
     items: &(impl crate::ui_items::ItemObjects + ?Sized),
+    records: &Items,
+    left: impl Fn(u64) -> u32,
 ) -> benilla_ui::script::AlertInputs {
     let worn = ALERT_REGIONS.map(|slot| {
-        let item = me
-            .player_inv_slot(slot)
-            .filter(|&g| g != 0)
-            .and_then(|g| items.object(g))
-            .filter(|f| f.is_item())?;
+        let guid = me.player_inv_slot(slot).filter(|&g| g != 0)?;
+        let item = items.object(guid).filter(|f| f.is_item())?;
+        let record_flags = item
+            .object_entry()
+            .and_then(|entry| records.template(entry, 0, Ask::Read))
+            .map_or(0, |t| t.flags);
         Some(benilla_ui::script::AlertItem {
             flags: item.item_flags().unwrap_or(0),
             durability: item.item_durability().unwrap_or(0),
             max_durability: item.item_max_durability().unwrap_or(0),
+            record_flags,
+            temp_enchant: item.item_enchant(TEMP_ENCHANTMENT_SLOT).unwrap_or(0) as u32,
+            temp_enchant_left_ms: left(guid),
         })
     });
     let ammo = me.player_ammo_id().filter(|&id| id != 0).map(|id| {

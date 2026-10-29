@@ -23,9 +23,13 @@ const OTHER: u64 = 0x8;
 const HELM: (u64, u32) = (item(1), 7366);
 /// In the backpack's first seat, 23: in no alert region.
 const SPARE: (u64, u32) = (item(2), 2361);
+/// In the main hand, seat 15, the ninth alert region.
+const SWORD: (u64, u32) = (item(3), 25);
 
-/// `ITEM_FIELD_FLAGS`, `ITEM_FIELD_DURABILITY` and `_MAXDURABILITY`.
+/// `ITEM_FIELD_FLAGS`, the temporary enchantment's id (`ITEM_FIELD_ENCHANTMENT` slot 1),
+/// `ITEM_FIELD_DURABILITY` and `_MAXDURABILITY`.
 const FLAGS: u16 = 21;
+const TEMP_ENCHANT: u16 = 25;
 const DURABILITY: u16 = 46;
 const MAX_DURABILITY: u16 = 47;
 
@@ -127,7 +131,7 @@ fn client(helm: u32) -> (Client, Vec<String>) {
     app.world_mut().resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
     {
         let mut items = app.world_mut().resource_mut::<crate::items::Items>();
-        for (_, entry) in [HELM, SPARE] {
+        for (_, entry) in [HELM, SPARE, SWORD] {
             items.insert_template(entry, Some(crate::items::test_template("Gear")));
         }
     }
@@ -135,9 +139,11 @@ fn client(helm: u32) -> (Client, Vec<String>) {
     let mut me = vec![(FIELD_UNIT_HEALTH, 100), (FIELD_UNIT_MAXHEALTH, 100)];
     me.extend(seat(0, HELM.0));
     me.extend(seat(23, SPARE.0));
+    me.extend(seat(15, SWORD.0));
     c.frame(vec![
         vec![item_create(HELM, helm)],
         vec![item_create(SPARE, 50)],
+        vec![item_create(SWORD, 50)],
         vec![created(ME, EntityKind::Player, &me)],
         vec![created(
             OTHER,
@@ -205,4 +211,37 @@ fn every_watched_pass_signals_and_nothing_else_does() {
     assert_eq!(c.seen(), Vec::<String>::new(), "a flag bit but force-red");
     c.frame(vec![vec![values(HELM.0, &[(FLAGS, 0x11)])]]);
     assert_eq!(c.seen(), ["ALERTS:4"], "the force-red bit");
+}
+
+/// The temporary-enchant arm (`0x4c8035`-`0x4c806d`) through the watchers: the enchantment's
+/// write runs the recompute (`0x5d9b2f`), whose main hand reads 1 with more than 30 s left
+/// (`0x5d9d00(1)`, `0x4c8060`). The time packet's setter (`0x5d9cc0`) runs no recompute, so the
+/// status stays 1 past the 30 s mark until a watcher's next pass reads 2.
+#[test]
+fn a_temporary_enchant_reads_one_then_two_at_the_next_pass() {
+    let (mut c, _) = client(40);
+    let main_hand = |c: &mut Client| -> i64 {
+        crate::script_calls::eval_in_vm(c.app.world(), "return GetInventoryAlertStatus(9)")
+    };
+    let time = |seconds: u32| SessionEvent::ItemEnchantTime {
+        item_guid: SWORD.0,
+        slot: 1,
+        seconds,
+    };
+    c.frame(vec![
+        vec![time(600)],
+        vec![values(SWORD.0, &[(TEMP_ENCHANT, 7)])],
+    ]);
+    assert_eq!(c.seen(), ["ALERTS:0"]);
+    assert_eq!(main_hand(&mut c), 1, "more than 30 s left");
+    c.frame(vec![vec![time(20)]]);
+    assert_eq!(
+        c.seen(),
+        Vec::<String>::new(),
+        "the time packet recomputes nothing"
+    );
+    assert_eq!(main_hand(&mut c), 1, "as the last pass left it");
+    c.frame(vec![vec![values(SWORD.0, &[(DURABILITY, 49)])]]);
+    assert_eq!(c.seen(), ["ALERTS:0"]);
+    assert_eq!(main_hand(&mut c), 2, "30 s or fewer left");
 }

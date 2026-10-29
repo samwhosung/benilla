@@ -207,12 +207,18 @@ fn slot_is_broken(v: &InvSlotView, durability: Option<(u32, u32)>) -> bool {
 }
 
 /// What `0x4c7ee0` reads of one worn item: `ITEM_FIELD_FLAGS` (`+0x3c`), `DURABILITY` (`+0xa0`)
-/// and `MAXDURABILITY` (`+0xa4`).
+/// and `MAXDURABILITY` (`+0xa4`); for the temporary-enchant arm, the record's flags (the `+0x110`
+/// table's slot 0, `0x4c8039`, 0 while the record is not cached), the temporary enchantment's id
+/// (`ITEM_FIELD_ENCHANTMENT` slot 1, `+0x4c`, `0x4c8043`) and its milliseconds left
+/// (`0x5d9d00(1)`, `0x4c805b`: the deadline less now, 0 when unset or run out).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AlertItem {
     pub flags: u32,
     pub durability: u32,
     pub max_durability: u32,
+    pub record_flags: u32,
+    pub temp_enchant: u32,
+    pub temp_enchant_left_ms: u32,
 }
 
 /// `0x4c7ee0`'s reads: the item `GetItemInSlot` (`0x6228a0`) finds in each of the 11 worn regions,
@@ -232,10 +238,11 @@ impl super::live::LiveQuery for InventoryAlertInputs {
     type Answer = Option<AlertInputs>;
 }
 
-/// One worn region's status (`0x4c7faa`-`0x4c8033`): 4 when force-red (`0x10`); else, unless
+/// One worn region's status (`0x4c7faa`-`0x4c806d`): 4 when force-red (`0x10`); else, unless
 /// wrapped (`0x08`) or without a maximum, 4 at durability 0 and 3 with 1..=5 points left (an
-/// absolute count, not a fraction); else 0. Statuses 1 and 2, the temporary-enchant arm
-/// (`0x4c8035`), are not computed; stock gives them no color (`DurabilityFrame.lua:18-19`).
+/// absolute count, not a fraction); else the temporary-enchant arm (`0x4c8035`): with record flag
+/// `0x2000` clear (`0x4c803b`) and a temporary enchantment (`0x4c8046`), 1, or 2 with 30000 ms or
+/// fewer left (`0x4c8060`, unsigned); else 0.
 fn alert_status(item: Option<AlertItem>) -> u8 {
     let Some(v) = item else {
         return 0;
@@ -243,13 +250,20 @@ fn alert_status(item: Option<AlertItem>) -> u8 {
     if v.flags & 0x10 != 0 {
         return 4;
     }
-    if v.flags & 0x08 != 0 || v.max_durability == 0 {
+    if v.flags & 0x08 == 0 && v.max_durability != 0 {
+        match v.durability {
+            0 => return 4,
+            1..=5 => return 3,
+            _ => {}
+        }
+    }
+    if v.record_flags & 0x2000 != 0 || v.temp_enchant == 0 {
         return 0;
     }
-    match v.durability {
-        0 => 4,
-        1..=5 => 3,
-        _ => 0,
+    if v.temp_enchant_left_ms <= 30_000 {
+        2
+    } else {
+        1
     }
 }
 
@@ -285,10 +299,12 @@ fn snapshot_alert_inputs(model: &Model) -> AlertInputs {
             .filter(|v| v.item_id != 0)
             .map(|v| {
                 let (durability, max_durability) = v.durability.unwrap_or((0, 0));
+                // The snapshot holds no temporary enchantment: its arm reads none.
                 AlertItem {
                     flags: v.flags,
                     durability,
                     max_durability,
+                    ..AlertItem::default()
                 }
             })
     });
@@ -2835,9 +2851,9 @@ mod tests {
         s.set_inventory_slots(slots);
         let mut worn = [None; 11];
         worn[0] = Some(AlertItem {
-            flags: 0,
             durability: 0,
             max_durability: 40,
+            ..AlertItem::default()
         });
         let mut host = Host(Some(AlertInputs {
             worn,
@@ -2857,6 +2873,72 @@ mod tests {
             s.eval::<Vec<String>>("return Heard").unwrap(),
             ["43", "43", "43"],
             "the host's statuses, once a pass, none with no player"
+        );
+    }
+
+    /// The temporary-enchant arm (`0x4c8035`-`0x4c806d`): a worn item no durability arm claims
+    /// reads 1 with a temporary enchantment, 2 at 30000 ms or fewer left, the boundary included
+    /// and an unset or run-out deadline (0) too; a charter record's (`0x2000`) or no enchantment
+    /// reads 0, and a damaged or broken item keeps its 3 or 4.
+    #[test]
+    fn the_temporary_enchant_arm_reads_one_or_two() {
+        let status = |item: AlertItem| {
+            let mut worn = [None; 11];
+            worn[8] = Some(item);
+            super::alert_statuses(&AlertInputs { worn, ammo: None }).0[8]
+        };
+        let enchanted = |left: u32| AlertItem {
+            durability: 40,
+            max_durability: 40,
+            temp_enchant: 7,
+            temp_enchant_left_ms: left,
+            ..AlertItem::default()
+        };
+        assert_eq!(status(enchanted(30_001)), 1);
+        assert_eq!(status(enchanted(30_000)), 2);
+        assert_eq!(status(enchanted(0)), 2, "unset or run out");
+        assert_eq!(
+            status(AlertItem {
+                flags: 0x08,
+                ..enchanted(60_000)
+            }),
+            1,
+            "wrapped skips the durability arms"
+        );
+        assert_eq!(
+            status(AlertItem {
+                max_durability: 0,
+                ..enchanted(60_000)
+            }),
+            1
+        );
+        assert_eq!(
+            status(AlertItem {
+                record_flags: 0x2000,
+                ..enchanted(60_000)
+            }),
+            0
+        );
+        assert_eq!(
+            status(AlertItem {
+                temp_enchant: 0,
+                ..enchanted(10)
+            }),
+            0
+        );
+        assert_eq!(
+            status(AlertItem {
+                durability: 5,
+                ..enchanted(10)
+            }),
+            3
+        );
+        assert_eq!(
+            status(AlertItem {
+                flags: 0x10,
+                ..enchanted(10)
+            }),
+            4
         );
     }
 }
