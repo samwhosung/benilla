@@ -61,35 +61,33 @@ impl HoldLoops {
 
     /// The kit sounds `edge` stops on its unit, the books moved to match: a hold's stop and a
     /// rebuild take the loops they name, an aura's stop and a replay their kit, a play nothing.
+    /// Each fades as `0x6203e0` stops an effect's sound ([`kit_stop_fade`]).
     pub(crate) fn stops(&mut self, edge: &SpellKitSound) -> Vec<KitStop> {
-        let declick = super::mixer::declick;
-        let (entity, kits, fade) = match *edge {
+        let (entity, kits) = match *edge {
             SpellKitSound::Play { .. } | SpellKitSound::PlayAt { .. } => return Vec::new(),
             SpellKitSound::StopHold { entity, spell_id } => {
-                (entity, self.stop_hold(entity, spell_id), declick())
+                (entity, self.stop_hold(entity, spell_id))
             }
             SpellKitSound::StopKit { entity, kit_sound } => {
                 // An aura-drop reap stops the kit's channels; an unrelated loop survives.
                 self.take(entity, |h| h.kit.1 == kit_sound);
-                (entity, vec![kit_sound], declick())
+                (entity, vec![kit_sound])
             }
-            SpellKitSound::Rebuilt { entity, at } => {
-                (entity, self.take(entity, |h| h.at < at), kit_stop_fade())
-            }
+            SpellKitSound::Rebuilt { entity, at } => (entity, self.take(entity, |h| h.at < at)),
             SpellKitSound::Replay {
                 entity, kit_sound, ..
             } => {
                 // Whatever the unit still sounds on the kit fades as the rebuild stopped its
                 // effect; the replay rings afresh.
                 self.take(entity, |h| h.kit.1 == kit_sound);
-                (entity, vec![kit_sound], kit_stop_fade())
+                (entity, vec![kit_sound])
             }
         };
         kits.into_iter()
             .map(|kit_sound| KitStop {
                 entity,
                 kit_sound,
-                fade,
+                fade: kit_stop_fade(),
             })
             .collect()
     }
@@ -131,8 +129,9 @@ impl HoldLoops {
     }
 }
 
-/// `0x6203e0`'s stop of an effect's sound, the rebuild's loop's (`0x60ac10`): a 0.15 s fade
-/// (`0x6204b6` → `0x7a5a10`).
+/// `0x6203e0`'s stop of an effect's sound, a 0.15 s fade (`0x6204b6` → `0x7a5a10`): every kit
+/// sound's stop, a hold's and an aura's through `0x614150` (`0x6141d8`, as a kit sound's effect
+/// from `0x61fec0` has no model) and the rebuild's through its loop `0x60ac10`.
 fn kit_stop_fade() -> kira::Tween {
     super::mixer::fade(KIT_STOP_FADE_MS)
 }
@@ -398,13 +397,51 @@ mod tests {
         assert_eq!(loops.held(unit), [(FIREBALL, BUILDUP)], "rang after");
     }
 
-    /// The rebuild's stop is `0x6203e0`'s: the sound fades over 0.15 s (`0x6204b6` → `0x7a5a10`),
-    /// not the 15 ms de-click of a force-stop.
+    /// Every stop of a kit's sound is `0x6203e0`'s, a 0.15 s fade (`0x6204b6` → `0x7a5a10`): a
+    /// hold's and an aura's through `0x614150` (`0x6141d8`), the rebuild's through its loop
+    /// `0x60ac10`, never the 15 ms de-click of a force-stop.
     #[test]
-    fn the_rebuilds_stop_fades_over_the_references_0_15_s() {
-        assert_eq!(
-            kit_stop_fade().duration,
-            std::time::Duration::from_millis(150)
-        );
+    fn every_kit_stop_fades_over_0_15_s() {
+        let unit = Entity::PLACEHOLDER;
+        for i in 0..5 {
+            let mut loops = HoldLoops::default();
+            edge(&mut loops, play(FIREBALL, BUILDUP, true, None));
+            edge(&mut loops, play(ARCANE_INTELLECT, AURA_LOOP, false, None));
+            let at = crate::lanes::stamp();
+            let stop = [
+                SpellKitSound::StopHold {
+                    entity: unit,
+                    spell_id: Some(FIREBALL),
+                },
+                SpellKitSound::StopHold {
+                    entity: unit,
+                    spell_id: None,
+                },
+                SpellKitSound::StopKit {
+                    entity: unit,
+                    kit_sound: AURA_LOOP,
+                },
+                SpellKitSound::Rebuilt { entity: unit, at },
+                SpellKitSound::Replay {
+                    entity: unit,
+                    spell_id: ARCANE_INTELLECT,
+                    kit_sound: AURA_LOOP,
+                    cast_hold: false,
+                    at,
+                },
+            ][i];
+            let fades: Vec<_> = loops
+                .stops(&stop)
+                .into_iter()
+                .map(|s| s.fade.duration)
+                .collect();
+            assert!(
+                !fades.is_empty()
+                    && fades
+                        .iter()
+                        .all(|&d| d == std::time::Duration::from_millis(150)),
+                "{stop:?}: {fades:?}"
+            );
+        }
     }
 }

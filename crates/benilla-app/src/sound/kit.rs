@@ -698,13 +698,14 @@ pub(super) fn set_source_kit_gain(out: &mut SoundOutput, source: Entity, kit_id:
     }
 }
 
-/// Force-stop `source`'s channels on kit `kit_id`: a looping spell kit rides the tracked play
-/// `0x61fec0` and dies with its effect (`0x614150`). Kit-scoped so the caster's greeting survives.
+/// Force-stop `source`'s channels on kit `kit_id` with the de-click, kit-scoped so the source's
+/// other sounds survive.
 pub(super) fn stop_source_kit(out: &mut SoundOutput, source: Entity, kit_id: u32) {
     stop_source_kit_with(out, source, kit_id, mixer::declick());
 }
 
-/// [`stop_source_kit`] over `fade`.
+/// [`stop_source_kit`] over `fade`: a spell kit's sound rides the tracked play `0x61fec0` and
+/// fades with its effect (`0x6203e0`).
 pub(super) fn stop_source_kit_with(
     out: &mut SoundOutput,
     source: Entity,
