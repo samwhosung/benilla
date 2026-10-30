@@ -734,6 +734,7 @@ const TYPE_GAMEOBJECT: u32 = 0x21;
 const GAMEOBJECT_FLAGS: u16 = 9;
 const GO_TRANSPORT: u32 = 0x8;
 const FORWARD: u32 = crate::creature_anim::move_flags::FORWARD;
+const ROOT: u32 = crate::creature_anim::move_flags::ROOT;
 
 /// A deck's descriptor: a game object flagged a transport.
 fn deck_fields() -> [(u16, u32); 2] {
@@ -994,6 +995,63 @@ fn a_listener_reads_a_member_whose_path_stopped_where_the_path_left_it() {
     c.frame(vec![vec![member_at(MATE, 20, ELWYNN, (100, 200))]]);
     let seen: Vec<String> = c.eval(false, "return Maps");
     assert_eq!(seen, ["0.7,0.6"]);
+}
+
+/// `SMSG_MONSTER_MOVE` stopping `guid` at `at`.
+fn halt(guid: u64, at: [f32; 3]) -> SessionEvent {
+    SessionEvent::MonsterMove {
+        guid,
+        transport: None,
+        start: at,
+        spline_id: 4,
+        path: Vec::new(),
+        facing: benilla_protocol::MonsterMoveFacing::None,
+        stop: true,
+        duration_ms: 0,
+        flying: false,
+        run_mode: true,
+    }
+}
+
+/// A monster move drops its member's queued plain move, so the frame after, a listener reads the
+/// member where it stood: the start's flush hands every node to `0x618080`, whose plain-move and
+/// heartbeat tags reach no case (`0x61851e`).
+#[test]
+fn a_listener_reads_a_member_whose_queued_move_a_monster_move_dropped_where_it_stood() {
+    let mut c = seated(0);
+    c.frame(vec![
+        vec![heartbeat(MATE, [700.0, 800.0, 0.0], 0, None)],
+        vec![halt(MATE, [500.0, 600.0, 0.0])],
+    ]);
+    c.frame(vec![vec![member_at(MATE, 20, ELWYNN, (100, 200))]]);
+    let seen: Vec<String> = c.eval(false, "return Maps");
+    assert_eq!(seen, ["0.5,0.6"]);
+}
+
+/// A queued root the monster move's flush applies refuses its path: the flush's root case roots
+/// the mover (`0x618425` → `0x619a00`), and the start tests the root bit after the flush
+/// (`0x6187c2`), so no path installs.
+#[test]
+fn a_queued_root_refuses_the_monster_move_that_flushes_it() {
+    let mut c = seated(0);
+    let mut root = heartbeat(MATE, [500.0, 600.0, 0.0], ROOT, None);
+    if let SessionEvent::UnitMove { verb, .. } = &mut root {
+        *verb = benilla_protocol::RelayVerb::Root(true);
+    }
+    c.frame(vec![
+        vec![root],
+        vec![walk(
+            MATE,
+            [500.0, 600.0, 0.0],
+            [900.0, 600.0, 0.0],
+            100_000,
+        )],
+    ]);
+    let mate = c.app.world().resource::<crate::net::GuidIndex>().0[&MATE];
+    assert!(
+        c.app.world().get::<crate::net::Spline>(mate).is_none(),
+        "the rooted mover takes no path"
+    );
 }
 
 /// A standing member's packet waits for the frame's tick, so a later packet's listener reads the

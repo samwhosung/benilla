@@ -681,28 +681,21 @@ fn on_monster_move(In(ev): In<SessionEvent>, mut sc: Scene) {
         run_mode,
     } = ev
     {
-        let rooted = modes_of(guid, &sc.index, &sc.modes).rooted();
-        // The start flushes the mover's queue, firing every queued move at once, and stops it
-        // (`0x6187a0` → `0x6185f0(0, 0)`, `0x61aa70`; a stop through `0x618750`), whether or not
-        // the root then refuses the path (`0x6187c2`). Nothing of it writes the replay chain (bit
-        // 31, `+0xa8`, `+0xac`, the ring), so the relays after the path time on from it.
+        // The start empties the mover's queue at once and stops it (`0x6187a0` → `0x6185f0(0, 0)`,
+        // `0x61aa70`; a stop through `0x618750`), then refuses the path on the root bit, its
+        // own (`0x6187c2`) or a granted one's. Nothing of it writes the replay chain (bit 31,
+        // `+0xa8`, `+0xac`, the ring), so the relays after the path time on from it.
+        let mut rooted = modes_of(guid, &sc.index, &sc.modes).rooted();
         if let Some(e) = sc.index.0.get(&guid).copied() {
             if let Ok(mut rm) = sc.remote.get_mut(e) {
-                let now_ms = sc.real.elapsed_secs_f64() * 1000.0;
                 for queued in std::mem::take(&mut rm.pending) {
-                    crate::net::motion::apply_move(
-                        e,
-                        &queued.mv,
-                        &mut rm,
-                        now_ms,
-                        &mut sc.commands,
-                        &mut sc.hard_landings,
-                    );
+                    flush_queued(e, &queued.mv, &mut rm, &mut sc.commands);
                 }
                 rm.flags &= !PATH_START_STOP;
                 rm.vertical_velocity = 0.0;
                 rm.jump_xy_vel = [0.0; 2];
                 rm.fall_start = None;
+                rooted |= rm.flags & crate::creature_anim::move_flags::ROOT != 0;
             }
         }
         let smooth =
@@ -1579,6 +1572,50 @@ fn monster_move(
                     .insert(SplineStopped(spline_id));
             }
         }
+    }
+}
+
+/// One queued relayed move as the flush's dispatcher takes it (`0x618080`, the flush `0x6185f0`
+/// passing `keep` 0): of what a relay queues, only the root, unroot and teleport tags act. The
+/// root stops the mover and roots it (tag 35: `0x619a00`, `0x61aa70` then `0x7c7340`; a relay's
+/// node has no send byte, so no snap to the path, `0x618425`), the unroot clears the bit (tag 36:
+/// `0x7c7370`; its fall start is not built: a remote mover has no landing), and the teleport
+/// places the mover (tag 38: `0x6184d0` → `0x617e90`). Every other pose is dropped (`0x61851e`),
+/// a plain move's, a heartbeat's (tag 37), a speed relay's and the fall start's (tag 6, `keep`
+/// 0) alike. Not built: benilla decodes the walk, run, hover, water-walk and feather-fall relays
+/// as plain poses, so their toggles (tags 14, 15, 29 to 34) drop with them, until the next relay's
+/// word carries the bits.
+fn flush_queued(
+    e: Entity,
+    mv: &crate::net::motion::RelayMove,
+    rm: &mut RemoteMotion,
+    commands: &mut Commands,
+) {
+    use crate::creature_anim::move_flags::ROOT;
+    match mv.verb {
+        benilla_protocol::RelayVerb::Root(true) => {
+            rm.flags = ((rm.flags & !PATH_START_STOP) | ROOT) & ROOT_APPLY_WIPE;
+        }
+        benilla_protocol::RelayVerb::Root(false) => rm.flags &= !ROOT,
+        benilla_protocol::RelayVerb::Teleport => {
+            match &mv.transport {
+                Some(t) => {
+                    commands.entity(e).insert(crate::transport::TransportRider {
+                        transport_guid: t.guid,
+                        local_pos: [t.pos.x, t.pos.y, t.pos.z],
+                        local_orientation: t.orientation,
+                    });
+                }
+                None => {
+                    commands
+                        .entity(e)
+                        .remove::<crate::transport::TransportRider>();
+                }
+            }
+            rm.wow_pos = mv.position;
+            rm.orientation = mv.orientation;
+        }
+        _ => {}
     }
 }
 
