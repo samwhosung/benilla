@@ -394,10 +394,14 @@ fn save_dirty_macros(
             return;
         }
         let held = *files.held.get(script);
+        // Moves parked for the bar keep the character file in the older numbering: the moves
+        // write the whole table once they run ([`renumber_buttons`]), this edit with it. An edit
+        // made meanwhile, in a session that ends before the arrival, is lost, never the buttons.
+        let parked = !files.renumber.get(script).is_empty();
         let state = script.macros();
         for (path, per_character) in [(&files.account, false), (&files.character, true)] {
             // A held scope's section is not written (`0x4f0c7f`, `0x4f0c90` → `0x5afee0`).
-            if held[usize::from(per_character)] {
+            if held[usize::from(per_character)] || (per_character && parked) {
                 continue;
             }
             let Some(path) = path else { continue };

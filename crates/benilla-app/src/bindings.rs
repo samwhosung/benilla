@@ -389,6 +389,9 @@ fn read_character_set(script: &mut UiScript, character: &Option<std::path::PathB
         script.seed_binding_set(2, Some(store::resolve(&overrides, &defaults)));
         info!("bindings: character-specific set read");
     }
+    // The choice zeroes the dirty mask before its copy into the live set (`0x4b6506`), so no
+    // `SaveBindings` made ahead of it is written: its queued files are dropped.
+    script.take_keybind_requests();
     script.load_binding_set(if script.character_bindings_exist() {
         2
     } else {
@@ -479,7 +482,8 @@ fn read_diff(path: &Option<std::path::PathBuf>) -> Option<Vec<(String, Vec<Strin
 }
 
 /// Drain the VM's binding requests: `SaveBindings` writes the set's diff; saving the account set
-/// deletes the character file. Left at the frame, not in the call: the call's own work, the copy
+/// deletes the character file. A set choice drops those made before it ([`read_character_set`]).
+/// Left at the frame, not in the call: the call's own work, the copy
 /// and the dirty mark (`0x4b8260` → `0x4b6310`), is the VM's and signals nothing (only a copy into
 /// the live set does, `0x4b6498`), and the reference writes the files at the interface's shutdown
 /// (`0x490bd0` → `0x4b65e0`), which no script reads.
@@ -2904,6 +2908,58 @@ mod tests {
             "bind H JUMP\r\n",
             "section 3 held: its file is not emptied"
         );
+        drop(app);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// A `/reload` meets both binding sections settled, so the readers run at their registration,
+    /// after the addons' files (`0x4900c7` → `0x4b62b0`). A `SaveBindings(1)` at file scope is
+    /// never written: the set choice zeroes the dirty mask (`0x4b6506`), so the character's file
+    /// stays and its set is the one in use.
+    #[test]
+    fn a_save_before_the_set_choice_is_never_written() {
+        let _l = crate::local_state::test_env::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tmp = std::env::temp_dir().join(format!("benilla-bind-early-{}", std::process::id()));
+        std::fs::remove_dir_all(&tmp).ok();
+        let _c = crate::local_state::test_env::EnvGuard::unset("WOW_CAPTURE");
+        let _h = crate::local_state::test_env::EnvGuard::set("BENILLA_HOME", tmp.to_str().unwrap());
+        let account = crate::local_state::bindings_account_path().unwrap();
+        crate::local_state::write_atomic(&account, "bind JUMP G\n").unwrap();
+        let character = crate::local_state::bindings_character_path("Realm", "Probeone").unwrap();
+        crate::local_state::write_atomic(&character, "bind JUMP H\n").unwrap();
+        let mut app = App::new();
+        app.insert_resource(crate::glue_session::roster::Roster::with_pending_pick(
+            vec![crate::glue_session::roster::test_character(7, "Probeone")],
+            7,
+        ))
+        .init_resource::<BindingFiles>()
+        .init_resource::<crate::account_data::AccountData>()
+        .add_systems(
+            Update,
+            (reread_arrived_bindings, drain_binding_requests).chain(),
+        );
+        app.world()
+            .resource::<crate::account_data::AccountData>()
+            .settle_for_test(Some(("Realm".into(), "Probeone".into())));
+        let mut script = core_script();
+        seed_bindings_for_vm(&mut script);
+        // An addon's file scope, ahead of the readers.
+        script.run("SaveBindings(1)").unwrap();
+        register_binding_readers(app.world_mut(), &mut script);
+        app.insert_non_send_resource(script);
+        app.update();
+        assert_eq!(
+            std::fs::read_to_string(&character).ok().as_deref(),
+            Some("bind JUMP H\n"),
+            "the character's file stays"
+        );
+        assert_eq!(
+            eval_str(&app, "return tostring(GetCurrentBindingSet())"),
+            "2"
+        );
+        assert_eq!(eval_str(&app, r#"return GetBindingKey("JUMP") or """#), "H");
         drop(app);
         std::fs::remove_dir_all(&tmp).ok();
     }

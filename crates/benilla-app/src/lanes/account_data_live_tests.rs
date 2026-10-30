@@ -410,3 +410,46 @@ fn an_older_character_file_moves_a_loaded_bar_at_its_read() {
         character_file()
     );
 }
+
+/// An edit while the moves wait for the bar, a `CreateMacro` in a listener of the character
+/// scope's `UPDATE_MACROS`, leaves the file in the older numbering, so a session that ends before
+/// the arrival still finds the buttons' old places at its next load; the arrival moves them and
+/// writes the table, the edit with it.
+#[test]
+fn an_edit_while_the_moves_wait_keeps_the_older_file_until_they_run() {
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut c = unarrived(
+        "renumber-edit",
+        &["UPDATE_MACROS"],
+        r#"local _, c = GetNumMacros()
+        if c > 0 and not Made then Made = 1 CreateMacro("Delta", 1, "/say d", nil, 1) end
+        return ''"#,
+        || {
+            vec![(
+                crate::local_state::macros_character_path("Realm", "Probeone").unwrap(),
+                OLD_CHARACTER_FILE,
+            )]
+        },
+    );
+    c.frame(vec![vec![digests(&[])]]);
+    c.frame(vec![]);
+    assert!(
+        crate::script_calls::eval_in_vm::<Option<u32>>(c.app.world(), "return Made").is_some(),
+        "the listener made its macro"
+    );
+    assert_eq!(
+        character_file(),
+        OLD_CHARACTER_FILE,
+        "the edit waits for the moves"
+    );
+    c.frame(vec![vec![old_bar()]]);
+    c.arrive();
+    assert_eq!(c.placed(), MOVED);
+    let file = character_file();
+    assert!(
+        file.starts_with("MACRO 16777217 \"Alpha\"") && file.matches(" \"Delta\" ").count() == 1,
+        "renumbered, the edit with it: {file}"
+    );
+}
