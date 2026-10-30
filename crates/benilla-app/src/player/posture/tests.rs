@@ -203,20 +203,30 @@ fn a_sit_closes_the_loot_and_stops_the_attack_and_a_stand_does_neither() {
     world.init_resource::<crate::creature_anim::AttackStopInFlight>();
     world.init_resource::<crate::creature_anim::UnitEdits>();
     world.init_resource::<crate::player::StandPending>();
-    world.init_resource::<crate::ui_loot::LootMoveStart>();
+    world.init_resource::<crate::net::GuidIndex>();
+    world.init_resource::<crate::ui_loot::LootState>();
+    world.init_resource::<crate::ui_loot::LootLatch>();
     world.init_resource::<Messages<crate::creature_anim::SheathRequest>>();
     world.spawn((
         crate::net::SelfPlayer,
         crate::creature_anim::Engaged(0xf130_0000_0000_0001),
     ));
+    const CORPSE: u64 = 0xf130_0000_0000_0042;
     let mut apply = |s: u8, stand_now: u8| {
+        world.resource_mut::<crate::ui_loot::LootState>().open(
+            CORPSE,
+            benilla_protocol::messages::loot_type::CORPSE,
+            0,
+            vec![],
+        );
+        world.resource_mut::<crate::ui_loot::LootLatch>().0 = Some(CORPSE);
         world
             .run_system_once(
                 move |mut player: ResMut<crate::player::StandPending>,
                       me: super::super::SelfPosture,
                       mut commands: Commands,
                       mut sheath: MessageWriter<crate::creature_anim::SheathRequest>,
-                      mut loot: ResMut<crate::ui_loot::LootMoveStart>| {
+                      mut loot: crate::ui_loot::MoveStartClose| {
                     super::apply_locally(
                         &mut player,
                         s,
@@ -229,14 +239,27 @@ fn a_sit_closes_the_loot_and_stops_the_attack_and_a_stand_does_neither() {
                 },
             )
             .unwrap();
-        let closed = std::mem::take(&mut world.resource_mut::<crate::ui_loot::LootMoveStart>().0);
+        let closed = world
+            .resource::<crate::ui_loot::LootState>()
+            .source()
+            .is_none();
+        world
+            .resource_mut::<crate::ui_loot::LootState>()
+            .clear_session();
+        world.resource_mut::<crate::ui_loot::LootLatch>().0 = None;
         let sent: Vec<String> = rx.try_iter().map(|c| format!("{c:?}")).collect();
         (closed, sent)
     };
     assert_eq!(
         apply(1, 0),
-        (true, vec!["AttackStop".to_string()]),
-        "the sit closes the loot and ends the attack"
+        (
+            true,
+            vec![
+                format!("LootRelease {{ guid: {CORPSE} }}"),
+                "AttackStop".to_string()
+            ]
+        ),
+        "the sit closes the loot, released there, then ends the attack"
     );
     assert_eq!(apply(0, 1), (false, vec![]), "the stand does neither");
 }
@@ -320,7 +343,7 @@ fn under_possession_the_posture_verbs_act_on_the_active_player() {
     world.insert_resource(NetCommands(tx));
     world.init_resource::<super::Player>();
     world.init_resource::<crate::player::StandPending>();
-    world.init_resource::<crate::ui_loot::LootMoveStart>();
+    world.init_resource::<crate::net::GuidIndex>();
     world.init_resource::<crate::bindings::BindingsState>();
     world.init_resource::<Messages<crate::creature_anim::SheathRequest>>();
     world.init_resource::<Messages<super::StandStateRequest>>();
@@ -348,7 +371,7 @@ fn under_possession_the_posture_verbs_act_on_the_active_player() {
                       net: Res<NetCommands>,
                       mut commands: Commands,
                       mut sheath: MessageWriter<crate::creature_anim::SheathRequest>,
-                      mut loot: ResMut<crate::ui_loot::LootMoveStart>,
+                      mut loot: crate::ui_loot::MoveStartClose,
                       mut asks: MessageReader<super::StandStateRequest>,
                       mut server: MessageReader<super::super::ServerStandState>| {
                     super::update(
@@ -410,7 +433,7 @@ fn a_stand_ask_sent_in_place_applies_locally_and_sends_nothing() {
     world.insert_resource(NetCommands(tx));
     world.init_resource::<super::Player>();
     world.init_resource::<crate::player::StandPending>();
-    world.init_resource::<crate::ui_loot::LootMoveStart>();
+    world.init_resource::<crate::net::GuidIndex>();
     world.init_resource::<crate::bindings::BindingsState>();
     world.init_resource::<Messages<crate::creature_anim::SheathRequest>>();
     world.init_resource::<Messages<super::StandStateRequest>>();
@@ -435,7 +458,7 @@ fn a_stand_ask_sent_in_place_applies_locally_and_sends_nothing() {
              net: Res<NetCommands>,
              mut commands: Commands,
              mut sheath: MessageWriter<crate::creature_anim::SheathRequest>,
-             mut loot: ResMut<crate::ui_loot::LootMoveStart>,
+             mut loot: crate::ui_loot::MoveStartClose,
              mut asks: MessageReader<super::StandStateRequest>,
              mut server: MessageReader<super::super::ServerStandState>| {
                 super::update(
@@ -479,7 +502,7 @@ fn posture_frame(world: &mut World) -> u8 {
              net: Res<NetCommands>,
              mut commands: Commands,
              mut sheath: MessageWriter<crate::creature_anim::SheathRequest>,
-             mut loot: ResMut<crate::ui_loot::LootMoveStart>,
+             mut loot: crate::ui_loot::MoveStartClose,
              mut asks: MessageReader<super::StandStateRequest>,
              mut server: MessageReader<super::super::ServerStandState>| {
                 super::update(
@@ -512,7 +535,7 @@ fn posture_world() -> (World, crossbeam_channel::Receiver<ClientCommand>) {
     world.insert_resource(NetCommands(tx));
     world.init_resource::<super::Player>();
     world.init_resource::<crate::player::StandPending>();
-    world.init_resource::<crate::ui_loot::LootMoveStart>();
+    world.init_resource::<crate::net::GuidIndex>();
     world.init_resource::<crate::bindings::BindingsState>();
     world.init_resource::<crate::creature_anim::UnitEdits>();
     world.init_resource::<Messages<crate::creature_anim::SheathRequest>>();

@@ -1014,15 +1014,32 @@ fn a_move_key_in_the_air_closes_the_loot_and_ends_a_follow_at_the_press() {
         "falling through the empty world"
     );
     follow(&mut client);
+    const CORPSE: u64 = 0xF130_0000_0000_0042;
     let world = client.app.world_mut();
-    world.resource_mut::<crate::ui_loot::LootMoveStart>().0 = false;
+    world.resource_mut::<crate::ui_loot::LootState>().open(
+        CORPSE,
+        benilla_protocol::messages::loot_type::CORPSE,
+        5,
+        vec![],
+    );
+    world.resource_mut::<crate::ui_loot::LootLatch>().0 = Some(CORPSE);
+    let _ = client.sent.try_iter().count();
+    let world = client.app.world_mut();
     *world.resource_mut::<BindingsState>() = BindingsState::after_calls(vec![], forward());
     for system in [client.sample, client.commands, client.cancel, client.press] {
         world.run_system(system).expect("the press runs");
     }
-    assert!(
-        world.resource::<crate::ui_loot::LootMoveStart>().0,
+    assert_eq!(
+        world.resource::<crate::ui_loot::LootState>().source(),
+        None,
         "the loot closes at the press"
+    );
+    assert!(
+        client
+            .sent
+            .try_iter()
+            .any(|c| matches!(c, ClientCommand::LootRelease { guid } if guid == CORPSE)),
+        "released there"
     );
     assert!(!following(&mut client), "and the follow ends there");
 }

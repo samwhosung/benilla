@@ -36,7 +36,7 @@ pub(super) fn update(
     net: &NetCommands,
     commands: &mut Commands,
     sheath: &mut MessageWriter<crate::creature_anim::SheathRequest>,
-    loot_close: &mut crate::ui_loot::LootMoveStart,
+    loot_close: &mut crate::ui_loot::MoveStartClose,
     asks: &mut MessageReader<StandStateRequest>,
     server: &mut MessageReader<super::ServerStandState>,
     reads: PlayerReads,
@@ -450,7 +450,7 @@ fn apply_locally(
     me: Option<SelfPostureItem>,
     commands: &mut Commands,
     sheath: &mut MessageWriter<crate::creature_anim::SheathRequest>,
-    loot_close: &mut crate::ui_loot::LootMoveStart,
+    loot_close: &mut crate::ui_loot::MoveStartClose,
 ) {
     let drawn = me
         .and_then(|(_, drv, ..)| drv)
@@ -462,8 +462,9 @@ fn apply_locally(
         pending.0 = Some(s);
     }
     if apply.leave {
-        // The same close as the movement start's (`0x60e9dd`), under the same `0x6126b0`.
-        loot_close.0 = true;
+        // The same close as the movement start's (`0x60e9dd`), under the same `0x6126b0`, here,
+        // ahead of the attack stop (`0x5f07e7`).
+        loot_close.close();
         commands.run_system_cached(stop_attack_for_stand_state);
     }
     if let (true, Some((e, ..))) = (apply.stow, me) {
@@ -493,7 +494,7 @@ fn set_stand_state(
     pending: &mut super::StandPending,
     commands: &mut Commands,
     sheath: &mut MessageWriter<crate::creature_anim::SheathRequest>,
-    loot_close: &mut crate::ui_loot::LootMoveStart,
+    loot_close: &mut crate::ui_loot::MoveStartClose,
 ) {
     if send_stand_state(s, stand_now, gates, flags, me.is_some(), net) {
         apply_locally(pending, s, stand_now, me, commands, sheath, loot_close);

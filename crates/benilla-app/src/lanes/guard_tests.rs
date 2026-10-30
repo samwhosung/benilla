@@ -1329,13 +1329,8 @@ const AT_THEIR_OWN_PLACE: &[(&str, &str)] = &[
     (
         "::player::controller::control",
         "the mover's queue sends the root and unroot acks at its frame update (`0x616438`, \
-         `0x6164a9`), and their input tick stops an auto-move there (`0x60e33d` → `0x60e347`)",
-    ),
-    (
-        "::player::press::press_tick",
-        "the window deactivate runs the input tick outside every call (`0x514490` → \
-         `0x5144b5`), its direction and pitch bits cleared (`0x5144a3`), whose pitch stop ends \
-         the auto-move there (`0x60ddda` → `0x60e990`)",
+         `0x6164a9`), and their input tick stops an auto-move there (`0x60e33d` → `0x60e347`), \
+         its starts' guard closing the loot there too (`0x60e990` → `0x60e9dd`)",
     ),
     (
         "::ui_chat::channels::end_session_channels_on_disconnect",
@@ -1345,14 +1340,7 @@ const AT_THEIR_OWN_PLACE: &[(&str, &str)] = &[
 
 /// The systems outside the phase that lend the call host and take a handler queue, firing off it
 /// in system order: remaining work, which only shrinks, by a suffix of the system's name.
-pub(super) const NOT_YET_PLACED: &[(&str, &str)] = &[(
-    "::ui_loot::drain_loot",
-    "the move-start close a loot response owes while we move (`0x5ebc3a`-`0x5ebc51`) when its \
-     copier returns with an item record outstanding (`0x4c1ea6`), which the reference makes \
-     inside the response's handler all the same: the loot lane takes it only at the copier's \
-     end, so the drain closes it in its own phase and `LOOT_CLOSED` fires behind the frame's \
-     packets",
-)];
+pub(super) const NOT_YET_PLACED: &[(&str, &str)] = &[];
 
 /// The placed queues' readers that defer work to their commands and push nothing onto a lane
 /// from them, by a suffix of the system's name, with what the commands do.

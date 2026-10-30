@@ -841,3 +841,57 @@ fn a_go_on_the_chest_we_loot_keeps_the_latch_it_arms() {
         "the chest stays the loot target"
     );
 }
+
+/// Silk, whose record the client lacks.
+const SILK: u32 = 4306;
+
+/// A response that lands while we run, on a body with a row whose record the client lacks: its
+/// copier returns with the fetch outstanding (`0x4c1ea6`), signalling nothing, and the response's
+/// tail closes the window all the same (`0x5ebc3a`-`0x5ebc51`), inside its packet: released there,
+/// `LOOT_CLOSED` there, and the teardown cancels the row's fetch (`0x4c1d4f`), so the record's
+/// answer behind it in the frame copies nothing and `LOOT_OPENED` never fires.
+#[test]
+fn a_response_on_the_run_waiting_on_a_record_closes_inside_its_packet() {
+    let mut c = client();
+    c.eval::<()>(
+        false,
+        r#"local g = CreateFrame("Frame")
+        g:RegisterEvent("CHAT_MSG_MONSTER_SAY")
+        g:SetScript("OnEvent", function()
+            table.insert(Seen, "items:" .. GetNumLootItems())
+        end)"#,
+    );
+    c.app
+        .world_mut()
+        .insert_resource(crate::player::Player::with_move_flags(
+            crate::creature_anim::move_flags::FORWARD,
+        ));
+    c.ask_loot(CORPSE);
+    c.frame(vec![
+        vec![response(CORPSE, 0, &[SILK])],
+        vec![SessionEvent::ItemTemplate {
+            entry: SILK,
+            info: Some(Box::new(crate::items::test_template("Silk Cloth"))),
+        }],
+        vec![boar_says("b")],
+    ]);
+    assert_eq!(
+        c.seen(),
+        ["LOOT_CLOSED:nil", "CHAT_MSG_MONSTER_SAY:b", "items:0"]
+    );
+    let sent = c.sent();
+    assert_eq!(
+        sent.iter()
+            .filter(|s| s.starts_with("LootRelease") && s.contains(&format!("{CORPSE}")))
+            .count(),
+        1,
+        "released once, at the response: {sent:?}"
+    );
+    assert!(
+        !sent.iter().any(|s| s.starts_with("AutostoreLootItem")),
+        "{sent:?}"
+    );
+    assert_eq!(c.app.world().resource::<LootState>().source(), None);
+    c.frame(vec![]);
+    assert!(c.seen().is_empty(), "nothing fires after");
+}

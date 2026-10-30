@@ -107,8 +107,8 @@ pub(super) fn press_tick(
         Query<Option<&crate::net::ObjectStore>, With<Embodied>>,
         SelfPosture,
     ),
-    // The loot window's move-start close.
-    mut loot: ResMut<crate::ui_loot::LootMoveStart>,
+    // The loot window's move-start close, run at the press.
+    mut loot: crate::ui_loot::MoveStartClose,
     // The auto-move a pitch start or stop ends, and where its `AUTOFOLLOW_END` goes.
     mut auto_move: (
         ResMut<FollowState>,
@@ -182,6 +182,11 @@ pub(super) fn press_tick(
         super::approach::end_auto_move(Some(follow), Some(approach), None, lane.as_deref_mut());
     }
     let prev = player.move_flags;
+    // A start's `OnMoveInput 0x60e990` (`0x60dc6a`, `0x60dcba`, `0x60dd55`) closes the loot at the
+    // press (`0x60e9dd`), before the start queues on the mover (`0x60dc7d`) for the stream below.
+    if lock.foreign_mover.is_none() && (loot_walk_away(prev, bits) || pitched) {
+        loot.close();
+    }
     // The tick runs in the air, whose translate predicate tests root alone (`0x514560` tests
     // `0x1200`, not the fall bit), so its legs above ran; the start it queues is the frame time's
     // to stream there, where only the mover's standstill nudge breaks the silence.
@@ -189,10 +194,6 @@ pub(super) fn press_tick(
         let ended = movement_net::stream_commands(&net.0, &mut player, bits, time.elapsed_secs());
         player.press_ended_precast |= ended;
         move_trace::press(word, prev, player.move_flags);
-    }
-    // A start's `0x60e990` (`0x60dc6a`, `0x60dcba`, `0x60dd55`) closes the loot at the press.
-    if lock.foreign_mover.is_none() && (loot_walk_away(prev, bits) || pitched) {
-        loot.0 = true;
     }
 }
 

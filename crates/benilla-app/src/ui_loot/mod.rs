@@ -7,7 +7,7 @@
 //! and each push's `ITEM_PUSH` and line. The getters read the session through the host
 //! ([`live::LootLive`]). The loot verbs and a row's click apply inside their calls
 //! ([`calls::LootSteps::apply`]), a precast end's close where the end applies
-//! ([`close_at_precast_end`]), and [`drain_loot`] takes the close a movement start owes.
+//! ([`close_at_precast_end`]), and a movement start's where its guard runs ([`MoveStartClose`]).
 
 use benilla_protocol::messages::{ItemPushResult, LootItem, BAG_PLAYER_INVENTORY};
 use bevy::prelude::*;
@@ -291,12 +291,14 @@ enum Step {
     /// the source zeroed (`0x4c1da0`), its `LOOT_CLOSED` while that window is open
     /// ([`Cells::open`]), then the window it fills, and whether its end ran inside its packet,
     /// every row's record held when its handler asked for each (`0x4c1e77`, `0x4c1ea6`); unknown
-    /// for a window no handler asked for.
+    /// for a window no handler asked for. `moving`: the response's tail owes the move-start close
+    /// behind that end (`0x5ebc3a`-`0x5ebc51`).
     Opened {
         ended: Window,
         window: Window,
         ends: Option<bool>,
         prior: Cells,
+        moving: bool,
     },
     /// The copier's end a response's pending records held, run by the cache callback at the last
     /// answer (`0x4c2ac0`, `0x4c2afc`), on its own session's window: a later response in the
@@ -404,7 +406,27 @@ impl LootState {
             window: self.window.clone(),
             ends: None,
             prior,
+            moving: false,
         });
+    }
+
+    /// The copier returned with an item record outstanding (`0x4c1ea6`), its end left to the last
+    /// answer (`0x4c2afc`).
+    pub(crate) fn copier_waits(&self) -> bool {
+        self.copier_due
+    }
+
+    /// The response's tail on the move (`0x5ebc3a`-`0x5ebc51`) after a copier that ended inside its
+    /// packet: the move-start close behind that end, which the lane runs as the response's step
+    /// fires ([`end_open`]), so the copier's sends and signals go first.
+    pub(crate) fn close_after_the_copier(&mut self) {
+        let opened = self.steps.iter_mut().rev().find_map(|(_, s)| match s {
+            Step::Opened { moving, .. } => Some(moving),
+            _ => None,
+        });
+        if let Some(moving) = opened {
+            *moving = true;
+        }
     }
 
     /// The latch as it stood before the response's handler wrote it (`0x5ebb60`), for the steps
@@ -951,17 +973,6 @@ impl LootLatch {
     }
 }
 
-/// The loot window's close owed this frame, `0x48f200(1, 1, 0)` while a loot target is latched
-/// (`0x6126b0`). Two writers call it: the movement-start guard `0x60e990` (`0x60e9dd`), called by
-/// every movement-start emitter, turning included, but not by mouse-look facing; and the local
-/// stand-state apply for a change to any state but 0 (`0x5f07d5`). No loot target reaches the
-/// range gate `0x493230`, so there is no distance leash. vmangos also releases on movement
-/// (`MovementHandler.cpp:1104`), but the close is the client's. A loot response that lands while
-/// we move sets it too (`0x5ebc3a`). A precast end's release closes where the end applies
-/// ([`close_at_precast_end`]), owing nothing here.
-#[derive(Resource, Default)]
-pub(crate) struct LootMoveStart(pub(crate) bool);
-
 pub(crate) struct UiLootPlugin;
 
 /// Applies a loot CVar change.
@@ -985,7 +996,6 @@ impl Plugin for UiLootPlugin {
             .init_resource::<LootConfig>()
             .init_resource::<LootLatch>()
             .init_resource::<LootKneel>()
-            .init_resource::<LootMoveStart>()
             .init_resource::<AutoLootByte>()
             .add_sweep_leg(SweepLeg::Loot, close_loot_on_leave_world)
             .add_systems(
@@ -994,9 +1004,6 @@ impl Plugin for UiLootPlugin {
                     drop_loot_steps
                         .in_set(UiFeed)
                         .run_if(not(crate::ui_script::ingame_ui_up)),
-                    drain_loot
-                        .in_set(crate::ui_script::UiDrain)
-                        .before(crate::target::TargetUpdate),
                     // After the net drain and the selection writers, which arm and drop the
                     // latch; the anim driver orders after this.
                     resolve_loot_kneel
@@ -1290,8 +1297,8 @@ impl LootReads<'_, '_> {
     }
 }
 
-/// The loot window's VM and session, and the move-start close a response's end takes.
-type LootVm<'w, 's> = VmWith<'w, 's, (LootSteps<'static, 'static>, ResMut<'static, LootMoveStart>)>;
+/// The loot window's VM and session.
+type LootVm<'w, 's> = VmWith<'w, 's, (LootSteps<'static, 'static>, ())>;
 
 /// The loot lane's head ([`crate::lanes`]).
 fn peek_loot(world: &World) -> Option<crate::lanes::Stamp> {
@@ -1386,6 +1393,7 @@ fn fire_step(vm: &mut LootVm, reads: &LootReads, step: Step) {
             window: w,
             ends,
             prior,
+            moving,
         } => {
             let replaced = vm.own().0.loot.replaced();
             // The copier ends the session in progress (`0x4c1ccb`-`0x4c1dac`): its
@@ -1401,8 +1409,9 @@ fn fire_step(vm: &mut LootVm, reads: &LootReads, step: Step) {
             vm.own().0.loot.pending_bind_confirm = None;
             restore_live(vm, live, false);
             let ends = vm.turn(|script, (mut steps, _)| {
+                // With no VM the copier's end tells no one; the close behind it still runs.
                 if script.is_none() {
-                    return false;
+                    return moving;
                 }
                 // A window no handler asked for (`0x4c1e77`) decides here, on the session as it
                 // stands.
@@ -1413,13 +1422,14 @@ fn fire_step(vm: &mut LootVm, reads: &LootReads, step: Step) {
                 })
             });
             if ends {
-                end_session_open(vm, w, replaced);
+                end_session_open(vm, w, replaced, moving);
             }
         }
+        // The response's own close ran in its handler (`0x5ebc51`), whatever the copier left.
         Step::CopierEnd(w) => {
             if vm.turn(|script, _| script.is_some()) {
                 let replaced = vm.own().0.loot.replaced();
-                end_session_open(vm, w, replaced);
+                end_session_open(vm, w, replaced, false);
             }
         }
         Step::FailureTail(at) => {
@@ -1455,15 +1465,14 @@ fn fire_step(vm: &mut LootVm, reads: &LootReads, step: Step) {
     }
 }
 
-/// A copier's end on its session `own`: one a later response in the frame replaced on the cells
-/// it left ([`end_superseded_open`]), else on its window as its packet left it, what the end does
-/// to it kept ([`on_its_window`]).
-fn end_session_open(vm: &mut LootVm, own: Window, replaced: bool) {
+/// A copier's end on its session `own`, with the move-start close its response's tail owes behind
+/// it when `moving`: one a later response in the frame replaced on the cells it left
+/// ([`end_superseded_open`]), else on its window as its packet left it, what the end does to it
+/// kept ([`on_its_window`]).
+fn end_session_open(vm: &mut LootVm, own: Window, replaced: bool, moving: bool) {
     if replaced {
-        let moving = vm.own().1 .0;
         end_superseded_open(vm, own, moving);
     } else {
-        let moving = std::mem::take(&mut vm.own().1 .0);
         on_its_window(vm, own, |vm| end_open(vm, moving));
     }
 }
@@ -1573,9 +1582,10 @@ fn restore_live<X: bevy::ecs::system::SystemParam + 'static>(
 
 /// A response's end, once its window is filled: the copier's end ([`LootSteps::copier_end`]) and
 /// what its signals owe, then the response's tail (`0x5ebc3a`-`0x5ebc51`): a window opened while
-/// we move (`moving`, [`LootMoveStart`]) takes the move-start close in the same handler, so it
-/// never paints. A session a later packet's handler has closed ([`LootState::closed_since`]) was
-/// released there, so its end sends nothing after that release: no sweep and no second close.
+/// we move (`moving`, [`LootState::close_after_the_copier`]) takes the move-start close in the
+/// same handler, so it never paints. A session a later packet's handler has closed
+/// ([`LootState::closed_since`]) was released there, so its end sends nothing after that release:
+/// no sweep and no second close.
 fn end_open<X: bevy::ecs::system::SystemParam + 'static>(
     vm: &mut VmWith<(LootSteps<'static, 'static>, X)>,
     moving: bool,
@@ -1983,9 +1993,16 @@ fn close_on_move_start(
     )
 }
 
-/// The move-start close where a packet's handler runs it, the movement guard `0x60e990` with
-/// `keepsLoot` clear (`0x60e9ba`-`0x60e9dd`): [`close_on_move_start`] and its dead source's
-/// deselect, the engine half at the handler, `LOOT_CLOSED` on the loot lane at its place.
+/// `0x48f200(1, 1, 0)` while a loot target is latched (`0x6126b0`), where its caller runs it: the
+/// movement guard `OnMoveInput 0x60e990` with `keepsLoot` clear (`0x60e9ba`-`0x60e9dd`), which every
+/// movement-start emitter calls, turning included, but not mouse-look facing, inside the start
+/// (`0x60dc6a`, ahead of the mover's queue at `0x60dc7d`); and the local stand-state apply for a
+/// change to any state but 0 (`0x5f07d5`). [`close_on_move_start`] and its dead source's deselect,
+/// the engine half there, `LOOT_CLOSED` on the loot lane at that place. No loot target reaches the
+/// range gate `0x493230`, so there is no distance leash. vmangos also releases on movement
+/// (`MovementHandler.cpp:1104`), but the close is the client's. A loot response's own on the move
+/// (`0x5ebc3a`-`0x5ebc51`) runs in its handler or behind its copier's end ([`end_open`]), and a
+/// precast end's where the end applies ([`close_at_precast_end`]).
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct MoveStartClose<'w, 's> {
     /// Absent in a harness without the loot window, which closes nothing.
@@ -2029,15 +2046,6 @@ pub(super) fn move_start_keeps(loot: &LootState, source: u64) -> bool {
     use benilla_protocol::messages::loot_type;
     loot.window.loot_type == loot_type::DISENCHANTING && !loot.window.is_empty()
         || guid::is_item(source)
-}
-
-/// The move-start close the frame owes from outside the VM, after the input pass
-/// ([`LootMoveStart`]): the input's, and a loot response's whose copier waits on an item record,
-/// which no copier end has taken. The loot lane signals its `LOOT_CLOSED`.
-fn drain_loot(mut owed: ResMut<LootMoveStart>, mut close: MoveStartClose) {
-    if std::mem::take(&mut owed.0) {
-        close.close();
-    }
 }
 
 /// `EndLootWindow 0x48f200(1, moving, 0)` as a precast end's tail runs it for the active player
@@ -2185,7 +2193,6 @@ mod tests {
             .init_resource::<crate::target::OwedSelects>()
             .init_resource::<LootState>()
             .init_resource::<LootLatch>()
-            .init_resource::<LootMoveStart>()
             .init_resource::<AutoLootByte>()
             .init_resource::<LootConfig>()
             .init_resource::<GroupState>()
@@ -3335,10 +3342,9 @@ mod tests {
     const CORPSE: u64 = 0xF130_0000_0000_0042;
     const LIVE: u64 = 0xF130_0000_0000_0043;
 
-    /// `drain_loot` scheduled, with [`CORPSE`] streamed at health 0 and [`LIVE`] at 100.
+    /// [`bare_app`] with [`CORPSE`] streamed at health 0 and [`LIVE`] at 100.
     fn close_app() -> (App, crossbeam_channel::Receiver<ClientCommand>) {
         let (mut app, rx) = bare_app();
-        app.add_systems(Update, drain_loot);
         for (guid, health) in [(CORPSE, 0), (LIVE, 100)] {
             stream(&mut app, guid, EntityKind::Unit, &[(F_UNIT_HEALTH, health)]);
         }
@@ -3350,6 +3356,13 @@ mod tests {
     /// The deselects asked for since the last call.
     fn deselects(app: &mut App) -> Vec<u64> {
         crate::target::take_owed_deselects(app.world_mut())
+    }
+
+    /// A movement start's guard, `0x60e990` → `0x48f200(1, 1, 0)` (`0x60e9dd`), where it runs.
+    fn move_start(app: &mut App) {
+        app.world_mut()
+            .run_system_once(|mut close: MoveStartClose| close.close())
+            .expect("the close runs as a one-shot system");
     }
 
     /// Opens a window as an admitted response does: the rows and the latch.
@@ -3505,7 +3518,7 @@ mod tests {
             open_loot(app, guid, kind, 0, rows);
         };
         let step = |app: &mut App| {
-            app.world_mut().resource_mut::<LootMoveStart>().0 = true;
+            move_start(app);
             app.update();
         };
 
@@ -3586,15 +3599,17 @@ mod tests {
     /// The precast end's release at rest, `0x48f200(1, 0, 0)` (`0x60d10b`): with `dl` clear an
     /// item's loot closes with its release and both unlocks (`0x48f2b5` falls through to
     /// `0x48f2bd`), and a disenchant window with rows left owes its sweep (`0x48f264`), where the
-    /// move-start close keeps both. Beside a move-start close the drain takes after it, it decides
-    /// alike, as the two commute.
+    /// move-start close keeps both. Beside a move-start close after it, it decides alike, as the two
+    /// commute.
     #[test]
     fn a_close_at_rest_takes_an_items_loot_and_sweeps_a_disenchant_hold() {
         const LOCKBOX: u64 = 0x4000_0000_0000_0007;
         let (mut app, rx) = close_app();
-        let step = |app: &mut App, move_start: bool| {
+        let step = |app: &mut App, and_move_start: bool| {
             close_at_precast_end(app.world_mut(), false);
-            app.world_mut().resource_mut::<LootMoveStart>().0 = move_start;
+            if and_move_start {
+                move_start(app);
+            }
             app.update();
         };
         for move_start in [false, true] {

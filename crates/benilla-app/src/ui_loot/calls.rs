@@ -86,7 +86,7 @@ pub(crate) struct LootSteps<'w, 's> {
 
 impl LootSteps<'_, '_> {
     /// A probe line's stand state change's loot close, `0x48f200(1, 1, 0)` at `0x5f07d5`, with
-    /// nobody to signal between its steps: the movement start's close ([`super::LootMoveStart`]),
+    /// nobody to signal between its steps: the movement start's close ([`super::MoveStartClose`]),
     /// its release sent now.
     pub(crate) fn close_for_stand(&mut self) {
         let closed = super::close_on_move_start(&mut self.loot, &mut self.latch, &self.net);
