@@ -25,7 +25,6 @@ use bevy::ecs::entity::EntityHashSet;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
-use benilla_formats::Reaction;
 use benilla_protocol::EntityKind;
 use benilla_ui::script::{
     unit_is_grey, PlateGeometry, PlateState, PLATE_BIT_ENEMY, PLATE_BIT_FRIEND,
@@ -34,12 +33,16 @@ use benilla_ui::script::{
 use crate::entities::{overhead_anchor, BoneAttach, OverheadFallback, SceneDrawn};
 use crate::names::NameCache;
 use crate::net::{Embodied, Guid, NetEntity, ObjectStore, SelfPlayer};
-use crate::query_cache::Ask;
 use crate::target::{Hovered, Selection, TargetUpdate};
 use benilla_world::view::WorldCamera;
 
 /// The plate border, sharp-resampled so its 128x32 art stays crisp when magnified.
 pub(crate) mod border;
+/// The gate's tests of a unit and the bind's reads, shared by the frame and the packets.
+mod gate;
+/// The host's reads for the plates' callbacks and the gate inside a packet.
+mod live;
+pub(crate) use live::NamePlateLive;
 
 /// The two script bits of `[0xc4da34]`, bit `0x1` enemy plates and bit `0x8` friendly: engine
 /// state, written only by the four plate verbs inside their calls ([`PlateSteps`]) and cleared at every world
@@ -314,6 +317,14 @@ pub(crate) fn seat_legacy_settings(
     }
 }
 
+/// The units whose spatial tests the frame's gate passed last (`0x60f600` from `0x607ef9`): the
+/// scene node drawn in the last render (`0x60f649`), not the camera's unit (`0x60f68c`), the
+/// anchor projected into view (`0x60f773`) and within 20 yards of the camera's unit (`0x60f7b8`).
+/// The gate a packet runs ([`NamePlateLive`]) reads them as they stand, as the reference's runs
+/// over the positions and the camera the last frame left.
+#[derive(Resource, Default)]
+pub(crate) struct PlateSpots(pub(crate) std::collections::HashSet<u64>);
+
 /// The world and reaction inputs of the plate gate, bundled under the 16-param ceiling.
 #[derive(SystemParam)]
 #[allow(clippy::type_complexity)] // one bundled system param
@@ -348,10 +359,17 @@ struct PlateWorld<'w, 's> {
     targeting: Res<'w, crate::spell::SpellTargeting>,
     /// The script bits, which a plate's `OnShow` may move inside its call.
     mode: Res<'w, VPlateMode>,
+    /// The spatial verdicts this gate leaves for the packets'.
+    spots: ResMut<'w, PlateSpots>,
 }
 
-/// Every frame: gate the units, seat each plate and hand the result to the widget layer as
-/// [`PlateState`]s. Runs after the targeting chain, whose selection it reads.
+/// Every frame, the units' gate (`0x60f600` from each unit's update, `0x607ef9`), the seat pass
+/// (`0x608ce0`) and the plates' own update (`0x7cb950`), handed to the widget layer as
+/// [`PlateState`]s: a unit the gate gives a plate is bound with what it reads now, a unit it
+/// keeps one on has the seat, the alpha, the lit bar and the hover moved, and the level while the
+/// latch asks. What a kept plate shows of its unit moves inside the packets, at the callbacks
+/// (`fire_plate_call`, the bar's watcher in [`crate::ui_unit`]). Runs after the targeting chain,
+/// whose selection it reads.
 #[allow(clippy::type_complexity)] // one Bevy system's full input set
 fn drive_vplates(
     // With the camera rig, whose look the plates' mouse follows and which the view verbs move
@@ -361,7 +379,6 @@ fn drive_vplates(
         Res<'static, crate::player::CameraControl>,
     )>,
     mut plates: ResMut<VPlates>,
-    mut flashes: ResMut<PlateFlashes>,
     names: Res<NameCache>,
     spells: Option<Res<crate::ui_action::Spells>>,
     anchor_q: (
@@ -379,9 +396,10 @@ fn drive_vplates(
     // The plates' widgets change after the turn, with the host lent: each plate's `OnShow` and
     // `OnHide` run in place as the walk shows or hides it, so a call one makes applies inside its
     // verb.
-    let step = vm.turn(|script, (world, rig)| {
+    let step = vm.turn(|script, (mut world, rig)| {
         plates.0.clear();
         bucket.clear();
+        world.spots.0.clear();
         // Every early return retires the plates first, or the widgets stay on screen; the reference
         // hides each live plate and returns it to the pool (`0x608a10`).
         let mode = *world.mode;
@@ -445,11 +463,21 @@ fn drive_vplates(
         );
         let hovered_key = script.hovered_nameplate();
         let my_level = self_store.and_then(|s| s.0.unit_level()).unwrap_or(1);
-        let (rel, me) = (world.relations.get(), world.relations.me());
-        let types = crate::creature_type::CreatureTypeSources {
+        let relations = &world.relations;
+        let unit_of = |guid: u64, store: &ObjectStore| relations.unit_of(guid, store);
+        let judge = gate::Judge {
+            rel: relations.get(),
+            me: relations.me(),
+            unit_of: &unit_of,
+            types: crate::creature_type::CreatureTypeSources {
+                names: Some(&names),
+                forms: spells.as_deref().map(|s| &s.forms),
+                words: None,
+            },
             names: Some(&names),
-            forms: spells.as_deref().map(|s| &s.forms),
-            words: None,
+            my_level,
+            group: Some(&group),
+            mode,
         };
         // `GetUnitName`'s miss (`0x609324`): the `UNKNOWNOBJECT` text, read once a frame.
         let unknown = script.unknown_object_text();
@@ -466,26 +494,11 @@ fn drive_vplates(
         let diag = viewport.length();
         let sort_pt = Vec2::new(0.4 * diag, viewport.y - 0.3 * diag);
         let mut cands = Vec::new();
+        let mut spots = std::collections::HashSet::new();
         for (entity, net, guid, tf, store) in &world.units {
             // The camera's own unit (`0x60f68c`); our body is a candidate while we are attached to
             // another unit.
             if !matches!(net.kind, EntityKind::Unit | EntityKind::Player) || entity == centre {
-                continue;
-            }
-            // `NOT_SELECTABLE` (flags bit 25) never gets a plate, re-tested every tick (`0x60f622`,
-            // from CGUnit's OnUpdate `0x607ed0`). A plate hover publishes the mouseover with no
-            // selectability check (`0x7cb869`, unlike the world hover at `0x482982`), so this gate
-            // is what keeps such a unit's tooltip away.
-            if store.is_some_and(|s| s.0.unit_flags() & (1 << 25) != 0) {
-                continue;
-            }
-            // `0x60f600`'s first test: health 0 or less (absent reads 0) has no plate. Feign death
-            // keeps health, so it passes here.
-            if store.is_none_or(|s| s.0.unit_health().unwrap_or(0) == 0) {
-                continue;
-            }
-            // `0x60f62e`: `bytes_1` byte 3 `& 3` (ghost or creep) has no plate.
-            if store.is_some_and(|s| s.0.unit_is_ghost_visual()) {
                 continue;
             }
             // The unit's scene node, drawn in the last render (`0x60f63b`-`0x60f650`): culled by
@@ -495,41 +508,6 @@ fn drive_vplates(
             }
             // Measured from the camera's unit (`0x60f780`-`0x60f7b8`).
             if (tf.translation - centre_pos).length_squared() > MAX_DIST_SQ {
-                continue;
-            }
-            // A CREATEDBY owner, no SUMMONEDBY owner and flags bit 9 (`0x200`): no plate in either
-            // category (`0x60f70b`-`0x60f72d`); the bit's 1.12 name is unknown.
-            if store.is_some_and(|s| {
-                s.0.unit_created_by().is_some_and(|g| g != 0)
-                    && s.0.unit_summoned_by().is_none_or(|g| g == 0)
-                    && s.0.unit_flags() & 0x200 != 0
-            }) {
-                continue;
-            }
-            // The category is `CanAttack` from the player (a rep faction answers by its at-war
-            // bit); the bar colour is the unit's reaction toward us (by standing). A not-at-war
-            // neutral NPC is a friendly plate with a yellow bar.
-            let is_player = net.kind == EntityKind::Player;
-            let pair = store
-                .map(|s| world.relations.unit_of(guid.0, s))
-                .zip(me.as_ref());
-            let rank = pair.map_or(Reaction::Neutral as u8, |(u, me)| rel.reaction(&u, me));
-            // A unit whose descriptor has not streamed is attackable by nobody, so friendly unless
-            // a player, whom `CanCooperate` cannot pass.
-            let friendly = pair.map_or(!is_player, |(u, me)| {
-                crate::target::ring::plate_is_friendly(&rel, &u, me, is_player)
-            });
-            if friendly && !mode.friends || !friendly && !mode.enemies {
-                continue;
-            }
-            // Only on the hostile side, a dead-looking unit has no plate (`0x60f733`): a feigning
-            // hunter's plate hides from enemies and stays for friends.
-            if !friendly && store.is_some_and(|s| s.0.unit_reads_dead()) {
-                continue;
-            }
-            // Only on the friendly side, a totem has no plate (`0x60f750`-`0x60f75a`, the type
-            // `0x605570` resolves); an enemy totem keeps its plate.
-            if friendly && store.is_some_and(|s| types.of(s) == CREATURE_TYPE_TOTEM) {
                 continue;
             }
             // Behind the camera or outside the viewport there is no plate: `0x60f600` destroys it
@@ -552,6 +530,11 @@ fn drive_vplates(
             .map(|p| ui_screen.point(p)) else {
                 continue;
             };
+            spots.insert(guid.0);
+            let is_player = net.kind == EntityKind::Player;
+            let Some(rank) = judge.admits(guid.0, is_player, store) else {
+                continue;
+            };
             cands.push((
                 screen.distance_squared(sort_pt),
                 screen,
@@ -568,7 +551,6 @@ fn drive_vplates(
             plates.0.insert(entity);
 
             let alpha = plate_alpha(&world.selection, guid.0);
-            let tint = plate_tint(rank, is_player);
             // `WOW_VPLATE_TRACE=1` prints each plate rect in logical px.
             static TRACE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
             let trace =
@@ -635,8 +617,8 @@ fn drive_vplates(
             // ── The plate's state, handed to the widget layer ──
             //
             // The plates hang off `WorldFrame`, outside `UIParent`'s scale, so root units are their
-            // own. The raid-target index is 1-based here, 0-based for the atlas cell.
-            let mark = group.raid_target_index(guid.0);
+            // own. What the bind reads of the unit: the widget layer takes it for a new plate.
+            let unit = judge.unit(guid.0, is_player, store, rank);
             let x_units = (plate.min.x + plate.max.x) * 0.5 / seam;
             let y_units = (viewport.y - plate.min.y) / seam;
             states.push(PlateState {
@@ -644,45 +626,22 @@ fn drive_vplates(
                 // addons cache per plate on it.
                 key: guid.0,
                 top_centre: (x_units, y_units),
-                // Raw health, not a fraction: `healthbar:GetValue()` is `[bar+0x320]` (`0x78f5d0`),
-                // and addons divide it by the max.
-                health: store.and_then(|s| s.0.unit_health()).unwrap_or(0) as f32,
-                max_health: store
-                    .and_then(|s| s.0.unit_max_health())
-                    .unwrap_or(1)
-                    .max(1) as f32,
-                bar_colour: [tint[0], tint[1], tint[2]],
-                // Read, never asked: this runs every frame; the unit's create asks. A miss is
-                // `GetUnitName`'s `UNKNOWNOBJECT` (`0x609324`), as the bind sets it (`0x7cb70c`).
-                name: names
-                    .resolve_unit(guid.0, store, Ask::Read)
-                    .map_or_else(|| unknown.clone(), str::to_owned),
-                // The skull (`0x7cbb40`): rank 3 through `gated_rank` (so a charmed boss shows its
-                // level), or a hostile 10 or more levels up that is not grey (`0x5f0700`, vacuous
-                // there but transcribed). A unit with no level yet shows neither.
-                level: store.and_then(|s| s.0.unit_level()),
-                skull: store.and_then(|s| s.0.unit_level()).is_some_and(|level| {
-                    crate::names::gated_rank(
-                        store
-                            .and_then(|s| s.0.object_entry())
-                            .and_then(|e| names.creature_record(e)),
-                        store,
-                    ) == 3
-                        || (rank <= 1 && level >= my_level + 10 && !unit_is_grey(my_level, level))
-                }),
-                level_colour: {
-                    let c = store
-                        .and_then(|s| s.0.unit_level())
-                        .map_or([1.0, 1.0, 1.0, 1.0], |level| con_color(my_level, level));
-                    [c[0], c[1], c[2]]
-                },
-                // 0-based for the atlas: `col = idx & 3`, `row = idx >> 2`.
-                raid_icon: (mark >= 1).then(|| mark - 1),
+                health: unit.health,
+                max_health: unit.max_health,
+                bar_colour: unit.bar_colour,
+                // A miss is `GetUnitName`'s `UNKNOWNOBJECT` (`0x609324`), as the bind sets it
+                // (`0x7cb70c`).
+                name: unit.name.unwrap_or_else(|| unknown.clone()),
+                level: unit.level,
+                skull: unit.skull,
+                level_colour: unit.level_colour,
+                raid_icon: unit.raid_icon,
                 alpha,
                 lit,
                 hovered: hover,
             });
         }
+        world.spots.0 = spots;
 
         // The widget layer rewrites the static anchors only when this moves, so an addon's own
         // re-anchoring survives between resizes.
@@ -708,7 +667,6 @@ fn drive_vplates(
             states,
         )
     });
-    let flashes = std::mem::take(&mut flashes.0);
     vm.run(|script| {
         let Some(script) = script else {
             return;
@@ -717,11 +675,63 @@ fn drive_vplates(
             PlateStep::Retire => script.retire_nameplates(),
             PlateStep::Sync(geometry, states) => script.sync_nameplates(geometry, &states),
         }
-        // After the sync, so a plate bound this frame is a hit's to flash.
-        for guid in flashes {
-            script.flash_nameplate(guid);
-        }
     });
+}
+
+/// One plate callback a packet runs at its place, which [`fire_plate_call`] applies to the unit's
+/// plate with the host lent, as the reference's runs inside the handler.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PlateCall {
+    /// `RefreshNameDesc`'s plate leg (`0x607080` → `0x7cbaa0`): the bar's colour from the
+    /// reaction. The health watcher (`0x60471b`), the reaction's refresh of a unit, its summon and
+    /// its charm (`0x606e3c`, `0x606e8a`, `0x606ecf`) and the active player's sweep (`0x606fa2`).
+    Colour,
+    /// `FlashNamePlate` (`0x6122e0`): the health watcher on a loss (`0x604764`), a direct spell
+    /// hit's line (`0x62ce43`) and an environmental one's (`0x62abac`), ahead of their lines.
+    Flash,
+    /// `OnLevelChanged`'s plate leg (`0x60ce5b` → `0x7cbb40`): the level and skull.
+    Level,
+    /// The active player's level change setting the latch (`0x5edb93` → `0x605550`): the next
+    /// frame's gate refreshes every kept plate's level and skull, which its level colours.
+    LevelLatch,
+    /// `InvalidateNameDesc`'s gate (`0x607050` at `0x60706a` → `0x60f600`), from the name update
+    /// (`0x491a2e`), the guild tag's refresh (`0x5e08fd`), `UNIT_FIELD_BYTES_1` byte 3's watcher
+    /// (`0x5ff82a`, `0x5ff846`) and the owners' (`0x604938`).
+    Gate,
+    /// `ReleaseNamePlate` (`0x608a10`) from the name and creature answers, ahead of their name
+    /// update (`0x5fb86e`, `0x6046c1`).
+    Release,
+    /// The unit's release as it leaves the world (`CGUnit_C::Release` at `0x5fbba9`, the
+    /// destructor at `0x5fb620`): its plate freed and its object's watches gone.
+    Gone,
+}
+
+/// `call` on `guid`'s plate, inside the packet that ran it.
+pub(crate) fn fire_plate_call(
+    script: &mut benilla_ui::script::UiScript,
+    guid: u64,
+    call: PlateCall,
+) {
+    match call {
+        PlateCall::Colour => script.refresh_nameplate_colour(guid),
+        PlateCall::Flash => script.flash_nameplate(guid),
+        PlateCall::Level => script.refresh_nameplate_level(guid),
+        PlateCall::LevelLatch => script.latch_nameplate_levels(),
+        PlateCall::Gate => script.gate_nameplate(guid),
+        PlateCall::Release => script.release_nameplate(guid),
+        PlateCall::Gone => script.nameplate_unit_gone(guid),
+    }
+}
+
+/// The bar's watcher on `guid` (`0x7cc570`) after the bridge's on the same field, with the unit's
+/// health and maximum as `store` holds them where it runs.
+pub(crate) fn health_watch(
+    script: &mut benilla_ui::script::UiScript,
+    guid: u64,
+    store: Option<&ObjectStore>,
+) {
+    let (health, max) = gate::bar_of(store);
+    script.nameplate_health(guid, health, max);
 }
 
 /// [`drive_vplates`] as a one-shot, for a test over the whole client.
@@ -795,28 +805,6 @@ enum PlateStep {
     Sync(PlateGeometry, Vec<PlateState>),
 }
 
-/// The units hit since the plate driver last ran, whose plates flash their names red for 5 s
-/// (`FlashNamePlate`, `0x6122e0`): the combat log's direct spell hit (`0x62cd80` at `0x62ce43`)
-/// and environmental damage (`0x62aac0` at `0x62abac`) push here, and [`flash_on_health_loss`]
-/// the health drops (`0x6046f0` at `0x604764`). The driver hands them to the widgets.
-#[derive(Resource, Default)]
-pub(crate) struct PlateFlashes(pub(crate) Vec<u64>);
-
-/// Queue every unit-block `UNIT_FIELD_HEALTH` edge whose old value is above the new, compared
-/// signed (`0x6046f0`: `cmp edi,[health]` at `0x60475d`, `jle` at `0x604760` skips).
-fn flash_on_health_loss(
-    mut edges: MessageReader<crate::net::FieldChanged>,
-    mut flashes: ResMut<PlateFlashes>,
-) {
-    flashes.0.extend(
-        edges
-            .read()
-            .filter(|e| e.unit_field(benilla_protocol::field::FIELD_UNIT_HEALTH))
-            .filter(|e| e.old as i32 > e.new as i32)
-            .map(|e| e.guid),
-    );
-}
-
 /// The plate driver's set; the overhead-name driver runs after it.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct VPlateSet;
@@ -829,16 +817,13 @@ impl Plugin for VPlatesPlugin {
         app.init_resource::<VPlateMode>()
             .init_resource::<VPlates>()
             .init_resource::<PlateHover>()
-            .init_resource::<PlateFlashes>()
+            .init_resource::<PlateSpots>()
             .add_systems(
                 Update,
-                (
-                    // After the targeting chain, itself after `WorldStage::Input`, so this projects
-                    // through this frame's camera; `ui_script::extract::paint_script` runs after
-                    // it, so the plates paint the same frame.
-                    drive_vplates.after(TargetUpdate).in_set(VPlateSet),
-                    flash_on_health_loss.before(VPlateSet),
-                ),
+                // After the targeting chain, itself after `WorldStage::Input`, so this projects
+                // through this frame's camera; `ui_script::extract::paint_script` runs after it,
+                // so the plates paint the same frame.
+                drive_vplates.after(TargetUpdate).in_set(VPlateSet),
             );
     }
 }
@@ -1101,116 +1086,6 @@ mod tests {
             None,
             "an entry of 0 is off, whatever its spelling"
         );
-    }
-
-    /// The driver's hand-over of the queued hits: what [`drive_vplates`] does with them.
-    fn hand_over(app: &mut App) {
-        let guids = std::mem::take(&mut app.world_mut().resource_mut::<PlateFlashes>().0);
-        let mut script = app
-            .world_mut()
-            .non_send_resource_mut::<benilla_ui::script::UiScript>();
-        for guid in guids {
-            script.flash_nameplate(guid);
-        }
-    }
-
-    /// A plate's name goes red for a unit whose health fell (`0x6046f0` at `0x604764`, old above
-    /// new, signed) or that a combat-log hit named ([`PlateFlashes`]); a rise, a unit-less field and
-    /// a unit with no plate flash nothing.
-    #[test]
-    fn a_health_drop_or_a_logged_hit_flashes_the_units_plate() {
-        use benilla_protocol::field::FIELD_UNIT_HEALTH;
-        use benilla_protocol::messages::ObjectType;
-        const WOLF: u64 = 0x1001;
-        const BEAR: u64 = 0x1002;
-        let mut script = benilla_ui::script::UiScript::new().unwrap();
-        script
-            .run(
-                r#"NAMEPLATE_FONT = "Fonts\FRIZQT__.TTF"
-                WorldFrame = CreateFrame("WorldFrame", "WorldFrame") WorldFrame:SetAllPoints()"#,
-            )
-            .unwrap();
-        let state = |key| PlateState {
-            key,
-            top_centre: (500.0, 400.0),
-            health: 30.0,
-            max_health: 40.0,
-            bar_colour: [1.0, 0.0, 0.0],
-            name: "Wolf".into(),
-            level: Some(12),
-            skull: false,
-            level_colour: [1.0, 1.0, 0.0],
-            raid_icon: None,
-            alpha: 255,
-            lit: false,
-            hovered: false,
-        };
-        let geometry = PlateGeometry {
-            width: 128.0,
-            height: 32.0,
-            bar_off_x: 4.0,
-            bar_off_y: 4.0,
-            bar_width: 103.0,
-            bar_height: 9.0,
-            level_off_x: 11.8,
-            level_off_y: 9.1,
-            skull_size: 12.8,
-            raid_size: 25.6,
-            name_height: 12.8,
-            level_height: 11.0,
-            shadow_offset: 1.0,
-        };
-        script.sync_nameplates(geometry, &[state(WOLF), state(BEAR)]);
-        let mut app = App::new();
-        app.add_message::<crate::net::FieldChanged>()
-            .init_resource::<PlateFlashes>()
-            .insert_non_send_resource(script)
-            .add_systems(Update, flash_on_health_loss);
-        let colour = |app: &App, plate: u32| {
-            app.world()
-                .non_send_resource::<benilla_ui::script::UiScript>()
-                .eval::<f64>(&format!(
-                    "local children = {{ WorldFrame:GetChildren() }} \
-                     local _, _, name = children[{plate}]:GetRegions() \
-                     local r, g, b = name:GetTextColor() return g"
-                ))
-                .map(|g| g.round())
-                .unwrap()
-        };
-        let edge = |guid, index, old, new| crate::net::FieldChanged {
-            at: crate::lanes::stamp(),
-            entity: Entity::PLACEHOLDER,
-            guid,
-            kind: ObjectType::Unit,
-            index,
-            old,
-            new,
-        };
-        // Both plates read white: green is 1.
-        assert_eq!((colour(&app, 1), colour(&app, 2)), (1.0, 1.0));
-
-        // A rise (signed: -16 to 5 is one), and a drop on a field that is not the health: nothing.
-        app.world_mut()
-            .write_message(edge(WOLF, FIELD_UNIT_HEALTH, 10, 20));
-        app.world_mut()
-            .write_message(edge(WOLF, FIELD_UNIT_HEALTH, 0xFFFF_FFF0, 5));
-        app.world_mut()
-            .write_message(edge(WOLF, FIELD_UNIT_HEALTH + 1, 20, 10));
-        app.update();
-        hand_over(&mut app);
-        assert_eq!(colour(&app, 1), 1.0);
-
-        // A drop flashes the wolf's plate alone, red having no green.
-        app.world_mut()
-            .write_message(edge(WOLF, FIELD_UNIT_HEALTH, 20, 10));
-        app.update();
-        hand_over(&mut app);
-        assert_eq!((colour(&app, 1), colour(&app, 2)), (0.0, 1.0));
-
-        // A logged hit names the bear; a unit with no plate is ignored.
-        app.world_mut().resource_mut::<PlateFlashes>().0 = vec![0x9999, BEAR];
-        hand_over(&mut app);
-        assert_eq!((colour(&app, 1), colour(&app, 2)), (0.0, 0.0));
     }
 
     #[test]

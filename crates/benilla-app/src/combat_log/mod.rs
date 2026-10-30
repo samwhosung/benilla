@@ -24,7 +24,6 @@ use crate::net::{
 };
 use crate::ui_chat::combat::{CombatLogRanges, LogPeriodicSpells};
 use crate::ui_chat::ChatLog;
-use crate::vplates::PlateFlashes;
 
 pub(crate) mod chat;
 #[cfg(test)]
@@ -133,8 +132,8 @@ impl Plugin for CombatLogPlugin {
             .net_handler(K::PvpCredit, on_pvp_credit)
             // Written by the missile flight; declared here too, as registering is idempotent.
             .add_message::<MissileMiss>()
-            // Taken by the plate driver; declared here too, as registering is idempotent.
-            .init_resource::<PlateFlashes>()
+            // Where the lines' plate flashes fire; declared here too, as registering is idempotent.
+            .init_resource::<crate::field_watch::NoticeLane>()
             // After the flight that writes the arrivals (`entities::move_missiles`), so the
             // flash and the line queue together, in `0x61dd50`'s order, the frame the missile
             // lands. The flight runs after the frame's feeds (the sheath request it follows is
@@ -162,12 +161,14 @@ fn on_spell_damage_log(
     In(ev): In<SessionEvent>,
     c: Ctx,
     mut l: Sinks,
-    mut flashes: ResMut<PlateFlashes>,
+    mut notices: ResMut<crate::field_watch::NoticeLane>,
 ) {
     if let SessionEvent::SpellDamageLog(s) = ev {
         let ctx = c.ctx();
+        // The direct hit's flash runs ahead of its line (`0x62ce43`): its place is taken first.
+        let at = crate::lanes::stamp();
         if let Some(victim) = chat::spell_damage_log(s, &ctx, &l.stores, &l.poses, &l.log) {
-            flashes.0.push(victim);
+            notices.write_at(at, plate_flash(victim));
         }
         text::spell_damage_log(
             s,
@@ -416,13 +417,23 @@ fn on_environmental_damage_log(
     In(ev): In<SessionEvent>,
     c: Ctx,
     l: Sinks,
-    mut flashes: ResMut<PlateFlashes>,
+    mut notices: ResMut<crate::field_watch::NoticeLane>,
 ) {
     if let SessionEvent::EnvironmentalDamageLog(e) = ev {
         let ctx = c.ctx();
+        // The flash runs ahead of the line (`0x62abac`): its place is taken first.
+        let at = crate::lanes::stamp();
         if let Some(victim) = chat::environmental_damage_log(e, &ctx, &l.stores, &l.poses, &l.log) {
-            flashes.0.push(victim);
+            notices.write_at(at, plate_flash(victim));
         }
+    }
+}
+
+/// `FlashNamePlate` (`0x6122e0`) on a line's victim, inside its packet.
+fn plate_flash(guid: u64) -> crate::field_watch::FieldNotice {
+    crate::field_watch::FieldNotice::Plate {
+        guid,
+        call: crate::vplates::PlateCall::Flash,
     }
 }
 

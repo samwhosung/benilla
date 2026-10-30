@@ -353,3 +353,45 @@ fn far_sight_judges_plates_around_the_cameras_object() {
         "home: around our body again"
     );
 }
+
+/// The level text of the first plate, region 4.
+fn first_level(app: &mut App) -> String {
+    super::drive_vplates_once(app.world_mut());
+    app.world()
+        .non_send_resource::<UiScript>()
+        .eval::<String>(
+            r#"local _, _, _, level = WorldFrame:GetChildren():GetRegions()
+            return level:GetText() or """#,
+        )
+        .unwrap()
+}
+
+/// The frame's gate writes no kept plate's level (`0x6086e0` takes `0x60875f`'s branch, not the
+/// bind): that is the level watcher's, inside its packet (`0x60ce5b`). Only the latch the active
+/// player's level sets (`0x5edb93` → `0x605550`) has the gate refresh it (`0x608769`), once.
+#[test]
+fn a_kept_plates_level_moves_at_the_frame_only_on_the_latch() {
+    const LEVEL: u16 = 34;
+    let mut app = plates_app();
+    let wolf = unit(&mut app, mob(0x31), Vec3::X * 3.0, &[(LEVEL, 10)]);
+    assert_eq!(first_level(&mut app), "10", "the bind's");
+    let set_level = |app: &mut App, e: Entity, level: u32| {
+        app.world_mut()
+            .get_mut::<ObjectStore>(e)
+            .unwrap()
+            .0
+            .merge(ObjectFields::from_pairs(&[(LEVEL, level)]));
+    };
+    set_level(&mut app, wolf, 20);
+    assert_eq!(
+        first_level(&mut app),
+        "10",
+        "no callback ran: the frame keeps it"
+    );
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .latch_nameplate_levels();
+    assert_eq!(first_level(&mut app), "20", "the latch refreshes it");
+    set_level(&mut app, wolf, 30);
+    assert_eq!(first_level(&mut app), "20", "and clears after its frame");
+}

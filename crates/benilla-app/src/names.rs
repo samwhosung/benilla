@@ -529,7 +529,7 @@ pub(crate) mod net {
                 }
             }
             if found && units.holds(guid) {
-                notices.write_batch(name_update(guid));
+                notices.write_batch(name_answered(guid));
             }
             // The lookups' own callbacks, in the order they asked, each for a found name only.
             for callback in callbacks.into_iter().filter(|_| found) {
@@ -563,7 +563,7 @@ pub(crate) mod net {
             pet_name(pet_number, name, &mut names);
             if found && pet_number != 0 {
                 for guid in units.matching(|s| s.0.unit_pet_number() == pet_number) {
-                    notices.write_batch(name_update(guid));
+                    notices.write_batch(name_answered(guid));
                 }
             }
         }
@@ -609,7 +609,7 @@ pub(crate) mod net {
             );
             if found {
                 for guid in units.matching(|s| s.0.object_entry() == Some(entry)) {
-                    notices.write_batch(name_update(guid));
+                    notices.write_batch(name_answered(guid));
                     notices.write(FieldNotice::Signal {
                         guid,
                         id: id::UNIT_CLASSIFICATION_CHANGED,
@@ -619,16 +619,31 @@ pub(crate) mod net {
         }
     }
 
-    /// `NotifyUnitNameUpdate` (`0x491a00`) on a held unit: the tooltip's refresh (`0x491a27`),
-    /// then `UNIT_NAME_UPDATE` (`0x491a3c`).
-    fn name_update(guid: u64) -> [FieldNotice; 2] {
+    /// `NotifyUnitNameUpdate` (`0x491a00`) on a held unit: the tooltip's refresh (`0x491a27`) and
+    /// the name's gate (`0x491a2e` → `0x607050`), then `UNIT_NAME_UPDATE` (`0x491a3c`).
+    fn name_update(guid: u64) -> [FieldNotice; 3] {
         [
             FieldNotice::TooltipUnit { guid },
+            FieldNotice::Plate {
+                guid,
+                call: crate::vplates::PlateCall::Gate,
+            },
             FieldNotice::Signal {
                 guid,
                 id: id::UNIT_NAME_UPDATE,
             },
         ]
+    }
+
+    /// A name or creature answer's callback on a held unit (`0x5fb840`, `0x604660`): its plate
+    /// released (`0x5fb86e`, `0x6046c1`), then the name update, whose gate binds it again with the
+    /// answer's name (`0x5fb875`, `0x6046d1`).
+    fn name_answered(guid: u64) -> impl Iterator<Item = FieldNotice> {
+        std::iter::once(FieldNotice::Plate {
+            guid,
+            call: crate::vplates::PlateCall::Release,
+        })
+        .chain(name_update(guid))
     }
 
     fn on_invalidate_player(In(ev): In<SessionEvent>, mut names: ResMut<NameCache>) {
@@ -776,9 +791,19 @@ pub(crate) mod net {
             FieldNotice::Signal { guid, id }
         }
 
-        /// `0x4919d0` on `guid`, the tooltip's refresh ahead of its name signal.
-        fn tooltip(guid: u64) -> FieldNotice {
-            FieldNotice::TooltipUnit { guid }
+        /// An answer's callback on the held unit `guid`: its plate released, the tooltip's refresh
+        /// (`0x4919d0`), the plate's gate, then the name signal.
+        fn answered(guid: u64) -> [FieldNotice; 4] {
+            use crate::vplates::PlateCall::{Gate, Release};
+            [
+                FieldNotice::Plate {
+                    guid,
+                    call: Release,
+                },
+                FieldNotice::TooltipUnit { guid },
+                FieldNotice::Plate { guid, call: Gate },
+                signal(guid, 183),
+            ]
         }
 
         fn creature(entry: u32, name: Option<&str>) -> SessionEvent {
@@ -808,16 +833,14 @@ pub(crate) mod net {
             assert_eq!(
                 notices(&mut app),
                 [
-                    tooltip(WOLF_B),
-                    signal(WOLF_B, 183),
-                    signal(WOLF_B, 187),
-                    tooltip(WOLF_A),
-                    signal(WOLF_A, 183),
-                    signal(WOLF_A, 187),
-                    tooltip(PET),
-                    signal(PET, 183),
-                    signal(PET, 187)
+                    answered(WOLF_B).to_vec(),
+                    vec![signal(WOLF_B, 187)],
+                    answered(WOLF_A).to_vec(),
+                    vec![signal(WOLF_A, 187)],
+                    answered(PET).to_vec(),
+                    vec![signal(PET, 187)],
                 ]
+                .concat()
             );
             app.world_mut()
                 .run_system_once_with(on_creature_name, creature(300, None))
@@ -847,7 +870,7 @@ pub(crate) mod net {
             app.world_mut()
                 .run_system_once_with(on_player_name, player(PLAYER, "Brisca"))
                 .unwrap();
-            assert_eq!(notices(&mut app), [tooltip(PLAYER), signal(PLAYER, 183)]);
+            assert_eq!(notices(&mut app), answered(PLAYER));
             app.world_mut()
                 .run_system_once_with(on_player_name, player(PLAYER, "Brisca"))
                 .unwrap();
@@ -871,7 +894,7 @@ pub(crate) mod net {
                     },
                 )
                 .unwrap();
-            assert_eq!(notices(&mut app), [tooltip(PET), signal(PET, 183)]);
+            assert_eq!(notices(&mut app), answered(PET));
             app.world_mut()
                 .run_system_once_with(
                     on_pet_name,

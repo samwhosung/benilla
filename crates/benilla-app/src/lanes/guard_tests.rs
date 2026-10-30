@@ -341,15 +341,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // record and the player at the call (`0x5075f0` at `0x52da24`). A getter's miss is asked here,
     // where the reference's lookup sends inside the call (`0x55ba30`).
     ("::ui_items::feed::feed_item_stats", &["items::Items"]),
-    // The plates seated off the units as the frame left them, where the reference moves a plate's
-    // bar inside the packet, by its health watcher `0x7cc570` (registered by `0x7cc510`), and
-    // binds plates there too: `0x60f600`, called at `0x60706a` from `InvalidateNameDesc`, whose
-    // callers include `0x491a00`, `0x5ff800` and `0x604910`.
-    ("::vplates::drive_vplates", &["Transform", "names::NameCache", "net::GuidIndex",
-        "net::ObjectStore", "net::SelfGuid", "net::reputations::Reputations",
-        "player::camera::CameraControl", "spell::group_relation::GroupRoster",
-        "spell::targeting::SpellTargeting", "target::Selection", "ui_party::GroupState",
-        "video::Widescreen", "vplates::PlateFlashes", "vplates::VPlateMode"]),
 ];
 
 /// The view pushes [`READS_FRAME_FINAL`]'s test finds whose build the reference too makes outside
@@ -388,6 +379,26 @@ pub(super) const BUILT_OUTSIDE_THE_PACKETS_IN_THE_REFERENCE: &[(&str, &[&str], &
         "ui_session::latch::InteractLatch"],
         "the word as the frame began, for the input records' reads with no host to ask; a call's \
          reads go live through the host (`SpellIsTargeting` `0x6e6cd0`)"),
+    // The units' gate binds what it reads of a unit it gives a plate, and its in-packet runs and
+    // the unit's callbacks write a bound plate's bar, colour, level, icon and name at their
+    // packets; `widescreen` shapes the screen the seat solves on, the camera rig the freelook
+    // edge, the selection the alpha and the targeting the hit-test veto (`0x7cba30`).
+    ("::vplates::drive_vplates", &["Transform", "names::NameCache", "net::GuidIndex",
+        "net::ObjectStore", "net::SelfGuid", "net::reputations::Reputations",
+        "player::camera::CameraControl", "spell::group_relation::GroupRoster",
+        "spell::targeting::SpellTargeting", "target::Selection", "ui_party::GroupState",
+        "video::Widescreen", "vplates::VPlateMode"],
+        "the world's render `0x483460` in the frame pass, after the packets, whose scene drain \
+         ticks each unit (`0x4815d0` → `0x48160c`, slot 14 `0x607ed0`), which runs the gate \
+         `0x60f600` at `0x607ef9`: a unit it gives a plate is bound (`0x6086e0` → `0x7cb6d0`), \
+         one it drops released (`0x60f742`), a kept one's point stored and its level refreshed on \
+         the latch (`0x60875f`); the render then seats them (`0x483647` → `0x608ce0`), and each \
+         plate's `OnUpdate` sets its alpha (`0x7cb9f9`); inside the packets the bar's watchers \
+         (`0x7cc570`), the health watcher's colour and flash (`0x60471b`, `0x604764`), the \
+         reaction's colour (`0x606e3c`), the level watcher (`0x60ce5b`), the raid board's icons \
+         (`0x4ba28a` → `0x608a90`), the logs' flashes (`0x62abac`, `0x62ce43`), the name \
+         answers' releases (`0x5fb86e`, `0x6046c1`), `InvalidateNameDesc`'s gate (`0x60706a`) \
+         and the unit's release (`0x5fbba9`) write the plate at their callbacks"),
     ("::ui_script::extract::tick_script", &["ui_script::UiScaleCvar", "video::Widescreen"],
         "the frame pass's `OnUpdate` walk (`0x764330` → `0x765650`), its screen and scale"),
     ("::ui_script::extract::paint_script", &["video::Widescreen"],
@@ -714,6 +725,9 @@ pub(super) const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "bevy_input::mouse::AccumulatedMouseMotion",
     // The frame a quest-share line starts its bounded wait for a name at.
     "bevy_diagnostic::frame_count_diagnostics_plugin::FrameCount",
+    // The frame gate's spatial verdicts, which the gate a packet runs reads through the host
+    // (`0x60706a` → `0x60f600`); only the frame's gate writes them, in the world's render.
+    "::vplates::PlateSpots",
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.

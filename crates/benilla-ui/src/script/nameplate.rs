@@ -60,7 +60,9 @@ pub struct PlateGeometry {
     pub shadow_offset: f32,
 }
 
-/// One plate's per-frame state: everything that can move while the plate is alive.
+/// One plate's state as the frame's gate reads it (`0x60f600` from `0x607ef9`): the bind's for a
+/// unit it gives a plate (`0x7cb6d0`), and the frame's own fields for every plate it keeps: the
+/// seat (`0x608ce0`), the alpha (`0x7cb9f9`), the lit bar and the hover.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlateState {
     /// The unit's GUID and the plate's identity: a plate is bound to its unit for its life
@@ -92,6 +94,73 @@ pub struct PlateState {
     pub hovered: bool,
 }
 
+impl PlateState {
+    /// What the bind reads of the unit.
+    fn unit(&self) -> PlateUnit {
+        PlateUnit {
+            health: self.health,
+            max_health: self.max_health,
+            bar_colour: self.bar_colour,
+            name: Some(self.name.clone()),
+            level: self.level,
+            skull: self.skull,
+            level_colour: self.level_colour,
+            raid_icon: self.raid_icon,
+        }
+    }
+}
+
+/// What a plate's bind reads of its unit (`0x7cb6d0`), and what the unit's callbacks write again
+/// inside their packets, each its own part: the bar's colour (`0x7cbaa0`), the level and skull
+/// (`0x7cbb40`) and the raid icon (`0x7cbe20`). The name is the bind's alone (`0x7cb70c`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlateUnit {
+    /// `UNIT_FIELD_HEALTH` and `UNIT_FIELD_MAXHEALTH`, as [`PlateState::health`].
+    pub health: f32,
+    pub max_health: f32,
+    pub bar_colour: [f32; 3],
+    /// `GetUnitName`'s answer (`0x609210`); `None` for its miss, the `UNKNOWNOBJECT` text the VM
+    /// holds (`0x609324`).
+    pub name: Option<String>,
+    pub level: Option<u32>,
+    pub skull: bool,
+    pub level_colour: [f32; 3],
+    pub raid_icon: Option<u8>,
+}
+
+/// The unit `guid` as a plate's callback reads it as it runs, asked of the lent host; no answer
+/// for no unit held under the guid (`0x468460`, mask 8).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PlateUnitQuery(pub u64);
+
+impl super::live::LiveQuery for PlateUnitQuery {
+    type Answer = PlateUnit;
+}
+
+/// The gate `0x60f600` on `guid` as it runs inside a packet, from `InvalidateNameDesc`
+/// (`0x60706a`): the unit as the bind reads it when the gate gives it a plate (`0x60f7d9`), else
+/// `None`, which releases one (`0x60f742`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PlateGateQuery(pub u64);
+
+impl super::live::LiveQuery for PlateGateQuery {
+    type Answer = Option<PlateUnit>;
+}
+
+/// A bound plate: its unit and the frame's fields as the last sync wrote them, each `None` until
+/// the first sync after a bind inside a packet writes it.
+#[derive(Clone, Debug)]
+struct Shown {
+    /// [`PlateState::key`], `[unit+0xe60]`'s back link.
+    key: u64,
+    /// The point the frame's seat anchored the plate at (`0x608ce0` → `0x509ec0`): a bind inside
+    /// a packet stores its point (`0x60872f`) and leaves the anchor to the frame's seat.
+    seat: Option<(f32, f32)>,
+    alpha: Option<u8>,
+    lit: Option<bool>,
+    hovered: Option<bool>,
+}
+
 /// One pooled plate's widgets, in the reference's creation order.
 #[derive(Clone, Debug)]
 struct Plate {
@@ -109,12 +178,21 @@ struct Plate {
     /// (`0x7cba77`), 0 at every bind (`0x7cb80e`), counted down by the plate's update; a negative
     /// timer is idle, and while it is above 0 the hover leaves the name red.
     flash_ms: i32,
-    /// Last frame's state, so [`Plate::drive`] writes only what moved; `None` while retired.
-    last: Option<PlateState>,
+    /// The bound unit and what the frame last wrote, so [`Plate::frame`] writes only what moved;
+    /// `None` while retired.
+    shown: Option<Shown>,
     /// `[plate+0x4e8]`, the unit last bound ([`PlateState::key`]): 0 from the constructor
     /// (`0x7cb2a6`), written by each bind (`0x7cb6e0`) and left by the retire (`0x608a10`), so a
     /// hidden pooled plate's click still names its last unit (`0x7cb91c`).
     guid: u64,
+    /// `[bar+0x338]`, the unit the bar's two watchers watch (`0x7cc510`): set by each bind
+    /// (`0x7cc405`) and kept by the retire, which unwatches nothing, so a retired plate's bar
+    /// follows its last unit until a bind moves it (`0x7cc3e2` → `0x7cc5d0`) or the unit's
+    /// object, which holds the watch list, goes; 0 for none.
+    bar_unit: u64,
+    /// The bind that registered the bar's watchers, which orders two plates' watches on one unit:
+    /// each object list runs its watchers in the order they were linked (`0x467f65`-`0x467f76`).
+    bar_watched_at: u64,
     /// The geometry its anchors were written under, `None` before the first lay-out. Kept per
     /// plate, so a plate the pool grows later is laid out too.
     laid_out: Option<PlateGeometry>,
@@ -122,7 +200,7 @@ struct Plate {
 
 impl Plate {
     fn key(&self) -> Option<u64> {
-        self.last.as_ref().map(|s| s.key)
+        self.shown.as_ref().map(|s| s.key)
     }
 }
 
@@ -146,6 +224,11 @@ pub(crate) struct NamePlates {
     geometry: Option<PlateGeometry>,
     /// The fills of the lit plates, which draw boosted ([`lit_fill_boost`]).
     lit_fills: std::collections::HashSet<RegionHandle>,
+    /// The binds so far, each the stamp of the bar watch it registers ([`Plate::bar_watched_at`]).
+    binds: u64,
+    /// Bit `0x4` of `[0xc4da34]` (`0x605550`): the next sync refreshes the level and skull of each
+    /// plate it keeps (`0x60875f` → `0x7cbb40`), then the latch clears (`0x48362e`).
+    levels_due: bool,
 }
 
 impl NamePlates {
@@ -196,7 +279,11 @@ pub(super) fn update(model: &mut Model, frame: FrameHandle, elapsed: f32) {
     if plate.flash_ms > 0 {
         return;
     }
-    let colour = if plate.last.as_ref().is_some_and(|l| l.hovered) {
+    let colour = if plate
+        .shown
+        .as_ref()
+        .is_some_and(|s| s.hovered == Some(true))
+    {
         NAME_YELLOW
     } else {
         crate::color::Rgba8::WHITE
@@ -237,13 +324,37 @@ pub enum PlateAction {
     Interact,
 }
 
-/// What a sync runs outside the model borrow: the plates' `Show`/`Hide`, whose transitions fire
-/// handlers, and `OnValueChanged` for moved bars (pfUI hooks it, `nameplates.lua:393`).
+/// What a sync runs outside the model borrow, in the order it issued them: the plates' `Show`
+/// and `Hide`, whose transitions fire handlers, and `OnValueChanged` for moved bars (pfUI hooks
+/// it, `nameplates.lua:393`). A bind's bar fires inside it, ahead of the plate's show
+/// (`0x608707` before `0x60871e`).
 #[derive(Default)]
-struct SyncEffects {
-    /// `(plate, shown)` in the order the sync issued them.
-    visibility: Vec<(FrameHandle, bool)>,
-    values: Vec<(FrameHandle, f32)>,
+struct SyncEffects(Vec<Effect>);
+
+enum Effect {
+    Shown(FrameHandle, bool),
+    Value(FrameHandle, f32),
+}
+
+impl SyncEffects {
+    fn shown(&mut self, frame: FrameHandle, shown: bool) {
+        self.0.push(Effect::Shown(frame, shown));
+    }
+
+    fn values(&mut self, bar: FrameHandle, fires: impl IntoIterator<Item = Option<f32>>) {
+        self.0
+            .extend(fires.into_iter().flatten().map(|v| Effect::Value(bar, v)));
+    }
+
+    /// Run them, each a full transition or handler.
+    fn apply(self, lua: &Lua) {
+        for effect in self.0 {
+            match effect {
+                Effect::Shown(frame, shown) => super::visibility::set_shown(lua, frame, shown),
+                Effect::Value(bar, v) => super::statusbar::fire_engine_value_changed(lua, bar, v),
+            }
+        }
+    }
 }
 
 /// Bit `0x1` of `[0xc4da34]`: plates on every unit that is not friendly, set by `ShowNameplates`
@@ -345,8 +456,13 @@ impl UiScript {
         writes
     }
 
-    /// Drive the pool from the app's per-frame states, one per shown plate; a unit with no state
-    /// has its plate retired (hidden, never destroyed). An unchanged `geometry` costs nothing.
+    /// The frame's gate over the pool (`0x60f600` from `0x607ef9`), one state per unit it keeps
+    /// a plate on: a unit with no plate is bound (`0x6086e0` → `0x7cb6d0`), a unit with one has
+    /// only the frame's fields moved, the seat, the alpha, the lit bar and the hover, and its
+    /// level too while the latch asks ([`Self::latch_nameplate_levels`]); a unit with no state
+    /// has its plate retired (hidden, never destroyed). What a bound plate shows of its unit
+    /// moves inside the packets, at its callbacks ([`Self::nameplate_health`] and the rest). An
+    /// unchanged `geometry` costs nothing.
     pub fn sync_nameplates(&mut self, geometry: PlateGeometry, states: &[PlateState]) {
         let lua = self.lua();
         // The constructor's two lookups (`0x7cb3f9`, `0x7cb49b`), for each plate about to be built
@@ -361,9 +477,7 @@ impl UiScript {
                 }
                 plates_to_build(&model, states)
             };
-            (0..2 * built)
-                .map(|_| super::font::nameplate_font(lua))
-                .collect()
+            fonts_for(lua, built)
         };
         let effects = {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -373,16 +487,192 @@ impl UiScript {
             };
             sync(&mut model, world, geometry, states, &mut fonts)
         };
-        apply_visibility(lua, effects.visibility);
-        for (bar, value) in effects.values {
-            super::statusbar::fire_engine_value_changed(lua, bar, value);
+        effects.apply(lua);
+    }
+
+    /// Set the level latch (bit `0x4` of `[0xc4da34]`, `0x605550`): the active player's level
+    /// moved (`0x5edb93`), so the next sync refreshes each kept plate's level and skull, whose
+    /// colour and threshold read it.
+    pub fn latch_nameplate_levels(&mut self) {
+        self.model_mut().nameplates.levels_due = true;
+    }
+
+    /// The bar's watcher `0x7cc570` on a change of `guid`'s `UNIT_FIELD_HEALTH` or
+    /// `UNIT_FIELD_MAXHEALTH`, inside its packet: on each plate whose bar watches the unit, a
+    /// retired one's included ([`Plate::bar_unit`]), in the order their watches were linked, the
+    /// range 0 to `max` (`0x7cc5a8` → `0x783270`), which re-applies the held value, then the value
+    /// (`0x7cc5be`), each firing `OnValueChanged` where it moves.
+    pub fn nameplate_health(&mut self, guid: u64, health: f32, max: f32) {
+        if guid == 0 {
+            return;
+        }
+        let lua = self.lua();
+        let bars: Vec<FrameHandle> = {
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            let mut watching: Vec<(u64, FrameHandle)> = model
+                .nameplates
+                .plates
+                .iter()
+                .filter(|p| p.bar_unit == guid)
+                .map(|p| (p.bar_watched_at, p.bar))
+                .collect();
+            watching.sort_by_key(|&(at, _)| at);
+            watching.into_iter().map(|(_, bar)| bar).collect()
+        };
+        for bar in bars {
+            for write in [BarWrite::Range(max), BarWrite::Value(health)] {
+                let fired = {
+                    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                    match model.arena.frame_mut(bar).map(|f| &mut f.kind_state) {
+                        Some(KindState::StatusBar(sb)) => match write {
+                            BarWrite::Range(max) => sb.set_min_max(0.0, max),
+                            BarWrite::Value(v) => sb.set_value(v),
+                        },
+                        _ => None,
+                    }
+                };
+                if let Some(v) = fired {
+                    super::statusbar::fire_engine_value_changed(lua, bar, v);
+                }
+            }
+        }
+    }
+
+    /// `RefreshNameDesc`'s plate leg (`0x607080` → `0x7cbaa0`) on `guid`'s plate, if it has one
+    /// (`0x60708e`), inside its packet: the bar's colour from the unit's reaction as it stands
+    /// ([`PlateUnitQuery`]). Its callers: the health watcher (`0x60471b`), the reaction's refresh
+    /// of a unit, its summon and its charm (`0x606e3c`, `0x606e8a`, `0x606ecf`) and the active
+    /// player's sweep (`0x606fa2`).
+    pub fn refresh_nameplate_colour(&mut self, guid: u64) {
+        self.refresh_bound(guid, |model, i, unit| {
+            Plate::colour(model, i, unit.bar_colour)
+        });
+    }
+
+    /// `OnLevelChanged`'s plate leg (`0x60cdd0` at `0x60ce5b` → `0x7cbb40`) on `guid`'s plate, if
+    /// it has one (`0x60ce58`), inside its packet: the level and skull as they stand.
+    pub fn refresh_nameplate_level(&mut self, guid: u64) {
+        self.refresh_bound(guid, Plate::level);
+    }
+
+    /// `f` on the plate bound to `guid`, with the unit as the lent host reads it now.
+    fn refresh_bound(&mut self, guid: u64, f: impl FnOnce(&mut Model, usize, &PlateUnit)) {
+        let lua = self.lua();
+        if bound_slot(&lua.app_data_ref::<Model>().expect("model app_data"), guid).is_none() {
+            return;
+        }
+        let Some(unit) = super::live::ask(lua, &PlateUnitQuery(guid)) else {
+            return;
+        };
+        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+        if let Some(i) = bound_slot(&model, guid) {
+            f(&mut model, i, &unit);
+        }
+    }
+
+    /// `0x608a90` on each unit with a plate: its plate's raid icon from the board's slot for it as
+    /// it stands (`0x608aa2` → `0x4bb190`, `0x608ab3` → `0x7cbe20`), as the raid target handler
+    /// runs it on each unit whose slot moved (`0x4ba28a`, `0x4ba308`, `0x4ba32f`) and the board's
+    /// clear on each it held (`0x4ba5cb`), ahead of `RAID_TARGET_UPDATE`. A unit whose slot did
+    /// not move reads the icon it shows.
+    pub fn refresh_nameplate_raid_icons(&mut self) {
+        let units: Vec<u64> = self
+            .model_ref()
+            .nameplates
+            .assigned
+            .keys()
+            .copied()
+            .collect();
+        for guid in units {
+            self.refresh_bound(guid, |model, i, unit| {
+                Plate::raid_icon(model, i, unit.raid_icon)
+            });
+        }
+    }
+
+    /// The gate `0x60f600` on `guid` inside its packet, from `InvalidateNameDesc` (`0x607050` at
+    /// `0x60706a`), as the lent host judges it ([`PlateGateQuery`]): a unit it gives a plate and
+    /// has none is bound (`0x6086e0`) and shown, its seat left for the frame's layout
+    /// (`0x608ce0`); one it refuses has its plate released (`0x60f742`). With no host to ask,
+    /// nothing moves.
+    pub fn gate_nameplate(&mut self, guid: u64) {
+        let lua = self.lua();
+        let Some(verdict) = super::live::ask(lua, &PlateGateQuery(guid)) else {
+            return;
+        };
+        let Some(unit) = verdict else {
+            self.release_nameplate(guid);
+            return;
+        };
+        let lua = self.lua();
+        let built = {
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            if model.arena.lookup("WorldFrame").is_none()
+                || model.nameplates.geometry.is_none()
+                || model.nameplates.assigned.contains_key(&guid)
+            {
+                return;
+            }
+            usize::from(free_slot(&model).is_none())
+        };
+        let mut fonts = fonts_for(lua, built);
+        let name = unit
+            .name
+            .clone()
+            .unwrap_or_else(|| self.unknown_object_text());
+        let lua = self.lua();
+        let effects = {
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            let (Some(world), Some(geometry)) =
+                (model.arena.lookup("WorldFrame"), model.nameplates.geometry)
+            else {
+                return;
+            };
+            let mut effects = SyncEffects::default();
+            let i = take_slot(&mut model, world, guid, &mut fonts);
+            if model.nameplates.plates[i].laid_out != Some(geometry) {
+                Plate::lay_out(&mut model, i, geometry);
+            }
+            Plate::bind(&mut model, i, guid, &unit, name, &mut effects);
+            effects
+        };
+        effects.apply(lua);
+    }
+
+    /// `ReleaseNamePlate` (`0x608a10`) on `guid`'s plate, if it has one, inside its packet: hidden
+    /// and returned to the pool, its guid and its bar's watch kept. The name and creature answers
+    /// release it ahead of their name update (`0x5fb86e`, `0x6046c1`).
+    pub fn release_nameplate(&mut self, guid: u64) {
+        let lua = self.lua();
+        let effects = {
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            let mut effects = SyncEffects::default();
+            if let Some(i) = model.nameplates.assigned.remove(&guid) {
+                Plate::retire(&mut model, i, &mut effects);
+            }
+            effects
+        };
+        effects.apply(lua);
+    }
+
+    /// The unit `guid` leaves the world inside its packet: its release frees its plate
+    /// (`CGUnit_C::Release` at `0x5fbba9`, the destructor at `0x5fb620`), and its object, which
+    /// holds the bar watches, goes with them, so no plate's bar follows it again.
+    pub fn nameplate_unit_gone(&mut self, guid: u64) {
+        self.release_nameplate(guid);
+        let mut model = self.model_mut();
+        for plate in &mut model.nameplates.plates {
+            if plate.bar_unit == guid {
+                plate.bar_unit = 0;
+            }
         }
     }
 
     /// A hit on the unit `key`: `FlashNamePlate` (`0x6122e0` → `0x7cba70`) starts the flash on the
     /// unit's plate, if it has one (`[unit+0xe60]`, `0x6122e6`): the timer to 5000 ms and the
-    /// name red, whatever the hover. Called for a health drop (`0x6046f0`), a direct spell hit
-    /// (`0x62cd80`) and environmental damage (`0x62aac0`).
+    /// name red, whatever the hover. Called inside the packet for a health drop (`0x6046f0` at
+    /// `0x604764`), a direct spell hit (`0x62cd80` at `0x62ce43`) and environmental damage
+    /// (`0x62aac0` at `0x62abac`).
     pub fn flash_nameplate(&mut self, key: u64) {
         let lua = self.lua();
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -390,7 +680,7 @@ impl UiScript {
             return;
         };
         let plate = &mut model.nameplates.plates[slot];
-        if plate.last.is_none() {
+        if plate.shown.is_none() {
             return;
         }
         plate.flash_ms = FLASH_MS;
@@ -456,7 +746,7 @@ impl UiScript {
             }
             effects
         };
-        apply_visibility(lua, effects.visibility);
+        effects.apply(lua);
     }
 
     /// How many plate widgets the pool holds.
@@ -467,11 +757,48 @@ impl UiScript {
     }
 }
 
-/// Run the plates' `Show`/`Hide` a sync issued, each a full transition with its handlers.
-fn apply_visibility(lua: &mlua::Lua, verbs: Vec<(FrameHandle, bool)>) {
-    for (frame, shown) in verbs {
-        super::visibility::set_shown(lua, frame, shown);
-    }
+/// One of the bar watcher's two writes (`0x7cc570`).
+#[derive(Clone, Copy)]
+enum BarWrite {
+    Range(f32),
+    Value(f32),
+}
+
+/// The slot of the plate bound to `guid` (`[unit+0xe60]`), if it has one.
+fn bound_slot(model: &Model, guid: u64) -> Option<usize> {
+    let &i = model.nameplates.assigned.get(&guid)?;
+    model.nameplates.plates[i].shown.is_some().then_some(i)
+}
+
+/// The lowest free slot. Deviation: the reference's free list is FIFO (`0x6087f0`, `0x608a5a`);
+/// either keeps every index stable, all an addon can observe of the pool's order.
+fn free_slot(model: &Model) -> Option<usize> {
+    (0..model.nameplates.plates.len()).find(|&i| model.nameplates.plates[i].shown.is_none())
+}
+
+/// `0x6087f0` for `guid`: the lowest free slot, else a plate built at the tail, assigned to it.
+fn take_slot(
+    model: &mut Model,
+    world: FrameHandle,
+    guid: u64,
+    fonts: &mut VecDeque<Option<String>>,
+) -> usize {
+    let i = free_slot(model).unwrap_or_else(|| {
+        let plate = Plate::create(model, world, fonts);
+        model.nameplates.plates.push(plate);
+        model.nameplates.plates.len() - 1
+    });
+    model.nameplates.assigned.insert(guid, i);
+    i
+}
+
+/// The constructor's two lookups (`0x7cb3f9`, `0x7cb49b`) for each of `built` plates, name then
+/// level, done before the Model is borrowed: a lookup honours an `_G` `__index` (`lua_gettable`
+/// at `0x704373`), which may call any verb.
+fn fonts_for(lua: &Lua, built: usize) -> VecDeque<Option<String>> {
+    (0..2 * built)
+        .map(|_| super::font::nameplate_font(lua))
+        .collect()
 }
 
 /// A plate's click slot (`0x7cb910`) ahead of the button's own click: `0x4949f0` on the plate's
@@ -522,11 +849,11 @@ fn submit(lua: &mlua::Lua, click: PlateClick) {
 /// slots, which are the retired ones and those the departing units are about to free.
 fn plates_to_build(model: &Model, states: &[PlateState]) -> usize {
     let np = &model.nameplates;
-    let mut free = np.plates.iter().filter(|p| p.last.is_none()).count();
+    let mut free = np.plates.iter().filter(|p| p.shown.is_none()).count();
     free += np
         .assigned
         .iter()
-        .filter(|(k, &i)| !states.iter().any(|s| s.key == **k) && np.plates[i].last.is_some())
+        .filter(|(k, &i)| !states.iter().any(|s| s.key == **k) && np.plates[i].shown.is_some())
         .count();
     let arriving: HashSet<u64> = states
         .iter()
@@ -536,7 +863,8 @@ fn plates_to_build(model: &Model, states: &[PlateState]) -> usize {
     arriving.len().saturating_sub(free)
 }
 
-/// The per-frame drive: retire departed units, bind the rest, lay out, write what changed.
+/// The frame's gate over the pool: retire departed units, bind arriving ones, lay out, and move
+/// the frame's fields of every kept plate, with its level while the latch asks.
 fn sync(
     model: &mut Model,
     world: FrameHandle,
@@ -564,27 +892,36 @@ fn sync(
         }
     }
 
+    let levels_due = std::mem::take(&mut model.nameplates.levels_due);
     for state in states {
-        let slot = match model.nameplates.assigned.get(&state.key) {
-            Some(&i) => i,
-            None => {
-                // The lowest free slot, else a new one at the tail. Deviation: the reference's
-                // free list is FIFO; either keeps every index stable, all an addon can observe.
-                let free = (0..model.nameplates.plates.len())
-                    .find(|i| model.nameplates.plates[*i].last.is_none());
-                let i = free.unwrap_or_else(|| {
-                    let plate = Plate::create(model, world, fonts);
-                    model.nameplates.plates.push(plate);
-                    model.nameplates.plates.len() - 1
-                });
-                model.nameplates.assigned.insert(state.key, i);
-                i
-            }
-        };
+        let kept = model.nameplates.assigned.get(&state.key).copied();
+        let slot = kept.unwrap_or_else(|| take_slot(model, world, state.key, fonts));
         if model.nameplates.plates[slot].laid_out != Some(geometry) {
             Plate::lay_out(model, slot, geometry);
         }
-        Plate::drive(model, slot, world, state, &mut effects);
+        match kept {
+            // `0x6086e0` on a unit with a plate: the level while the latch asks (`0x60875f` →
+            // `0x7cbb40`), and the point stored for the seat.
+            Some(_) if levels_due => Plate::level(model, slot, &state.unit()),
+            Some(_) => {}
+            // A new plate's bind (`0x608707`), then its show (`0x60871e`). WORLD batches precede
+            // the world callback's allocations (`0x765896`, `0x7658e2`).
+            None => {
+                let frame = model.nameplates.plates[slot].frame;
+                if !model.nameplates.retired_in_batch.contains(&frame) {
+                    model.nameplates.pending_paint.insert(frame);
+                }
+                Plate::bind(
+                    model,
+                    slot,
+                    state.key,
+                    &state.unit(),
+                    state.name.clone(),
+                    &mut effects,
+                );
+            }
+        }
+        Plate::frame(model, slot, world, state);
     }
 
     // A geometry change reaches retired plates too: addons still read them in the child list.
@@ -703,8 +1040,10 @@ impl Plate {
             bar,
             fill,
             flash_ms: 0,
-            last: None,
+            shown: None,
             guid: 0,
+            bar_unit: 0,
+            bar_watched_at: 0,
             laid_out: None,
         }
     }
@@ -718,7 +1057,7 @@ impl Plate {
             (p.border, p.glow, p.name, p.level, p.skull, p.raid);
         let plate_id = model.frame_id(frame);
 
-        // The plate's size; its position is per-frame, in `drive`.
+        // The plate's size; its position is the frame's seat, in `frame`.
         let input = model.layout_inputs.entry(frame).or_default();
         input.width = crate::layout::Len::Script(g.width);
         input.height = crate::layout::Len::Script(g.height);
@@ -798,26 +1137,76 @@ impl Plate {
         model.nameplates.plates[i].laid_out = Some(g);
     }
 
-    /// The per-frame write, each property only when it moved.
-    fn drive(
+    /// The bind `0x7cb6d0` of plate `i` to the unit `key`, at the frame's gate or inside a packet:
+    /// the guid (`0x7cb6e0`), the name white (`0x7cb701`) with `GetUnitName`'s text (`0x7cb70c`),
+    /// the bar bound to the unit and set from it (`0x7cb724` → `0x7cc3d0`), the flash timer 0
+    /// (`0x7cb80e`), the bar's colour (`0x7cb818`), the level (`0x7cb820`) and the raid icon
+    /// (`0x7cb837`); then the show (`0x60871e`). The seat is the frame's ([`Self::frame`]).
+    fn bind(
         model: &mut Model,
         i: usize,
-        world: FrameHandle,
-        state: &PlateState,
+        key: u64,
+        unit: &PlateUnit,
+        name: String,
         effects: &mut SyncEffects,
     ) {
+        model.nameplates.binds += 1;
+        let binds = model.nameplates.binds;
+        let p = &mut model.nameplates.plates[i];
+        p.guid = key;
+        p.flash_ms = 0;
+        p.shown = Some(Shown {
+            key,
+            seat: None,
+            alpha: None,
+            lit: None,
+            hovered: None,
+        });
+        let (frame, bar, name_rh, fill) = (p.frame, p.bar, p.name, p.fill);
+
+        model
+            .region_data
+            .entry(name_rh)
+            .or_default()
+            .set_vertex_color(Some(crate::color::Rgba8::WHITE));
+        // The name goes through `SetText` with its expand flag: `GetUnitName` takes the one stack
+        // argument and leaves the `push 1` ahead of it for the call (`0x7cb706`-`0x7cb718`).
+        let text = model.localized_text(name);
+        model.region_data.entry(name_rh).or_default().text = Some(text);
+        model.touch_measure(name_rh);
+        // A new string clears the valid bit and invalidates (`0x771ea4`).
+        model.clear_region_valid(name_rh);
+
+        // The bar's bind unwatches its last unit and watches this one (`0x7cc3e2`, `0x7cc416`),
+        // then sets its range and its value (`0x7cc42c`, `0x7cc442`), each firing where it moves.
+        let p = &mut model.nameplates.plates[i];
+        p.bar_unit = key;
+        p.bar_watched_at = binds;
+        let fires = super::statusbar::set_health(model, bar, unit.max_health, unit.health);
+        effects.values(bar, fires);
+
+        // The lit boost is the frame's to set again ([`Self::frame`]).
+        if let Some(fill) = fill {
+            model.nameplates.lit_fills.remove(&fill);
+        }
+        Plate::colour(model, i, unit.bar_colour);
+        Plate::level(model, i, unit);
+        Plate::raid_icon(model, i, unit.raid_icon);
+        effects.shown(frame, true);
+    }
+
+    /// The frame's own fields of plate `i`, each only when it moved: the seat (`0x608ce0` →
+    /// `0x509ec0`), the alpha (`OnUpdate`, `0x7cb9f9`), the lit bar and the hover.
+    fn frame(model: &mut Model, i: usize, world: FrameHandle, state: &PlateState) {
         let p = &model.nameplates.plates[i];
-        let (frame, bar) = (p.frame, p.bar);
-        let (glow, name, level, skull, raid, fill) =
-            (p.glow, p.name, p.level, p.skull, p.raid, p.fill);
-        let last = p.last.clone();
+        let (frame, glow, name, fill) = (p.frame, p.glow, p.name, p.fill);
+        let Some(shown) = p.shown.clone() else {
+            return;
+        };
         let world_id = model.frame_id(world);
 
         // Re-seated whenever it moves, as the reference does (`0x509ec0`).
-        if last
-            .as_ref()
-            .is_none_or(|l| l.top_centre != state.top_centre)
-        {
+        if shown.seat != Some(state.top_centre) {
             let input = model.layout_inputs.entry(frame).or_default();
             input.anchors = Anchors::from([Anchor::new(
                 Point::Top,
@@ -829,69 +1218,21 @@ impl Plate {
             // `SetPoint` with the invalidate flag (`0x50a044`).
             model.invalidate_frame(frame, true);
         }
-
-        if last.is_none() {
-            // WORLD batches precede the world callback's allocations (`0x765896`, `0x7658e2`).
-            if !model.nameplates.retired_in_batch.contains(&frame) {
-                model.nameplates.pending_paint.insert(frame);
-            }
-            effects.visibility.push((frame, true));
-        }
-        if last.as_ref().is_none_or(|l| l.alpha != state.alpha) {
+        if shown.alpha != Some(state.alpha) {
             model.arena.set_alpha(frame, state.alpha);
         }
-
-        // Raw health on the bar; the fill's reaction colour brightens while lit (`LIT_BOOST`).
-        // The assignment drives it once (`0x7cc42c`); after that one watcher per field, HEALTH and
-        // MAXHEALTH (`0x7cc53b`, `0x7cc562`), runs for each that changed (`0x4655bb`).
-        let runs = match &last {
-            None => 1,
-            Some(l) => {
-                usize::from(l.health != state.health)
-                    + usize::from(l.max_health != state.max_health)
-            }
-        };
-        for _ in 0..runs {
-            let fires = super::statusbar::set_health(model, bar, state.max_health, state.health);
-            effects
-                .values
-                .extend(fires.into_iter().flatten().map(|v| (bar, v)));
-        }
-        if last
-            .as_ref()
-            .is_none_or(|l| l.bar_colour != state.bar_colour || l.lit != state.lit)
-        {
-            // The boost rides the draw ([`lit_fill_boost`]): it can pass 1, which the packed
-            // colour cannot hold.
+        // The fill's reaction colour brightens while lit (`LIT_BOOST`); the boost rides the draw
+        // ([`lit_fill_boost`]), as it can pass 1, which the packed colour cannot hold.
+        if shown.lit != Some(state.lit) {
             if let Some(fill) = fill {
                 if state.lit {
                     model.nameplates.lit_fills.insert(fill);
                 } else {
                     model.nameplates.lit_fills.remove(&fill);
                 }
-                let c = state.bar_colour;
-                model.region_data.entry(fill).or_default().vertex_color =
-                    Some(crate::color::Rgba8::from_f32([c[0], c[1], c[2], 1.0]));
             }
         }
-
-        if last.as_ref().is_none_or(|l| l.name != state.name) {
-            // The name goes through `SetText` with its expand flag: `GetUnitName` takes the one
-            // stack argument and leaves the `push 1` ahead of it for the call (`0x7cb706`-`0x7cb718`).
-            let shown = model.localized_text(state.name.clone());
-            model.region_data.entry(name).or_default().text = Some(shown);
-            model.touch_measure(name);
-            // A new string clears the valid bit and invalidates (`0x771ea4`).
-            model.clear_region_valid(name);
-        }
-        // The bind stores the unit's guid (`0x7cb6e0`) and starts the flash timer at 0
-        // (`0x7cb80e`).
-        if last.is_none() {
-            let plate = &mut model.nameplates.plates[i];
-            plate.guid = state.key;
-            plate.flash_ms = 0;
-        }
-        if last.as_ref().is_none_or(|l| l.hovered != state.hovered) {
+        if shown.hovered != Some(state.hovered) {
             // The enter and leave notifies (`0x7cb883`, `0x7cb8d9`) set the name's colour only
             // with the timer at 0 or less; a flash outlasts the hover.
             if model.nameplates.plates[i].flash_ms <= 0 {
@@ -909,66 +1250,81 @@ impl Plate {
             // The glow really shows, as addons read mouseover from it; it only paints nothing.
             model.set_region_hidden(glow, !state.hovered);
         }
+        model.nameplates.plates[i].shown = Some(Shown {
+            seat: Some(state.top_centre),
+            alpha: Some(state.alpha),
+            lit: Some(state.lit),
+            hovered: Some(state.hovered),
+            ..shown
+        });
+    }
 
-        if last.as_ref().is_none_or(|l| {
-            l.level != state.level || l.skull != state.skull || l.level_colour != state.level_colour
-        }) {
-            match (state.level, state.skull) {
-                // The skull flag wins the seat, whatever the level.
-                (_, true) => {
-                    model.set_region_hidden(level, true);
-                    model.set_region_hidden(skull, false);
-                }
-                (Some(n), false) => {
-                    let c = state.level_colour;
-                    // The level goes through `SetText` with its expand flag (`0x7cbcca`).
-                    let shown = model.localized_text(n.to_string());
-                    let data = model.region_data.entry(level).or_default();
-                    data.text = Some(shown);
-                    data.set_vertex_color(Some(crate::color::Rgba8::from_f32([
-                        c[0], c[1], c[2], 1.0,
-                    ])));
-                    model.set_region_hidden(level, false);
-                    model.set_region_hidden(skull, true);
-                    model.touch_measure(level);
-                    model.clear_region_valid(level);
-                }
-                // No level yet and no skull: the seat stays empty.
-                (None, false) => {
-                    model.set_region_hidden(level, true);
-                    model.set_region_hidden(skull, true);
-                }
+    /// `SetBarColor` (`0x7cbaa0`): the fill's reaction colour, exact, as addons read the unit's
+    /// reaction from `GetStatusBarColor`.
+    fn colour(model: &mut Model, i: usize, c: [f32; 3]) {
+        if let Some(fill) = model.nameplates.plates[i].fill {
+            model.region_data.entry(fill).or_default().vertex_color =
+                Some(crate::color::Rgba8::from_f32([c[0], c[1], c[2], 1.0]));
+        }
+    }
+
+    /// `UpdateLevel` (`0x7cbb40`): the level text in its colour, or the skull in its seat.
+    fn level(model: &mut Model, i: usize, unit: &PlateUnit) {
+        let p = &model.nameplates.plates[i];
+        let (level, skull) = (p.level, p.skull);
+        match (unit.level, unit.skull) {
+            // The skull flag wins the seat, whatever the level.
+            (_, true) => {
+                model.set_region_hidden(level, true);
+                model.set_region_hidden(skull, false);
+            }
+            (Some(n), false) => {
+                let c = unit.level_colour;
+                // The level goes through `SetText` with its expand flag (`0x7cbcca`).
+                let shown = model.localized_text(n.to_string());
+                let data = model.region_data.entry(level).or_default();
+                data.text = Some(shown);
+                data.set_vertex_color(Some(crate::color::Rgba8::from_f32([c[0], c[1], c[2], 1.0])));
+                model.set_region_hidden(level, false);
+                model.set_region_hidden(skull, true);
+                model.touch_measure(level);
+                model.clear_region_valid(level);
+            }
+            // No level yet and no skull: the seat stays empty.
+            (None, false) => {
+                model.set_region_hidden(level, true);
+                model.set_region_hidden(skull, true);
             }
         }
+    }
 
-        if last.as_ref().is_none_or(|l| l.raid_icon != state.raid_icon) {
-            match state.raid_icon {
-                Some(idx) => {
-                    let (u0, v0) = (f32::from(idx & 3) * 0.25, f32::from(idx >> 2) * 0.25);
-                    let data = model.region_data.entry(raid).or_default();
-                    data.tex_coords = Some(TexCoords::Rect([u0, u0 + 0.25, v0, v0 + 0.25]));
-                    model.set_region_hidden(raid, false);
-                }
-                None => model.set_region_hidden(raid, true),
+    /// `0x7cbe20`: the raid icon's atlas cell, column `idx & 3` and row `idx >> 2`, or hidden.
+    fn raid_icon(model: &mut Model, i: usize, icon: Option<u8>) {
+        let raid = model.nameplates.plates[i].raid;
+        match icon {
+            Some(idx) => {
+                let (u0, v0) = (f32::from(idx & 3) * 0.25, f32::from(idx >> 2) * 0.25);
+                let data = model.region_data.entry(raid).or_default();
+                data.tex_coords = Some(TexCoords::Rect([u0, u0 + 0.25, v0, v0 + 0.25]));
+                model.set_region_hidden(raid, false);
             }
+            None => model.set_region_hidden(raid, true),
         }
-
-        model.nameplates.plates[i].last = Some(state.clone());
     }
 
     /// Retire a plate: hide it, never destroy it (`0x608a10`), so it keeps its child-list index and
     /// comes back as the same Lua object addons key their per-plate state by. Its guid stays: the
-    /// retire never writes `+0x4e8`.
+    /// retire never writes `+0x4e8`, and its bar still watches the unit.
     fn retire(model: &mut Model, i: usize, effects: &mut SyncEffects) {
-        if model.nameplates.plates[i].last.is_none() {
+        if model.nameplates.plates[i].shown.is_none() {
             return;
         }
         let frame = model.nameplates.plates[i].frame;
         if !model.nameplates.pending_paint.remove(&frame) {
             model.nameplates.retired_in_batch.insert(frame);
         }
-        effects.visibility.push((frame, false));
-        model.nameplates.plates[i].last = None;
+        effects.shown(frame, false);
+        model.nameplates.plates[i].shown = None;
     }
 }
 

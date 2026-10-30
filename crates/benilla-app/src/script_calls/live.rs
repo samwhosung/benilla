@@ -184,6 +184,9 @@ live_reads! {
         /// The world plates' builds, the game object's and the corpse's; absent in a harness
         /// without the object records or the caches.
         plates: Option<crate::ui_tooltip::PlateLive<'static, 'static>>,
+        /// The nameplates' callbacks and their gate inside a packet; absent in a harness without
+        /// the relations' inputs.
+        nameplates: Option<crate::vplates::NamePlateLive<'static, 'static>>,
         /// The targeting word's halves and `SpellCanTargetUnit`'s unit leg; absent in a harness
         /// without the unit checks' inputs.
         targeting: Option<crate::spell::targeting::TargetingLive<'static, 'static>>,

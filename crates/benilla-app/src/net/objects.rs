@@ -1949,10 +1949,19 @@ mod tests {
         let mate = [(HEALTH, 100), (MAXHEALTH, 200), (LEVEL, 60)];
         super::super::handlers::dispatch(world, super::wire(vec![create(MATE, &mate)]));
         let signal = |id| FieldNotice::Signal { guid: MATE, id };
+        let gate = FieldNotice::Plate {
+            guid: MATE,
+            call: crate::vplates::PlateCall::Gate,
+        };
         assert_eq!(
             drain(world),
-            [FieldNotice::Global { id: 376 }, signal(345), signal(22)],
-            "the guild tag, then the maximum differs"
+            [
+                gate,
+                FieldNotice::Global { id: 376 },
+                signal(345),
+                signal(22)
+            ],
+            "the guild tag, its plate's gate first, then the maximum differs"
         );
         super::super::handlers::dispatch(world, super::wire(vec![create(MATE, &mate)]));
         assert_eq!(

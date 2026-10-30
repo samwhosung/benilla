@@ -26,6 +26,7 @@ use benilla_protocol::{ObjectFields, OwnerFallback};
 use bevy::prelude::*;
 
 use crate::tutorial::id as tutorial;
+use crate::vplates::PlateCall;
 
 /// One signal a reference callback raised, in the order the packets raised them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -234,6 +235,12 @@ pub(crate) enum FieldNotice {
     /// with `apply` set, which stops the auto-move when the unit may neither translate nor turn
     /// (`0x5146c1`-`0x5146d6`).
     InputTick,
+    /// A plate callback on the unit `guid` ([`crate::vplates::PlateCall`]), run on its plate at
+    /// the notice's place, inside its packet.
+    Plate {
+        guid: u64,
+        call: crate::vplates::PlateCall,
+    },
     /// The far-sight field's change to `object`, 0 for none (`0x5de0d0`): with the object held the
     /// start (`0x5de144` → `0x5ee270`), whose update while far sight is off sends
     /// `CMSG_FAR_SIGHT` 1, puts the view out and stops the auto-move, through the mover's tick
@@ -251,6 +258,13 @@ impl NoticeLane {
     /// Queue `notice` behind everything stamped before it.
     pub(crate) fn write(&mut self, notice: FieldNotice) {
         let stamp = crate::lanes::stamp();
+        let at = self.0.partition_point(|(s, _)| *s < stamp);
+        self.0.insert(at, (stamp, notice));
+    }
+
+    /// Queue `notice` at `stamp`, a place its writer took ahead of what it wrote since, as a
+    /// callback that runs ahead of a line its handler words first.
+    pub(crate) fn write_at(&mut self, stamp: crate::lanes::Stamp, notice: FieldNotice) {
         let at = self.0.partition_point(|(s, _)| *s < stamp);
         self.0.insert(at, (stamp, notice));
     }
@@ -370,11 +384,16 @@ pub(crate) mod id {
     pub(crate) const AUTOFOLLOW_END: u16 = 368;
 }
 
-/// `CGPlayer_C::RefreshGuildTag` (`0x5e08e0`) on the player `guid`: `TABARD_CANSAVE_CHANGED` bare
-/// (`0x5e0907`), then `PLAYER_GUILD_UPDATE` through `0x515e50` (`0x5e0922`). A player's first create
-/// runs it from `PostInit` (`0x5dec19`) and a `PLAYER_GUILDID` change from `0x5e2795`.
-pub(crate) fn guild_tag(guid: u64) -> [FieldNotice; 2] {
+/// `CGPlayer_C::RefreshGuildTag` (`0x5e08e0`) on the player `guid`: the name's gate
+/// (`0x5e08fd`), `TABARD_CANSAVE_CHANGED` bare (`0x5e0907`), then `PLAYER_GUILD_UPDATE` through
+/// `0x515e50` (`0x5e0922`). A player's first create runs it from `PostInit` (`0x5dec19`) and a
+/// `PLAYER_GUILDID` change from `0x5e2795`.
+pub(crate) fn guild_tag(guid: u64) -> [FieldNotice; 3] {
     [
+        FieldNotice::Plate {
+            guid,
+            call: PlateCall::Gate,
+        },
         FieldNotice::Global {
             id: id::TABARD_CANSAVE_CHANGED,
         },
@@ -758,11 +777,24 @@ impl Pass {
         }
     }
 
-    /// `NotifyUnitNameUpdate` (`0x491a00`) on the watched unit: the tooltip's refresh, then
-    /// `UNIT_NAME_UPDATE` (`0x491a3c`).
+    fn plate(&mut self, at: Place, guid: u64, call: PlateCall) {
+        if guid != 0 {
+            self.push(at, FieldNotice::Plate { guid, call });
+        }
+    }
+
+    /// `NotifyUnitNameUpdate` (`0x491a00`) on the watched unit: the tooltip's refresh
+    /// (`0x491a27`) and the name's gate (`0x491a2e`), then `UNIT_NAME_UPDATE` (`0x491a3c`).
     fn name_update(&mut self, at: Place, guid: u64) {
         if guid != 0 {
             self.push(at, FieldNotice::TooltipUnit { guid });
+            self.push(
+                at,
+                FieldNotice::Plate {
+                    guid,
+                    call: PlateCall::Gate,
+                },
+            );
         }
         self.signal(at, guid, id::UNIT_NAME_UPDATE);
     }
@@ -863,6 +895,18 @@ pub(crate) fn placed_values(
 
     // The unit type watchers (`0x6041f0`), on every unit.
     let mine = around.me == Some(guid);
+    // The health watcher `0x6046f0` on every unit, its plate legs first: the bar's colour
+    // (`0x60471b` → `0x607080`), then the flash on a loss, compared signed (`cmp edi,[health]` at
+    // `0x60475d`, `jle` at `0x604760`, `0x604764` → `0x6122e0`).
+    if let Some(at) = at(UNIT_SECTION, HEALTH, List::Type) {
+        pass.plate(at, guid, PlateCall::Colour);
+        let lost = block
+            .edge(UNIT_SECTION + HEALTH.0 / 4)
+            .is_some_and(|(old, new)| old as i32 > new as i32);
+        if lost {
+            pass.plate(at, guid, PlateCall::Flash);
+        }
+    }
     // The health watcher's revive arm (`0x6047ee`-`0x6047f4`, a health of 0 or less rising above
     // it) for the active player (`0x5fef9f`): `0x5fef70`'s unlock and `PLAYER_ALIVE`, ahead of the
     // watcher's usable refresh.
@@ -885,12 +929,19 @@ pub(crate) fn placed_values(
             pass.push(at, FieldNotice::UsableRefresh);
         }
     }
-    // `0x5ff800` on byte 3's bit 0x2 against its copy, for the active player (`0x5ff81a`,
-    // `0x5ff831`).
+    // `0x5ff800` on byte 3 against its copy: on bit 0x2 the name's gate (`0x5ff82a`), then, for
+    // the active player, the usable refresh (`0x5ff831`, `0x5ff83a`); on bit 0x1 the name's gate
+    // again (`0x5ff846`).
     if let Some(at) = at(UNIT_SECTION, BYTES_1_BYTE_3, List::Type) {
         let flipped = block.flipped(UNIT_SECTION + BYTES_1_BYTE_3.0 / 4);
-        if mine && flipped & 0x0200_0000 != 0 {
-            pass.push(at, FieldNotice::UsableRefresh);
+        if flipped & 0x0200_0000 != 0 {
+            pass.plate(at, guid, PlateCall::Gate);
+            if mine {
+                pass.push(at, FieldNotice::UsableRefresh);
+            }
+        }
+        if flipped & 0x0100_0000 != 0 {
+            pass.plate(at, guid, PlateCall::Gate);
         }
     }
     if let Some(at) = at(OBJECT_SECTION, ENTRY, List::Type) {
@@ -901,6 +952,10 @@ pub(crate) fn placed_values(
     }
     for range in [OWNERS, PERSUADED, FACTION_TEMPLATE] {
         if let Some(at) = at(UNIT_SECTION, range, List::Type) {
+            // `0x604910`: the name's gate (`0x604938`) ahead of the reaction (`0x60493f`).
+            if range == OWNERS {
+                pass.plate(at, guid, PlateCall::Gate);
+            }
             pass.reaction(at, guid, fields, around);
         }
     }
@@ -1020,6 +1075,13 @@ pub(crate) fn placed_values(
         // behind the quest-giver sweep (`0x5edb85`).
         let id = id::UPDATE_LFG_TYPES;
         pass.push(at, FieldNotice::Global { id });
+        // Last, the plates' level latch (`0x5edb93` → `0x605550`).
+        pass.plate(at, guid, PlateCall::LevelLatch);
+    }
+    // `0x60cdd0` on every unit, after the active player's arm (`0x60ce4b`): its plate's level
+    // (`0x60ce5b` → `0x7cbb40`).
+    if let Some(at) = at(UNIT_SECTION, LEVEL, List::Type) {
+        pass.plate(at, guid, PlateCall::Level);
     }
 
     // The bridge (`0x51bbb0`), the object's own watches. The happiness watch carries its field's
@@ -1342,12 +1404,22 @@ pub(crate) fn reaction_signals(
     if me == Some(guid) {
         guids.extend(others());
     }
+    // Each guid's `RefreshNameDesc` (`0x607080`), whose plate leg recolours the bar, ahead of its
+    // signal (`0x606e3c` before `0x606e57`, `0x606e8a`, `0x606ecf`, `0x606fa2` before `0x606fbd`).
     guids
         .into_iter()
         .filter(|&g| g != 0)
-        .map(|guid| FieldNotice::Signal {
-            guid,
-            id: id::UNIT_FACTION,
+        .flat_map(|guid| {
+            [
+                FieldNotice::Plate {
+                    guid,
+                    call: PlateCall::Colour,
+                },
+                FieldNotice::Signal {
+                    guid,
+                    id: id::UNIT_FACTION,
+                },
+            ]
         })
         .collect()
 }
@@ -1886,7 +1958,21 @@ mod tests {
     }
 
     /// [`block`] with the world's answers given: the creature cache's and the reaction sweep's.
+    /// The plate legs are left out: these tests read the signals, and
+    /// [`each_plate_leg_runs_where_its_watcher_calls_it`] reads the legs ([`block_with_plates`]).
     fn block_around(
+        store: &mut ObjectFields,
+        around: &Around,
+        guid: u64,
+        delta: &[(u16, u32)],
+    ) -> Vec<FieldNotice> {
+        let mut notices = block_with_plates(store, around, guid, delta);
+        notices.retain(|n| !matches!(n, FieldNotice::Plate { .. }));
+        notices
+    }
+
+    /// [`block_around`] with the plate legs kept.
+    fn block_with_plates(
         store: &mut ObjectFields,
         around: &Around,
         guid: u64,
@@ -1908,6 +1994,128 @@ mod tests {
 
     fn signal(guid: u64, id: u16) -> FieldNotice {
         FieldNotice::Signal { guid, id }
+    }
+
+    /// Each watcher's plate legs where it calls them, ahead of the bridge on the same field: the
+    /// health watcher's colour, then on a loss compared signed its flash, ahead of the revive arm
+    /// and the usable refresh (`0x60471b`, `0x604764`, `0x6047ee`, `0x604848`); the reaction's
+    /// colour ahead of each `UNIT_FACTION` (`0x606e3c` before `0x606e57`); the owners' gate ahead
+    /// of their reaction (`0x604938`, `0x60493f`); byte 3 of `UNIT_FIELD_BYTES_1` on bit 0x2 its
+    /// gate then the active player's refresh, on bit 0x1 its gate (`0x5ff82a`, `0x5ff83a`,
+    /// `0x5ff846`); the name update's gate between the tooltip's refresh and the signal
+    /// (`0x491a2e`); the level's after the active player's arm and its latch (`0x5edb93`,
+    /// `0x60ce5b`); the guild tag's gate first (`0x5e08fd`).
+    #[test]
+    fn each_plate_leg_runs_where_its_watcher_calls_it() {
+        use PlateCall::*;
+        let plate = |guid, call| FieldNotice::Plate { guid, call };
+        let around = Around {
+            me: Some(ME),
+            target: None,
+            creature_lookup: &|entry| entry == 299,
+            others: &Vec::new,
+            pet_bar: 0,
+        };
+        let run = |store: &mut ObjectFields, guid, delta: &[(u16, u32)]| {
+            block_with_plates(store, &around, guid, delta)
+        };
+        const R: FieldNotice = FieldNotice::UsableRefresh;
+
+        let mut mob = unit();
+        assert_eq!(
+            run(&mut mob, MOB, &[(22, 50)]),
+            [plate(MOB, Colour), bridge(MOB, 16)],
+            "a rise: the colour alone"
+        );
+        assert_eq!(
+            run(&mut mob, MOB, &[(22, 0xFFFF_FFF0)]),
+            [plate(MOB, Colour), plate(MOB, Flash), bridge(MOB, 16)],
+            "50 to -16 is a loss"
+        );
+        assert_eq!(
+            run(&mut mob, MOB, &[(22, 5)]),
+            [plate(MOB, Colour), bridge(MOB, 16)],
+            "-16 to 5 is a rise"
+        );
+        assert_eq!(
+            run(&mut mob, MOB, &[(28, 90)]),
+            [bridge(MOB, 22)],
+            "the maximum has no type watcher"
+        );
+        let mut me = player();
+        assert_eq!(
+            run(&mut me, ME, &[(22, 90)]),
+            [plate(ME, Colour), FieldNotice::Revived, R, bridge(ME, 16)]
+        );
+        assert_eq!(
+            run(&mut me, ME, &[(22, 80)]),
+            [plate(ME, Colour), plate(ME, Flash), R, bridge(ME, 16)]
+        );
+
+        assert_eq!(
+            run(&mut mob, MOB, &[(10, 7)]),
+            [
+                plate(MOB, Gate),
+                plate(MOB, Colour),
+                signal(MOB, id::UNIT_FACTION)
+            ],
+            "the owners' gate, then the reaction"
+        );
+        let bytes_1 = UNIT_SECTION + BYTES_1_BYTE_3.0 / 4;
+        let bytes_1_bridge = BYTES_1_BYTE_3.0 / 4;
+        assert_eq!(
+            run(&mut mob, MOB, &[(bytes_1, 0x0200_0000)]),
+            [plate(MOB, Gate), bridge(MOB, bytes_1_bridge)]
+        );
+        assert_eq!(
+            run(&mut me, ME, &[(bytes_1, 0x0300_0000)]),
+            [
+                plate(ME, Gate),
+                R,
+                plate(ME, Gate),
+                bridge(ME, bytes_1_bridge)
+            ]
+        );
+        assert_eq!(
+            run(&mut mob, MOB, &[(3, 299)]),
+            [
+                tooltip(MOB),
+                plate(MOB, Gate),
+                signal(MOB, id::UNIT_NAME_UPDATE)
+            ]
+        );
+
+        assert_eq!(
+            run(&mut mob, MOB, &[(34, 12)]),
+            [plate(MOB, Level), bridge(MOB, id::UNIT_LEVEL)]
+        );
+        assert_eq!(
+            run(&mut me, ME, &[(34, 2)]),
+            [
+                FieldNotice::Global {
+                    id: id::SPELLS_CHANGED
+                },
+                FieldNotice::TrainerPass,
+                FieldNotice::Global {
+                    id: id::UPDATE_LFG_TYPES
+                },
+                plate(ME, LevelLatch),
+                plate(ME, Level),
+                bridge(ME, id::UNIT_LEVEL)
+            ]
+        );
+
+        let mut other = player();
+        assert_eq!(
+            run(&mut other, OTHER, &[(pf(GUILD_ID.0), 5)]),
+            [
+                plate(OTHER, Gate),
+                FieldNotice::Global {
+                    id: id::TABARD_CANSAVE_CHANGED
+                },
+                signal(OTHER, id::PLAYER_GUILD_UPDATE)
+            ]
+        );
     }
 
     /// `0x4919d0` on `guid`, the tooltip's refresh ahead of a name signal.

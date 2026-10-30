@@ -97,6 +97,10 @@ impl NoticeFiring<'_, '_> {
             }
             return false;
         }
+        if let FieldNotice::Plate { guid, call } = notice {
+            crate::vplates::fire_plate_call(script, guid, call);
+            return false;
+        }
         if notice == FieldNotice::CorpsePlate {
             script.tooltip_corpse_refresh();
             return false;
@@ -167,12 +171,23 @@ impl NoticeFiring<'_, '_> {
             return false;
         }
         fire(script, &mut self.sink, notice);
-        if let FieldNotice::Unit {
-            guid,
-            id: crate::field_watch::id::UNIT_HEALTH,
-        } = notice
-        {
-            self.tooltip_health(script, guid);
+        if let FieldNotice::Unit { guid, id } = notice {
+            if id == crate::field_watch::id::UNIT_HEALTH {
+                self.tooltip_health(script, guid);
+            }
+            // The plates' bar watchers on the unit's two fields (`0x7cc53b`, `0x7cc562`), linked
+            // when a plate is bound, after the bridge's.
+            if matches!(
+                id,
+                crate::field_watch::id::UNIT_HEALTH | crate::field_watch::id::UNIT_MAXHEALTH
+            ) {
+                let store = self
+                    .index
+                    .as_ref()
+                    .and_then(|i| i.0.get(&guid))
+                    .and_then(|&e| self.views.get(e).ok());
+                crate::vplates::health_watch(script, guid, store);
+            }
         }
         false
     }
@@ -678,6 +693,7 @@ pub(crate) fn fire(
         | FieldNotice::PetMacros
         | FieldNotice::PetGuidSet { .. }
         | FieldNotice::TooltipUnit { .. }
+        | FieldNotice::Plate { .. }
         | FieldNotice::CorpsePlate
         | FieldNotice::RecruitmentCascade => {}
         // Put on the trainer lane by the packet's handler ([`crate::ui_trainer::TrainerPasses`]).

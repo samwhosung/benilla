@@ -172,7 +172,10 @@ fn fire_signal(
         GroupSignal::LeaderChanged => ("PARTY_LEADER_CHANGED", vec![]),
         GroupSignal::LootMethodChanged => ("PARTY_LOOT_METHOD_CHANGED", vec![]),
         GroupSignal::RaidRosterUpdate => ("RAID_ROSTER_UPDATE", vec![]),
-        GroupSignal::RaidTargetUpdate => ("RAID_TARGET_UPDATE", vec![]),
+        GroupSignal::RaidTargetUpdate => {
+            script.refresh_nameplate_raid_icons();
+            ("RAID_TARGET_UPDATE", vec![])
+        }
         // With the 1-based slot as a number (`%d`, `0x835154`). Stock FrameXML ignores them
         // (`PartyMemberFrame.lua:145` is commented out).
         GroupSignal::MemberEnabled(slot) => (

@@ -320,12 +320,15 @@ fn one_packets_blocks_for_one_object_notify_against_its_last_copy() {
 }
 
 /// One block's edges and notices take their stamps in the notify pass's one ascending walk: the
-/// health edge, the bridge's `UNIT_HEALTH` on field 22, then the aura edge, whose line the aura
+/// health edge, the health watcher's plate legs (the colour, the flash on the loss), the bridge's
+/// `UNIT_HEALTH` on field 22, then the aura edge, whose line the aura
 /// watcher `0x604d00` writes at field 47 after the notices of the lower fields and ahead of the
 /// bridge's `UNIT_AURA` there, the type watchers running first.
 #[test]
 fn a_blocks_edges_and_notices_are_stamped_in_field_order() {
+    use crate::vplates::PlateCall;
     use benilla_protocol::field::{FIELD_UNIT_AURA, FIELD_UNIT_HEALTH};
+    let plate = |call| crate::field_watch::FieldNotice::Plate { guid: MOB, call };
     let mut app = client();
     let world = app.world_mut();
     world.resource_mut::<SelfGuid>().0 = Some(ME);
@@ -357,6 +360,8 @@ fn a_blocks_edges_and_notices_are_stamped_in_field_order() {
         order,
         [
             "edge 22".to_string(),
+            format!("{:?}", plate(PlateCall::Colour)),
+            format!("{:?}", plate(PlateCall::Flash)),
             format!(
                 "{:?}",
                 crate::field_watch::FieldNotice::Unit {
@@ -518,10 +523,19 @@ fn a_released_player_comes_back_with_its_fields_and_no_create_hook() {
         )
     };
     let signal = |id| FieldNotice::Signal { guid: MATE, id };
+    let gate = FieldNotice::Plate {
+        guid: MATE,
+        call: crate::vplates::PlateCall::Gate,
+    };
     send(world, [mate(5)]);
     assert_eq!(
         notices(world),
-        [FieldNotice::Global { id: 376 }, signal(345), signal(22)],
+        [
+            gate,
+            FieldNotice::Global { id: 376 },
+            signal(345),
+            signal(22)
+        ],
         "control: a first create runs the hook"
     );
     edges(world);

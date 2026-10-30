@@ -363,11 +363,19 @@ fn notices(app: &mut App) -> Vec<FieldNotice> {
         .collect()
 }
 
-fn faction(guid: u64) -> FieldNotice {
-    FieldNotice::Signal {
-        guid,
-        id: crate::field_watch::id::UNIT_FACTION,
-    }
+/// `guid`'s `RefreshNameDesc`, whose plate leg recolours the bar (`0x606e3c`), then its
+/// `UNIT_FACTION`.
+fn faction(guid: u64) -> [FieldNotice; 2] {
+    [
+        FieldNotice::Plate {
+            guid,
+            call: crate::vplates::PlateCall::Colour,
+        },
+        FieldNotice::Signal {
+            guid,
+            id: crate::field_watch::id::UNIT_FACTION,
+        },
+    ]
 }
 
 fn update_faction() -> FieldNotice {
@@ -376,11 +384,11 @@ fn update_faction() -> FieldNotice {
     }
 }
 
-/// `RefreshReaction` on the active player (`0x606e20`): `UNIT_FACTION` for it and its `SUMMON`,
+/// `RefreshReaction` on the active player (`0x606e20`): [`faction`] for it and its `SUMMON`,
 /// then for each held unit the sweep reaches, its own summons skipped (`0x606f76`-`0x606f9e`), so
 /// neither its totem nor a party member the object manager does not hold hears it.
 fn refresh() -> Vec<FieldNotice> {
-    vec![faction(ME), faction(PET), faction(BOAR)]
+    [faction(ME), faction(PET), faction(BOAR)].concat()
 }
 
 /// A standing message refreshes the player's reaction once when an entry moved a rank (`0x4d58ac`

@@ -160,8 +160,8 @@ mod minimap;
 mod movieframe;
 pub mod nameplate;
 pub use nameplate::{
-    PlateAction, PlateBitWrite, PlateBitWrites, PlateClick, PlateGeometry, PlateState,
-    PLATE_BIT_ENEMY, PLATE_BIT_FRIEND,
+    PlateAction, PlateBitWrite, PlateBitWrites, PlateClick, PlateGateQuery, PlateGeometry,
+    PlateState, PlateUnit, PlateUnitQuery, PLATE_BIT_ENEMY, PLATE_BIT_FRIEND,
 };
 mod model;
 mod modelframe;

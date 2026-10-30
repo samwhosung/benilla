@@ -289,7 +289,8 @@ fn the_target_plate_is_the_opaque_one() {
 }
 
 /// pfUI's bar `OnValueChanged` (`:393`) finds the plate by `this:GetParent()`; the reference sets
-/// the bar from a GUID-watch callback that fires the handler, as the driver's write does here.
+/// the bar from a GUID-watch callback that fires the handler (`0x7cc570`), inside the packet that
+/// moved the field, never at the frame's gate.
 #[test]
 fn an_engine_health_write_fires_onvaluechanged_with_the_plate_as_parent() {
     let mut s = vm();
@@ -307,20 +308,52 @@ fn an_engine_health_write_fires_onvaluechanged_with_the_plate_as_parent() {
     "#,
     )
     .unwrap();
-    // The watcher (`0x7cc570`) sets the range, which re-fires the held value, then the value.
+    let wolf = plate("Wolf", 30.0, 40.0).key;
+    // The frame's gate keeping the plate moves no bar, whatever the frame's health reads.
     drive(&mut s, &[plate("Wolf", 12.0, 40.0)]);
+    assert_eq!(s.eval::<i64>("return Fired").unwrap(), 0);
+    // The watcher (`0x7cc570`) sets the range, which re-fires the held value, then the value.
+    s.nameplate_health(wolf, 12.0, 40.0);
     assert_eq!(s.eval::<i64>("return Fired").unwrap(), 2);
     assert!(s.eval::<bool>("return ParentIsPlate").unwrap());
-    // Unmoved health fires nothing: a watcher runs only on a changed field.
-    drive(&mut s, &[plate("Wolf", 12.0, 40.0)]);
-    assert_eq!(s.eval::<i64>("return Fired").unwrap(), 2);
     // Health and maximum both moved: one watcher each, the range fire twice, the value once.
-    drive(&mut s, &[plate("Wolf", 20.0, 50.0)]);
+    s.nameplate_health(wolf, 20.0, 50.0);
+    s.nameplate_health(wolf, 20.0, 50.0);
     assert_eq!(s.eval::<i64>("return Fired").unwrap(), 5);
     // The maximum alone moved: its watcher (field `0x58`) runs once, the range re-firing the held
     // value, and the equal value stores nothing.
-    drive(&mut s, &[plate("Wolf", 20.0, 60.0)]);
+    s.nameplate_health(wolf, 20.0, 60.0);
     assert_eq!(s.eval::<i64>("return Fired").unwrap(), 6);
+    // Another unit's watch moves nothing here.
+    s.nameplate_health(wolf + 1, 1.0, 60.0);
+    assert_eq!(s.eval::<i64>("return Fired").unwrap(), 6);
+}
+
+/// The retire unwatches nothing (`0x608a10`): a hidden plate's bar follows its last unit until a
+/// bind moves its watch (`0x7cc3e2` → `0x7cc5d0`), and the unit's going drops it.
+#[test]
+fn a_retired_plates_bar_follows_its_last_unit_until_the_unit_goes() {
+    let mut s = vm();
+    let wolf = plate("Wolf", 30.0, 40.0);
+    drive(&mut s, std::slice::from_ref(&wolf));
+    drive(&mut s, &[]);
+    let value = |s: &mut UiScript| {
+        s.eval::<f64>("return WorldFrame:GetChildren():GetChildren():GetValue()")
+            .unwrap()
+    };
+    s.nameplate_health(wolf.key, 25.0, 40.0);
+    assert_eq!(
+        value(&mut s),
+        25.0,
+        "the hidden plate's bar still watches the wolf"
+    );
+    s.nameplate_unit_gone(wolf.key);
+    s.nameplate_health(wolf.key, 5.0, 40.0);
+    assert_eq!(
+        value(&mut s),
+        25.0,
+        "the wolf's object took its watches with it"
+    );
 }
 
 /// The driver writes a plate's static properties once, at creation, so an addon's takeover (pfUI
@@ -1012,7 +1045,9 @@ fn an_on_update_scanner_skins_a_plate_before_any_stock_art_draws() {
         .any(|p| p.contains("UI-TargetingFrame-BarFill")));
     assert_eq!(s.eval::<i64>("return updates").unwrap(), 2);
 
-    drive(&mut s, &[plate("Wolf", 20.0, 40.0)]);
+    // The bar's watcher, inside the health's packet (`0x7cc570`).
+    let wolf = plate("Wolf", 20.0, 40.0);
+    s.nameplate_health(wolf.key, 20.0, 40.0);
     assert_eq!(s.eval::<i64>("return health_changed").unwrap(), 20);
     assert!(texture_paths(&s).iter().any(|p| p == "SkinnedFill"));
     assert!(s.take_errors().is_empty());
@@ -1264,8 +1299,9 @@ fn the_plates_fill_shrinks_with_health() {
         .unwrap());
     let whole = fill_width(&mut s);
     assert!(whole > 0.0);
+    let wolf = plate("Wolf", 40.0, 40.0).key;
     for (health, part) in [(20.0, 0.5), (10.0, 0.25)] {
-        drive(&mut s, &[plate("Wolf", health, 40.0)]);
+        s.nameplate_health(wolf, health, 40.0);
         s.tick(0.0);
         crate::assert_near!(fill_width(&mut s), whole * part);
     }

@@ -853,10 +853,17 @@ fn deactivate(sc: &mut Scene, guid: u64, script: Option<&UiScript>) {
     if sc.self_guid.0 == Some(guid) {
         crate::ui_mirror::stop_all(&mut sc.field_notices);
     }
-    // `CGUnit_C::Release` (`0x5fbb60`, after the player's roster legs, `0x5e9b61`): the
-    // selection's teardown (`0x5fbbe5`), unless a group row holds the guid (`0x5fbbcd`). Its run
-    // waits for the packet's end, so in one out-of-range list its sends follow a later member's
-    // `0x27f`.
+    // `CGUnit_C::Release` (`0x5fbb60`, after the player's roster legs, `0x5e9b61`): its plate
+    // freed (`0x5fbba9`), then the selection's teardown (`0x5fbbe5`), unless a group row holds the
+    // guid (`0x5fbbcd`). Its run waits for the packet's end, so in one out-of-range list its sends
+    // follow a later member's `0x27f`.
+    if held(guid).is_some_and(|s| s.is_unit()) {
+        sc.field_notices
+            .write(crate::field_watch::FieldNotice::Plate {
+                guid,
+                call: crate::vplates::PlateCall::Gone,
+            });
+    }
     {
         let held = |g: u64| held(g).map(|s| &s.0);
         let me = sc.self_guid.0;
