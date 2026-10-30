@@ -200,9 +200,9 @@ pub(crate) fn drain_arrival_casts(
     drain_click_casts(vm);
 }
 
-/// Sends the casts a dispatcher outside the world click queued (a nameplate's right-click, a
-/// crate's `Interact`) through the cast ladder, as an engine turn among the frame's input records.
-/// The world click's own are drained inside its call ([`ClickCastDrain::drain`]).
+/// Sends the casts a dispatcher outside any call queued (a crate's `Interact`) through the cast
+/// ladder, as an engine turn among the frame's input records. The world click's and a nameplate
+/// click's own are drained inside their calls ([`ClickCastDrain::drain`]).
 pub(crate) fn drain_click_casts(
     mut vm: crate::script_calls::VmWith<ClickCastDrain<'static, 'static>>,
 ) {

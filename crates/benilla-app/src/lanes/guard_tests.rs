@@ -446,13 +446,10 @@ pub(super) const WRITES_NO_VIEW: &[(&str, &str)] = &[
     ("::sound::ui::drain_ui_sounds", "`PlaySound`'s queued plays"),
     ("::sound::zone::lua_music", "`PlayMusic` and `StopMusic`'s queued verbs"),
     ("::target::click::act_on_arrival", "the verb an approach owed, at its stop (`0x60fa20`)"),
-    ("::target::click::act_on_interact", "a plate right-click's interact (`0x492881`)"),
-    ("::target::click::select_on_plate_click", "a plate click (`0x7cb910`)"),
+    ("::target::click::act_on_interact", "a crate's `Interact`, the object's dispatcher"),
     ("::ui_action::drain::attack_nearest_probe", "the melee probe's press"),
     ("::ui_action::drain::drain_arrival_casts", "the cast a walk's arrival owed"),
-    ("::ui_action::drain::drain_click_casts", "the casts a plate click or a crate's `Interact` \
-        queued"),
-    ("::ui_action::drop_item::trade_on_plate_click", "a plate click's trade leg (`0x4925d0`)"),
+    ("::ui_action::drain::drain_click_casts", "the casts a crate's `Interact` queued"),
     ("::ui_billing::poll_play_time", "the frame time's poll (`0x420d63`)"),
     ("::ui_chat::away::movement_clears_afk", "the movement keys' AFK clear (`0x513d36`, \
         `0x514e23`, `0x514f0b`, `0x514fca`)"),

@@ -1079,8 +1079,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
                 model.frame_id(h)
             };
-            // A released click, flagged as scripted, which only a LootButton reads.
-            click_button(lua, id, click_arg_name(&button), false, true);
+            // A released click, flagged as scripted, which a LootButton and a nameplate read.
+            click_button(lua, id, click_arg_name(&button), true);
             Ok(())
         })?,
     )?;
@@ -1172,15 +1172,14 @@ pub(super) fn wants_press_visual(model: &Model, h: FrameHandle, button: &str) ->
     }
 }
 
-/// The click shared by the input path and `Click()`: a CheckButton toggles first, enabled or not
-/// (`0x785550`), a disabled Button fires nothing more, then `OnClick` gets the button name alone
-/// as `arg1` (`0x779540` fires it with the format `"%s"`); `down`, true only for a click a
-/// `…ButtonDown` registration fired, reaches the nameplate's select alone. The mouse never gets
-/// here for a disabled button: its press slot returns first (`0x77922e`), its release is gated on
-/// PUSHED. `scripted` marks a Lua `Click()`
-/// (`0x7826c0` passes 1, the mouse `0x779280`/`0x7793a4` pass 0): a LootButton then does nothing at
-/// all, not even its `OnClick` (`0x4c182b`); every other kind ignores it.
-pub(super) fn click_button(lua: &Lua, id: u32, button: &str, down: bool, scripted: bool) {
+/// The click shared by the input path and `Click()`: a nameplate's slot runs its unit's select or
+/// interact ahead of the rest (`0x7cb910`), a CheckButton toggles, enabled or not (`0x785550`), a
+/// disabled Button fires nothing more, then `OnClick` gets the button name alone as `arg1`
+/// (`0x779540` fires it with the format `"%s"`). The mouse never gets here for a disabled button:
+/// its press slot returns first (`0x77922e`), its release is gated on PUSHED. `scripted` marks a
+/// Lua `Click()` (`0x7826c0` passes 1, the mouse `0x779280`/`0x7793a4` pass 0): a LootButton then
+/// does nothing at all, not even its `OnClick` (`0x4c182b`), and a nameplate's call carries it.
+pub(super) fn click_button(lua: &Lua, id: u32, button: &str, scripted: bool) {
     // A hyperlink button's click slot (`+0x94`, `0x7a3510`) is its text frame's
     // `OnHyperlinkClick`, in place of the Button's `OnClick` firer.
     let target = lua
@@ -1191,6 +1190,11 @@ pub(super) fn click_button(lua: &Lua, id: u32, button: &str, down: bool, scripte
         .copied();
     if target.is_some_and(|h| super::hyperlink::click(lua, h, button)) {
         return;
+    }
+    // A nameplate's slot calls `0x4949f0` on its unit (`0x7cb92a`) before the button's click
+    // (`0x7cb936` → `0x779540`), so its `OnClick` reads the unit it selected.
+    if let Some(h) = target {
+        super::nameplate::click(lua, h, button, scripted);
     }
     let mut take_loot = None;
     let fire = {
@@ -1251,12 +1255,6 @@ pub(super) fn click_button(lua: &Lua, id: u32, button: &str, down: bool, scripte
         lua.app_data_mut::<Model>()
             .expect("model app_data")
             .record_lua_error(&e);
-    }
-    // A nameplate click selects its unit, from the pointer or `Click()` alike (the plate's
-    // override `0x7cb910` chains the base), after the handler so an erroring hook cannot eat it. A
-    // press selects nothing: the plate registers Up clicks only (`0x7cb637`).
-    if !down {
-        super::nameplate::note_click(lua, id, button);
     }
     // The take runs whatever the handler did (`0x4c1867`), inside the click: a row whose `OnClick`
     // errored still loots, and the click's next listener reads what the take did.

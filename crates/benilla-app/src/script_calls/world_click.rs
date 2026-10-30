@@ -8,12 +8,19 @@
 //! the mouse commands pass the movement gate only inside an input event (`0x494a50`, tag 0), and
 //! the walk is where the input events run.
 //!
+//! A nameplate's click is the same object legs on the plate's unit, without the router
+//! ([`ScriptCall::PlateClick`]): its slot (`0x7cb910`) calls `ClickObjectByAction 0x4949f0`, which
+//! calls each leg directly (`0x494a22`, `0x494a39`), before the plate's own click.
+//!
 //! [`ScriptCall::WorldClick`]: benilla_ui::script::ScriptCall::WorldClick
+//! [`ScriptCall::PlateClick`]: benilla_ui::script::ScriptCall::PlateClick
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::Vec2;
 
-use benilla_ui::script::{CallHost, CallTail, ClickCall, ClickMode, ScriptCall, UiScript};
+use benilla_ui::script::{
+    CallHost, CallTail, ClickCall, ClickMode, PlateAction, PlateClick, ScriptCall, UiScript,
+};
 
 use super::{disjoint, ScriptCallHost, Signalled};
 
@@ -267,6 +274,110 @@ impl ScriptCallHost<'_, '_> {
     }
 }
 
+impl ScriptCallHost<'_, '_> {
+    /// A nameplate's click inside its call: `0x4949f0` on the plate's unit, the left button's
+    /// select or the right's select and interact, then the casts the interact's dispatchers tried
+    /// (`0x5f35c0`, `0x5f06dc` → `0x6e5a90`). A unit that left since its plate was drawn, or no
+    /// active player, takes nothing (`0x492619`, `0x49285c`, `0x494a13`).
+    pub(super) fn plate_click(
+        &mut self,
+        script: &mut UiScript,
+        at: &mut Signalled,
+        click: PlateClick,
+    ) {
+        let unit = self
+            .appliers
+            .click()
+            .plate()
+            .and_then(|plate| plate.unit(click.guid));
+        let Some(entity) = unit else {
+            return;
+        };
+        match click.action {
+            PlateAction::Select => self.plate_select(script, at, entity, click),
+            PlateAction::Interact => self.plate_interact(script, at, entity, click),
+        }
+        if let Some(mut casts) = self.appliers.click().casts() {
+            casts.drain(Some(script));
+        }
+    }
+
+    /// `SelectObjectByClick` (`0x4925d0`): the player leg's trade (`0x492635`-`0x49278e`) and the
+    /// pet's feed (`0x4927a6`-`0x4927f8`), whose signals run ahead of the rest, the greeting
+    /// (`0x4927ff`), then `SelectTarget` (`0x49280c`), signalled in place.
+    fn plate_select(
+        &mut self,
+        script: &mut UiScript,
+        at: &mut Signalled,
+        entity: bevy::prelude::Entity,
+        click: PlateClick,
+    ) {
+        let mut legs = self.appliers.click();
+        if let Some(mut trade) = legs.trade() {
+            trade.click_on(script, entity, click.guid);
+        }
+        if let Some(mut feed) = legs.feed() {
+            feed.click_on(script, click.guid);
+        }
+        self.at_point(script, &mut at.mark);
+        let owed = self.appliers.click().plate().and_then(|mut plate| {
+            plate.greet(entity);
+            plate.select(entity, click.guid)
+        });
+        if let Some(owed) = owed {
+            self.settle_selection(script, at, owed);
+        }
+    }
+
+    /// `InteractWithObjectByClick` (`0x492820`): `SelectTarget` (`0x492870`), signalled in place,
+    /// then the unit's interact (`0x492881`), after the bind of a unit the select handed a standing
+    /// cursor has emptied the cursor's word, so the cast goes out ahead of what the interact does.
+    fn plate_interact(
+        &mut self,
+        script: &mut UiScript,
+        at: &mut Signalled,
+        entity: bevy::prelude::Entity,
+        click: PlateClick,
+    ) {
+        let owed = self
+            .appliers
+            .click()
+            .plate()
+            .and_then(|mut plate| plate.select(entity, click.guid));
+        if let Some(owed) = owed {
+            self.settle_selection(script, at, owed);
+        }
+        self.appliers.cursor().bind_parked();
+        let pick = self
+            .appliers
+            .click()
+            .plate_pick()
+            .map(|pick| pick.of(entity, click.guid, click.scripted));
+        let Some(pick) = pick else {
+            return;
+        };
+        let owed = self
+            .appliers
+            .click()
+            .dispatch()
+            .and_then(|mut dispatch| dispatch.act_on(script, &pick));
+        let Some(owed) = owed else {
+            return;
+        };
+        // The leg's `SetAutoLoot` is a call of its own, which applies here, ahead of the loot or
+        // the use it owes (`0x5d6c78`, `0x60bff7`, `0x5f86a6`).
+        self.at_point(script, &mut at.mark);
+        let owed = self
+            .appliers
+            .click()
+            .dispatch()
+            .and_then(|mut dispatch| dispatch.pay(owed));
+        if let Some(owed) = owed {
+            self.settle_selection(script, at, owed);
+        }
+    }
+}
+
 /// Apply the world click steps waiting (made with no host lent, or after an arm that found no
 /// press's pick) through the call host, in the order made. Whether any waited.
 pub(crate) fn submit_waiting_clicks(world: &mut bevy::prelude::World) -> bool {
@@ -299,6 +410,30 @@ pub(crate) fn release_click(world: &mut bevy::prelude::World, mode: ClickMode) {
         script
             .expect("a VM")
             .submit_click(benilla_ui::script::ClickCall::Release);
+    });
+}
+
+/// A nameplate's click on `guid`'s unit through the call host, as the plate's slot applies it
+/// (`0x7cb910` → `0x4949f0`), its tag 2 passed, on a fresh VM when the world holds none: for a test
+/// of the click's legs. A click not `scripted` reads the press pick, as a mouse press on the plate
+/// latched it.
+#[cfg(test)]
+pub(crate) fn click_plate(
+    world: &mut bevy::prelude::World,
+    guid: u64,
+    action: PlateAction,
+    scripted: bool,
+) {
+    if world.get_non_send_resource::<UiScript>().is_none() {
+        super::insert_test_vm(world);
+    }
+    super::with_hosted_vm(world, |script| {
+        script.expect("a VM").submit_plate_click(PlateClick {
+            guid,
+            action,
+            scripted,
+            may_cast: true,
+        });
     });
 }
 

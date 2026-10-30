@@ -111,6 +111,10 @@ struct Plate {
     flash_ms: i32,
     /// Last frame's state, so [`Plate::drive`] writes only what moved; `None` while retired.
     last: Option<PlateState>,
+    /// `[plate+0x4e8]`, the unit last bound ([`PlateState::key`]): 0 from the constructor
+    /// (`0x7cb2a6`), written by each bind (`0x7cb6e0`) and left by the retire (`0x608a10`), so a
+    /// hidden pooled plate's click still names its last unit (`0x7cb91c`).
+    guid: u64,
     /// The geometry its anchors were written under, `None` before the first lay-out. Kept per
     /// plate, so a plate the pool grows later is laid out too.
     laid_out: Option<PlateGeometry>,
@@ -136,8 +140,6 @@ pub(crate) struct NamePlates {
     /// Plates this sync hid while they were in the built batch: re-shown in the same pass, they
     /// still draw from the records the batch copied (`0x772fd0`).
     retired_in_batch: std::collections::HashSet<FrameHandle>,
-    /// Completed clicks, drained by [`UiScript::take_nameplate_clicks`].
-    clicks: Vec<NamePlateClick>,
     /// The hit-test veto (`0x7cba30`). Not the mouse-enabled bit: it leaves `IsMouseEnabled()`
     /// true, where freelook (`0x60f830`) clears the bit.
     hit_test_vetoed: bool,
@@ -207,14 +209,32 @@ pub(super) fn update(model: &mut Model, frame: FrameHandle, elapsed: f32) {
         .set_vertex_color(Some(colour));
 }
 
-/// A completed click on a plate. The reference's click slot (`0x7cb910`) selects the unit on the
-/// left button (`0x4925d0`) and selects and interacts on the right (`0x492820`).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NamePlateClick {
-    /// The unit whose plate was clicked ([`PlateState::key`]).
-    pub key: u64,
-    /// `"LeftButton"` or `"RightButton"`.
-    pub button: String,
+/// A plate's click as its slot (`CGNamePlateFrame::OnClick 0x7cb910`) hands it to
+/// `ClickObjectByAction` (`0x7cb92a` → `0x4949f0`), which the host applies inside the click
+/// ([`super::ScriptCall::PlateClick`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PlateClick {
+    /// The plate's unit, its guid at `[plate+0x4e8]` (`0x7cb91c`, [`PlateState::key`]).
+    pub guid: u64,
+    /// What the button's bit asks of `0x4949f0`.
+    pub action: PlateAction,
+    /// A Lua `Click()`, which passes the slot 1 (`0x7827b2`) where the mouse passes 0
+    /// (`0x779280`, `0x7793a4`): no press of the mouse latched the unit, so the right button's
+    /// interact classes it as it stands.
+    pub scripted: bool,
+    /// The gate's tag 2 (`0x6e5ba5`), asked where the click ran, for the select's bind to a
+    /// standing targeting cursor and for the casts the interact tries.
+    pub may_cast: bool,
+}
+
+/// The two button bits `0x4949f0` acts on (`0x494a15`, `0x494a2c`); any other does nothing
+/// (`0x494a3e`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlateAction {
+    /// Bit 1, the left button: `SelectObjectByClick` (`0x494a22` → `0x4925d0`).
+    Select,
+    /// Bit 4, the right button: `InteractWithObjectByClick` (`0x494a39` → `0x492820`).
+    Interact,
 }
 
 /// What a sync runs outside the model borrow: the plates' `Show`/`Hide`, whose transitions fire
@@ -392,11 +412,10 @@ impl UiScript {
         model.nameplates.plates.get(slot)?.key()
     }
 
-    /// Drain the completed plate clicks, physical or `plate:Click()`, for the app to select from.
-    pub fn take_nameplate_clicks(&mut self) -> Vec<NamePlateClick> {
-        let lua = self.lua();
-        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        std::mem::take(&mut model.nameplates.clicks)
+    /// Apply `click` through the host lent now, as the plate's slot does inside its click
+    /// ([`super::ScriptCall::PlateClick`]): for a test of the click's legs without the widget.
+    pub fn submit_plate_click(&mut self, click: PlateClick) {
+        submit(self.lua(), click);
     }
 
     /// The freelook toggle (`0x60f830`): entering camera freelook disables mouse input on every
@@ -455,22 +474,48 @@ fn apply_visibility(lua: &mlua::Lua, verbs: Vec<(FrameHandle, bool)>) {
     }
 }
 
-/// Record a click on `id` if it is a live plate; every button click comes here.
-pub(super) fn note_click(lua: &mlua::Lua, id: u32, button: &str) {
-    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-    let Some(frame) = model.id_to_frame.get(&id).copied() else {
-        return;
+/// A plate's click slot (`0x7cb910`) ahead of the button's own click: `0x4949f0` on the plate's
+/// unit (`0x7cb92a`), applied inside the click, so the plate's `OnClick` (`0x7cb936` →
+/// `0x779540`) and the line after a `Click()` read what it did. Every run of the slot comes here, a
+/// press's (`0x779285`) or a release's (`0x7793a9`), the mouse's or `Click()`'s, on an enabled
+/// plate or not: `RunClick`'s gate (`0x779552`) is past it, and on a retired plate, whose guid is
+/// still its last unit's. A frame that is no plate, a plate never bound, or any button but the
+/// left and the right, does nothing.
+pub(super) fn click(lua: &mlua::Lua, frame: FrameHandle, button: &str, scripted: bool) {
+    let action = match button {
+        "LeftButton" => PlateAction::Select,
+        "RightButton" => PlateAction::Interact,
+        _ => return,
     };
-    let Some(&slot) = model.nameplates.by_frame.get(&frame) else {
-        return;
+    let guid = {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        let Some(&slot) = model.nameplates.by_frame.get(&frame) else {
+            return;
+        };
+        match model.nameplates.plates.get(slot).map(|p| p.guid) {
+            Some(guid) if guid != 0 => guid,
+            _ => return,
+        }
     };
-    let Some(key) = model.nameplates.plates.get(slot).and_then(Plate::key) else {
-        return;
-    };
-    model.nameplates.clicks.push(NamePlateClick {
-        key,
-        button: button.to_string(),
-    });
+    let may_cast = super::protected::select_may_cast(lua);
+    submit(
+        lua,
+        PlateClick {
+            guid,
+            action,
+            scripted,
+            may_cast,
+        },
+    );
+}
+
+/// Hand `click` to the host, which applies it before this returns.
+fn submit(lua: &mlua::Lua, click: PlateClick) {
+    if let Err(e) = super::calls::submit(lua, super::ScriptCall::PlateClick(click)) {
+        lua.app_data_mut::<Model>()
+            .expect("model app_data")
+            .record_lua_error(&e);
+    }
 }
 
 /// How many new plates [`sync`] builds for `states`: the units without a plate, less the free
@@ -659,6 +704,7 @@ impl Plate {
             fill,
             flash_ms: 0,
             last: None,
+            guid: 0,
             laid_out: None,
         }
     }
@@ -838,9 +884,12 @@ impl Plate {
             // A new string clears the valid bit and invalidates (`0x771ea4`).
             model.clear_region_valid(name);
         }
-        // The bind starts the plate's flash timer at 0 (`0x7cb80e`).
+        // The bind stores the unit's guid (`0x7cb6e0`) and starts the flash timer at 0
+        // (`0x7cb80e`).
         if last.is_none() {
-            model.nameplates.plates[i].flash_ms = 0;
+            let plate = &mut model.nameplates.plates[i];
+            plate.guid = state.key;
+            plate.flash_ms = 0;
         }
         if last.as_ref().is_none_or(|l| l.hovered != state.hovered) {
             // The enter and leave notifies (`0x7cb883`, `0x7cb8d9`) set the name's colour only
@@ -908,7 +957,8 @@ impl Plate {
     }
 
     /// Retire a plate: hide it, never destroy it (`0x608a10`), so it keeps its child-list index and
-    /// comes back as the same Lua object addons key their per-plate state by.
+    /// comes back as the same Lua object addons key their per-plate state by. Its guid stays: the
+    /// retire never writes `+0x4e8`.
     fn retire(model: &mut Model, i: usize, effects: &mut SyncEffects) {
         if model.nameplates.plates[i].last.is_none() {
             return;

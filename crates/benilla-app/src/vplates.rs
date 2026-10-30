@@ -102,14 +102,6 @@ impl PlateHover {
     }
 }
 
-/// Completed plate clicks, physical or an addon's `plate:Click`, waiting for the targeting chain:
-/// the reference's click slot (`0x7cb910`) ends in the same `SetSelection` as a body click.
-#[derive(Resource, Default)]
-pub(crate) struct PlateClicks {
-    pub(crate) left: Vec<Entity>,
-    pub(crate) right: Vec<Entity>,
-}
-
 /// The plate frame in gx units (`[0x87d9cc]`, `[0x87d9d0]`); child offsets from `0x7cb250` and
 /// `0x7cb6d0`.
 const PLATE_W: f32 = 0.1;
@@ -369,7 +361,6 @@ fn drive_vplates(
         Res<'static, crate::player::CameraControl>,
     )>,
     mut plates: ResMut<VPlates>,
-    mut plate_clicks: ResMut<PlateClicks>,
     mut flashes: ResMut<PlateFlashes>,
     names: Res<NameCache>,
     spells: Option<Res<crate::ui_action::Spells>>,
@@ -453,7 +444,6 @@ fn drive_vplates(
                 .wants(crate::spell::targeting::TargetingWants::Location),
         );
         let hovered_key = script.hovered_nameplate();
-        let clicked = script.take_nameplate_clicks();
         let my_level = self_store.and_then(|s| s.0.unit_level()).unwrap_or(1);
         let (rel, me) = (world.relations.get(), world.relations.me());
         let types = crate::creature_type::CreatureTypeSources {
@@ -649,14 +639,6 @@ fn drive_vplates(
             let mark = group.raid_target_index(guid.0);
             let x_units = (plate.min.x + plate.max.x) * 0.5 / seam;
             let y_units = (viewport.y - plate.min.y) / seam;
-            for click in &clicked {
-                if click.key == guid.0 {
-                    match click.button.as_str() {
-                        "RightButton" => plate_clicks.right.push(entity),
-                        _ => plate_clicks.left.push(entity),
-                    }
-                }
-            }
             states.push(PlateState {
                 // A plate stays bound to its unit for its life, as the reference's `[unit+0xe60]`;
                 // addons cache per plate on it.
@@ -751,6 +733,60 @@ pub(crate) fn drive_vplates_once(world: &mut World) {
         .expect("the plate driver runs as a one-shot system");
 }
 
+/// A plate bound to each unit of `keys`, in order, over a `WorldFrame` on a 1024 × 768 screen, as
+/// the driver's sync binds them, each plate's middle at (500, 384): for a test of a plate's click.
+#[cfg(test)]
+pub(crate) fn plates_for_test(script: &mut benilla_ui::script::UiScript, keys: &[u64]) {
+    script.set_screen_size(1024.0, 768.0);
+    script
+        .run(r#"WorldFrame = CreateFrame("WorldFrame", "WorldFrame") WorldFrame:SetAllPoints()"#)
+        .expect("the world frame builds");
+    script.resolve();
+    sync_plates_for_test(script, keys);
+}
+
+/// The driver's sync of [`plates_for_test`]'s plates to the units of `keys`: a unit gone retires
+/// its plate, and a new one binds a free plate.
+#[cfg(test)]
+pub(crate) fn sync_plates_for_test(script: &mut benilla_ui::script::UiScript, keys: &[u64]) {
+    use benilla_ui::script::{PlateGeometry, PlateState};
+    let states: Vec<PlateState> = keys
+        .iter()
+        .map(|&key| PlateState {
+            key,
+            top_centre: (500.0, 400.0),
+            health: 30.0,
+            max_health: 40.0,
+            bar_colour: [1.0, 0.0, 0.0],
+            name: format!("unit {key:#x}"),
+            level: Some(12),
+            skull: false,
+            level_colour: [1.0, 1.0, 0.0],
+            raid_icon: None,
+            alpha: 255,
+            lit: false,
+            hovered: false,
+        })
+        .collect();
+    let geometry = PlateGeometry {
+        width: 128.0,
+        height: 32.0,
+        bar_off_x: 4.0,
+        bar_off_y: 4.0,
+        bar_width: 103.0,
+        bar_height: 9.0,
+        level_off_x: 11.8,
+        level_off_y: 9.1,
+        skull_size: 12.8,
+        raid_size: 25.6,
+        name_height: 12.8,
+        level_height: 11.0,
+        shadow_offset: 1.0,
+    };
+    script.sync_nameplates(geometry, &states);
+    script.resolve();
+}
+
 /// What [`drive_vplates`]'s turn leaves the widget layer to do.
 enum PlateStep {
     /// Hide every live plate and return it to the pool.
@@ -793,7 +829,6 @@ impl Plugin for VPlatesPlugin {
         app.init_resource::<VPlateMode>()
             .init_resource::<VPlates>()
             .init_resource::<PlateHover>()
-            .init_resource::<PlateClicks>()
             .init_resource::<PlateFlashes>()
             .add_systems(
                 Update,

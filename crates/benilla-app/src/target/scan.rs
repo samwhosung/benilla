@@ -940,6 +940,21 @@ pub(super) fn latches_on(relations: &RelationWorld, old: Option<u64>) -> bool {
         })
 }
 
+/// The re-swing's verdict on the unit `guid`, `store`, a select commits (`0x4938c8` →
+/// `Attack 0x5ecb70`): Attack's own legs on its target, read then, not the press or the cursor's:
+/// a unit (`0x5ecbe6`, typemask 8), alive (`0x5ecc16`-`0x5ecc29`) and `CanAttack` (`0x5ecc2e`).
+/// Its gate `0x494a50(1)` passes in every context. The player's own returns are the seam's.
+pub(super) fn reswing_allowed(
+    relations: &RelationWorld,
+    guid: u64,
+    store: Option<&ObjectStore>,
+) -> bool {
+    store.filter(|s| s.is_unit()).is_some_and(|store| {
+        let unit = relations.unit_of(guid, store);
+        attack_target_valid(&relations.get(), relations.me().as_ref(), &unit, store)
+    })
+}
+
 /// The final gate's target legs (`0x613152`–`0x613169`): alive, where a zero-health target passes
 /// iff `UNIT_DYNAMIC_FLAGS` bit 5 is set (`0x613159`), and the full `CanAttack 0x606980` from the
 /// player. No player fails; the reference always holds one here.

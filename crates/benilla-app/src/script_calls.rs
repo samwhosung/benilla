@@ -32,7 +32,9 @@ pub(crate) mod live;
 mod windows;
 mod world_click;
 #[cfg(test)]
-pub(crate) use world_click::{error_lines, record_error_lines, release_click, take_error_lines};
+pub(crate) use world_click::{
+    click_plate, error_lines, record_error_lines, release_click, take_error_lines,
+};
 pub(crate) use world_click::{submit_waiting_clicks, InputHost};
 
 /// `DoEmote` (`0x5ef560`) in the reference's order: a posture emote's stand change to a state but 0
@@ -1178,6 +1180,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
             }
             ScriptCall::RecordAsk(ask) => appliers.asks().apply(ask),
             ScriptCall::WorldClick(step) => self.world_click(script, &mut at, step),
+            ScriptCall::PlateClick(click) => self.plate_click(script, &mut at, click),
             ScriptCall::Input(input) => tail = self.set_commands(script, &mut at.mark, input),
             ScriptCall::Look(call) => tail = self.look(script, &mut at.mark, call),
             ScriptCall::DropItemOnUnit(token) => appliers.drop_item().drop_on(script, &token),
@@ -1676,9 +1679,9 @@ pub(crate) fn run_cached<O: 'static, M, S: IntoSystem<(), O, M> + 'static>(
     r
 }
 
-/// Bind the units a plate click's select found the targeting cursor up for (`SelectTarget`,
-/// `0x4935d5`), in the click's legs, ahead of its interact: a call binds its own as it applies, and
-/// a handler at its select ([`crate::spell::PickBind`]).
+/// Bind the units a selection writer's `SelectTarget` found the targeting cursor up for
+/// (`0x4935d5`): a call binds its own as it applies, and a handler at its select
+/// ([`crate::spell::PickBind`]).
 pub(crate) fn bind_parked_picks(mut bind: crate::spell::PickBind) {
     bind.bind();
 }
@@ -1749,6 +1752,7 @@ mod tests {
     mod closes;
     mod dialogs;
     mod engine;
+    mod plates;
     mod refusals;
     mod selection;
     mod sends;

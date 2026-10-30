@@ -75,9 +75,9 @@ impl DropItemLeg<'_, '_> {
 }
 
 /// The world click's pet leg (`0x492793`-`0x4927f8`, in its object leg `0x4925d0`, ahead of the
-/// greeting and the select): a left click on our pet's model with an item held feeds it through
-/// `0x6ea1e0`, and the cursor clears on success. The press pick names the unit: the live hover can
-/// differ after a drag.
+/// greeting and the select): a left click on our pet's model or plate with an item held feeds it
+/// through `0x6ea1e0`, and the cursor clears on success. The press pick names the body's unit: the
+/// live hover can differ after a drag.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct ClickFeed<'w, 's> {
     press: Res<'w, crate::target::PressPick>,
@@ -96,8 +96,16 @@ pub(crate) struct ClickFeed<'w, 's> {
 impl ClickFeed<'_, '_> {
     /// The leg on the left click's release.
     pub(crate) fn click(&mut self, script: &mut benilla_ui::script::UiScript) {
+        if let Some(guid) = self.press.hovered.guid {
+            self.click_on(script, guid);
+        }
+    }
+
+    /// The leg on the clicked unit `guid`.
+    pub(crate) fn click_on(&mut self, script: &mut benilla_ui::script::UiScript, guid: u64) {
+        // The pet's guid `[0xb714a0]` (`0x4927a6`-`0x4927b7`).
         let pet_guid = self.cast.ladder.pet_guid();
-        if pet_guid == 0 || self.press.hovered.guid != Some(pet_guid) {
+        if pet_guid == 0 || guid != pet_guid {
             return;
         }
         // The held item `[0xb4e248]` (`0x4927b9`-`0x4927c8`).
@@ -345,47 +353,10 @@ fn ask(
     trade.initiate_send(guid, true, net, names, errors);
 }
 
-/// The world click's trade leg (`0x4925d0`) for a nameplate's left click (`0x7cb910` →
-/// `0x4949f0` action 1), ahead of the select that follows it in the same function (`0x49280c`)
-/// and so ahead of the targeting cursor's bind, whose state it reads (`0x492668`). The body click's
-/// is [`ClickTrade`], inside the click's call.
-pub(crate) fn trade_on_plate_click(
-    mut vm: crate::script_calls::VmWith<(
-        TradeLeg<'static, 'static>,
-        Res<'static, crate::spell::SpellTargeting>,
-    )>,
-    plate: Res<crate::vplates::PlateClicks>,
-    me: Query<&crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
-    guids: Query<&crate::net::Guid>,
-) {
-    if plate.left.is_empty() {
-        return;
-    }
-    vm.turn(|script, (mut trade, targeting)| {
-        let Some(script) = script else {
-            return;
-        };
-        // The active player (`0x4925f4`).
-        let Some(me) = me.iter().next() else {
-            return;
-        };
-        if targeting.active() {
-            return;
-        }
-        let dead = me.0.is_dead_or_ghost();
-        for (entity, guid) in plate
-            .left
-            .iter()
-            .filter_map(|&e| guids.get(e).ok().map(|g| (e, g.0)))
-        {
-            trade.click_on(script, entity, guid, dead);
-        }
-    })
-}
-
 /// The body click's trade leg (`0x4925d0`), on the press pick's unit, past the router's charmed
-/// return (`0x481f98`, in the click's call): the leg runs only with no spell awaiting a target
-/// (`0x492668`).
+/// return (`0x481f98`, in the click's call), and a nameplate's left click's on its unit
+/// (`0x7cb910` → `0x4949f0` → `0x4925d0`): the leg runs only with no spell awaiting a target
+/// (`0x492668`), ahead of the select's bind, which would empty the word.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct ClickTrade<'w, 's> {
     trade: TradeLeg<'w, 's>,
@@ -398,17 +369,30 @@ pub(crate) struct ClickTrade<'w, 's> {
 impl ClickTrade<'_, '_> {
     /// The leg on the left click's release.
     pub(crate) fn click(&mut self, script: &mut benilla_ui::script::UiScript) {
+        if self.inspect.enabled {
+            return;
+        }
+        if let (Some(entity), Some(guid)) = (self.press.hovered.target, self.press.hovered.guid) {
+            self.click_on(script, entity, guid);
+        }
+    }
+
+    /// The leg on the clicked object `entity`, `guid`.
+    pub(crate) fn click_on(
+        &mut self,
+        script: &mut benilla_ui::script::UiScript,
+        entity: Entity,
+        guid: u64,
+    ) {
         // The active player (`0x4925f4`).
         let Some(me) = self.me.iter().next() else {
             return;
         };
-        if self.targeting.active() || self.inspect.enabled {
+        if self.targeting.active() {
             return;
         }
         let dead = me.0.is_dead_or_ghost();
-        if let (Some(entity), Some(guid)) = (self.press.hovered.target, self.press.hovered.guid) {
-            self.trade.click_on(script, entity, guid, dead);
-        }
+        self.trade.click_on(script, entity, guid, dead);
     }
 }
 

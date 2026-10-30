@@ -31,122 +31,87 @@ impl PayloadLeg<'_, '_> {
     }
 }
 
-/// A right-click begun on a nameplate, replayed for [`act_on_interact`]: the plate's click slot
-/// (`0x7cb910`) goes to `0x4949f0` and so to `InteractWithObjectByClick` (`0x492820`), not
-/// through the world click router (`0x481f60`), whose charmed return and payload legs it skips.
-/// The click's `SelectTarget` (`0x492870`) ran at the click.
-#[derive(Message, Clone, Copy)]
-pub(super) struct PlateRightClick;
-
-/// A plate click is a click on its unit (the click slot `0x7cb910`). The left button carries the
-/// plate's unit, as a scripted `plate:Click()` (pfUI, `nameplates.lua:1228`) has no cursor; the
-/// right replays [`PlateRightClick`] only when the press pick names it, so a scripted one does
-/// nothing yet. A physical right-click arrives only here: `0x7cb910` → `0x4949f0` → `0x492820`.
-///
-/// The left click is the body click's select (`0x4949f0` action 1 → `0x4925d0` → `SelectTarget`
-/// `0x49280c`), so with the targeting cursor up the unit goes to the cast's bind and the target
-/// stays ([`super::front`]). The right is the interact (`0x492820`): its `SelectTarget`
-/// (`0x492870`) runs here and binds the same way, and the unit's interact (`0x492881`) follows
-/// either way, in [`act_on_interact`], after the bind has emptied the cursor's word; the plate's
-/// press never reached the world frame's right-press targeting cancel (`0x492c20`), so the cursor
-/// stands up to here.
-pub(super) fn select_on_plate_click(
-    mut plate: ResMut<crate::vplates::PlateClicks>,
-    mut right_clicks: MessageWriter<PlateRightClick>,
-    mut vm: crate::script_calls::VmWith<PlateSelect<'static, 'static>>,
-) {
-    let (left, right) = (
-        std::mem::take(&mut plate.left),
-        std::mem::take(&mut plate.right),
-    );
-    for entity in left {
-        let select = {
-            let mut c = vm.own();
-            let Ok((guid, store)) = c.units.get(entity) else {
-                continue; // the unit left between the click and this frame
-            };
-            let guid = guid.0;
-            let store = store.cloned();
-            // The greeting fires on the select, plate or body, before SetTarget (`0x60c270`).
-            c.greeting
-                .write(crate::sound::NpcGreetingRequest { npc: entity });
-            // `SelectTarget`'s returns: charmed, or the cursor's bind in the select's place.
-            if c.front.takes(entity, guid, c.seam.slots.targeting()) {
-                continue;
-            }
-            // Attack-classified only when the press was on this unit: a scripted click has no
-            // cursor.
-            let attack = c.press.attack() && c.press.hovered.target == Some(entity);
-            c.commit(entity, guid, store.as_ref(), attack)
-        };
-        vm.engine_select(select, |mut c, owed| {
-            owed.pay(&mut c.selection, &mut c.seam);
-        });
-    }
-    for entity in right {
-        let select = {
-            let mut c = vm.own();
-            // The press pick must name it: a scripted click has no cursor to interact by.
-            if c.press.hovered.target != Some(entity) {
-                continue;
-            }
-            let Ok((guid, store)) = c.units.get(entity) else {
-                continue;
-            };
-            let guid = guid.0;
-            let store = store.cloned();
-            if c.front.takes(entity, guid, c.seam.slots.targeting()) {
-                None
-            } else {
-                let attack = c.press.attack();
-                Some(c.commit(entity, guid, store.as_ref(), attack))
-            }
-        };
-        if let Some(select) = select {
-            vm.engine_select(select, |mut c, owed| {
-                owed.pay(&mut c.selection, &mut c.seam);
-            });
-        }
-        right_clicks.write(PlateRightClick);
-    }
-}
-
-/// What a plate click reads and writes.
+/// A nameplate's click on its unit, as the call host applies it inside the click
+/// ([`benilla_ui::script::ScriptCall::PlateClick`]): the plate's slot (`0x7cb910`) calls
+/// `ClickObjectByAction` (`0x4949f0`) with the plate's guid, past the world click's router
+/// (`0x481f60`), whose charmed return and payload legs it skips. Both its legs go through
+/// `SelectTarget` (`0x49280c`, `0x492870`), so with the targeting cursor up the unit goes to the
+/// cast's bind and the target stays ([`super::front`]); the plate's press never reached the world
+/// frame's right-press targeting cancel (`0x492c20`), so the cursor stands up to the select.
 #[derive(bevy::ecs::system::SystemParam)]
-pub(super) struct PlateSelect<'w, 's> {
-    press: Res<'w, PressPick>,
+pub(crate) struct PlateLeg<'w, 's> {
     selection: ResMut<'w, Selection>,
     seam: crate::creature_anim::AttackSeam<'w, 's>,
     front: super::front::SelectFront<'w, 's>,
     self_q: Query<'w, 's, &'static Guid, With<SelfPlayer>>,
     greeting: MessageWriter<'w, crate::sound::NpcGreetingRequest>,
-    units: Query<'w, 's, (&'static Guid, Option<&'static ObjectStore>)>,
+    index: Res<'w, crate::net::GuidIndex>,
+    units: Query<'w, 's, Option<&'static ObjectStore>, With<Guid>>,
     relations: super::RelationWorld<'w, 's>,
 }
 
-impl PlateSelect<'_, '_> {
-    /// `SetSelection` on the plate's unit, owing what follows its signals.
-    fn commit(
-        &mut self,
-        entity: Entity,
-        guid: u64,
-        store: Option<&ObjectStore>,
-        attack: bool,
-    ) -> crate::script_calls::EngineSelect {
+impl PlateLeg<'_, '_> {
+    /// The plate's unit, which `0x4949f0` acts on only for an active player (`0x494a13`) and
+    /// both legs only while the object manager holds it (`0x492619`, `0x49285c`): a unit that
+    /// left since its plate was drawn takes nothing.
+    pub(crate) fn unit(&self, guid: u64) -> Option<Entity> {
+        self.self_q.single().ok()?;
+        let &entity = self.index.0.get(&guid)?;
+        self.units.contains(entity).then_some(entity)
+    }
+
+    /// The greeting the left button's leg plays for a unit ahead of its select (`0x4927ff` →
+    /// `0x60c270`), the cursor up or not and charmed or not.
+    pub(crate) fn greet(&mut self, entity: Entity) {
+        self.greeting
+            .write(crate::sound::NpcGreetingRequest { npc: entity });
+    }
+
+    /// `SelectTarget` on the plate's unit: its returns (charmed, or the cursor's bind in the
+    /// select's place), else `SetSelection`, owing what follows its signals, its re-swing judged on
+    /// the unit ([`scan::reswing_allowed`]), a mouse press's click or a `Click()`'s alike.
+    pub(crate) fn select(&mut self, entity: Entity, guid: u64) -> Option<super::SelectDebt> {
+        if self.front.takes(entity, guid, self.seam.slots.targeting()) {
+            return None;
+        }
+        let store = self.units.get(entity).ok().flatten().cloned();
+        let attack = scan::reswing_allowed(&self.relations, guid, store.as_ref());
         let self_guid = self.self_q.single().ok().map(|g| g.0);
-        let before = Standing::of(&self.selection, &self.seam);
         let old_latches = scan::latches_on(&self.relations, self.selection.guid);
         let (_, owed) = scan::commit_owing(
             &mut self.selection,
             &mut self.seam,
             Some(entity),
             guid,
-            store,
+            store.as_ref(),
             self_guid,
             attack,
             old_latches,
         );
-        before.owing(owed)
+        Some(owed.into())
+    }
+}
+
+/// What the right button's interact (`0x492881`) acts on: the press the plate took, which latched
+/// its unit and the cursor's verdict on it ([`super::world_steps`]); for a click no press on this
+/// unit made, a script's `Click()`, the unit as the cursor's classifier sees it now.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct PlatePick<'w, 's> {
+    press: Res<'w, PressPick>,
+    inputs: cursor_mode::CursorInputs<'w, 's>,
+}
+
+impl PlatePick<'_, '_> {
+    /// The pick of the unit `entity`, `guid`.
+    pub(crate) fn of(&self, entity: Entity, guid: u64, scripted: bool) -> PressPick {
+        if !scripted && self.press.hovered.target == Some(entity) {
+            return *self.press;
+        }
+        let mut pick = PressPick::default();
+        (pick.hovered.target, pick.hovered.guid) = (Some(entity), Some(guid));
+        (pick.cursor, pick.attack_fork) =
+            cursor_mode::classify(&self.inputs, &pick.hovered, &pick.object);
+        pick
     }
 }
 
@@ -268,7 +233,7 @@ fn click_select(
             // click fires it, so a re-click steps the variation.
             c.greeting
                 .write(crate::sound::NpcGreetingRequest { npc: entity });
-            // The cursor's Attack classification is `0x5ecb70`'s new-target validation.
+            let attack = scan::reswing_allowed(&c.relations, guid, c.stores.get(entity).ok());
             let old_latches = scan::latches_on(&c.relations, c.selection.guid);
             let (_, owed) = scan::commit_owing(
                 &mut c.selection,
@@ -277,7 +242,7 @@ fn click_select(
                 guid,
                 c.stores.get(entity).ok(),
                 self_guid,
-                c.press.attack(),
+                attack,
                 old_latches,
             );
             owed
@@ -425,13 +390,8 @@ enum Owed {
         walk: bool,
     },
     /// The rest of StartAttack past its stand-up (`0x5ecca0` on): its own select (`0x5eccaa`),
-    /// whose signals run their listeners before its swing ([`attack_select`]); `attackable` is the
-    /// press's Attack classification, the re-swing's gate.
-    Attack {
-        entity: Entity,
-        guid: u64,
-        attackable: bool,
-    },
+    /// whose signals run their listeners before its swing ([`attack_select`]).
+    Attack { entity: Entity, guid: u64 },
 }
 
 /// Pay what [`interact`] owed past its turn, on a [`crate::script_calls::VmWith`] whose set, bound
@@ -441,15 +401,11 @@ enum Owed {
 macro_rules! pay_owed {
     ($vm:ident, $owed:expr, $mark:expr, |$p:pat_param| $parts:expr) => {
         match $owed {
-            Some(Owed::Attack {
-                entity,
-                guid,
-                attackable,
-            }) => {
+            Some(Owed::Attack { entity, guid }) => {
                 let select = {
                     let $p = $vm.own();
                     let (dispatch, selection) = $parts;
-                    attack_select(dispatch, selection, entity, guid, attackable, $mark)
+                    attack_select(dispatch, selection, entity, guid, $mark)
                 };
                 $vm.engine_select(select, |$p, owed| {
                     let (dispatch, selection) = $parts;
@@ -476,7 +432,6 @@ fn attack_select(
     selection: &mut ResMut<Selection>,
     entity: Entity,
     guid: u64,
-    attackable: bool,
     mark: crate::lanes::Mark,
 ) -> crate::script_calls::EngineSelect {
     let before = Standing::of(selection, &dispatch.seam).since(mark);
@@ -489,6 +444,7 @@ fn attack_select(
     }
     let me = dispatch.me().map(|(_, g)| g);
     let target = dispatch.stores.get(entity).ok().map(|(s, _)| s);
+    let attack = scan::reswing_allowed(&dispatch.relations, guid, target);
     let old_latches = scan::latches_on(&dispatch.relations, selection.guid);
     let (_, owed) = scan::commit_owing(
         selection,
@@ -497,7 +453,7 @@ fn attack_select(
         guid,
         target,
         me,
-        attackable,
+        attack,
         old_latches,
     );
     tail(owed)
@@ -528,6 +484,7 @@ fn interact_select(
     let me = dispatch.me().map(|(_, g)| g);
     let before = Standing::of(selection, &dispatch.seam);
     let target = dispatch.stores.get(entity).ok().map(|(s, _)| s);
+    let attack = scan::reswing_allowed(&dispatch.relations, guid, target);
     let old_latches = scan::latches_on(&dispatch.relations, selection.guid);
     let (_, owed) = scan::commit_owing(
         selection,
@@ -536,7 +493,7 @@ fn interact_select(
         guid,
         target,
         me,
-        press.attack(),
+        attack,
         old_latches,
     );
     Some(before.owing(owed))
@@ -1189,8 +1146,8 @@ impl Dispatch<'_, '_> {
 /// takes the nothing leg with zero points (`0x481f98`, `0x48204e`), so nothing is selected,
 /// interacted with or walked to; otherwise the ground and the sky walk (`0x5e0378`, `0x492d50`)
 /// and an object takes the INTERACT leg `0x492820`: select it ([`Self::select`]), then
-/// [`interact`] ([`Self::act`]). A nameplate's click does not come through here
-/// ([`PlateRightClick`]).
+/// [`interact`] ([`Self::act`]). A nameplate's right-click takes the INTERACT leg without the
+/// router ([`Self::act_on`]).
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct ClickDispatch<'w, 's> {
     /// The press pick: the reference picks once, on the down edge (`0x481f00`).
@@ -1227,6 +1184,16 @@ impl ClickDispatch<'_, '_> {
         self.act_with(Some(script), payload_held)
     }
 
+    /// The INTERACT leg's dispatcher (`0x492881`) on a nameplate's unit, `pick` ([`PlatePick`]),
+    /// past its own select: [`interact`] alone, with no router ahead of it.
+    pub(crate) fn act_on(
+        &mut self,
+        script: &mut benilla_ui::script::UiScript,
+        pick: &PressPick,
+    ) -> Option<ActOwed> {
+        interact(&mut self.dispatch, Some(script), pick).map(ActOwed)
+    }
+
     /// [`Self::act`] with `payload_held` whether the cursor holds a payload.
     fn act_with(
         &mut self,
@@ -1258,20 +1225,10 @@ impl ClickDispatch<'_, '_> {
     /// leg's loot or use, run here.
     pub(crate) fn pay(&mut self, owed: ActOwed) -> Option<super::SelectDebt> {
         match owed.0 {
-            Owed::Attack {
-                entity,
-                guid,
-                attackable,
-            } => {
+            Owed::Attack { entity, guid } => {
                 let mark = crate::lanes::mark();
-                let select = attack_select(
-                    &mut self.dispatch,
-                    &mut self.selection,
-                    entity,
-                    guid,
-                    attackable,
-                    mark,
-                );
+                let select =
+                    attack_select(&mut self.dispatch, &mut self.selection, entity, guid, mark);
                 Some(select.owed)
             }
             owed => {
@@ -1533,11 +1490,7 @@ fn interact_legs(
                 .start_head(crate::creature_anim::StartTarget::Attackable)
             {
                 debug!("right-click attack: {guid:#x}");
-                return Some(Owed::Attack {
-                    entity,
-                    guid,
-                    attackable: press.attack(),
-                });
+                return Some(Owed::Attack { entity, guid });
             }
         }
         UnitBranch::Dead(DeadUnitLeg::Loot) => {
@@ -1609,18 +1562,13 @@ fn interact_legs(
 #[derive(Message, Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Interact(pub Entity);
 
-/// Each nameplate right-click's unit interact (`0x492881`), then each [`Interact`], its object
-/// classified as a press over it would be. Runs after the bind of a standing cursor's parked picks
-/// ([`crate::script_calls::bind_parked_picks`]): a plate's `SelectTarget` gave its unit to the
-/// cast, and the interact that follows finds the cursor's word empty, so its attack leg selects
-/// the unit and its service leg talks, after the cast on the wire.
+/// Each [`Interact`], its object classified as a press over it would be.
 #[allow(clippy::type_complexity)] // a Bevy system's full input set
 pub(super) fn act_on_interact(
     mut requests: MessageReader<Interact>,
-    mut plate_clicks: MessageReader<PlateRightClick>,
     kinds: Query<(&Guid, &crate::net::NetEntity)>,
-    // The classifier, the dispatchers, the selection and the press pick, which the host's calls
-    // also reach: an engine turn.
+    // The classifier, the dispatchers and the selection, which the host's calls also reach: an
+    // engine turn.
     mut vm: crate::script_calls::VmWith<(
         ParamSet<
             'static,
@@ -1631,23 +1579,11 @@ pub(super) fn act_on_interact(
             ),
         >,
         ResMut<'static, Selection>,
-        Res<'static, PressPick>,
     )>,
 ) {
     use benilla_protocol::EntityKind;
-    if requests.is_empty() && plate_clicks.is_empty() {
+    if requests.is_empty() {
         return;
-    }
-    // Each its own dispatch, as the reference calls each slot: a leg's owed loot or use is a turn
-    // after its store's.
-    let plates = plate_clicks.read().count();
-    for _ in 0..plates {
-        let mark = crate::lanes::mark();
-        let owed = vm.turn(|script, (mut set, _, press)| interact(&mut set.p1(), script, &press));
-        pay_owed!(vm, owed, mark, |(mut set, mut selection, _)| (
-            &mut set.p1(),
-            &mut selection
-        ));
     }
     let entities: Vec<Entity> = requests.read().map(|&Interact(entity)| entity).collect();
     for entity in entities {
@@ -1668,12 +1604,12 @@ pub(super) fn act_on_interact(
             EntityKind::DynamicObject | EntityKind::Other => continue,
         }
         let mark = crate::lanes::mark();
-        let owed = vm.turn(|script, (mut set, _, _)| {
+        let owed = vm.turn(|script, (mut set, _)| {
             (pick.cursor, pick.attack_fork) =
                 cursor_mode::classify(&set.p0(), &pick.hovered, &pick.object);
             interact(&mut set.p1(), script, &pick)
         });
-        pay_owed!(vm, owed, mark, |(mut set, mut selection, _)| (
+        pay_owed!(vm, owed, mark, |(mut set, mut selection)| (
             &mut set.p1(),
             &mut selection
         ));
@@ -2812,7 +2748,6 @@ mod tests {
         let (tx, _rx) = crossbeam_channel::unbounded::<ClientCommand>();
         let mut world = World::new();
         world.insert_resource(NetCommands(tx));
-        world.init_resource::<Messages<PlateRightClick>>();
         world.init_resource::<Messages<crate::sound::NpcGreetingRequest>>();
         world.init_resource::<PressPick>();
         world.init_resource::<Selection>();
@@ -4131,10 +4066,11 @@ mod tests {
             (F_MAXHEALTH, 100),
             (F_UNIT_FLAGS, 0x8),
         ]));
+        // A unit (`OBJECT_FIELD_TYPE` 0x9), as the re-swing's Attack looks it up (`0x5ecbe6`).
         let wolf = world
             .spawn((
                 Guid(WOLF),
-                store(&[(F_HEALTH, 100), (F_MAXHEALTH, 100)]),
+                store(&[(2, 0x9), (F_HEALTH, 100), (F_MAXHEALTH, 100)]),
                 Transform::from_xyz(3.0, 0.0, 0.0),
                 crate::net::NetEntity {
                     kind: benilla_protocol::EntityKind::Unit,

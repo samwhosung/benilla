@@ -13,11 +13,11 @@ use benilla_world::schedule::WorldStage;
 mod arm;
 #[cfg(test)]
 pub(crate) use crate::script_calls::{
-    error_lines, record_error_lines, release_click, take_error_lines,
+    click_plate, error_lines, record_error_lines, release_click, take_error_lines,
 };
 pub(crate) use arm::{
-    begin_records, plate_clicks_first, right_press_hook, run_world_clicks, world_steps, ArmTracer,
-    ClickArm, ClickLegs, WorldClickLegs,
+    begin_records, right_press_hook, run_world_clicks, world_steps, ArmTracer, ClickArm, ClickLegs,
+    WorldClickLegs,
 };
 mod by_name;
 // `pub(crate)` for the chest live probe, which drives the mouse's own `click::resolve_go_action`.
@@ -213,8 +213,8 @@ pub(crate) struct PressPick {
     pub(crate) hovered: Hovered,
     pub(crate) object: HoveredObject,
     pub(crate) occlusion: PickOcclusion,
-    /// The context cursor as of the press, which the right-click ladder forks on; the reference's
-    /// new-target validation (`0x5ecb70`) also reads the press's pick, not a live one.
+    /// The context cursor as of the press, which the right-click ladder forks on. No select's
+    /// re-swing reads it: `Attack 0x5ecb70` judges the new unit itself (`scan::reswing_allowed`).
     pub(crate) cursor: cursor_mode::WorldCursor,
     /// The unit dispatcher's attack fork as of the press, which the sword alone cannot carry: the
     /// sword also needs the player's own legs, and a refused player still takes the attack arm.
@@ -227,11 +227,6 @@ impl PressPick {
     /// GameObject. Anything else is the ground or the sky.
     pub(crate) fn over_object(&self) -> bool {
         self.hovered.any().is_some() || self.hovered.refused || self.object.target.is_some()
-    }
-
-    /// Whether the press was an Attack-cursor press, for `0x5ecb70`'s new-target validation.
-    pub(crate) fn attack(&self) -> bool {
-        self.cursor.kind == cursor_mode::CursorKind::Attack
     }
 }
 
@@ -325,7 +320,6 @@ impl Plugin for TargetPlugin {
             .init_resource::<scan::TabHistory>()
             .init_resource::<scan::LastEnemy>()
             .add_message::<AttackNearestRequest>()
-            .add_message::<click::PlateRightClick>()
             .add_message::<Interact>()
             .add_systems(
                 Startup,
@@ -335,32 +329,17 @@ impl Plugin for TargetPlugin {
                     (ring::load_factions, scan::load_creature_types).after(AssetSet::Open),
                 ),
             )
-            // What no mouse command's call dispatches, where the frame's records begin and end,
-            // ahead of the packets, as the reference's world-frame handlers run in the window
-            // input (`0x423920` at `0x420d23`), in the dispatcher's order: a plate click's trade
-            // leg and select, the binds of the units the selects parked, the interacts, the drops
-            // and the casts the dispatchers queued.
+            // What no call dispatches, where the frame's records end, ahead of the packets, as
+            // the reference's world-frame handlers run in the window input (`0x423920` at
+            // `0x420d23`), in the dispatcher's order: a crate's interacts and the casts their
+            // dispatchers queued.
             .edit_schedule(WorldClickLegs, |legs| {
                 legs.set_executor_kind(bevy::ecs::schedule::ExecutorKind::SingleThreaded);
             })
             .add_systems(
                 WorldClickLegs,
                 (
-                    // A plate's left click's trade leg, ahead of the select in the same click
-                    // (`0x4925d0`), then the select.
-                    (
-                        crate::ui_action::drop_item::trade_on_plate_click,
-                        click::select_on_plate_click,
-                    )
-                        .chain(),
-                    // The units the plate selects parked with the targeting cursor up, bound to its
-                    // cast; then the unit interact of a nameplate's right-click and a crate's
-                    // `Interact`, so the cast goes out ahead of the interact it came with.
-                    (
-                        crate::script_calls::bind_parked_picks,
-                        click::act_on_interact,
-                    )
-                        .chain(),
+                    click::act_on_interact,
                     // The casts the dispatchers queued (`0x5f35c0`, `0x5f06dc` → `0x6e5a90`).
                     crate::ui_action::drain_click_casts,
                 )

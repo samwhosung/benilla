@@ -815,7 +815,7 @@ impl UiScript {
             // Button. The mouse raises the gate's click flag around the slot
             // (`0x779275`-`0x77928b`); `Click()` does not.
             let _click = protected::raise(&self.lua, protected::Event::Click);
-            button::click_button(&self.lua, id, button, down, false);
+            button::click_button(&self.lua, id, button, false);
         }
         // The press art last (`0x7792b1` follows the Down click `0x779285`): `OnMouseDown`
         // (`0x76bf70`, at the top of the slot) and a Down `OnClick` see the button unpushed, and
@@ -916,7 +916,7 @@ impl UiScript {
                     self.push_error(e);
                 }
             } else {
-                button::click_button(&self.lua, id, button, false, false);
+                button::click_button(&self.lua, id, button, false);
             }
             // A double clears the stamp (`0x779393`), so clicks pair: four fast clicks are click,
             // double, click, double. A single stamps the detector (`0x7793af`) whether or not an

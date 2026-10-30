@@ -14,8 +14,9 @@
 //! `0x481f1d`). An arm made under a host without
 //! the tracer (a signal point inside another call's apply, the stuck-latch sweep's up-half) is
 //! traced where the record's walk returns, and the steps after it wait for that trace and apply
-//! there, in order. What no mouse command dispatches runs where the frame's records end
-//! ([`WorldClickLegs`]): a nameplate's click, a crate's `Interact`, a `DropItemOnUnit`.
+//! there, in order. A nameplate's click is a call of its own, applied with the same legs inside the
+//! click ([`benilla_ui::script::ScriptCall::PlateClick`]); what no call dispatches, a crate's
+//! `Interact`, runs where the frame's records end ([`WorldClickLegs`]).
 
 use bevy::ecs::schedule::ScheduleLabel;
 use bevy::input::mouse::AccumulatedMouseMotion;
@@ -66,17 +67,15 @@ impl ClickArm {
     }
 }
 
-/// What no mouse command's call dispatches, the click dispatcher's order kept: a nameplate's
-/// left click's trade leg and select, the binds of the units the selects parked, a nameplate's
-/// right-click's and a crate's `Interact`, `DropItemOnUnit`'s legs, and the casts their
-/// dispatchers queued. Run where the frame's records begin, for the plate clicks the last frame
-/// completed, and where they end.
+/// What no call dispatches, the click dispatcher's order kept: a crate's `Interact`, and the casts
+/// its dispatchers queued. Run where the frame's records end.
 #[derive(ScheduleLabel, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct WorldClickLegs;
 
 crate::script_calls::disjoint::disjoint_set! {
     /// The world click's state, as its call applies it: the arm and its pick, then the
-    /// dispatcher's legs in its order (`0x481f60`). Each is lent alone: they share the press pick,
+    /// dispatcher's legs in its order (`0x481f60`), and a nameplate's click's, which takes the
+    /// object legs without the router (`0x4949f0`). Each is lent alone: they share the press pick,
     /// the selection and the cast ladder. A leg whose state a harness lacks is absent and does
     /// nothing.
     pub(crate) struct ClickLegs, ClickLegsState {
@@ -95,6 +94,10 @@ crate::script_calls::disjoint::disjoint_set! {
         dispatch: Option<super::click::ClickDispatch<'static, 'static>>,
         /// The casts the dispatchers queued.
         casts: Option<crate::ui_action::ClickCastDrain<'static, 'static>>,
+        /// A nameplate's click: its unit, its greeting and its `SelectTarget`, and the pick its
+        /// right button's interact acts on.
+        plate: Option<super::click::PlateLeg<'static, 'static>>,
+        plate_pick: Option<super::click::PlatePick<'static, 'static>>,
     }
 }
 
@@ -306,8 +309,8 @@ pub(crate) fn world_steps(world: &mut World, record: &InputRecord) {
         // The plate the walk left hovered, as the record's press found it.
         run(world, crate::vplates::seed_plate_hover);
     }
-    // A press a nameplate took: its click acts on the plate's unit (`0x7cb910` → `0x4949f0`), which
-    // the pick names, classified as the press found it.
+    // A press a nameplate took: the pick names the plate's unit as the press found it, which the
+    // plate's click reads at the release for the cursor's verdict on it (`0x7cb910` → `0x4949f0`).
     let plate = world
         .get_resource::<crate::vplates::PlateHover>()
         .is_some_and(|h| h.0.is_some());
@@ -334,20 +337,9 @@ fn settle(world: &mut World, at: Option<Vec2>) {
     }
 }
 
-/// The frame's walk begins: the plate clicks the last frame's plates completed act first, on the
-/// pick their press latched, ahead of any press of this frame's.
-pub(crate) fn plate_clicks_first(world: &mut World) {
-    if world
-        .get_resource::<crate::vplates::PlateClicks>()
-        .is_some_and(|c| !c.left.is_empty() || !c.right.is_empty())
-    {
-        world.run_schedule(WorldClickLegs);
-    }
-}
-
 /// Where the frame's records end: the click steps made with no host lent or waiting for an arm's
 /// pick, applied now (a packet handler's `MouselookStart`, a stuck-latch sweep's release), then the
-/// legs for what no command dispatched.
+/// legs for what no call dispatched.
 pub(crate) fn run_world_clicks(world: &mut World) {
     settle(world, None);
     world.run_schedule(WorldClickLegs);

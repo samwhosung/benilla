@@ -285,3 +285,83 @@ fn a_charmed_players_world_click_feeds_trades_and_selects_nothing() {
     );
     assert_eq!(selected(&f), Some(PET), "the target stands");
 }
+
+/// A plate on each unit of `guids`, the world frame's children in that order.
+fn plates(f: &mut Feed, guids: &[u64]) {
+    let mut script = f.app.world_mut().non_send_resource_mut::<UiScript>();
+    crate::vplates::plates_for_test(&mut script, guids);
+}
+
+/// A nameplate's left click is the body click's object leg (`0x7cb910` → `0x4949f0` action 1 →
+/// `0x4925d0`), inside the click: with the food held it feeds our pet (`0x4927e8`), and asks
+/// another player to trade (`0x49278e`) ahead of the select that follows it (`0x49280c`), each
+/// sent before `Click` returns.
+#[test]
+fn a_plate_click_with_the_food_held_feeds_the_pet_and_trades_ahead_of_its_select() {
+    let mut f = client_with(true, 55, false);
+    plates(&mut f, &[PET, OTHER]);
+    run(
+        &mut f,
+        "PickupContainerItem(0, 1) local pet = WorldFrame:GetChildren() pet:Click()",
+    );
+    assert_eq!(
+        casts(&f),
+        vec![format!(
+            "{:?}",
+            ClientCommand::CastSpellItem {
+                spell_id: FEED_PET,
+                item_guid: JERKY,
+            }
+        )],
+        "the plate's click feeds the pet"
+    );
+    assert!(held(&f).is_none(), "the feed cleared the cursor");
+    run(
+        &mut f,
+        "PickupContainerItem(0, 1) local _, other = WorldFrame:GetChildren() other:Click()",
+    );
+    let sent = sent(&f);
+    let trade = format!("{:?}", ClientCommand::InitiateTrade { target: OTHER });
+    let select = format!("{:?}", ClientCommand::SetSelection { guid: OTHER });
+    let at = |line: &str| sent.iter().position(|s| s == line);
+    assert!(
+        matches!((at(&trade), at(&select)), (Some(t), Some(s)) if t < s),
+        "the trade's ask, then the select: {sent:?}"
+    );
+    assert_eq!(selected(&f), Some(OTHER));
+}
+
+/// The trade leg tests the targeting cursor (`0x492668`) ahead of the select's bind
+/// (`0x49280c` → `0x4935d5`), so with the cursor up a plate's click asks no trade, and the bind
+/// gives the cast the player instead of selecting them.
+#[test]
+fn a_plate_click_under_the_cursor_asks_no_trade_and_binds_the_player() {
+    let mut f = client_with(true, 55, false);
+    plates(&mut f, &[OTHER]);
+    f.app
+        .world_mut()
+        .resource_mut::<crate::spell::SpellTargeting>()
+        .enter(2050, crate::spell::CastCommit::Spell, 0x0002);
+    // A key's body, an input event, so the bind's tag 2 passes (`0x6e5ba5`).
+    with_hosted_vm(f.app.world_mut(), |vm| {
+        vm.expect("a VM")
+            .run_binding("PickupContainerItem(0, 1) WorldFrame:GetChildren():Click()")
+    })
+    .expect("the chunk runs");
+    let sent = sent(&f);
+    assert!(
+        !sent.iter().any(|s| s.starts_with("InitiateTrade")),
+        "no trade under the cursor: {sent:?}"
+    );
+    assert!(
+        sent.contains(&format!(
+            "{:?}",
+            ClientCommand::CastSpell {
+                spell_id: 2050,
+                target: Some(OTHER),
+            }
+        )),
+        "the bind casts at the player: {sent:?}"
+    );
+    assert_eq!(selected(&f), Some(PET), "the target stands");
+}

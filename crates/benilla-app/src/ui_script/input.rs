@@ -160,7 +160,6 @@ fn dispatch(world: &mut World, feed: &mut Option<bevy::ecs::system::SystemId>, l
     let id = *feed.get_or_insert_with(|| world.register_system(feed_ui_input));
     *world.get_resource_or_init::<RecordWalk>() = RecordWalk::default();
     crate::target::begin_records(world);
-    crate::target::plate_clicks_first(world);
     loop {
         if let Err(err) = world.run_system(id) {
             debug!("ui_script(input): the walk did not run: {err}");

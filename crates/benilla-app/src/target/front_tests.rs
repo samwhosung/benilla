@@ -7,7 +7,6 @@ use crossbeam_channel::Receiver;
 
 use super::{click, scan, Hovered, PressPick, Selection};
 use crate::net::{ClientCommand, Guid, GuidIndex, NetCommands, ObjectStore, SelfGuid, SelfPlayer};
-use crate::vplates::PlateClicks;
 
 pub(super) const ME: u64 = 0x10;
 /// Selected before each writer runs.
@@ -92,6 +91,16 @@ impl Fix {
         let world = self.app.world_mut();
         world.resource_mut::<PressPick>().hovered = pick;
         super::release_click(world, benilla_ui::script::ClickMode::Select);
+    }
+
+    /// A left click on `MOB`'s nameplate, through the click's call (`0x7cb910` → `0x4949f0`).
+    pub(super) fn plate_click(&mut self) {
+        super::click_plate(
+            self.app.world_mut(),
+            MOB,
+            benilla_ui::script::PlateAction::Select,
+            false,
+        );
     }
 
     /// A unit the TAB scan can pick, `x` yards along.
@@ -209,32 +218,13 @@ impl Fix {
 fn a_plate_click_with_the_cursor_up_binds_its_unit() {
     let mut up = fix(false);
     up.cursor_up();
-    let mob = up.mob;
-    up.app
-        .world_mut()
-        .resource_mut::<PlateClicks>()
-        .left
-        .push(mob);
-    up.app
-        .world_mut()
-        .run_system_once(click::select_on_plate_click)
-        .expect("the plate click runs");
-    up.bind();
+    up.plate_click();
     assert_eq!(up.wire(), (vec![Some(MOB)], vec![]), "bound, not selected");
     assert_eq!(up.selected(), Some(OLD));
     assert!(!up.cursor_is_up());
 
     let mut down = fix(false);
-    let mob = down.mob;
-    down.app
-        .world_mut()
-        .resource_mut::<PlateClicks>()
-        .left
-        .push(mob);
-    down.app
-        .world_mut()
-        .run_system_once(click::select_on_plate_click)
-        .expect("the plate click runs");
+    down.plate_click();
     assert_eq!(down.wire(), (vec![], vec![MOB]));
     assert_eq!(down.selected(), Some(MOB));
 }
@@ -249,18 +239,7 @@ fn a_charmed_player_is_refused_by_every_selector() {
         (
             "a plate click",
             false,
-            |f| {
-                let mob = f.mob;
-                f.app
-                    .world_mut()
-                    .resource_mut::<PlateClicks>()
-                    .left
-                    .push(mob);
-                f.app
-                    .world_mut()
-                    .run_system_once(click::select_on_plate_click)
-                    .unwrap();
-            },
+            |f| f.plate_click(),
             Some(MOB),
             false,
         ),
@@ -650,15 +629,7 @@ fn a_plate_click_greets_with_the_cursor_up() {
             f.cursor_up();
         }
         let mob = f.mob;
-        f.app
-            .world_mut()
-            .resource_mut::<PlateClicks>()
-            .left
-            .push(mob);
-        f.app
-            .world_mut()
-            .run_system_once(click::select_on_plate_click)
-            .expect("the plate click runs");
+        f.plate_click();
         assert_eq!(
             f.greetings(),
             vec![mob],

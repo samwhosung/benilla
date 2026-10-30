@@ -299,6 +299,10 @@ pub enum ScriptCall {
     /// the press (`ArmClick 0x514810` → `0x481f00`), or the last primary's release and its
     /// dispatch (`ReleaseCommands 0x514b70` → `DispatchWorldClick 0x481f60`), inside the call.
     WorldClick(super::ClickCall),
+    /// A nameplate's click ([`super::PlateClick`]): `ClickObjectByAction` (`0x7cb92a` →
+    /// `0x4949f0`) on the plate's unit, its select, or its select and the unit's interact, inside
+    /// the click and ahead of the plate's `OnClick`.
+    PlateClick(super::PlateClick),
     /// A movement or camera binding function's call ([`super::BindingInput`]) on the engine's
     /// input state, inside the call: a command bit pressed or released through `SetCommands`
     /// (`0x515090`) with the cast cancel a new direction makes (`0x5150ce`-`0x515193`), a
@@ -515,6 +519,7 @@ impl ScriptCall {
             | ScriptCall::TargetNearest { may_cast, .. }
             | ScriptCall::TargetLastTarget { may_cast }
             | ScriptCall::AttackTarget { may_cast, .. } => *may_cast,
+            ScriptCall::PlateClick(click) => click.may_cast,
             _ => true,
         }
     }

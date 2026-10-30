@@ -52,7 +52,6 @@ fn client() -> Client {
     app.insert_resource(NetCommands(tx));
     // What the dispatchers and the cursor read that a headless build leaves to its plugins.
     app.init_resource::<PressPick>()
-        .init_resource::<Messages<PlateRightClick>>()
         .init_resource::<Messages<Interact>>()
         .init_resource::<crate::player::Approach>()
         .init_resource::<crate::player::FollowState>()

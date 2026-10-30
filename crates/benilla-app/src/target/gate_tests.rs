@@ -11,14 +11,12 @@ use benilla_protocol::ObjectFields;
 use benilla_ui::script::{
     ClickMode, ContainerSlot, ContainerState, MerchantItem, MerchantState, UiScript,
 };
-use bevy::ecs::system::RunSystemOnce;
 use bevy::prelude::*;
 
 use super::front_tests::{fix, Fix, ME, MOB, OLD};
-use super::{click, cursor_mode, Hovered, PickOcclusion, PressPick};
+use super::{cursor_mode, Hovered, PickOcclusion, PressPick};
 use crate::net::{ClientCommand, GuidIndex, ObjectStore};
 use crate::ui_action::UiErrorKeys;
-use crate::vplates::PlateClicks;
 
 /// A gossip NPC, and a hostile unit.
 const NPC: u64 = 0x51;
@@ -120,25 +118,15 @@ impl Fix {
         super::release_click(world, ClickMode::Action);
     }
 
-    /// A right-click on `unit`'s nameplate, begun on what the press latched, through the systems
-    /// in the schedule's order (`plate_right_click_runs_after_the_script_calls_head` pins it):
-    /// the click's `SelectTarget`, the head of the script calls' pass that binds what it parked,
-    /// then the unit's interact.
-    fn plate_right_click(&mut self, unit: Entity) {
-        self.app
-            .world_mut()
-            .resource_mut::<PlateClicks>()
-            .right
-            .push(unit);
-        self.app
-            .world_mut()
-            .run_system_once(click::select_on_plate_click)
-            .expect("the plate click runs");
-        self.bind();
-        self.app
-            .world_mut()
-            .run_system_once(click::act_on_interact)
-            .expect("the unit's interact runs");
+    /// A mouse right-click on `guid`'s nameplate, begun on what the press latched, through the
+    /// click's call (`0x7cb910` → `0x4949f0` → `0x492820`).
+    fn plate_right_click(&mut self, guid: u64) {
+        super::click_plate(
+            self.app.world_mut(),
+            guid,
+            benilla_ui::script::PlateAction::Interact,
+            false,
+        );
     }
 
     /// Everything sent since the last look.
@@ -345,7 +333,7 @@ fn a_charmed_players_world_right_click_does_nothing_and_a_plates_still_interacts
         let npc = f.unit_with(NPC, 3.0, &[(FIELD_UNIT_NPC_FLAGS, GOSSIP)]);
         f.press_on(npc, NPC, false);
         if plate {
-            f.plate_right_click(npc);
+            f.plate_right_click(NPC);
         } else {
             f.right_click();
         }
@@ -357,6 +345,40 @@ fn a_charmed_players_world_right_click_does_nothing_and_a_plates_still_interacts
             "{what}"
         );
     }
+}
+
+/// Mid-combat, the world right-click's select (`0x492870` → `0x493540`) stops and re-swings at the
+/// new unit by Attack's own legs on it (`0x4938c8` → `0x5ecb70`: alive, `CanAttack` at
+/// `0x5ecc2e`), whatever cursor the press showed: a gossip NPC we can attack, pressed under the
+/// Speak cursor, is swung at, then talked to.
+#[test]
+fn a_right_click_mid_combat_reswings_at_an_attackable_unit_under_any_cursor() {
+    let mut f = fix(false);
+    f.app.world_mut().init_resource::<crate::player::Player>();
+    let old = f.app.world().resource::<GuidIndex>().0[&OLD];
+    // A creature (`OBJECT_FIELD_TYPE` 0x9), which the latch (`0x60ecb0`) looks up as a unit.
+    f.make_unit(old);
+    let npc = f.unit_with(NPC, 3.0, &[(2, 0x9), (FIELD_UNIT_NPC_FLAGS, GOSSIP)]);
+    f.app
+        .world_mut()
+        .insert_non_send_resource(UiScript::new().expect("a VM"));
+    crate::script_calls::with_hosted_vm(f.app.world_mut(), |s| {
+        s.expect("a VM").run("AttackTarget()")
+    })
+    .expect("the attack runs");
+    f.press_on(npc, NPC, false);
+    f.right_click();
+    let sent = f.sent();
+    assert!(
+        swung_at(&sent, OLD),
+        "the attack began on the old target: {sent:?}"
+    );
+    assert!(
+        swung_at(&sent, NPC),
+        "the select re-swings at the NPC: {sent:?}"
+    );
+    assert!(greeted(&sent, NPC), "and the interact talks: {sent:?}");
+    assert_eq!(f.selected(), Some(NPC));
 }
 
 /// The router's nothing leg for a charmed player has no points to walk along (`0x492d3f` on a
@@ -430,7 +452,7 @@ fn a_plate_right_click_binds_then_selects_then_acts_in_the_references_order() {
         };
         let unit = f.unit_with(guid, 3.0, fields);
         f.press_on(unit, guid, attack);
-        f.plate_right_click(unit);
+        f.plate_right_click(guid);
         let sent = f.sent();
         let what = format!("attack leg {attack}, cursor up {cursor}: {sent:?}");
         assert_eq!(steps(&sent), want, "{what}");
