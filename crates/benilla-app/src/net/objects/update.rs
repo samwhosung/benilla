@@ -1332,6 +1332,23 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
                     }
                 }
             }
+            // The ghost bit's corpse query (`0x5eeac1` → `0x491f50`), at its place: the cache reset,
+            // the range latch's `CORPSE_OUT_OF_RANGE` on the lane behind `PLAYER_UNGHOST`, and a
+            // ghost's `MSG_CORPSE_QUERY` sent here, as the bit stands after this packet.
+            crate::field_watch::Step::Notice(crate::field_watch::FieldNotice::QueryCorpse) => {
+                let was_in = crate::death::reset_corpse(
+                    Some(&mut sc.death_net),
+                    sc.death_latches.as_deref_mut(),
+                );
+                if was_in {
+                    sc.field_notices
+                        .write(crate::field_watch::FieldNotice::Global {
+                            id: crate::field_watch::id::CORPSE_OUT_OF_RANGE,
+                        });
+                }
+                let ghost = sc.stores.get(e).is_ok_and(|s| s.0.player_is_ghost());
+                crate::death::ask_corpse(ghost, &sc.net);
+            }
             // The quest-slot watcher's accept line (`0x5dde4f`-`0x5dde7d`), at its place.
             crate::field_watch::Step::Notice(crate::field_watch::FieldNotice::QuestAccepted {
                 quest_id,
@@ -1447,6 +1464,12 @@ fn create_hook(
             sc.names.lookup_fields(guid, &fields, &sc.net);
             sc.field_notices
                 .write_batch(crate::field_watch::guild_tag(guid));
+            // Then the recruitment cascade (`0x5dec1e`), for our create alone (the deviation in
+            // `crate::ui_chat`'s recruitment).
+            if sc.self_guid.0 == Some(guid) {
+                sc.field_notices
+                    .write(crate::field_watch::FieldNotice::RecruitmentCascade);
+            }
             // `0x5dec35` → `0x4e85d0` mode 1: a party slot's `PARTY_MEMBER_ENABLE`.
             sc.group.member_object(guid, true);
             if sc.self_guid.0 != Some(guid) {

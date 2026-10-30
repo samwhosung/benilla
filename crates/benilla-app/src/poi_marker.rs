@@ -206,10 +206,12 @@ impl Plugin for PoiMarkerPlugin {
             Update,
             (
                 // Before the lanes, whose world-state firing rebuilds the landmarks off the marker,
-                // and after the net drain, as the minimap's update runs from its draw (`0x4ec950`
-                // → `0x6d93a0`), past the frame's packets.
+                // and after the feeds, which read it through the host's landmark sources, as the
+                // minimap's update runs from its draw (`0x4ec950` → `0x6d93a0`) in the frame pass,
+                // past the frame's packets and their feeds (`0x420d55`).
                 expire_marker
                     .after(crate::player::ControlRestore)
+                    .after(crate::ui_script::UiFeed)
                     .before(crate::lanes::UiLanes),
             ),
         );

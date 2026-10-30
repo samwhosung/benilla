@@ -276,7 +276,7 @@ pub use calls::{spell_owner, ItemCallback, NearestMode, QueuedCall, RecordAsk, S
 pub use camera_view::{CameraViewRequest, CAMERA_VIEW_COUNT};
 pub use channel::{
     channel_send_target, ChannelCommand, JoinedChannel, JoinedChannelsQuery, RecruitmentPlan,
-    ZoneChannelRow,
+    RecruitmentPlanQuery, ZoneChannelRow,
 };
 pub use char_stats::{
     weapon_subclass_skill, AlertInputs, AlertItem, BankBagSlots, InvSlotView, InventoryAlertInputs,
@@ -525,11 +525,11 @@ pub use use_gates::{ControlBypassQuery, FarSightOnQuery};
 pub use weapon_enchant::{WeaponEnchant, WeaponEnchantQuery};
 pub use who_sort::{WhoSortChain, WhoSortKey};
 pub use worldmap::{
-    UnitMapPosition, UnitMapPositionQuery, WorldMapContinentView, WorldMapLandmarkSource,
-    WorldMapLandmarkView, WorldMapLevel, WorldMapOverlayView, WorldMapSheetRow, WorldMapState,
-    WorldMapZoneView,
+    CorpseMapPointQuery, MapSetterQuery, MapSetterReads, UnitMapPosition, UnitMapPositionQuery,
+    WorldMapContinentView, WorldMapLandmarkSource, WorldMapLandmarkView, WorldMapLevel,
+    WorldMapOverlayView, WorldMapSheetRow, WorldMapState, WorldMapZoneView,
 };
-pub use worldstate::WorldStateUiView;
+pub use worldstate::{WorldStateUiQuery, WorldStateUiView};
 pub use worn_display::{WornDisplay, WornDisplaySet};
 pub use zone_text::{PlayerFactionMasksQuery, ZonePvp, ZoneTexts};
 

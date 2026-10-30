@@ -4,11 +4,12 @@
 //!   `AreaTable`, `WorldMapContinent`, `Map` and the `.zmp` bitmaps, built as the reference's
 //!   `0x4a5d00` builds it, with the instance maps no continent owns beside it.
 //! - [`feed_world_map`], every frame: the player's selection (`0x4a6650`), and its own position
-//!   and the corpse's projected onto the displayed map, which the arrows draw. The explored bits
-//!   are read once, silently, and kept by the field notice of their watcher (`0x4a6460`).
-//! - [`MapPositionLive`]: the unit `GetPlayerMapPosition` projects, read at the call (`0x4a7870`).
-//! - [`feed_landmarks`] and [`LandmarkLane`]: the landmark sources the setter `0x4a67a0` builds
-//!   its list from, rebuilt and signalled where each input moves.
+//!   projected onto the displayed map, which the arrows draw.
+//! - [`MapPositionLive`]: the unit `GetPlayerMapPosition` projects (`0x4a7870`) and the corpse
+//!   `GetCorpseMapPosition` does (`0x4a7960`), read at the call.
+//! - [`LandmarkReads`]: the explored bytes and the landmark sources the setter `0x4a67a0` builds
+//!   over, read at its run; [`LandmarkLane`] the re-selects the gossip marker makes, each where
+//!   it runs.
 //! - [`dev_map_jump`]: Alt+click the map to go there.
 
 use bevy::prelude::*;
@@ -282,6 +283,23 @@ pub(crate) fn build_catalog(
     ))
 }
 
+#[cfg(test)]
+impl WorldMapUiData {
+    /// One continent on `map_id`, its own rect `rect`, with one zone of `area_id` over the same
+    /// rect, and no instance maps.
+    pub(crate) fn one_zone_for_test(map_id: u32, area_id: u32, rect: ZoneRect) -> Self {
+        Self {
+            continents: vec![ContinentEntry {
+                map_id,
+                proj: None,
+                rect,
+                zones: vec![ZoneEntry { area_id, rect }],
+            }],
+            direct: Vec::new(),
+        }
+    }
+}
+
 /// The built continent catalog, kept for the process: the walk cannot change, so a later login
 /// re-seeds its VM from here. The instance maps ride [`WorldMapUiData`].
 #[derive(Resource)]
@@ -329,19 +347,11 @@ fn build_catalog_from_world(world: &World) -> Option<(Vec<WorldMapContinentView>
     build_catalog(&mut chain, &areas.0, maps)
 }
 
-/// The inputs the landmark sources are a pure function of. Besides a selection change, `0x4a67a0`
-/// rebuilds the list on these: a world-state push (`0x48fa0d`), a `PLAYER_EXPLORED_ZONES` change
-/// (`0x4a6477`, an UpdateFields callback on byte `0xe6c`, which the field notice
-/// [`crate::field_watch::FieldNotice::ExploredZones`] has rebuilt at its place already) and the
-/// gossip marker's set and clear.
-#[derive(PartialEq, Eq)]
+/// What the landmark sources are built over besides the rows, the world states and the marker:
+/// the map shown and the explored bytes the exploration gate tests (`0x4a6890`-`0x4a68f3`).
 struct LandmarkKey {
     map: u32,
-    states: u64,
     explored: Vec<u32>,
-    /// The guard-directions marker `(continent, pos, icon)`, the position as raw `f32` bits: it is
-    /// copied from the packet, so a bit compare is exact.
-    marker: Option<(u32, [u32; 3], u32)>,
 }
 
 /// [`WorldMapLandmarkSource::icons`]' order.
@@ -510,9 +520,6 @@ fn install_world_loc_projector(script: &mut UiScript, data: &WorldMapUiData) {
 /// [`feed_world_map`]'s memos under one [`crate::ui_script::VmMemo`], so a new VM resets them all.
 #[derive(Default)]
 struct FeedMemos {
-    /// The player object whose explored bytes the engine has read once, silently: the watcher
-    /// (`0x4a6460`) keeps them after that ([`LandmarkReads::explored_zones_changed`]).
-    explored_read_for: Option<Entity>,
     /// The world-enter sync has run: the reference's `old == 0` gate.
     map_synced: bool,
     /// `GetWorldLocMapPosition`'s projection is installed over the current catalog.
@@ -521,7 +528,8 @@ struct FeedMemos {
 
 /// `GetPlayerMapPosition`'s read of a unit at the call, the host's half of
 /// [`benilla_ui::script::UnitMapPositionQuery`] (`0x4a7870`): the objects and the group's records
-/// as of the drain's place, each position where it stands now.
+/// as of the drain's place, each position where it stands now; and `GetCorpseMapPosition`'s of the
+/// corpse cache ([`benilla_ui::script::CorpseMapPointQuery`]).
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct MapPositionLive<'w, 's> {
     index: Option<Res<'w, crate::net::GuidIndex>>,
@@ -534,6 +542,8 @@ pub(crate) struct MapPositionLive<'w, 's> {
     map: Option<Res<'w, CurrentMap>>,
     group: Option<Res<'w, crate::ui_party::GroupState>>,
     areas: Option<Res<'w, crate::area::AreaTableRes>>,
+    /// The corpse cache the corpse query's answer fills (`0x492010`).
+    death: Option<Res<'w, crate::death::DeathNet>>,
 }
 
 impl MapPositionLive<'_, '_> {
@@ -579,11 +589,24 @@ impl MapPositionLive<'_, '_> {
             y: f32::from(y),
         })
     }
+
+    /// `0x492090`'s copy of the cache: the display map `0xb4e31c` and the position, `None` with
+    /// no corpse cached.
+    fn corpse(&self) -> Option<benilla_ui::script::UnitMapPosition> {
+        let corpse = self.death.as_deref()?.corpse.as_ref()?;
+        Some(benilla_ui::script::UnitMapPosition {
+            // A negative map, the reset cache's -1, names no row, so it projects nowhere.
+            map: u32::try_from(corpse.display_map).unwrap_or(u32::MAX),
+            x: corpse.position[0],
+            y: corpse.position[1],
+        })
+    }
 }
 
 impl crate::script_calls::live::LiveFamily for MapPositionLive<'_, '_> {
     fn answer(&mut self, ask: &mut benilla_ui::script::live::LiveAsk<'_>) -> bool {
         ask.answer(|q: &benilla_ui::script::UnitMapPositionQuery| Some(self.position(q.0)))
+            || ask.answer(|_: &benilla_ui::script::CorpseMapPointQuery| Some(self.corpse()))
     }
 }
 
@@ -606,29 +629,24 @@ pub(crate) fn explored_of(fields: &benilla_protocol::ObjectFields) -> Vec<u32> {
 }
 
 impl LandmarkReads<'_, '_> {
-    /// The key the sources are rebuilt on, `None` without the map and the area table.
-    fn key(&self) -> Option<LandmarkKey> {
-        let explored = self
-            .self_q
-            .iter()
-            .next()
-            .map(|store| explored_of(&store.0))
-            .unwrap_or_default();
-        self.key_over(explored)
+    /// The active player's explored bytes as they stand, `None` with no active player held.
+    fn explored(&self) -> Option<Vec<u32>> {
+        self.self_q.iter().next().map(|store| explored_of(&store.0))
     }
 
-    /// [`Self::key`] over `explored`, the bytes as a packet's notify pass left them.
+    /// What the sources are built over now, `None` without the map data.
+    fn key(&self) -> Option<LandmarkKey> {
+        self.key_over(self.explored().unwrap_or_default())
+    }
+
+    /// [`Self::key`] over `explored`, the bytes as a packet's notify pass left them; `None`
+    /// without the map, the area table, the marker's record or the world states.
     fn key_over(&self, explored: Vec<u32>) -> Option<LandmarkKey> {
         let (map, _) = (self.map.as_deref()?, self.areas.as_deref()?);
-        let (marker, states) = (self.poi_marker.as_deref()?, self.world_states.as_deref()?);
-        let marker = marker
-            .on_map(map.0)
-            .map(|m| (m.continent_id, m.pos.map(f32::to_bits), m.icon));
+        let _ = (self.poi_marker.as_deref()?, self.world_states.as_deref()?);
         Some(LandmarkKey {
             map: map.0,
-            states: states.generation(),
             explored,
-            marker,
         })
     }
 
@@ -705,6 +723,22 @@ impl LandmarkReads<'_, '_> {
     }
 }
 
+/// The setter's reads at its run (`0x4a67a0`), the host's half of
+/// [`benilla_ui::script::MapSetterQuery`]: a Lua verb's selection, the engine's world-enter sync
+/// and the projection's install build over the bytes and the sources as they stand, as the
+/// reference's setter reads the active player and the tables while it builds (`0x4a6bf4`,
+/// `0x4a6819`).
+impl crate::script_calls::live::LiveFamily for LandmarkReads<'_, '_> {
+    fn answer(&mut self, ask: &mut benilla_ui::script::live::LiveAsk<'_>) -> bool {
+        ask.answer(|_: &benilla_ui::script::MapSetterQuery| {
+            Some(benilla_ui::script::MapSetterReads {
+                explored: self.explored(),
+                sources: self.sources_now(),
+            })
+        })
+    }
+}
+
 /// The gossip marker's re-selects of the shown map, each fired at its place among the other
 /// lanes' items ([`crate::lanes`]): the set in `SMSG_GOSSIP_POI`'s handler (`0x4e28aa` →
 /// `0x6dac10` → `0x6dac93`) and the clears in the minimap's update, at the deadline (`0x6d9411`)
@@ -761,66 +795,23 @@ fn drop_landmark_signals(mut lane: ResMut<LandmarkLane>) {
     lane.items.clear();
 }
 
-/// The landmark sources a VM holds, kept equal to the state's. Each input that the reference
-/// rebuilds and signals at its place does so there: the explored bytes' watcher, a world-state
-/// packet, the gossip marker's set and clears ([`LandmarkLane`]). A new VM is seeded with its
-/// list built, silently, as the reference's list is the engine's and outlives a reload. Any other
-/// move (a world entry's clear of the marker, a new map) is stored silently, as the reference
-/// reads the rows and the marker only at the setter's next run.
-fn feed_landmarks(
-    mut vm: crate::script_calls::HostedVm,
-    reads: LandmarkReads,
-    mut memo: Local<crate::ui_script::VmMemo<Option<LandmarkKey>>>,
-) {
-    vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        let Some(key) = reads.key() else {
-            return;
-        };
-        let before = memo.get(script).as_ref();
-        if before.is_some_and(|k| *k == key) {
-            return;
-        }
-        let first = before.is_none();
-        let sources = reads.sources(&key);
-        *memo.get(script) = Some(key);
-        if first {
-            script.rebuild_world_map_landmarks(sources);
-        } else {
-            script.seed_world_map_landmark_sources(sources);
-        }
-    })
-}
-
+/// The frame's feed: the player's zone and position on the displayed map, the projection's
+/// install, and the engine's world-enter selection. The explored bytes and the landmark sources
+/// the setter builds over are read at its run, and the corpse at `GetCorpseMapPosition`'s call,
+/// through the host ([`LandmarkReads`], [`MapPositionLive`]).
 fn feed_world_map(
-    // The death stores, which the death calls write: the corpse is read before the Lua runs.
-    mut vm: crate::script_calls::VmWith<Res<'static, crate::death::DeathNet>>,
+    mut vm: crate::script_calls::HostedVm,
     data: Option<Res<WorldMapUiData>>,
     player: Res<Player>,
     map: Option<Res<CurrentMap>>,
     world: benilla_world::world_point::WorldPoint,
-    self_q: Query<(Entity, &ObjectStore), With<SelfPlayer>>,
     areas: Option<Res<crate::area::AreaTableRes>>,
     mut memo: Local<crate::ui_script::VmMemo<FeedMemos>>,
 ) {
-    let corpse = vm.own().corpse;
     vm.run(|script| {
         let (Some(script), Some(data), Some(map), Some(areas)) = (script, data, map, areas) else {
             return;
         };
-        // The bytes `0x4a6460` watches are read where the setter `0x4a67a0` builds over them
-        // (`0x4a6bf4`), so a map first built over a loaded player already sees them. Past that
-        // read the watcher's notice carries every change, signalling at its place in the update
-        // packet ([`LandmarkReads::explored_zones_changed`]); this read signals nothing.
-        if let Some((entity, store)) = self_q.iter().next() {
-            let memo = memo.get(script);
-            if memo.explored_read_for != Some(entity) {
-                memo.explored_read_for = Some(entity);
-                script.seed_world_map_explored(explored_of(&store.0));
-            }
-        }
         let wow = bevy_to_wow(player.pos);
         let (wx, wy) = (wow[0], wow[1]);
 
@@ -851,21 +842,8 @@ fn feed_world_map(
             }
         }
 
-        let selection = script.world_map_selection();
-        let project = |pos_map: u32, px: f32, py: f32| {
-            project_on_displayed(&data, selection, pos_map, px, py)
-        };
-        let uv = project(map.0, wx, wy);
-        // The corpse at the query answer's display position, a dungeon corpse at its entrance.
-        let corpse_uv = corpse.and_then(|cp| {
-            project(
-                u32::try_from(cp.display_map).unwrap_or(u32::MAX),
-                cp.position[0],
-                cp.position[1],
-            )
-        });
-
-        script.set_world_map_feed(player_sel.zone, uv, player.facing(), corpse_uv);
+        let uv = project_on_displayed(&data, script.world_map_selection(), map.0, wx, wy);
+        script.set_world_map_feed(player_sel.zone, uv, player.facing());
         // The instance-map leg for `SetMapToCurrentZone`, which the battlefield minimap calls on
         // `PLAYER_ENTERING_WORLD` (`Blizzard_BattlefieldMinimap.lua:58-62`).
         script.set_world_map_player_direct_area(player_sel.direct);
@@ -968,7 +946,6 @@ impl Plugin for WorldMapUiPlugin {
                 (
                     // After the script tick: a selection changed this tick projects on the next.
                     feed_world_map.after(crate::ui_script::UiTick),
-                    feed_landmarks.after(crate::ui_script::UiTick),
                     // After the script tick, so the jump hit-tests this tick's frame rects.
                     dev_map_jump.after(crate::ui_script::UiTick),
                     drop_landmark_signals

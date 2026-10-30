@@ -20,17 +20,10 @@ use bevy::prelude::*;
 #[derive(Resource, Default)]
 pub(crate) struct WorldStates {
     values: HashMap<u32, u32>,
-    generation: u64,
     scope: Option<(u32, u32)>,
 }
 
 impl WorldStates {
-    /// Bumped per write and per init, not per pair, the edge readers rebuild on: the reference's
-    /// handler re-runs the world-map landmark builder once per packet (`0x48fa0d` to `0x4a67a0`).
-    pub(crate) fn generation(&self) -> u64 {
-        self.generation
-    }
-
     /// The reference's getter (`0x4c5810`): a missing key reads 0 (`0x4c5867`). Signed, as the
     /// reference prints it through `"%d"`.
     pub(crate) fn get(&self, key: u32) -> i32 {
@@ -54,7 +47,6 @@ impl WorldStates {
     pub(crate) fn init_scope(&mut self, map: u32, area: u32) {
         self.values.clear();
         self.scope = Some((map, area));
-        self.generation = self.generation.wrapping_add(1);
     }
 
     /// Writes `(id, value)` pairs, the reference's setter (`0x4c5870`) for both opcodes. Init's
@@ -62,42 +54,32 @@ impl WorldStates {
     /// tested in `[0x4c5870, 0x4c5a31)`); a repeated key overwrites in place (`0x4c58bb`).
     pub(crate) fn write(&mut self, states: &[(u32, u32)]) {
         self.values.extend(states.iter().copied());
-        self.generation = self.generation.wrapping_add(1);
     }
-}
-
-/// What an item of the world-state lane signals.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum WorldStateSignal {
-    /// A world-state packet, init or update alike: the tail of its handler rebuilds the world map
-    /// (`0x48f9f6` into `0x4a67a0`, which signals `WORLD_MAP_UPDATE`, `0x4a6cdf`-`0x4a6ce4`) and
-    /// then signals `UPDATE_WORLD_STATES` (`0x48fa12`).
-    Packet,
-    /// The readout's own rebuild, with no map: the defense channel's flip (`0x49bdd6`).
-    Readout,
 }
 
 /// The lane of the signals the world-state handler raises, each stamped where its packet ran
 /// ([`crate::lanes`]), so two packets in a frame signal twice, at their places among the other
-/// lanes' items.
+/// lanes' items. Each item is a packet's tail, an init's and an update's alike: it rebuilds the
+/// world map (`0x48f9f6` into `0x4a67a0`, which signals `WORLD_MAP_UPDATE`, `0x4a6cdf`-`0x4a6ce4`)
+/// and then signals `UPDATE_WORLD_STATES` (`0x48fa12`).
 #[derive(Resource, Default)]
 pub(crate) struct WorldStateLane {
-    items: std::collections::VecDeque<(crate::lanes::Stamp, WorldStateSignal)>,
+    items: std::collections::VecDeque<crate::lanes::Stamp>,
 }
 
 impl WorldStateLane {
-    /// Queue `signal` stamped now, behind everything stamped before it.
-    pub(crate) fn push(&mut self, signal: WorldStateSignal) {
+    /// Queue a packet's signals stamped now, behind everything stamped before it.
+    pub(crate) fn push(&mut self) {
         let stamp = crate::lanes::stamp();
-        let at = self.items.partition_point(|(s, _)| *s < stamp);
-        self.items.insert(at, (stamp, signal));
+        let at = self.items.partition_point(|s| *s < stamp);
+        self.items.insert(at, stamp);
     }
 
     pub(crate) fn head(&self) -> Option<crate::lanes::Stamp> {
-        self.items.front().map(|(s, _)| *s)
+        self.items.front().copied()
     }
 
-    pub(crate) fn pop(&mut self) -> Option<(crate::lanes::Stamp, WorldStateSignal)> {
+    pub(crate) fn pop(&mut self) -> Option<crate::lanes::Stamp> {
         self.items.pop_front()
     }
 

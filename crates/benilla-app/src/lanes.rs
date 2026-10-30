@@ -781,7 +781,11 @@ mod unit_live_tests;
 mod unit_view_tests;
 
 #[cfg(test)]
+mod world_map_live_tests;
+#[cfg(test)]
 mod world_map_update_tests;
+#[cfg(test)]
+mod world_state_live_tests;
 #[cfg(test)]
 mod worn_live_tests;
 

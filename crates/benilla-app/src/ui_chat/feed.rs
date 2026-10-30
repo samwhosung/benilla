@@ -1292,22 +1292,49 @@ pub(crate) struct ChatSlots<'w> {
     channels: ResMut<'w, ChannelState>,
     bubbles: Res<'w, crate::chat_bubble::BubbleConfig>,
     filters: Res<'w, crate::text_filter::TextFilterSwitches>,
+    /// The last init's scope, which the defense flag's flip tests before it signals (`0x49bdc0`).
+    world_states: Option<Res<'w, crate::world_state::WorldStates>>,
 }
 
 /// [`deliver`] with the host lent around the event alone: a join a handler makes takes its slot
 /// through the host against the slots the confirm left, and the free after it leaves that join's
-/// slot where it is, as the notify handler frees after its event (`0x49c5b0`, `0x49c5b5`).
+/// slot where it is, as the notify handler frees after its event (`0x49c5b0`, `0x49c5b5`). A
+/// confirm or a free that flips the zone-defense flag signals the readout in place, the confirm's
+/// ahead of the event and the free's after it (`0x49bbbf`, `0x49bc41` → `0x49bd50`).
 fn deliver_hosted(
     script: &mut benilla_ui::script::UiScript,
     set: &mut SlotsAndHost,
     windows: &mut ChatWindows,
     event: &mut ChatEvent,
 ) {
+    let flag = set.p0().channels.defense_channel;
     let dropping = deliver_before(script, &mut set.p0().channels, event);
+    defense_flip(script, set, flag);
     crate::script_calls::lent(script, set.p1().as_mut(), |script| {
         route(script, windows, event)
     });
+    let flag = set.p0().channels.defense_channel;
     deliver_after(script, &mut set.p0().channels, dropping);
+    defense_flip(script, set, flag);
+}
+
+/// `0x49bd50`'s tail when the zone-defense flag moved off `before` (`0x49bdb8`-`0x49bdd6`): the
+/// readout's list follows the flag, which its getters read at the call, and `UPDATE_WORLD_STATES`
+/// signals in place, with the host lent, once an init has set the scope (`0x49bdc0`).
+fn defense_flip(script: &mut benilla_ui::script::UiScript, set: &mut SlotsAndHost, before: bool) {
+    let slots = set.p0();
+    if slots.channels.defense_channel == before {
+        return;
+    }
+    let Some(states) = slots.world_states.as_deref() else {
+        return;
+    };
+    let scoped = states.scope().is_some();
+    crate::script_calls::lent(script, set.p1().as_mut(), |script| {
+        if scoped {
+            script.fire_event("UPDATE_WORLD_STATES", Vec::new());
+        }
+    });
 }
 
 /// [`deliver`]'s half before the event: the confirm and the stamp. Returns the name whose slot

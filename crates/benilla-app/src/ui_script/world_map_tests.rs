@@ -289,7 +289,7 @@ fn party_blips_sit_at_their_map_positions_and_hide_when_absent() {
         party: [0x11, 0x12, 0x13, 0],
         ..Default::default()
     });
-    s.set_world_map_feed(None, Some((0.5, 0.5)), 0.0, None);
+    s.set_world_map_feed(None, Some((0.5, 0.5)), 0.0);
     let mut host = MapPositions(
         [
             (PLAYER, (0.5, 0.5)),
@@ -368,7 +368,7 @@ fn the_player_arrow_is_the_stock_model_pane_seated_and_turned_by_the_update() {
     s.resolve();
     s.run("ShowUIPanel(WorldMapFrame)").unwrap();
     s.resolve();
-    s.set_world_map_feed(None, Some((0.25, 0.75)), 1.25, None);
+    s.set_world_map_feed(None, Some((0.25, 0.75)), 1.25);
     update(&mut s);
     s.resolve();
     let arrow = |s: &mut UiScript| {
@@ -416,7 +416,7 @@ fn the_player_arrow_is_the_stock_model_pane_seated_and_turned_by_the_update() {
     );
 
     // Off the displayed map: the (0, 0) sentinel hides it.
-    s.set_world_map_feed(None, None, 0.0, None);
+    s.set_world_map_feed(None, None, 0.0);
     update(&mut s);
     s.resolve();
     assert!(arrow(&mut s).is_none(), "off-map hides the arrow");
@@ -429,7 +429,7 @@ fn the_player_arrow_is_the_stock_model_pane_seated_and_turned_by_the_update() {
 fn battleground_teammates_and_the_flag_draw_from_the_position_family() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = harness();
-    s.set_world_map_feed(None, Some((0.5, 0.5)), 0.0, None);
+    s.set_world_map_feed(None, Some((0.5, 0.5)), 0.0);
     s.set_battlefield_positions(
         vec![
             BattlefieldPositionView {
@@ -591,7 +591,7 @@ fn hovering_the_player_blip_on_a_scaled_map_names_the_player() {
         s.eval::<f64>("return WorldMapFrame:GetScale()").unwrap() < 0.99,
         "the narrow window scales the map under 1"
     );
-    s.set_world_map_feed(None, Some((0.5, 0.5)), 0.0, None);
+    s.set_world_map_feed(None, Some((0.5, 0.5)), 0.0);
     update(&mut s);
     s.resolve();
     let (px, py, eff) = s
@@ -639,7 +639,7 @@ fn the_player_arrow_draws_over_the_zones_explored_overlays() {
     arrow_facts(&mut s);
     s.run("ShowUIPanel(WorldMapFrame)").unwrap();
     s.resolve();
-    s.set_world_map_feed(None, Some((0.5, 0.5)), 0.0, None);
+    s.set_world_map_feed(None, Some((0.5, 0.5)), 0.0);
     update(&mut s);
     // An overlay made the stock file's way, covering the whole detail frame.
     s.run(
@@ -698,7 +698,7 @@ fn a_click_over_a_blip_still_answers_the_maps_uv() {
     s.resolve();
     s.run("ShowUIPanel(WorldMapFrame)").unwrap();
     s.resolve();
-    s.set_world_map_feed(None, Some((0.4, 0.6)), 0.0, None);
+    s.set_world_map_feed(None, Some((0.4, 0.6)), 0.0);
     update(&mut s);
     s.resolve();
 
@@ -1038,7 +1038,7 @@ fn a_reopened_map_shows_the_players_zone_before_its_first_paint() {
         ..Default::default()
     }]);
     // The player stands in Elwynn Forest.
-    s.set_world_map_feed(Some((1, 1)), None, 0.0, None);
+    s.set_world_map_feed(Some((1, 1)), None, 0.0);
     s.tick(0.01);
     let tile = |s: &UiScript| {
         s.eval::<String>("return WorldMapDetailTile1:GetTexture()")

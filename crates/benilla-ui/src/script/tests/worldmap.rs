@@ -160,7 +160,7 @@ fn a_direct_area_is_the_third_selection_state() {
 
     // In Warsong Gulch `0x4a6650`'s continent loop misses (map 489 is no continent's) and the
     // orphan loop selects the row's own id.
-    s.set_world_map_feed(None, Some((0.5, 0.5)), 0.0, None);
+    s.set_world_map_feed(None, Some((0.5, 0.5)), 0.0);
     s.set_world_map_player_direct_area(Some(443));
     s.run("SetMapToCurrentZone()").unwrap();
 
@@ -412,7 +412,7 @@ fn worldmap_current_zone_and_player_feed() {
         ..Default::default()
     });
 
-    s.set_world_map_feed(Some((1, 2)), Some((0.25, 0.75)), 1.5, None);
+    s.set_world_map_feed(Some((1, 2)), Some((0.25, 0.75)), 1.5);
     s.run("SetMapToCurrentZone()").unwrap();
     assert_eq!(
         s.eval::<(i64, i64)>("return GetCurrentMapContinent(), GetCurrentMapZone()")
@@ -487,7 +487,7 @@ fn worldmap_current_zone_and_player_feed() {
     }
 
     // No feed → the world sheet (never an error).
-    s.set_world_map_feed(None, None, 0.0, None);
+    s.set_world_map_feed(None, None, 0.0);
     s.run("SetMapToCurrentZone()").unwrap();
     assert_eq!(s.eval::<i64>("return GetCurrentMapContinent()").unwrap(), 0);
 }
@@ -505,7 +505,7 @@ fn a_member_the_live_roster_holds_reads_its_position_by_guid() {
         party: [10, 0, 0, 0],
         ..Default::default()
     });
-    s.set_world_map_feed(Some((1, 2)), Some((0.25, 0.75)), 0.0, None);
+    s.set_world_map_feed(Some((1, 2)), Some((0.25, 0.75)), 0.0);
     let mut host = Lent {
         at: [(10, on_ours(0.1, 0.2)), (12, on_ours(0.6, 0.7))].into(),
         party1: Some(12),
@@ -823,7 +823,7 @@ fn worldmap_zone_level_hover_names_without_highlight() {
 fn worldmap_update_fires_inside_the_verb_that_moves_the_selection() {
     let mut s = script();
     push_catalog(&mut s);
-    s.set_world_map_feed(Some((2, 1)), None, 0.0, None);
+    s.set_world_map_feed(Some((2, 1)), None, 0.0);
     // Drain the catalog push's own queued event first.
     s.tick(0.01);
     s.run(
@@ -1022,8 +1022,7 @@ fn a_packet_rebuild_replaces_the_landmarks_and_queues_nothing() {
 
 /// The explored bytes' watcher (`0x4a6460` → `0x4a67a0`) takes the bits, rebuilds the landmark list
 /// they gate and signals `WORLD_MAP_UPDATE` in place (`0x4a6ce4`), once: a handler reads the new
-/// overlays and landmarks, and nothing is left queued for the tick. The read at the world enter
-/// stores the bits and signals nothing.
+/// overlays and landmarks, and nothing is left queued for the tick.
 #[test]
 fn the_explored_watcher_rebuilds_then_signals_once() {
     let mut s = script();
@@ -1058,14 +1057,8 @@ fn the_explored_watcher_rebuilds_then_signals_once() {
     };
     let seen = |s: &UiScript| s.eval::<String>("return table.concat(seen, ',')").unwrap();
 
-    // The world-enter read: Northshire (bit 125) shows at once, with no signal.
-    s.seed_world_map_explored(bits(3, 29));
-    s.tick(0.01);
-    assert_eq!(seen(&s), "");
-    assert_eq!(s.eval::<i64>("return GetNumMapOverlays()").unwrap(), 1);
-
-    // A packet reveals Goldshire (bit 124) beside it, and the sources the bits gate change: one
-    // signal, over both.
+    // A packet reveals Goldshire (bit 124) beside Northshire (bit 125), and the sources the bits
+    // gate change: one signal, over both.
     let mut both = bits(3, 29);
     both[3] |= 1 << 28;
     s.world_map_explored_changed(both, Some(vec![source("Goldshire Inn"), source("Abbey")]));
@@ -1110,8 +1103,8 @@ fn the_catalog_push_signals_nothing() {
 
 /// The gossip marker's set and clears re-select the shown map (`0x6dac93`, `0x6d9411`,
 /// `0x6d9a4c` → `0x4a67a0`): the list is rebuilt, then `WORLD_MAP_UPDATE` signals before the call
-/// returns, once, whether or not the list moved. A silent seed stores the sources alone, for the
-/// setter's next run.
+/// returns, once, whether or not the list moved. Sources the host holds are read at the setter's
+/// next run, not before.
 #[test]
 fn a_marker_change_rebuilds_then_signals_in_place() {
     let mut s = script();
@@ -1138,14 +1131,120 @@ fn a_marker_change_rebuilds_then_signals_in_place() {
     assert_eq!(seen(&s), "1", "the handler read the marker");
     s.world_map_landmarks_changed(None);
     assert_eq!(seen(&s), "1,1", "an unmoved list signals too");
-    s.seed_world_map_landmark_sources(Vec::new());
-    s.tick(0.01);
-    assert_eq!(seen(&s), "1,1", "nothing queued for the tick");
-    assert_eq!(
-        s.eval::<i64>("return GetNumMapLandmarks()").unwrap(),
-        1,
-        "the seed leaves the list to the setter's next run"
-    );
-    s.world_map_landmarks_changed(None);
-    assert_eq!(seen(&s), "1,1,0", "which reads the seeded sources");
+    let mut host = Setter {
+        reads: MapSetterReads {
+            explored: None,
+            sources: Some(Vec::new()),
+        },
+        ..Default::default()
+    };
+    s.hosted(&mut host, |s| {
+        s.tick(0.01);
+        assert_eq!(seen(s), "1,1", "nothing queued for the tick");
+        assert_eq!(
+            s.eval::<i64>("return GetNumMapLandmarks()").unwrap(),
+            1,
+            "the host's sources wait for the setter's next run"
+        );
+        s.run("SetMapZoom(0)").unwrap();
+    });
+    assert_eq!(seen(&s), "1,1,0", "which reads them");
+}
+
+/// A host answering the setter's reads ([`MapSetterQuery`]) and the corpse cache
+/// ([`CorpseMapPointQuery`]) from its fields.
+#[derive(Default)]
+struct Setter {
+    reads: MapSetterReads,
+    corpse: Option<UnitMapPosition>,
+}
+
+impl CallHost for Setter {
+    fn apply(&mut self, _: &mut UiScript, _: ScriptCall) -> Option<CallTail> {
+        None
+    }
+    fn read_live(&mut self, ask: &mut crate::script::live::LiveAsk<'_>) -> bool {
+        ask.answer(|_: &MapSetterQuery| Some(self.reads.clone()))
+            || ask.answer(|_: &CorpseMapPointQuery| Some(self.corpse))
+    }
+}
+
+/// The setter reads the explored bytes and the landmark sources as it builds (`0x4a6bf4`,
+/// `0x4a6819`): a selection made with the host lent shows the overlay and the landmark the host
+/// holds, and a host that lacks either leaves the VM's copy standing.
+#[test]
+fn the_setter_reads_the_bytes_and_the_sources_at_its_run() {
+    let mut s = script();
+    push_catalog(&mut s);
+    s.set_world_loc_projector(Box::new(|(c, _, _), map, x, y| {
+        (c == 2 && map == 0).then_some((x, y))
+    }));
+    let mut northshire = vec![0u32; 64];
+    northshire[3] = 1 << 29;
+    let inn = WorldMapLandmarkSource {
+        name: "Lion's Pride Inn".into(),
+        description: String::new(),
+        map: 0,
+        pos: (0.3, 0.3),
+        icons: [Some(6); 3],
+    };
+    let counts = |s: &UiScript| {
+        s.eval::<(i64, i64)>("return GetNumMapOverlays(), GetNumMapLandmarks()")
+            .unwrap()
+    };
+    s.run("SetMapZoom(2, 1)").unwrap();
+    assert_eq!(counts(&s), (0, 0), "control: no host, nothing held");
+    let mut host = Setter {
+        reads: MapSetterReads {
+            explored: Some(northshire),
+            sources: Some(vec![inn]),
+        },
+        ..Default::default()
+    };
+    s.hosted(&mut host, |s| {
+        assert_eq!(counts(s), (0, 0), "a getter reads what the last build left");
+        s.run("SetMapZoom(2, 1)").unwrap();
+        assert_eq!(counts(s), (1, 1), "the setter read both at its run");
+    });
+    let mut lacking = Setter::default();
+    s.hosted(&mut lacking, |s| s.run("SetMapZoom(2, 1)").unwrap());
+    assert_eq!(counts(&s), (1, 1), "a host lacking both leaves the copies");
+}
+
+/// `GetCorpseMapPosition` reads the corpse cache at the call (`0x4a86df` → `0x4a7960` →
+/// `0x492090`) and projects it under its display map onto the displayed map (`0x4a79a4` →
+/// `0x4a7360`): (0, 0) with no corpse, off the map, or with no host to ask.
+#[test]
+fn the_corpse_position_is_read_at_the_call() {
+    let mut s = script();
+    push_catalog(&mut s);
+    project_map_zero(&mut s);
+    let corpse = |s: &UiScript| {
+        s.eval::<(f64, f64)>("return GetCorpseMapPosition()")
+            .unwrap()
+    };
+    assert_eq!(corpse(&s), (0.0, 0.0), "no host to ask");
+    let mut host = Setter {
+        corpse: Some(on_ours(0.25, 0.75)),
+        ..Default::default()
+    };
+    s.hosted(&mut host, |s| {
+        let (x, y) = corpse(s);
+        assert!(
+            (x - 0.25).abs() < 1e-6 && (y - 0.75).abs() < 1e-6,
+            "{x},{y}"
+        );
+    });
+    host.corpse = Some(UnitMapPosition {
+        map: 1,
+        x: 0.25,
+        y: 0.75,
+    });
+    s.hosted(&mut host, |s| {
+        assert_eq!(corpse(s), (0.0, 0.0), "another map is off this one");
+    });
+    host.corpse = None;
+    s.hosted(&mut host, |s| {
+        assert_eq!(corpse(s), (0.0, 0.0), "no corpse")
+    });
 }

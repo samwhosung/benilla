@@ -48,6 +48,17 @@ pub struct AreaPoiCatalog {
 }
 
 impl AreaPoiCatalog {
+    /// A catalog over rows given directly, in record order, for tests that need a table of known
+    /// shape.
+    pub fn from_rows(rows: Vec<(u32, AreaPoi)>) -> Self {
+        let by_id = rows
+            .iter()
+            .enumerate()
+            .map(|(i, (id, _))| (*id, i))
+            .collect();
+        Self { rows, by_id }
+    }
+
     pub fn get(&self, id: u32) -> Option<&AreaPoi> {
         self.by_id.get(&id).map(|&i| &self.rows[i].1)
     }

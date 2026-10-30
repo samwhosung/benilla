@@ -99,8 +99,13 @@ live_reads! {
         book: crate::ui_spellbook::BookLive<'static, 'static>,
         /// The battleground queue slots, list, board and positions.
         battlefield: crate::ui_battlefield::BattlefieldLive<'static, 'static>,
-        /// A unit's position for the world map, as `GetPlayerMapPosition` reads it.
+        /// A unit's position for the world map, as `GetPlayerMapPosition` reads it, and the
+        /// corpse's, as `GetCorpseMapPosition` does.
         world_map: crate::ui_world_map::MapPositionLive<'static, 'static>,
+        /// The explored bytes and the landmark sources the map setter builds over.
+        map_setter: crate::ui_world_map::LandmarkReads<'static, 'static>,
+        /// The world-state readout's rows.
+        world_state_ui: crate::world_state_ui::WorldStateUiLive<'static>,
         /// The friend list, its selections and the `/who` array.
         social: crate::ui_social::SocialLive<'static>,
         /// The stance bar's form list and its entries; absent in a harness without the relations'
@@ -164,6 +169,8 @@ live_reads! {
         game_time: crate::net::GameTimeLive<'static>,
         /// The joined-channel slot array.
         channels: crate::ui_chat::edit::ChannelLive<'static>,
+        /// What the guild recruitment cascade acts on.
+        recruitment: crate::ui_chat::RecruitmentLive<'static, 'static>,
         /// The acknowledged tutorial bank `TutorialsEnabled` scans.
         tutorials: crate::tutorial::TutorialLive<'static>,
         /// The camera's freelook, which blanks the world's pick, and the TurnOrAction bit.

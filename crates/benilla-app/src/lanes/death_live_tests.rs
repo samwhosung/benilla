@@ -173,3 +173,91 @@ fn confirm_xp_loss_fires_at_its_packet_for_a_ghost_in_reach() {
         [ghost, "CONFIRM_XP_LOSS", ghost]
     );
 }
+
+/// The ghost bit's edges run the corpse query inside their packet, behind the ghost state
+/// (`0x5eeab4` → `0x5eeac1` → `0x491f50`): the set asks for the corpse; the clear resets the
+/// cache and lowers the range latch, whose `CORPSE_OUT_OF_RANGE` signals behind `PLAYER_UNGHOST`
+/// between the packets around it, and sends nothing (`0x491fa1`-`0x491fb0`), nor does the frame's
+/// poll after it.
+#[test]
+fn the_ghost_bits_edges_ask_and_reset_the_corpse_at_their_packet() {
+    use crate::net::ClientCommand;
+    use benilla_protocol::field::{FIELD_PLAYER_FLAGS, FIELD_UNIT_HEALTH};
+    let mut app = dead_client();
+    let (tx, sent) = crossbeam_channel::unbounded();
+    app.insert_resource(crate::net::NetCommands(tx));
+    app.world_mut()
+        .resource_mut::<crate::net::NetStatus>()
+        .connected = true;
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(
+            r#"
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("PLAYER_UNGHOST")
+            f:RegisterEvent("CORPSE_OUT_OF_RANGE")
+            f:SetScript("OnEvent", function() table.insert(Seen, event) end)
+            "#,
+        )
+        .unwrap();
+    let queries = || {
+        sent.try_iter()
+            .filter(|c| matches!(c, ClientCommand::CorpseQuery))
+            .count()
+    };
+    let poll = |app: &mut App| {
+        app.world_mut()
+            .run_system_cached(crate::death::poll_corpse)
+            .expect("the poll runs")
+    };
+
+    frame(
+        &mut app,
+        vec![values(
+            ME,
+            &[(FIELD_UNIT_HEALTH, 1), (FIELD_PLAYER_FLAGS, 0x10)],
+        )],
+    );
+    assert_eq!(queries(), 1, "the release asks inside its packet");
+    poll(&mut app);
+    assert_eq!(queries(), 0, "and the poll asks nothing more");
+
+    crate::net::handlers::dispatch(
+        app.world_mut(),
+        vec![SessionEvent::CorpseQuery {
+            found: true,
+            display_map: 0,
+            position: [1.0, 2.0, 3.0],
+            corpse_map: 0,
+        }],
+    );
+    assert!(
+        app.world()
+            .resource::<crate::death::DeathNet>()
+            .corpse
+            .is_some(),
+        "control: a ghost's answer is stored"
+    );
+    app.world_mut()
+        .resource_mut::<crate::death::DeathLatches>()
+        .latch_corpse_in_range_for_test();
+
+    let ghost = "UNIT_COMBAT:player:1";
+    assert_eq!(
+        frame(
+            &mut app,
+            vec![fall(5), values(ME, &[(FIELD_PLAYER_FLAGS, 0)]), fall(5)]
+        ),
+        [ghost, "PLAYER_UNGHOST", "CORPSE_OUT_OF_RANGE", ghost]
+    );
+    assert!(
+        app.world()
+            .resource::<crate::death::DeathNet>()
+            .corpse
+            .is_none(),
+        "the cache reset at the packet"
+    );
+    assert_eq!(queries(), 0, "the revive sends nothing");
+    poll(&mut app);
+    assert_eq!(queries(), 0, "nor does the poll");
+}

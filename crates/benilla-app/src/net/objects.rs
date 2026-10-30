@@ -182,6 +182,8 @@ pub(crate) struct Scene<'w, 's> {
     /// aura cancel it runs.
     spirit: Option<ResMut<'w, crate::ui_dialog_verbs::AreaSpiritHealer>>,
     aura: crate::ui_aura::AuraGate<'w>,
+    /// The corpse-range latch the ghost bit's corpse query lowers (`0x5eeac1` → `0x491f7b`).
+    death_latches: Option<ResMut<'w, crate::death::DeathLatches>>,
 }
 
 /// The item watchers' reads of the scene ([`crate::item_watch::Watch`]).
@@ -1860,7 +1862,11 @@ mod tests {
         );
         assert_eq!(
             drain(world),
-            crate::field_watch::guild_tag(ME),
+            [
+                &crate::field_watch::guild_tag(ME)[..],
+                &[crate::field_watch::FieldNotice::RecruitmentCascade],
+            ]
+            .concat(),
             "a first create runs no notify pass, only a player's own `PostInit`"
         );
         super::super::handlers::dispatch(
@@ -1961,8 +1967,12 @@ mod tests {
         super::super::handlers::dispatch(world, super::wire(vec![create(ME, &mate)]));
         assert_eq!(
             drain(world),
-            crate::field_watch::guild_tag(ME),
-            "our own create: the guild tag alone"
+            [
+                &crate::field_watch::guild_tag(ME)[..],
+                &[FieldNotice::RecruitmentCascade],
+            ]
+            .concat(),
+            "our own create: the guild tag, then the recruitment cascade (`0x5dec1e`)"
         );
     }
 

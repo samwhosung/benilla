@@ -41,7 +41,7 @@ fn on_world_states(
         // The handler's tail signals the map, then the readout (`0x48f9f6`-`0x48fa17`), for an
         // init and an update alike.
         if let Some(mut lane) = lane {
-            lane.push(crate::world_state::WorldStateSignal::Packet);
+            lane.push();
         }
     }
 }

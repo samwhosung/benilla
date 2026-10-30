@@ -40,6 +40,8 @@ pub(crate) struct NoticeFiring<'w, 's> {
     pet_stats: Option<Res<'w, crate::ui_pet_stats::PetStatTables>>,
     // The explored watch's setter rebuilds the landmark list the bits gate.
     landmarks: crate::ui_world_map::LandmarkReads<'w, 's>,
+    // The recruitment cascade's retry, which a run that cannot act arms.
+    cascade: Option<ResMut<'w, crate::ui_chat::GuildRecruitmentCascade>>,
 }
 
 impl NoticeFiring<'_, '_> {
@@ -110,6 +112,12 @@ impl NoticeFiring<'_, '_> {
                 .map(|store| crate::ui_world_map::explored_of(&store.0));
             if let Some(explored) = explored {
                 self.landmarks.explored_zones_changed(script, explored);
+            }
+            return false;
+        }
+        if notice == FieldNotice::RecruitmentCascade {
+            if let Some(cascade) = self.cascade.as_mut() {
+                cascade.run(script);
             }
             return false;
         }
@@ -306,8 +314,14 @@ fn peek(world: &World) -> Option<crate::lanes::Stamp> {
 }
 
 /// The VM and the host, with the open trainer `SetPetGuid` reads between notices.
-type NoticeVm<'w, 's> =
-    crate::script_calls::VmWith<'w, 's, Option<Res<'static, crate::ui_trainer::TrainerOpen>>>;
+type NoticeVm<'w, 's> = crate::script_calls::VmWith<
+    'w,
+    's,
+    (
+        Option<Res<'static, crate::ui_trainer::TrainerOpen>>,
+        crate::ui_chat::TaxiWalk<'static>,
+    ),
+>;
 
 /// The notices `until` admits, in stamp order, each one's signals with the host lent; the lane's
 /// firing stops after a notice whose firing stamped anything, so the drain takes what it pushed
@@ -322,6 +336,22 @@ fn fire_lane(vm: &mut NoticeVm, lane: &mut NoticeLane, firing: &mut NoticeFiring
         // An engine write, with no signal: the host's autorun bit.
         if notice == FieldNotice::AutorunClear {
             vm.engine_autorun_clear();
+            continue;
+        }
+        if notice == FieldNotice::ZoneChannelWalk {
+            // An engine turn on the slots beside the VM, then the walk's tail with the host lent.
+            let ((), moved) = crate::lanes::firing(stamp, || {
+                if vm.turn(|script, (_, mut walk)| walk.walk(script)) {
+                    vm.run(|script| {
+                        if let (Some(script), Some(cascade)) = (script, firing.cascade.as_mut()) {
+                            cascade.tail(script);
+                        }
+                    });
+                }
+            });
+            if moved {
+                break;
+            }
             continue;
         }
         if notice == FieldNotice::UsableRefresh {
@@ -373,7 +403,7 @@ fn fire_lane(vm: &mut NoticeVm, lane: &mut NoticeLane, firing: &mut NoticeFiring
         }
         let trainer = match &notice {
             FieldNotice::PetGuidSet { changed: true, .. } => {
-                crate::ui_trainer::open_pet_trainer(vm.own().as_deref())
+                crate::ui_trainer::open_pet_trainer(vm.own().0.as_deref())
             }
             _ => None,
         };
@@ -623,12 +653,15 @@ pub(crate) fn fire(
         }
         // Caught by [`fire_lane`] before it reaches here: the refresh and the slot write's pair
         // run on the host's action states
-        // ([`crate::script_calls::ScriptCallHost::engine_usable_refresh`]).
+        // ([`crate::script_calls::ScriptCallHost::engine_usable_refresh`]), and the taxi arm's
+        // walk on the slots beside the VM ([`crate::ui_chat::TaxiWalk`]).
         FieldNotice::UsableRefresh
         | FieldNotice::ActionSlotChanged { .. }
-        | FieldNotice::SpellSlots { .. } => {}
+        | FieldNotice::SpellSlots { .. }
+        | FieldNotice::ZoneChannelWalk => {}
         // Fired by [`NoticeFiring::fire`], which holds the slots, the banks, the names, the form
-        // table, the spell catalog, the aura cache, the skill lines and the pet's stat tables.
+        // table, the spell catalog, the aura cache, the skill lines, the pet's stat tables and the
+        // recruitment cascade's retry.
         FieldNotice::QuestLog
         | FieldNotice::ExploredZones
         | FieldNotice::Tutorial { .. }
@@ -645,7 +678,8 @@ pub(crate) fn fire(
         | FieldNotice::PetMacros
         | FieldNotice::PetGuidSet { .. }
         | FieldNotice::TooltipUnit { .. }
-        | FieldNotice::CorpsePlate => {}
+        | FieldNotice::CorpsePlate
+        | FieldNotice::RecruitmentCascade => {}
         // Put on the trainer lane by the packet's handler ([`crate::ui_trainer::TrainerPasses`]).
         FieldNotice::TrainerPass
         | FieldNotice::AutoMoveStop
@@ -654,7 +688,9 @@ pub(crate) fn fire(
         | FieldNotice::FarSight { .. } => {}
         // Run at its place by the packet's handler ([`crate::net::objects`]), its signal written
         // there.
-        FieldNotice::AreaSpiritHealerClear | FieldNotice::QuestAccepted { .. } => {}
+        FieldNotice::AreaSpiritHealerClear
+        | FieldNotice::QueryCorpse
+        | FieldNotice::QuestAccepted { .. } => {}
         // `%d%d` (`0x4018d5`): the two counts as numbers, which `ChatFrame_DisplayTimePlayed`
         // prints (`ChatFrame.lua:1279`).
         FieldNotice::PlayedTime { total, level } => script.fire_event(
@@ -829,6 +865,7 @@ fn global_event(id: u16) -> Option<&'static str> {
         id::MERCHANT_UPDATE => "MERCHANT_UPDATE",
         id::UPDATE_FACTION => "UPDATE_FACTION",
         id::PLAYER_UNGHOST => "PLAYER_UNGHOST",
+        id::CORPSE_OUT_OF_RANGE => "CORPSE_OUT_OF_RANGE",
         id::PLAYER_UPDATE_RESTING => "PLAYER_UPDATE_RESTING",
         id::PET_UI_UPDATE => "PET_UI_UPDATE",
         id::PLAYTIME_CHANGED => "PLAYTIME_CHANGED",

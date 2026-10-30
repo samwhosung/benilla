@@ -182,12 +182,22 @@ pub(crate) enum FieldNotice {
     /// `AREA_SPIRIT_HEALER_OUT_OF_RANGE`. The packet's handler runs it at its place and writes
     /// the signal, so this never reaches the lane.
     AreaSpiritHealerClear,
+    /// `QueryCorpse 0x491f50` behind the ghost state, on either edge of the active player's ghost
+    /// bit (`0x5eeac1`): the corpse cache reset, the range latch out and, for a ghost, the corpse
+    /// query ([`crate::death::reset_corpse`]). The packet's handler runs it at its place and
+    /// writes the signal, so this never reaches the lane.
+    QueryCorpse,
     /// `SMSG_PLAYED_TIME`'s handler `0x401850`, after its console lines: `TIME_PLAYED_MSG` with
     /// the total and the level's time (`0x4018df`).
     PlayedTime { total: u32, level: u32 },
     /// `SMSG_PLAYER_SKINNED`'s handler `0x5e7d40`: `PLAYER_SKINNED` with the byte's truth
     /// (`0x5e7d57` → `0x48f412`).
     Skinned { free_repop: bool },
+    /// The guild recruitment cascade `0x49ea90` behind the active player's guild tag: its create's
+    /// `PostInit` (`0x5dec1e`) and its `PLAYER_GUILDID` watcher (`0x5e279a`), each right after the
+    /// tag's signals ([`guild_tag`]). It runs on AUTO alone, and arms the retry when it cannot act
+    /// ([`crate::ui_chat::GuildRecruitmentCascade`]).
+    RecruitmentCascade,
     /// The explored bytes' watcher `0x4a6460` on the active player (`PLAYER_EXPLORED_ZONES`, 0x100
     /// bytes at the player section's `+0xe6c`, armed by `0x4a6430` in the world-enter cascade):
     /// `0x4a6477` calls the map setter `0x4a67a0` over the map already shown. It reads the bytes
@@ -211,6 +221,10 @@ pub(crate) enum FieldNotice {
     /// the feign-death bit's rise (`0x6004f5`-`0x600530`), whose tick runs with `apply` clear, so
     /// both its predicates fail (`0x51468d`, `0x5146a6`) and it stops (`0x5146d6`).
     AutoMoveStop,
+    /// The active player's flags watcher's taxi arm, the flag's clear (`0x5ff538`-`0x5ff56e`):
+    /// the zone channels walked at the watcher's place, unless a cinematic runs (`0x5ff565`), with
+    /// the walk's tail ([`crate::ui_chat::TaxiWalk`]).
+    ZoneChannelWalk,
     /// A follow's stop clearing autorun (`0x60fc08` → `0x514630` at `0x60e83f`), right behind its
     /// `AUTOFOLLOW_END`, which `StopAutoMove` signals first (`0x60fb84`): it runs after that
     /// event's listeners, so a toggle one of them made is undone
@@ -341,6 +355,7 @@ pub(crate) mod id {
     pub(crate) const TABARD_CANSAVE_CHANGED: u16 = 376;
     pub(crate) const MERCHANT_UPDATE: u16 = 317;
     pub(crate) const PLAYER_UNGHOST: u16 = 401;
+    pub(crate) const CORPSE_OUT_OF_RANGE: u16 = 399;
     pub(crate) const PLAYER_UPDATE_RESTING: u16 = 405;
     pub(crate) const PET_UI_UPDATE: u16 = 427;
     pub(crate) const PLAYTIME_CHANGED: u16 = 530;
@@ -913,9 +928,15 @@ pub(crate) fn placed_values(
             };
             pass.push(at, FieldNotice::Global { id });
         }
-        // Last in the active player's arm, the taxi flag's rise (`0x5ff538`-`0x5ff55a`).
-        if mine && flipped & flags & crate::player::UNIT_FLAG_TAXI_FLIGHT != 0 {
-            pass.push(at, FieldNotice::AutoMoveStop);
+        // Last in the active player's arm, the taxi flag's edge (`0x5ff538`): its rise stops the
+        // auto-move (`0x5ff55a`), its clear walks the zone channels (`0x5ff565`-`0x5ff56e`).
+        if mine && flipped & crate::player::UNIT_FLAG_TAXI_FLIGHT != 0 {
+            let notice = if flags & crate::player::UNIT_FLAG_TAXI_FLIGHT != 0 {
+                FieldNotice::AutoMoveStop
+            } else {
+                FieldNotice::ZoneChannelWalk
+            };
+            pass.push(at, notice);
         }
         // The reaction on 0x4080 (`0x5ff71c`) and again on 0x1000 (`0x5ff72b`).
         if flipped & 0x4080 != 0 {
@@ -1031,7 +1052,7 @@ pub(crate) fn placed_values(
                 let flags = fields.player_flags();
                 // 0x10, the ghost state (`0x5eeab4` → `0x5de9c0`) on either edge: set, its
                 // tutorial (`0x5de9eb`-`0x5de9f0`); clear, the healer's clear (`0x5dea20`), then
-                // `PLAYER_UNGHOST` (`0x5dea2a`).
+                // `PLAYER_UNGHOST` (`0x5dea2a`). Then the corpse query (`0x5eeac1` → `0x491f50`).
                 if flipped & 0x10 != 0 {
                     if flags & 0x10 != 0 {
                         pass.push(
@@ -1045,6 +1066,7 @@ pub(crate) fn placed_values(
                         let id = id::PLAYER_UNGHOST;
                         pass.push(at, FieldNotice::Global { id });
                     }
+                    pass.push(at, FieldNotice::QueryCorpse);
                 }
                 // 0x20, resting: the rest tutorial when now set (`0x5eeae6`-`0x5eeaed`), then
                 // `PLAYER_UPDATE_RESTING` on either edge (`0x5eead0`, `0x5eeaf2`).
@@ -1073,9 +1095,13 @@ pub(crate) fn placed_values(
             }
         }
         if let Some(at) = at(PLAYER_SECTION, GUILD_ID, List::Type) {
-            // `0x5e2770`: the player's guild tag (`0x5e2795`).
+            // `0x5e2770`: the player's guild tag (`0x5e2795`), then the recruitment cascade
+            // (`0x5e279a`), ours alone (the module's deviation in `crate::ui_chat`).
             for notice in guild_tag(guid) {
                 pass.push(at, notice);
+            }
+            if around.me == Some(guid) {
+                pass.push(at, FieldNotice::RecruitmentCascade);
             }
         }
         if let Some(at) = at(PLAYER_SECTION, GUILD_RANK, List::Type) {
@@ -2277,7 +2303,8 @@ mod tests {
     /// `0x5ee990`'s ghost arm runs the ghost state `0x5de9c0` on either edge of bit 0x10
     /// (`0x5eeab4` → `0x5eeabc`), after `PLAYER_FLAGS_CHANGED` (`0x5eea35`): set, its tutorial
     /// (`0x5de9eb`-`0x5de9f0`); clear, the healer's clear (`0x5dea20`) and `PLAYER_UNGHOST`
-    /// (`0x5dea25`-`0x5dea2a`), with no gate before them, so the health plays no part. Another player's ghost bit reaches neither.
+    /// (`0x5dea25`-`0x5dea2a`), with no gate before them, so the health plays no part; then, on
+    /// either edge, the corpse query (`0x5eeac1`). Another player's ghost bit reaches neither.
     #[test]
     fn the_ghost_bit_runs_the_ghost_state_on_either_edge() {
         let flags = pf(PLAYER_FLAGS.0);
@@ -2285,14 +2312,19 @@ mod tests {
         let mut me = player();
         assert_eq!(
             block(&mut me, Some(ME), ME, &[(flags, 0x10)]),
-            [changed, FieldNotice::Tutorial { id: 0x18 }]
+            [
+                changed,
+                FieldNotice::Tutorial { id: 0x18 },
+                FieldNotice::QueryCorpse
+            ]
         );
         assert_eq!(
             block(&mut me, Some(ME), ME, &[(flags, 0)]),
             [
                 changed,
                 FieldNotice::AreaSpiritHealerClear,
-                FieldNotice::Global { id: 401 }
+                FieldNotice::Global { id: 401 },
+                FieldNotice::QueryCorpse
             ],
             "with no health in the store"
         );
@@ -2404,14 +2436,15 @@ mod tests {
         );
         assert_eq!(
             block(&mut me, Some(ME), ME, &[(flags, 0x10)]),
-            [changed, tutorial(0x18)]
+            [changed, tutorial(0x18), FieldNotice::QueryCorpse]
         );
         assert_eq!(
             block(&mut me, Some(ME), ME, &[(flags, 0)]),
             [
                 changed,
                 FieldNotice::AreaSpiritHealerClear,
-                FieldNotice::Global { id: 401 }
+                FieldNotice::Global { id: 401 },
+                FieldNotice::QueryCorpse
             ],
             "the ghost bit's clear runs the ghost state too, its event and no tutorial"
         );
@@ -2446,7 +2479,8 @@ mod tests {
         );
     }
 
-    /// `PLAYER_GUILDID` runs the guild tag on any player (`0x5e2770`), `PLAYER_GUILDRANK` signals
+    /// `PLAYER_GUILDID` runs the guild tag on any player (`0x5e2770`), and on the active player
+    /// the recruitment cascade behind it (`0x5e279a`); `PLAYER_GUILDRANK` signals
     /// `PLAYER_GUILD_UPDATE` bare (`0x5e27b0`).
     #[test]
     fn the_guild_watchers_reach_every_player() {
@@ -2470,6 +2504,7 @@ mod tests {
             [
                 FieldNotice::Global { id: 376 },
                 signal(ME, 345),
+                FieldNotice::RecruitmentCascade,
                 FieldNotice::Global { id: 345 }
             ]
         );

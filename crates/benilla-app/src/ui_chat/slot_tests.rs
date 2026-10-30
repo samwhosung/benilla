@@ -470,25 +470,40 @@ fn a_handlers_join_keeps_the_slot_its_call_took() {
     assert_eq!(c.joins(), ["X"]);
 }
 
+/// Our player unguilded in Stormwind City, a capital (`0x100`), with the city word's row, so the
+/// cascade's plan, read as it runs, is the join.
+fn unguilded_in_a_capital(c: &mut Client) {
+    let row = |flags, name: &str| benilla_formats::AreaTableRow {
+        map_id: 0,
+        zone_id: 0,
+        explore_flag: 0,
+        flags,
+        faction_group_mask: 0,
+        exploration_level: 0,
+        name: name.into(),
+    };
+    crate::test_support::hold_self_player(c.world(), 0x7, &[]);
+    c.world().insert_resource(crate::area::AreaTableRes(
+        benilla_formats::AreaTableCatalog::from_rows(vec![
+            (1519, row(0x138, "Stormwind City")),
+            (3459, row(0x200, "City")),
+        ]),
+    ));
+    c.world()
+        .resource_mut::<super::channels::ZoneChannelWalk>()
+        .zone_id = Some(1519);
+}
+
 /// `SetGuildRecruitmentMode(1)` runs the cascade inside the verb (`0x49ea7b` → `0x49eb55` →
 /// `0x49eb70`), whose join takes its slot there (`0x49edf3`): a `/join` the same script makes after
 /// it takes the next one, with 1-2 held 3 and then 4, each sent in that order.
 #[test]
 fn the_cascades_join_takes_its_slot_ahead_of_a_later_join() {
-    let mut script = UiScript::new().expect("a VM");
-    script.set_guild_recruitment_plan(benilla_ui::script::RecruitmentPlan::Join {
-        name: "GuildRecruitment - City".into(),
-        shortcut: "GuildRecruitment".into(),
-        id: 25,
-    });
+    let script = UiScript::new().expect("a VM");
     let mut c = Client::new(&["A", "B"], script);
+    unguilded_in_a_capital(&mut c);
     c.run("SetGuildRecruitmentMode(1) JoinChannelByName('Y')");
     super::drain_chat_input_once(c.world());
-    bevy::ecs::system::RunSystemOnce::run_system_once(
-        c.world(),
-        super::recruitment::guild_recruitment_cascade,
-    )
-    .expect("the cascade runs");
     assert_eq!(c.number_of("GuildRecruitment - City"), Some(3));
     assert_eq!(c.number_of("Y"), Some(4));
     assert_eq!(c.joins(), ["GuildRecruitment - City", "Y"]);

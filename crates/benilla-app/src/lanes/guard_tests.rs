@@ -283,8 +283,9 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // Quiet: the connection's state, which the session's handlers write and the death getters'
     // body test reads through the host; no feed fires off it.
     "::net::NetStatus",
-    // Moved here from `NOT_YET_ON_A_LANE`, so neither list grew: the death getters read the stores
-    // through the host and the death verbs hold them in their calls, and quiet: the offers and the
+    // Moved here from `NOT_YET_ON_A_LANE`, so neither list grew: the death getters and
+    // `GetCorpseMapPosition` read the stores through the host and the death verbs hold them in
+    // their calls, and quiet: the offers and the
     // corpse-range signals packets raise go on the dialogs' lane at their handlers, the revive's
     // on the notice lane, and the corpse poll runs in the world frame's update, after the packets
     // (`0x4818c5`).
@@ -312,9 +313,15 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // the host, and no feed fires off it, as its statuses' events go on the trade lane at their
     // handlers and the initiate's name callback.
     "::ui_trade::TradeSession",
+    // Read through the host by the map setter's landmark sources (`0x4a6819`), and quiet: the
+    // gossip handler's set re-selects the map on the landmark lane at its packet (`0x6dac93`), and
+    // the clears at its deadline and on arrival run in the minimap's update (`0x6d9411`,
+    // `0x6d9a4c`), past the frame's packets, on that lane.
+    "::poi_marker::PoiMarker",
     // Read through the host by the mail getters' letter bodies, whose `$` tokens expand off it
-    // (`0x506f70`), and quiet: its packets' signals fire on the world-state lane, and the
-    // readout's feed signals only a new VM's catch-up and the defense channel's flip.
+    // (`0x506f70`), the readout's getters and the map setter's landmark sources, and quiet: its
+    // packets' signals fire on the world-state lane, and the defense channel's flip signals
+    // inside its notice (`0x49bdd6`).
     "::world_state::WorldStates",
 ];
 
@@ -334,23 +341,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // record and the player at the call (`0x5075f0` at `0x52da24`). A getter's miss is asked here,
     // where the reference's lookup sends inside the call (`0x55ba30`).
     ("::ui_items::feed::feed_item_stats", &["items::Items"]),
-    // Found once the scan took every system that writes the VM, not only the `UiFeed` phase's.
-    // The world map's feed, after the tick: our position, explored bits and corpse, which
-    // `GetPlayerMapPosition` (`0x4a8610`) and the setter read at the call.
-    ("::ui_world_map::feed_world_map", &["death::DeathNet", "net::ObjectStore"]),
-    // The landmark sources, after the tick, which the reference reads at the setter's next run
-    // (`0x4a67a0`).
-    ("::ui_world_map::feed_landmarks", &["net::ObjectStore", "poi_marker::PoiMarker",
-        "world_state::WorldStates"]),
-    // The readout's rows at the frame's end, where the reference rebuilds them at the packet or
-    // the defense channel's flip (`0x49bdc7`-`0x49bdcf`); the lane's firing builds them again
-    // ahead of its own signals.
-    ("::world_state_ui::feed_world_state_ui", &["ui_chat::edit::ChannelState",
-        "world_state::WorldStateLane", "world_state::WorldStates"]),
-    // The recruitment plan off our guild and the channels, which `SetGuildRecruitmentMode(1)`
-    // runs on inside its call.
-    ("::ui_chat::recruitment::guild_recruitment_cascade", &["net::ObjectStore",
-        "ui_chat::edit::ChannelState"]),
     // The plates seated off the units as the frame left them, where the reference moves a plate's
     // bar inside the packet, by its health watcher `0x7cc570` (registered by `0x7cc510`), and
     // binds plates there too: `0x60f600`, called at `0x60706a` from `InvalidateNameDesc`, whose
@@ -360,10 +350,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         "player::camera::CameraControl", "spell::group_relation::GroupRoster",
         "spell::targeting::SpellTargeting", "target::Selection", "ui_party::GroupState",
         "video::Widescreen", "vplates::PlateFlashes", "vplates::VPlateMode"]),
-    // The zone-channel walk (`ZoneChannelRefresh` `0x49a210`), which the reference also runs
-    // inside packets: the chat settings' load (`0x499a22`) and the taxi flag's clear
-    // (`0x5ff56e`).
-    ("::ui_chat::channels::auto_join_zone_channels", &["ui_chat::edit::ChannelState"]),
 ];
 
 /// The view pushes [`READS_FRAME_FINAL`]'s test finds whose build the reference too makes outside
@@ -406,6 +392,13 @@ pub(super) const BUILT_OUTSIDE_THE_PACKETS_IN_THE_REFERENCE: &[(&str, &[&str], &
         "the frame pass's `OnUpdate` walk (`0x764330` → `0x765650`), its screen and scale"),
     ("::ui_script::extract::paint_script", &["video::Widescreen"],
         "the UI pass's paint, after the walk, which no getter reads"),
+    ("::ui_chat::channels::auto_join_zone_channels", &["net::ObjectStore",
+        "ui_chat::edit::ChannelState"],
+        "the zone text's update `0x494780`, whose walk (`0x494931`, gated on our taxi flag at \
+         `0x494908`-`0x49491a`) the area poll runs in the idle pass after the packets \
+         (`0x401ece` → `0x5db900` → `0x67e510` → `0x494780`), and `EndCinematic`'s (`0x48f1d0`), \
+         in the frame pass; its runs inside a packet run there: the chat cache's load \
+         (`0x499a22`) and the taxi flag's clear (`0x5ff56e`)"),
 ];
 
 /// The systems that write the VM and push no view a getter reads of what a handler writes, by a
@@ -522,6 +515,10 @@ pub(super) const READ_ONLY_TO_HANDLERS: &[&str] = &[
     // The chat log files: the logging verbs open and close them through `&self` inside their
     // call (`0x49fea2`), a file no handler reads back; the chat tee only appends to them.
     "::ui_chat::logging::ChatLogFiles",
+    // The gossip marker, which the map setter's landmark sources read through the host
+    // (`0x4a6819`); `SMSG_GOSSIP_POI`'s handler and the minimap's clears write it through their
+    // own `ResMut` (`0x6dac10`, `0x6d9411`, `0x6d9a4c`).
+    "::poi_marker::PoiMarker",
     // The language word pools, which a page's show rewrites it by (`0x4e3856`), loaded once at
     // startup; the show reads the character's skill live (`0x4e3837` → `GetIndexedSpellSkill`).
     "::ui_chat::language::ChatLanguages",
@@ -546,6 +543,12 @@ pub(super) const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::glue_session::roster::Roster",
     // `0xb4e314`, which the party snapshot reads; only the zone feed commits it.
     "::area::CommittedZone",
+    // The walk's committed zone, which the recruitment cascade's plan reads through the host
+    // (`0x49ead7`), and the slots; the walk's poll and the notice lane's taxi walk write them
+    // through their own `ResMut`. Both sit here only because the scan cannot see an exclusive
+    // handler's writes: the chat cache's read writes both inside its section's settle, in its
+    // packet (`0x499a22`).
+    "::ui_chat::channels::ZoneChannelWalk",
     "::ui_chat::edit::ChannelState",
     // The console's registry, which a `ConsoleExec` a listener makes reads.
     "::console::ConsoleCommands",
@@ -1289,8 +1292,9 @@ const AT_THEIR_OWN_PLACE: &[(&str, &str)] = &[
     ),
     (
         "::ui_chat::channels::auto_join_zone_channels",
-        "world entry only arms the zone-channel walk, an engine turn that runs no Lua: its one \
-         push is a walk's refusal onto the ui-error lane",
+        "world entry only arms the zone-channel walk, whose one push is a walk's refusal onto \
+         the ui-error lane, made where the zone text's update walks, after the packets \
+         (`0x401ece` → `0x494931`)",
     ),
     (
         "::player::controller::control",
@@ -1306,11 +1310,6 @@ const AT_THEIR_OWN_PLACE: &[(&str, &str)] = &[
     (
         "::ui_chat::channels::end_session_channels_on_disconnect",
         "a dead socket ends the channel session, and no packet follows it",
-    ),
-    (
-        "::poi_marker::expire_marker",
-        "the gossip marker's clears at its deadline and on arrival run in the minimap's update \
-         (`0x6d9411`, `0x6d9a4c`), past the frame's packets, not at the set's packet",
     ),
 ];
 

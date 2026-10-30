@@ -23,11 +23,14 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::Disconnected, on_session_end);
 }
 
-/// `MSG_CORPSE_QUERY`'s two arms of `0x48f690`: a found corpse fills the cache
-/// (`0x48f7d1` → `0x492010`); a not-found resets it (`0x48f800`) and lowers the range latch
-/// (`0x48f807` → `0x4920f0(0)`), whose `CORPSE_OUT_OF_RANGE` signals at the packet when it was set.
+/// `MSG_CORPSE_QUERY`'s two arms of `0x48f690`: a found answer to a ghost fills the cache
+/// (`0x48f7d1` → `0x492010`), the found byte, the active player (`0x468460`) and its ghost bit
+/// tested first (`0x48f75f`-`0x48f779`); any other answer resets it (`0x48f800`) and lowers the
+/// range latch (`0x48f807` → `0x4920f0(0)`), whose `CORPSE_OUT_OF_RANGE` signals at the packet
+/// when it was set.
 fn on_corpse_query(
     In(ev): In<SessionEvent>,
+    me: Query<&ObjectStore, With<SelfPlayer>>,
     mut death_net: ResMut<DeathNet>,
     mut latches: ResMut<DeathLatches>,
     mut lane: ResMut<DialogLane>,
@@ -39,8 +42,15 @@ fn on_corpse_query(
         corpse_map,
     } = ev
     {
-        corpse_query(found, display_map, position, corpse_map, &mut death_net);
-        if !found {
+        let ghost = me.iter().next().is_some_and(|s| s.0.player_is_ghost());
+        let stored = corpse_query(
+            found && ghost,
+            display_map,
+            position,
+            corpse_map,
+            &mut death_net,
+        );
+        if !stored {
             if let Some(signal) = latches.set_in_range(false, None) {
                 signal.queue(&mut lane);
             }
@@ -192,7 +202,7 @@ fn on_move_mode(
 }
 
 /// The death stores and latches are session-scoped; a reconnect while dead re-sends the reclaim
-/// delay, and a relog as a ghost must find no mirror, or the corpse query is never re-sent.
+/// delay, and a relog as a ghost asks for its corpse in the world-enter cascade.
 pub(super) fn on_session_end(
     In(_): In<SessionEvent>,
     mut death_net: ResMut<DeathNet>,
@@ -253,19 +263,21 @@ pub(crate) fn forget_corpse(guid: u64, death_net: &mut DeathNet) {
     }
 }
 
-/// `MSG_CORPSE_QUERY`'s answer; a not-found, asked or pushed at bones conversion, drops the marker.
+/// `MSG_CORPSE_QUERY`'s answer, `store` when it is found for a ghost; any other, a not-found asked
+/// or pushed at bones conversion among them, drops the marker. Whether it stored.
 fn corpse_query(
-    found: bool,
+    store: bool,
     display_map: i32,
     position: [f32; 3],
     corpse_map: u32,
     death_net: &mut DeathNet,
-) {
-    death_net.corpse = found.then_some(CorpsePoint {
+) -> bool {
+    death_net.corpse = store.then_some(CorpsePoint {
         display_map,
         position,
         corpse_map,
     });
+    store
 }
 
 /// `SMSG_CORPSE_RECLAIM_DELAY`, anchored at arrival on the clock the getters read.

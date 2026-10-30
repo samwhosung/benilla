@@ -1,12 +1,15 @@
 //! The `AUTO_JOIN_GUILD_CHANNEL` cascade (`0x49ea90`), the one place the client joins or leaves
 //! `GuildRecruitment - City` on its own. On AUTO (`[0x843608]`, the default) a guilded player
 //! leaves it (`0x49ee70`) and an unguilded one in a capital joins it (`0x49eb70`), with no
-//! membership check; otherwise a retry waits for the next zone change. Once joined, the zone walk
-//! owns it as it owns Trade. Triggers: `SetGuildRecruitmentMode(1)`, which runs it inside the verb
-//! on the plan pushed here, and the `PLAYER_GUILDID` watcher (`0x5e2770`), whose first sight is
-//! the player create (`0x5dec1e`). Deviation: no re-run
-//! when a remote player streams in, because the reference's re-run only repeats the join, which
-//! vmangos swallows, or the leave, whose "Not on channel" notice nothing prints.
+//! membership check; otherwise it arms the retry `[0xb6e5e4]`, which the zone walk's tail spends
+//! (`0x49a6a4`-`0x49a6b2`). Once joined, the zone walk owns it as it owns Trade. It runs on the
+//! plan the host resolves as it runs ([`RecruitmentLive`]), where the reference runs it:
+//! `SetGuildRecruitmentMode(1)` inside the verb (`0x49ea7b`), our create's `PostInit` (`0x5dec1e`)
+//! and the `PLAYER_GUILDID` watcher (`0x5e279a`) inside the update packet, each behind the guild
+//! tag ([`crate::field_watch::FieldNotice::RecruitmentCascade`]), and the walk's tail.
+//! Deviation: no re-run when a remote player streams in, because the reference's re-run only
+//! repeats the join, which vmangos swallows, or the leave, whose "Not on channel" notice nothing
+//! prints.
 
 use bevy::prelude::*;
 
@@ -18,36 +21,44 @@ use crate::net::{ObjectStore, SelfPlayer};
 use super::channels::{city_word, ZoneChannelWalk, AREA_FLAG_CAPITAL};
 use super::edit::ChannelState;
 
-/// The cascade's own state: whether a run is owed, and the guild id its watcher last saw.
+/// The cascade's retry: the one-shot `[0xb6e5e4]` a run that cannot act arms (`0x49eaf5`,
+/// `0x49eb33`) and the walk's tail spends (`0x49a6ac`), engine state that outlives a reload.
 #[derive(Resource, Default)]
 pub(crate) struct GuildRecruitmentCascade {
-    /// A run is owed: the one-shot `[0xb6e5e4]` and the tail-jump from `0x49ea70` in one flag,
-    /// kept while the cascade cannot act.
     pending: bool,
-    /// The last `PLAYER_GUILDID` seen; `None` makes the first sight a change, the create trigger.
-    last_guild_id: Option<u32>,
 }
 
 impl GuildRecruitmentCascade {
-    /// A trigger fired: `SetGuildRecruitmentMode(1)`, or the watcher.
-    pub(super) fn request(&mut self) {
-        self.pending = true;
-    }
-
-    /// The watcher: note the guild id, and request a run when it moved or is first seen.
-    pub(super) fn observe_guild_id(&mut self, guild_id: u32) -> bool {
-        if self.last_guild_id == Some(guild_id) {
-            return false;
+    /// One run of `0x49ea90`, with the host lent: nothing off AUTO (`0x49ea96`), else the run on
+    /// the plan as it stands, which arms the retry when it cannot act.
+    pub(crate) fn run(&mut self, script: &mut benilla_ui::script::UiScript) {
+        if script.guild_recruitment_mode() == 1 && !script.run_guild_recruitment_cascade() {
+            self.pending = true;
         }
-        self.last_guild_id = Some(guild_id);
-        self.pending = true;
-        true
     }
 
-    /// Session end: forget the owed run and the last guild id.
+    /// The walk's tail (`0x49a6a4`-`0x49a6b2`): a retry armed, by a run or by a
+    /// `SetGuildRecruitmentMode(1)` whose cascade could not act, is cleared and run.
+    pub(crate) fn tail(&mut self, script: &mut benilla_ui::script::UiScript) {
+        let owed = script.take_guild_recruitment_cascade();
+        if std::mem::take(&mut self.pending) || owed {
+            self.run(script);
+        }
+    }
+
+    /// Session end: forget the retry.
     pub(super) fn clear_session(&mut self) {
         self.pending = false;
-        self.last_guild_id = None;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn arm_for_test(&mut self) {
+        self.pending = true;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn armed_for_test(&self) -> bool {
+        self.pending
     }
 }
 
@@ -124,43 +135,33 @@ fn plan(
     }
 }
 
-/// The cascade, chained after the walk: the reference runs it at the walk's tail, on a fresh zone.
-/// The VM runs it on the plan pushed here, inside `SetGuildRecruitmentMode(1)` or for this
-/// system's retry and watcher; the call host applies its join or leave inside the run.
-pub(super) fn guild_recruitment_cascade(
-    mut vm: crate::script_calls::VmWith<Res<'static, ChannelState>>,
-    mut state: ResMut<GuildRecruitmentCascade>,
-    walk: Res<ZoneChannelWalk>,
-    areas: Option<Res<AreaTableRes>>,
-    self_q: Query<&ObjectStore, With<SelfPlayer>>,
-) {
-    // Only while the avatar is streamed: a despawned body has not "left the guild". With no
-    // player object the verb's cascade returns owing nothing (`0x49eac3`).
-    let guild_id = self_q.iter().next().map(|s| s.0.player_guild_id());
-    let plan = match guild_id {
-        Some(guild_id) => plan(guild_id, &vm.own(), &walk, areas.as_deref()),
-        None => RecruitmentPlan::NoPlayer,
-    };
-    vm.run(|script| {
-        let Some(script) = script else { return };
-        // A `SetGuildRecruitmentMode(1)` whose cascade could not act leaves the run owed.
-        if script.take_guild_recruitment_cascade() {
-            state.request();
-        }
-        script.set_guild_recruitment_plan(plan);
-        let Some(guild_id) = guild_id else {
-            return;
-        };
-        state.observe_guild_id(guild_id);
-        if !state.pending {
-            return;
-        }
-        // STANDARD: nothing, not even the retry (`0x49ea96`).
-        if script.guild_recruitment_mode() == 1 && !script.run_guild_recruitment_cascade() {
-            return;
-        }
-        state.pending = false;
-    })
+/// The cascade's reads as it runs, the host's half of [`benilla_ui::script::RecruitmentPlanQuery`]:
+/// our guild id (`0x49eb01`), the zone row (`0x49ead7`) and the channels, as they stand. Absent in
+/// a harness without chat.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct RecruitmentLive<'w, 's> {
+    me: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
+    channels: Option<Res<'w, ChannelState>>,
+    walk: Option<Res<'w, ZoneChannelWalk>>,
+    areas: Option<Res<'w, AreaTableRes>>,
+}
+
+impl crate::script_calls::live::LiveFamily for RecruitmentLive<'_, '_> {
+    fn answer(&mut self, ask: &mut benilla_ui::script::live::LiveAsk<'_>) -> bool {
+        ask.answer(|_: &benilla_ui::script::RecruitmentPlanQuery| {
+            let (channels, walk) = (self.channels.as_deref()?, self.walk.as_deref()?);
+            // With no player object the cascade returns owing nothing (`0x49eac3`).
+            Some(match self.me.iter().next() {
+                Some(store) => plan(
+                    store.0.player_guild_id(),
+                    channels,
+                    walk,
+                    self.areas.as_deref(),
+                ),
+                None => RecruitmentPlan::NoPlayer,
+            })
+        })
+    }
 }
 
 #[cfg(test)]
@@ -237,21 +238,5 @@ mod tests {
             1,
             "the cascade passes no reset flag"
         );
-    }
-
-    #[test]
-    fn the_watcher_fires_on_first_sight_and_on_change() {
-        let mut c = GuildRecruitmentCascade::default();
-        assert!(!c.pending);
-        assert!(c.observe_guild_id(0), "first sight, even of 'no guild'");
-        assert!(c.pending);
-        c.pending = false;
-        assert!(!c.observe_guild_id(0), "unchanged");
-        assert!(!c.pending);
-        assert!(c.observe_guild_id(42), "joined a guild");
-        assert!(c.pending);
-        c.clear_session();
-        assert!(!c.pending);
-        assert!(c.observe_guild_id(42), "a new session sees it fresh");
     }
 }

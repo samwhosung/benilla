@@ -100,6 +100,9 @@ pub(super) struct Parsed {
     /// `OPTION_GUILD_RECRUITMENT_CHANNEL`, the latch `GetGuildRecruitmentMode` returns: `STANDARD`
     /// is 0 and any other word, or none, is 1 (`0x49ea70`, `ecx=0` only for `STANDARD`).
     pub(super) guild_recruitment_auto: bool,
+    /// Whether the file had the option line, whose store through `0x49ea70` runs the cascade on
+    /// AUTO (`0x498e35` → `0x49ea7b`).
+    pub(super) guild_recruitment_line: bool,
 }
 
 impl Default for Parsed {
@@ -111,6 +114,7 @@ impl Default for Parsed {
             zone_mask: None,
             // The boot value: the reference writes `AUTO` for characters that never set it.
             guild_recruitment_auto: true,
+            guild_recruitment_line: false,
         }
     }
 }
@@ -298,6 +302,7 @@ fn parse(text: &str, rows: &[(u32, String)]) -> Parsed {
                 out.guild_recruitment_auto = !it
                     .next()
                     .is_some_and(|w| w.eq_ignore_ascii_case("STANDARD"));
+                out.guild_recruitment_line = true;
             }
             // `VERSION` is not read.
             continue;
@@ -531,9 +536,6 @@ fn restore_chat_looks_again(world: &mut World, script: &mut UiScript, again: boo
         // (`0x49a5b4`), which the loader runs (`0x499a22`).
         channels.deferred_joins = parsed.joined.clone();
     }
-    if let Some(mut walk) = world.get_resource_mut::<super::channels::ZoneChannelWalk>() {
-        walk.rewalk();
-    }
     // The VM's half with a call host lent, so a call one of the burst's handlers makes applies
     // inside its verb.
     let (recruitment, colors, looks) = (
@@ -541,8 +543,15 @@ fn restore_chat_looks_again(world: &mut World, script: &mut UiScript, again: boo
         parsed.colors,
         parsed.looks,
     );
+    // The option line's store runs the cascade on AUTO (`0x498e35` → `0x49ea70` → `0x49ea7b`), in
+    // the file's order: ahead of the windows and the burst.
+    let line = parsed.guild_recruitment_line;
+    let mut cascade = world.remove_resource::<super::recruitment::GuildRecruitmentCascade>();
     crate::script_calls::lent_by_world(world, script, |script| {
         script.set_guild_recruitment_mode(recruitment);
+        if let (true, Some(cascade)) = (line, cascade.as_mut()) {
+            cascade.run(script);
+        }
         script.set_chat_colors(colors);
         script.set_chat_window_looks(looks);
         // `UPDATE_CHAT_WINDOWS` once, then `UPDATE_CHAT_COLOR` for every registry entry, file or
@@ -561,6 +570,11 @@ fn restore_chat_looks_again(world: &mut World, script: &mut UiScript, again: boo
             );
         }
     });
+    if let Some(cascade) = cascade {
+        world.insert_resource(cascade);
+    }
+    // Then the zone walk (`0x499a22`), which joins the zone channels and the deferred ones.
+    super::channels::walk_at_settle(world, script);
 }
 
 /// Arm the debounce when Lua writes the chat state.
@@ -685,6 +699,7 @@ fn arrived_chat_looks_reads(world: &mut World) -> bevy::ecs::query::FilteredAcce
     fn restore(
         _: Option<ResMut<super::edit::ChannelState>>,
         _: Option<ResMut<super::channels::ZoneChannelWalk>>,
+        _: Option<ResMut<super::recruitment::GuildRecruitmentCascade>>,
         _: Option<ResMut<ChatWindowFile>>,
     ) {
     }
@@ -1448,6 +1463,204 @@ mod tests {
             "the restore took the settling"
         );
         drop(world);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// The cache loader walks the zone channels after its burst (`0x499a22`), inside the settling
+    /// that reads the file (`0x5afaca`): with a zone committed, the joins the seeded mask owes go
+    /// out and take their slots there, ahead of whatever the settling's packet runs after it, with
+    /// no frame's poll between.
+    #[test]
+    fn the_cache_loader_walks_the_committed_zone_at_its_settling() {
+        let _l = crate::local_state::test_env::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tmp = std::env::temp_dir().join(format!("benilla-chat-walk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _capture = crate::local_state::test_env::EnvGuard::unset("WOW_CAPTURE");
+        let _home = crate::local_state::test_env::EnvGuard::set(
+            "BENILLA_HOME",
+            tmp.to_str().expect("utf-8 temp path"),
+        );
+        let roster = probe_roster("Chatwalk");
+        let id = crate::ui_macro::identity(&roster).expect("a picked character");
+        let path = crate::local_state::chat_character_path(&id.0, &id.1).expect("a cache path");
+        std::fs::create_dir_all(path.parent().expect("a parent")).expect("the character dir");
+        std::fs::write(&path, format!("{WRITER_GENERATION}\nVERSION 2\n")).expect("seed the file");
+
+        const ELWYNN: u32 = 12;
+        let mut world = World::new();
+        world.insert_resource(super::super::edit::ChannelState {
+            channels: benilla_formats::ChatChannelsCatalog::from_rows(
+                [
+                    (1, 0x0_0003, "General - %s", "General"),
+                    (22, 0x1_0003, "LocalDefense - %s", "LocalDefense"),
+                ]
+                .into_iter()
+                .map(
+                    |(id, flags, pattern, shortcut)| benilla_formats::ChatChannelRow {
+                        id,
+                        flags,
+                        pattern: pattern.into(),
+                        shortcut: shortcut.into(),
+                    },
+                )
+                .collect(),
+            ),
+            ..Default::default()
+        });
+        world.insert_resource(super::super::channels::ZoneChannelWalk::walked_for_test(
+            ELWYNN,
+        ));
+        world.insert_resource(crate::area::AreaTableRes(
+            benilla_formats::AreaTableCatalog::from_rows(vec![(
+                ELWYNN,
+                benilla_formats::AreaTableRow {
+                    map_id: 0,
+                    zone_id: 0,
+                    explore_flag: 0,
+                    flags: 0,
+                    faction_group_mask: 0,
+                    exploration_level: -1,
+                    name: "Elwynn Forest".into(),
+                },
+            )]),
+        ));
+        let (tx, sent) = crossbeam_channel::unbounded();
+        world.insert_resource(crate::net::NetCommands(tx));
+        world.init_resource::<crate::ui_action::UiErrorKeys>();
+        world.init_resource::<super::super::GuildRecruitmentCascade>();
+        world.init_resource::<ChatWindowFile>();
+        world.init_resource::<crate::account_data::AccountData>();
+        world.insert_resource(roster);
+        let joins = || -> Vec<String> {
+            sent.try_iter()
+                .filter_map(|c| match c {
+                    crate::net::ClientCommand::JoinChannel { name, .. } => Some(name),
+                    _ => None,
+                })
+                .collect()
+        };
+        let mut script = UiScript::new().expect("a VM");
+        restore_chat_looks(&mut world, &mut script);
+        world.insert_non_send_resource(script);
+        assert!(
+            joins().is_empty(),
+            "pending: the reader is held, so is its walk"
+        );
+        world
+            .resource::<crate::account_data::AccountData>()
+            .settle_section_for_test(crate::account_data::CHAT);
+        reread_arrived_chat_looks(&mut world);
+        assert_eq!(
+            joins(),
+            ["General - Elwynn Forest", "LocalDefense - Elwynn Forest"],
+            "the settling walked"
+        );
+        assert_eq!(
+            world
+                .non_send_resource::<UiScript>()
+                .eval::<i64>("return (GetChannelName('LocalDefense - Elwynn Forest'))")
+                .expect("the number"),
+            2,
+            "its slots taken there"
+        );
+        drop(world);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A reload's read of the cache stores the option line through `0x49ea70` (`0x498e35`), which
+    /// on AUTO runs the cascade there (`0x49ea7b`): guilded in a capital, its leave goes out and
+    /// its `UPDATE_CHAT_WINDOWS` signals inside the load, ahead of the burst's own.
+    #[test]
+    fn a_reload_on_auto_runs_the_cascade_at_the_option_line() {
+        let _l = crate::local_state::test_env::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tmp = std::env::temp_dir().join(format!("benilla-chat-cascade-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _capture = crate::local_state::test_env::EnvGuard::unset("WOW_CAPTURE");
+        let _home = crate::local_state::test_env::EnvGuard::set(
+            "BENILLA_HOME",
+            tmp.to_str().expect("utf-8 temp path"),
+        );
+        let roster = probe_roster("Chatcascade");
+        let id = crate::ui_macro::identity(&roster).expect("a picked character");
+        let path = crate::local_state::chat_character_path(&id.0, &id.1).expect("a cache path");
+        std::fs::create_dir_all(path.parent().expect("a parent")).expect("the character dir");
+        let text =
+            format!("{WRITER_GENERATION}\nVERSION 2\nOPTION_GUILD_RECRUITMENT_CHANNEL AUTO\n");
+        std::fs::write(&path, text).expect("seed the file");
+
+        const STORMWIND: u32 = 1519;
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        let (tx, sent) = crossbeam_channel::unbounded();
+        app.insert_resource(crate::net::NetCommands(tx));
+        let world = app.world_mut();
+        benilla_world::world_point::init_world_point_resources(world);
+        world.insert_resource(super::super::edit::ChannelState {
+            channels: benilla_formats::ChatChannelsCatalog::from_rows(vec![
+                benilla_formats::ChatChannelRow {
+                    id: 25,
+                    flags: 0x2_0032,
+                    pattern: "GuildRecruitment - %s".into(),
+                    shortcut: "GuildRecruitment".into(),
+                },
+            ]),
+            ..Default::default()
+        });
+        world.insert_resource(super::super::channels::ZoneChannelWalk::walked_for_test(
+            STORMWIND,
+        ));
+        let row = |flags, name: &str| benilla_formats::AreaTableRow {
+            map_id: 0,
+            zone_id: 0,
+            explore_flag: 0,
+            flags,
+            faction_group_mask: 0,
+            exploration_level: -1,
+            name: name.into(),
+        };
+        world.insert_resource(crate::area::AreaTableRes(
+            benilla_formats::AreaTableCatalog::from_rows(vec![
+                (STORMWIND, row(0x138, "Stormwind City")),
+                (3459, row(0x200, "City")),
+            ]),
+        ));
+        // `PLAYER_GUILDID`: guilded.
+        crate::test_support::hold_self_player(world, 0x7, &[(191, 5)]);
+        world.insert_resource(roster);
+        world
+            .resource::<crate::account_data::AccountData>()
+            .settle_section_for_test(crate::account_data::CHAT);
+        let mut script = UiScript::new().expect("a VM");
+        script
+            .run(
+                r#"
+                Heard = {}
+                local f = CreateFrame("Frame")
+                f:RegisterEvent("UPDATE_CHAT_WINDOWS")
+                f:SetScript("OnEvent", function() table.insert(Heard, event) end)
+                "#,
+            )
+            .expect("the spy");
+        restore_chat_looks(world, &mut script);
+        let leaves: Vec<String> = sent
+            .try_iter()
+            .filter_map(|c| match c {
+                crate::net::ClientCommand::LeaveChannel { name } => Some(name),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(leaves, ["GuildRecruitment - City"]);
+        assert_eq!(
+            script
+                .eval::<Vec<String>>("return Heard")
+                .expect("the spy's record"),
+            ["UPDATE_CHAT_WINDOWS", "UPDATE_CHAT_WINDOWS"],
+            "the cascade's, then the burst's"
+        );
+        drop(app);
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

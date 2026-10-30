@@ -56,12 +56,14 @@ pub(crate) mod settings;
 mod slot_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod walk_live_tests;
 
 pub(crate) use away::AfkMirror;
 pub(crate) use broadcast::Broadcast;
 /// The zone-channel catalog's seed, called from the world-entry UI load: addons read the catalog
 /// at file scope, before an `Update` push would land.
-pub(crate) use channels::seed_zone_channel_catalog;
+pub(crate) use channels::{seed_zone_channel_catalog, TaxiWalk};
 /// The joined-channel roster and the `ChatChannels.dbc` catalog.
 pub(crate) use edit::ChannelState;
 /// Test-only: `ui_script::chat_tests` checks every fired name against the live `ChatTypeInfo`.
@@ -76,6 +78,7 @@ pub(crate) use feed::{release_display, Answer, ChatLog};
 pub(crate) use input::{chat_world, run_chat};
 /// The host's chat appliers ([`crate::script_calls::ScriptCallHost`]).
 pub(crate) use input::{ChatSender, EmoteDoer};
+pub(crate) use recruitment::{GuildRecruitmentCascade, RecruitmentLive};
 
 /// The chat feed once, for a test over the whole client: the `CHAT_MSG_*` fan-out of what the
 /// log holds, with the call host the world lends.
@@ -211,15 +214,12 @@ impl Plugin for UiChatPlugin {
             // The zone-channel auto-join, which vmangos leaves to the client. The disconnect clear
             // runs first, so a same-frame drop cannot leave the walk diffing stale membership.
             // After `AreaAuthoritySet`, since a stale area joins and leaves the wrong channels, and
-            // after the settle state's release, which the walk's gate reads. The guild-recruitment
-            // cascade follows the walk: it is the tail of `ZoneChannelRefresh`.
+            // after the settle state's release, which the walk's gate reads.
             .add_systems(
                 Update,
                 (
                     channels::end_session_channels_on_disconnect,
                     channels::auto_join_zone_channels.in_set(crate::client_state::InWorldGated),
-                    recruitment::guild_recruitment_cascade
-                        .in_set(crate::client_state::InWorldGated),
                 )
                     .chain()
                     .after(benilla_world::terrain_stream::AreaAuthoritySet)

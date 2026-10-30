@@ -444,20 +444,16 @@ fn corpse_range_events_drive_recover_corpse() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// No corpse reads (0, 0), which hides the map's corpse marker (`WorldMapFrame.lua:445`).
+/// No corpse reads (0, 0), which hides the map's corpse marker (`WorldMapFrame.lua:445`); the
+/// corpse cache is read at the call through the host (`crate::lanes::world_map_live_tests`).
 #[test]
 fn corpse_map_position_binding() {
     benilla_formats::wow_data_or_skip!();
-    let mut s = setup();
+    let s = setup();
     let (x, y) = s
         .eval::<(f64, f64)>("return GetCorpseMapPosition()")
         .unwrap();
     assert_eq!((x, y), (0.0, 0.0), "no corpse ⇒ the (0,0) hide sentinel");
-    s.set_world_map_feed(None, None, 0.0, Some((0.25, 0.75)));
-    let (x, y) = s
-        .eval::<(f64, f64)>("return GetCorpseMapPosition()")
-        .unwrap();
-    assert!((x - 0.25).abs() < 1e-6 && (y - 0.75).abs() < 1e-6);
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 

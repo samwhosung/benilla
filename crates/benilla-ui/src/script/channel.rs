@@ -41,6 +41,15 @@ pub struct ZoneChannelRow {
     pub guild_recruitment: bool,
 }
 
+/// The question the recruitment cascade asks as it runs: what `0x49ea90` does now, off the active
+/// player's guild id (`0x49eb01`), the zone row (`0x49ead7`) and the `GuildRecruitment` row
+/// (`0x49f140`), as they stand.
+pub struct RecruitmentPlanQuery;
+
+impl LiveQuery for RecruitmentPlanQuery {
+    type Answer = RecruitmentPlan;
+}
+
 /// What the recruitment cascade `0x49ea90` would do now, as the app resolves it from the player,
 /// the zone row and the `GuildRecruitment` row, so `SetGuildRecruitmentMode(1)` runs it in place.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -66,13 +75,16 @@ pub enum RecruitmentPlan {
     },
 }
 
-/// What `0x49ea90` does on the pushed plan, the latch already AUTO: `None` while the run stays
-/// owed; else the leave (`0x49eb17` → `0x49ee70`) or the join (`0x49eb55` → `0x49eb70`, whose body
-/// first registers window 1's entry, `0x49ec24`) it sends, if any, and whether it then signals
+/// What `0x49ea90` does on `plan`, the latch already AUTO: `None` while the run stays owed; else
+/// the leave (`0x49eb17` → `0x49ee70`) or the join (`0x49eb55` → `0x49eb70`, whose body first
+/// registers window 1's entry, `0x49ec24`) it sends, if any, and whether it then signals
 /// `UPDATE_CHAT_WINDOWS` (`0x49eb21`, `0x49eb5f`). Neither passes the binding's reset flag
 /// (`0x49eb0e`, `0x49eb47`), so neither turns the auto-join off.
-fn cascade_step(model: &mut Model) -> Option<(Option<ChannelCommand>, bool)> {
-    Some(match model.guild_recruitment_plan.clone() {
+fn cascade_step(
+    model: &mut Model,
+    plan: RecruitmentPlan,
+) -> Option<(Option<ChannelCommand>, bool)> {
+    Some(match plan {
         RecruitmentPlan::Retry => return None,
         RecruitmentPlan::NoPlayer => (None, false),
         RecruitmentPlan::Unnamed => (None, true),
@@ -89,11 +101,18 @@ fn cascade_step(model: &mut Model) -> Option<(Option<ChannelCommand>, bool)> {
     })
 }
 
-/// `0x49ea90` on the pushed plan: its join or leave, which the host applies inside the call, then
-/// its `UPDATE_CHAT_WINDOWS`, whose handlers read the slot the join took. Returns whether the run
-/// is spent, `false` when it stays owed.
+/// `0x49ea90` on the plan as the lent host resolves it now ([`RecruitmentPlanQuery`]), else the
+/// pushed one: its join or leave, which the host applies inside the call, then its
+/// `UPDATE_CHAT_WINDOWS`, whose handlers read the slot the join took. Returns whether the run is
+/// spent, `false` when it stays owed.
 pub(crate) fn run_recruitment_cascade(lua: &Lua) -> mlua::Result<bool> {
-    let Some((send, signals)) = super::tick::verb(lua, cascade_step) else {
+    let plan = ask(lua, &RecruitmentPlanQuery).unwrap_or_else(|| {
+        lua.app_data_ref::<Model>()
+            .expect("model app_data")
+            .guild_recruitment_plan
+            .clone()
+    });
+    let Some((send, signals)) = super::tick::verb(lua, |model| cascade_step(model, plan)) else {
         return Ok(false);
     };
     if let Some(cmd) = send {
@@ -222,7 +241,7 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().guild_recruitment_cascade)
     }
 
-    /// What the cascade would do now; the verb runs it in place.
+    /// What the cascade would do with no host to ask; the verb runs it in place.
     pub fn set_guild_recruitment_plan(&mut self, plan: RecruitmentPlan) {
         self.model_mut().guild_recruitment_plan = plan;
     }
@@ -301,8 +320,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // ── The `ecx == 1` cascade ──────────────────────────────────────────
     // For mode 1 only, `0x49ea70` tail-jumps into `0x49ea90`: a guilded player leaves
     // `GuildRecruitment - City`, an unguilded one in a capital joins it, and an acting cascade
-    // fires `UPDATE_CHAT_WINDOWS` before the verb's own. It runs here on the app's plan; the host
-    // takes the join's slot and sends the packet inside the call.
+    // fires `UPDATE_CHAT_WINDOWS` before the verb's own. It runs here on the plan the host resolves
+    // at the call; the host takes the join's slot and sends the packet inside the call.
     g.set(
         "SetGuildRecruitmentMode",
         // As `0x4a0060`: `lua_isnumber` (`0x6f34d0`, so `"1"` passes), truncation toward zero

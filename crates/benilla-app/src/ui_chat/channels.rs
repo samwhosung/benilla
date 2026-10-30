@@ -55,9 +55,20 @@ pub(crate) struct ZoneChannelWalk {
 
 impl ZoneChannelWalk {
     /// Walk again at the next settled frame, whatever the zone: the cache loader's call
-    /// (`0x499a22`), which runs the deferred joins it just seated.
+    /// (`0x499a22`) when no zone is committed to walk it against yet, which runs the deferred
+    /// joins it just seated.
     pub(super) fn rewalk(&mut self) {
         self.at = None;
+    }
+
+    /// A live session that walked `zone` and holds it committed.
+    #[cfg(test)]
+    pub(super) fn walked_for_test(zone: u32) -> Self {
+        ZoneChannelWalk {
+            at: Some(zone),
+            zone_id: Some(zone),
+            live: true,
+        }
     }
 
     /// Forget the session: the next world entry re-joins from nothing.
@@ -86,13 +97,19 @@ fn end_channel_session(
     }
 }
 
+/// The slots and the walk beside the VM: the cascade's plan reads both through the host
+/// ([`super::RecruitmentLive`]), so a system that writes them takes them in turn with it.
+type WalkState = (
+    ResMut<'static, ChannelState>,
+    ResMut<'static, ZoneChannelWalk>,
+);
+
 /// The session-end edge: a confirmed `/logout` back to the glue screens (`OnExit(InWorld)`).
 pub(super) fn end_session_channels(
-    mut vm: crate::script_calls::VmWith<ResMut<'static, ChannelState>>,
-    mut walk: ResMut<ZoneChannelWalk>,
+    mut vm: crate::script_calls::VmWith<WalkState>,
     mut cascade: ResMut<GuildRecruitmentCascade>,
 ) {
-    vm.turn(|script, mut channels| {
+    vm.turn(|script, (mut channels, mut walk)| {
         end_channel_session(script, &mut channels, &mut walk, &mut cascade);
     })
 }
@@ -100,15 +117,14 @@ pub(super) fn end_session_channels(
 /// The other session end, a dead socket: a recoverable drop never leaves `InWorld`, but the
 /// reconnect gets a fresh server-side `Player` in no channels, so it clears the same state.
 pub(super) fn end_session_channels_on_disconnect(
-    mut vm: crate::script_calls::VmWith<ResMut<'static, ChannelState>>,
-    mut walk: ResMut<ZoneChannelWalk>,
+    mut vm: crate::script_calls::VmWith<WalkState>,
     mut cascade: ResMut<GuildRecruitmentCascade>,
     mut disconnects: MessageReader<crate::net::DisconnectedMessage>,
 ) {
     if disconnects.read().next().is_none() {
         return;
     }
-    vm.turn(|script, mut channels| {
+    vm.turn(|script, (mut channels, mut walk)| {
         end_channel_session(script, &mut channels, &mut walk, &mut cascade);
     })
 }
@@ -396,19 +412,57 @@ fn zone_is_settled(player: Option<&crate::player::Player>) -> bool {
     player.is_some_and(|p| p.active && !p.settling)
 }
 
+/// Whether our `UNIT_FIELD_FLAGS` has the taxi flight bit, which holds the zone commit's walk off
+/// (`0x494908`-`0x49491a`).
+fn on_a_flight(me: &Query<&crate::net::ObjectStore, With<crate::net::SelfPlayer>>) -> bool {
+    me.iter()
+        .next()
+        .is_some_and(|s| s.0.unit_flags() & crate::player::UNIT_FLAG_TAXI_FLIGHT != 0)
+}
+
+/// One walk against the committed zone [`ZoneChannelWalk::zone_id`], the reference's
+/// `ds:0xb4e314`: nothing while the chat is not ready (`0x49a219`, the mask unseated) or with no
+/// zone row (`0x49a243`-`0x49a275`), else [`walk_zone`] and the zone noted. Whether it walked, for
+/// the tail ([`GuildRecruitmentCascade::tail`]).
+fn walk_committed(
+    channels: &mut ChannelState,
+    walk: &mut ZoneChannelWalk,
+    areas: Option<&AreaTableRes>,
+    net: (&NetCommands, &crate::ui_action::UiErrorKeys),
+    script: Option<&mut benilla_ui::script::UiScript>,
+) -> bool {
+    let (Some(zone_id), Some(areas)) = (walk.zone_id, areas) else {
+        return false;
+    };
+    let Some(row) = areas.0.get(zone_id) else {
+        return false;
+    };
+    if channels.zone_mask.is_none() {
+        return false;
+    }
+    let (name, flags) = (row.name.clone(), row.flags);
+    walk_zone(channels, &name, flags, city_word(&areas.0), net, script);
+    walk.at = Some(zone_id);
+    true
+}
+
 /// The walk, re-run whenever the zone changes. It composes from the real zone name, the
 /// `GetRealZoneText` cache (`0xb4b404`), never the display text, which the indoor override
 /// (`0x67e670`) renames.
 ///
-/// The reference walks in `UpdateZoneText 0x494780` on each zone change (`0x494931`) and once at
-/// world entry; this polls the same inputs every frame. It waits while the world arrives
-/// (`Player::settling`), as the reference walks after its loading screen and our leaf area moves
-/// while terrain streams in, and for the chat cache to seat the mask, as the reference bails on
-/// its ready flag (`0x49a219`) until the cache loader calls the walk (`0x499a22`).
+/// The reference walks in `UpdateZoneText 0x494780` on each zone change (`0x494931`), which the
+/// area poll runs in the frame's idle pass after the packets (`0x401ece` → `0x5db900` →
+/// `0x67e510` → `0x494780`), skipped while our taxi flag is set (`0x494908`-`0x49491a`); this
+/// polls the same inputs every frame. It waits while the world arrives (`Player::settling`), as
+/// the reference walks after its loading screen and our leaf area moves while terrain streams in,
+/// and for the chat cache to seat the mask, as the reference bails on its ready flag (`0x49a219`).
+/// The walks the reference makes inside a packet run there: the cache loader's
+/// ([`walk_at_settle`]) and the taxi flag's clear ([`on_field_edge`]). The walk's tail runs the
+/// recruitment cascade's retry (`0x49a6a4`-`0x49a6b2`).
 pub(super) fn auto_join_zone_channels(
     commands: Res<NetCommands>,
-    // The slots beside the VM: the walk runs no Lua, so it is an engine turn.
-    mut vm: crate::script_calls::VmWith<ResMut<'static, ChannelState>>,
+    // The slots and the walk beside the VM: the walk runs no Lua, so it is an engine turn.
+    mut vm: crate::script_calls::VmWith<WalkState>,
     areas: Option<Res<AreaTableRes>>,
     world: benilla_world::world_point::WorldPoint,
     // One parameter for clippy's argument limit: the body's settle and a cinematic's view.
@@ -416,12 +470,16 @@ pub(super) fn auto_join_zone_channels(
         Option<Res<crate::player::Player>>,
         Option<Res<crate::cinematic::Cinematic>>,
     ),
-    mut walk: ResMut<ZoneChannelWalk>,
     mut entered: MessageReader<crate::net::EnteredWorldMessage>,
     mut catalog_fed: Local<crate::ui_script::VmMemo<Option<(String, u32)>>>,
-    errors: Res<crate::ui_action::UiErrorKeys>,
+    // The taxi flag the zone commit's walk waits on, and the tail's retry.
+    (errors, me, mut cascade): (
+        Res<crate::ui_action::UiErrorKeys>,
+        Query<&crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
+        ResMut<GuildRecruitmentCascade>,
+    ),
 ) {
-    vm.turn(|script, mut channels| {
+    let walked = vm.turn(|script, (mut channels, mut walk)| {
         let (player, cinematic) = (&body.0, &body.1);
         // World entry arms the walk; the session-end edges disarm it.
         if entered.read().next().is_some() {
@@ -469,27 +527,105 @@ pub(super) fn auto_join_zone_channels(
             }
         }
 
-        let (Some(zone_id), Some((zone_name, area_flags)), Some(areas)) = (zone_id, zone, areas)
-        else {
-            return; // nothing to walk against yet
-        };
-        if channels.zone_mask.is_none() {
-            return; // the mask is not seated: the reference's ready-flag bail
+        if zone_id.is_none() || walk.at == zone_id || on_a_flight(&me) {
+            return false; // nothing to walk against, the same zone as last frame, or aloft
         }
-        if walk.at == Some(zone_id) {
-            return; // same zone as last frame
-        }
-
-        walk_zone(
+        walk_committed(
             &mut channels,
-            &zone_name,
-            area_flags,
-            city_word(&areas.0),
+            &mut walk,
+            areas,
             (&commands, &errors),
             script,
-        );
-        walk.at = Some(zone_id);
-    })
+        )
+    });
+    if walked {
+        vm.run(|script| {
+            if let Some(script) = script {
+                cascade.tail(script);
+            }
+        });
+    }
+}
+
+/// The cache loader's walk (`0x499a22`, after its burst), inside the chat section's settle or the
+/// interface load that reads it ([`super::settings`]), against the committed zone, with the tail.
+/// With no zone committed yet the walk would bail, and the poll walks at the first settled frame,
+/// which runs the deferred joins the loader seated.
+pub(super) fn walk_at_settle(world: &mut World, script: &mut benilla_ui::script::UiScript) {
+    let live = world
+        .get_resource::<ZoneChannelWalk>()
+        .is_some_and(|w| w.live && w.zone_id.is_some());
+    if !live {
+        if let Some(mut walk) = world.get_resource_mut::<ZoneChannelWalk>() {
+            walk.rewalk();
+        }
+        return;
+    }
+    let walked = world.resource_scope::<ChannelState, _>(|world, mut channels| {
+        world.resource_scope::<ZoneChannelWalk, _>(|world, mut walk| {
+            let (Some(commands), Some(errors)) = (
+                world.get_resource::<NetCommands>(),
+                world.get_resource::<crate::ui_action::UiErrorKeys>(),
+            ) else {
+                return false;
+            };
+            walk_committed(
+                &mut channels,
+                &mut walk,
+                world.get_resource::<AreaTableRes>(),
+                (commands, errors),
+                Some(script),
+            )
+        })
+    });
+    if walked {
+        world.resource_scope::<GuildRecruitmentCascade, _>(|world, mut cascade| {
+            crate::script_calls::lent_by_world(world, script, |script| cascade.tail(script));
+        });
+    }
+}
+
+/// What the active player's flags watcher's taxi arm walks with, beside the notice lane's VM
+/// ([`crate::field_watch::FieldNotice::ZoneChannelWalk`]): the slots and the walk, which the
+/// host reads, and the zone rows, the wire and the cinematic's view.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct TaxiWalk<'w> {
+    channels: Option<ResMut<'w, ChannelState>>,
+    walk: Option<ResMut<'w, ZoneChannelWalk>>,
+    areas: Option<Res<'w, AreaTableRes>>,
+    commands: Option<Res<'w, NetCommands>>,
+    errors: Option<Res<'w, crate::ui_action::UiErrorKeys>>,
+    cinematic: Option<Res<'w, crate::cinematic::Cinematic>>,
+}
+
+impl TaxiWalk<'_> {
+    /// The taxi arm's clear (`0x5ff538`-`0x5ff56e`), at the watcher's place among the packet's
+    /// notices: with no cinematic running (`0x5ff565`, its cell read as the arm runs), the zone
+    /// channels walked against the committed zone (`0x5ff56e` → `0x49a210`). Whether it walked,
+    /// for the tail ([`GuildRecruitmentCascade::tail`]).
+    pub(crate) fn walk(&mut self, script: Option<&mut benilla_ui::script::UiScript>) -> bool {
+        if self.cinematic.as_deref().is_some_and(|c| c.is_playing()) {
+            return false;
+        }
+        let (Some(channels), Some(walk), Some(commands), Some(errors)) = (
+            self.channels.as_deref_mut(),
+            self.walk.as_deref_mut(),
+            self.commands.as_deref(),
+            self.errors.as_deref(),
+        ) else {
+            return false;
+        };
+        if !walk.live {
+            return false;
+        }
+        walk_committed(
+            channels,
+            walk,
+            self.areas.as_deref(),
+            (commands, errors),
+            script,
+        )
+    }
 }
 
 /// Feed the VM the zone-less catalog before any interface file runs: world entry runs FrameXML
@@ -669,7 +805,7 @@ mod tests {
             live: true,
         };
         let mut cascade = GuildRecruitmentCascade::default();
-        cascade.observe_guild_id(7);
+        cascade.arm_for_test();
 
         // No VM in a unit test: the mirror leg is the one line this cannot reach.
         end_channel_session(None, &mut channels, &mut walk, &mut cascade);
@@ -688,9 +824,8 @@ mod tests {
             "the mask is the character's file, not the session's"
         );
         assert!(
-            cascade.observe_guild_id(7),
-            "the cascade's watcher forgot the guild id, so the next login's first sight of it is \
-             a change again — the reference's player-create trigger"
+            !cascade.armed_for_test(),
+            "the session's end forgets the cascade's retry"
         );
     }
 
