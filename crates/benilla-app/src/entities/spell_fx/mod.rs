@@ -1086,6 +1086,7 @@ mod tests {
         .init_resource::<benilla_world::rig_palette::RigPalettes>()
         .add_message::<SpellKitFx>()
         .add_message::<crate::entities::live_display::DisplaySwapped>()
+        .add_message::<crate::entities::DisplayRebuilt>()
         .add_systems(
             Update,
             (crate::entities::rebuild_then_start_kits(), attach_spell_fx).chain(),
@@ -1226,7 +1227,7 @@ mod tests {
 
     /// Swap the display, then build the new body, as `attach_entity_visuals` would a frame on.
     fn swap_then_build(app: &mut App, unit: Entity) {
-        app.world_mut().entity_mut(unit).insert(display_field(8));
+        swap_display(app, unit);
         app.update();
         assert_names_no_dead_root(app, unit);
         app.world_mut()
@@ -1354,7 +1355,7 @@ mod tests {
         for start in starts {
             messages.write(start);
         }
-        app.world_mut().entity_mut(unit).insert(display_field(8));
+        swap_display(app, unit);
     }
 
     /// Build the new body a frame on, then let the spawn pass run.
@@ -1438,6 +1439,15 @@ mod tests {
         );
     }
 
+    /// A new display naming new records, whose rebuild the update announces (`0x60abe0`).
+    fn swap_display(app: &mut App, unit: Entity) {
+        app.world_mut().entity_mut(unit).insert(display_field(8));
+        let at = crate::lanes::stamp();
+        app.world_mut()
+            .resource_mut::<Messages<crate::entities::DisplayRebuilt>>()
+            .write(crate::entities::DisplayRebuilt { entity: unit, at });
+    }
+
     fn display_field(display: u32) -> crate::net::ObjectStore {
         crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(
             benilla_protocol::field::FIELD_UNIT_DISPLAYID,
@@ -1511,7 +1521,7 @@ mod tests {
     #[test]
     fn a_display_swap_ends_the_units_effects_before_its_visual_goes() {
         let (mut app, unit, roots, emitters) = mid_cast();
-        app.world_mut().entity_mut(unit).insert(display_field(8));
+        swap_display(&mut app, unit);
         app.update();
         assert!(
             !app.world()
@@ -1550,7 +1560,7 @@ mod tests {
                 ..crate::entities::display::empty_shell()
             },
         );
-        app.world_mut().entity_mut(unit).insert(display_field(8));
+        swap_display(&mut app, unit);
         app.update();
         app.update();
         assert_eq!(
@@ -1578,7 +1588,7 @@ mod tests {
             .unwrap()
             .instances[1]
             .decaying = true;
-        app.world_mut().entity_mut(unit).insert(display_field(8));
+        swap_display(&mut app, unit);
         app.update();
         assert_names_no_dead_root(&app, unit);
         assert_eq!(instances_of(&app, unit), vec![]);

@@ -94,6 +94,8 @@ pub(crate) struct Scene<'w, 's> {
     anchors: Query<'w, 's, &'static crate::transport::TransportAnchor>,
     speeds: Query<'w, 's, &'static mut UnitSpeeds>,
     field_changes: MessageWriter<'w, FieldChanged>,
+    /// The display rebuilds (`0x60abe0`) the watchers run, at their places.
+    rebuilds: MessageWriter<'w, crate::entities::DisplayRebuilt>,
     /// The aura watcher's calls ([`super::AuraFieldsChanged`]), one per block.
     aura_watch: MessageWriter<'w, super::AuraFieldsChanged>,
     /// The item watchers' runs ([`crate::item_lane`]).
@@ -2622,6 +2624,73 @@ mod tests {
             ])
             .into_created(as_type),
         }
+    }
+
+    /// The display rebuild (`0x60abe0`) is announced at its watcher's place among the update's
+    /// edges, the fields written first and the watchers run after in field order: behind the
+    /// level's (34), at the display's (131, `0x6049b5`), ahead of the dynamic flags' (143). A
+    /// display naming the held row's records rebuilds nothing (`0x60ae10`).
+    #[test]
+    fn a_display_rebuild_is_announced_at_its_watchers_place() {
+        use benilla_protocol::field::{
+            FIELD_UNIT_DISPLAYID, FIELD_UNIT_DYNAMIC_FLAGS, FIELD_UNIT_LEVEL,
+        };
+        const ENTRY: u32 = 1234;
+        let mob = (u64::from(ENTRY) << 24) | (u64::from(guid::HIGH_UNIT) << 48) | 1;
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        app.world_mut().insert_resource(NetCommands(tx));
+        app.world_mut().insert_resource(display_tables());
+        let world = app.world_mut();
+        super::super::handlers::dispatch(
+            world,
+            super::wire(vec![displayed(mob, EntityKind::Unit, 9, 10)]),
+        );
+        let values = |world: &mut World, pairs: &[(u16, u32)]| {
+            world.resource_mut::<Messages<FieldChanged>>().clear();
+            world
+                .resource_mut::<Messages<crate::entities::DisplayRebuilt>>()
+                .clear();
+            super::super::handlers::dispatch(
+                world,
+                super::wire(vec![SessionEvent::ObjectValues {
+                    guid: mob,
+                    fields: ObjectFields::from_pairs(pairs),
+                }]),
+            );
+            let edges: Vec<FieldChanged> = world
+                .resource_mut::<Messages<FieldChanged>>()
+                .drain()
+                .collect();
+            let rebuilds: Vec<crate::entities::DisplayRebuilt> = world
+                .resource_mut::<Messages<crate::entities::DisplayRebuilt>>()
+                .drain()
+                .collect();
+            (edges, rebuilds)
+        };
+
+        let (_, rebuilds) = values(world, &[(FIELD_UNIT_DISPLAYID, 12)]);
+        assert!(rebuilds.is_empty(), "display 12 names display 10's records");
+
+        let (edges, rebuilds) = values(
+            world,
+            &[
+                (FIELD_UNIT_LEVEL, 2),
+                (FIELD_UNIT_DISPLAYID, 11),
+                (FIELD_UNIT_DYNAMIC_FLAGS, 1),
+            ],
+        );
+        let at = |index| edges.iter().find(|e| e.index == index).unwrap().at;
+        let [rebuild] = rebuilds[..] else {
+            panic!("one rebuild: {rebuilds:?}");
+        };
+        assert_eq!(rebuild.entity, world.resource::<GuidIndex>().0[&mob]);
+        assert_eq!(
+            rebuild.at,
+            at(FIELD_UNIT_DISPLAYID),
+            "at the display's watcher"
+        );
+        assert!(at(FIELD_UNIT_LEVEL) < rebuild.at && rebuild.at < at(FIELD_UNIT_DYNAMIC_FLAGS));
     }
 
     /// A creature asks its record again when its display names a new record set: the display

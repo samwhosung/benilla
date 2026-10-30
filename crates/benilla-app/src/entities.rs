@@ -56,7 +56,7 @@ pub(crate) mod corpse;
 
 mod live_display;
 use live_display::{refresh_live_display, tick_scale_ease};
-pub(crate) use live_display::{AppliedDisplay, DisplaySwapped};
+pub(crate) use live_display::{AppliedDisplay, DisplayRebuilt, DisplaySwapped};
 
 /// Terrain conform: a model flagged `GlobalModelFlags & 3 ∈ {1,3}` tilts to the ground.
 mod conform;
@@ -686,6 +686,7 @@ impl Plugin for EntitiesPlugin {
         // A display swap's rebuild edge, for the impact-kit replay the reference runs at the end
         // of `0x60abe0`.
         .add_message::<live_display::DisplaySwapped>()
+        .add_message::<live_display::DisplayRebuilt>()
         .add_systems(Startup, setup_entities.after(AssetSet::Open))
         // The eviction ahead of the VM pass, whose sends read the item displays for a ranged
         // spell's precast visual (`0x60d450`).

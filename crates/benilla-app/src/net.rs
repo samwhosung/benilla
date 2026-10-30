@@ -109,6 +109,7 @@ impl Plugin for NetPlugin {
             .add_message::<TeleportMessage>()
             .add_message::<FieldChanged>()
             .add_message::<AuraFieldsChanged>()
+            .add_message::<crate::entities::DisplayRebuilt>()
             .init_resource::<crate::item_lane::ItemLane>()
             .init_resource::<crate::item_watch::BagCache>()
             .init_resource::<crate::field_watch::NoticeLane>()
