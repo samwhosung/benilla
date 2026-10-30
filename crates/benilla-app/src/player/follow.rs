@@ -405,7 +405,7 @@ mod tests {
             .init_resource::<GuidIndex>()
             .init_resource::<ButtonInput<MouseButton>>()
             .init_resource::<crate::bindings::BindingsState>()
-            .init_resource::<CameraControl>()
+            .init_resource::<super::super::camera::CameraControl>()
             .init_resource::<ViewSubject>()
             .init_resource::<FarSight>()
             .insert_resource(NetCommands(tx))

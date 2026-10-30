@@ -436,6 +436,9 @@ pub(super) const BUILT_OUTSIDE_THE_PACKETS_IN_THE_REFERENCE: &[(&str, &[&str], &
     ("::minimap::feed_minimap_arrows", &["death::DeathNet", "net::GuidIndex", "net::ObjectStore",
         "poi_marker::PoiMarker", "ui_party::GroupState"],
         "the arrow half of the minimap's render (`0x4ec950`), which aims them by bearing"),
+    ("::player::camera::focus_on_look_edges", &["player::camera::CameraControl"],
+        "the mouse half of the freelook edges the frame's mouse made, which the input pass runs \
+         ahead of its tick (`0x51491f` → `0x493070`, `0x493090`); a call's edge runs it inside"),
     ("::spell::targeting::feed_targeting_to_input", &["items::Items", "names::NameCache",
         "net::GuidIndex", "net::ObjectStore", "net::UnitSpeeds", "net::motion::modes::UnitMoveModes",
         "net::motion::remote::RemoteMotion", "net::reputations::Reputations",
