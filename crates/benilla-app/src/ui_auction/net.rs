@@ -349,8 +349,8 @@ fn land_page(vm: &mut HouseVm, list: usize) {
 }
 
 /// A line readied onto the house lane, its item's name filled as the cache holds it; one whose
-/// item is not cached waits on the record, asked with the callback `0x4cd190` (`0x4ccf6e`,
-/// `0x4cd3eb`, `0x4cd4ef`), and shows when it lands ([`message_answered`]). Whether it was
+/// item is not cached waits on the record, asked with the callback `0x4cd190` (`0x4ccfa2`,
+/// `0x4cd41f`, `0x4cd51a`), and shows when it lands ([`message_answered`]). Whether it was
 /// readied, with the rest of its handler past it.
 fn show_line(h: &mut House, msg: AuctionMessage, then: Option<AfterLine>) -> bool {
     let fill = match msg.item {

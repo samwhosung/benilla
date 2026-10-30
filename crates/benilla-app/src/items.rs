@@ -546,7 +546,7 @@ pub(crate) enum RecordCallback {
     /// `0x4af66f` with `0x4af0a0`), one per call, or an auction notice's at the list parse
     /// (`0x4acf38` with `0x4ad010`), one per notice.
     Mail,
-    /// An auction notice's line whose item was not cached (`0x4ccf6e`, `0x4cd3eb`, `0x4cd4ef` with
+    /// An auction notice's line whose item was not cached (`0x4ccfa2`, `0x4cd41f`, `0x4cd51a` with
     /// `0x4cd190`), one per line.
     AuctionMessage,
     /// The attachment's, asked by `GetSendMailItem` (`0x4ae604` with `0x4ae710`), one per call.

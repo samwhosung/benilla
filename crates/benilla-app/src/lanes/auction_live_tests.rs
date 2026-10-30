@@ -582,7 +582,7 @@ fn a_sell_item_whose_object_is_gone_asks_no_record() {
 }
 
 /// A page that waits on silk's record keeps the list's callback (`0x4cc9bf`, dedupe 0) ahead of
-/// a later sold notice's (`0x4ccf6e`); the answer runs them in that order (`0x55bf12`-`0x55bf39`),
+/// a later sold notice's (`0x4ccfa2`); the answer runs them in that order (`0x55bf12`-`0x55bf39`),
 /// so the page's sort and update (`0x4cca10` → `0x4cd8b0`) fire ahead of the notice's line.
 #[test]
 fn a_pages_callback_runs_ahead_of_a_later_notices_in_the_answers_list() {
