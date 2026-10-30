@@ -43,11 +43,12 @@ impl Client {
         let world = self.app.world_mut();
         crate::net::handlers::dispatch(world, wire(packets));
         crate::lanes::fire_in_order(world);
-        bevy::ecs::system::RunSystemOnce::run_system_once(
-            world,
-            super::channels::auto_join_zone_channels,
-        )
-        .expect("the poll runs");
+        // The poll's tenth tick (`0x5db906`).
+        for _ in 0..10 {
+            world
+                .run_system_cached(crate::area::feed_zone_events)
+                .expect("the poll runs");
+        }
     }
 
     /// What went out, joins and leaves by name, emptied.
@@ -126,12 +127,22 @@ fn client(zone: u32, held: Option<&[(u16, u32)]>) -> Client {
         )
         .collect(),
     );
+    // The zone's channels already joined, as the first commit's walk finds them.
+    let zone_name = ["Elwynn Forest", "Westfall", "Stormwind City"][match zone {
+        ELWYNN => 0,
+        WESTFALL => 1,
+        _ => 2,
+    }];
     world.insert_resource(ChannelState {
         channels: catalog,
         zone_mask: Some(1 | 1 << 21),
+        joined: vec![
+            ChannelSlot::confirmed(&format!("General - {zone_name}"), 1).into(),
+            ChannelSlot::confirmed(&format!("LocalDefense - {zone_name}"), 22).into(),
+        ],
         ..Default::default()
     });
-    world.insert_resource(ZoneChannelWalk::walked_for_test(zone));
+    ZoneChannelWalk::seat_for_test(world, zone);
     world.resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
     if let Some(fields) = held {
         crate::test_support::hold_self_player(world, ME, fields);
@@ -341,21 +352,17 @@ fn our_create_runs_the_cascade_inside_its_packet() {
         r#"table.insert(Heard, tostring((GetChannelName("GuildRecruitment - City"))))"#,
     );
     c.frame(vec![vec![created()], combo(2)]);
-    assert_eq!(c.heard(), ["1"]);
+    assert_eq!(c.heard(), ["3"], "after General and LocalDefense");
     assert_eq!(c.wire(), ["join GuildRecruitment - City"]);
 }
 
-/// The poll's ticks: each one the zone feed's system, then the walk's (`0x5db900`), the tenth
-/// committing.
+/// The poll's ticks (`0x5db900`), the tenth committing.
 fn tick(c: &mut Client, n: usize) {
     for _ in 0..n {
-        let world = c.app.world_mut();
-        world
+        c.app
+            .world_mut()
             .run_system_cached(crate::area::feed_zone_events)
             .expect("the feed runs");
-        world
-            .run_system_cached(super::channels::auto_join_zone_channels)
-            .expect("the walk runs");
     }
 }
 
@@ -455,4 +462,44 @@ fn the_walk_runs_before_the_commits_new_area_listeners() {
     stand_in(&mut c, WESTFALL);
     tick(&mut c, 1);
     assert_eq!(c.heard(), ["1"]);
+}
+
+const WESTFALL_WALK: [&str; 4] = [
+    "leave General - Elwynn Forest",
+    "join General - Westfall",
+    "leave LocalDefense - Elwynn Forest",
+    "join LocalDefense - Westfall",
+];
+
+/// A cinematic running (`0x49491c`) or latched (`0x494928` → `0x5efc90`) holds the commit's walk
+/// off; the commit still stores the zone, and EndCinematic's walk (`0x48f1d0`) walks it.
+#[test]
+fn a_cinematic_holds_the_commits_walk_and_its_end_walks_the_committed_zone() {
+    for held in [
+        crate::cinematic::Cinematic::playing_for_test(),
+        crate::cinematic::Cinematic::pending_for_test(41),
+    ] {
+        let mut c = settled_in_elwynn();
+        c.app.world_mut().insert_resource(held);
+        stand_in(&mut c, WESTFALL);
+        tick(&mut c, 10);
+        assert!(c.wire().is_empty(), "no walk under a cinematic");
+        assert_eq!(
+            c.app.world().resource::<crate::area::CommittedZone>().0,
+            Some(WESTFALL),
+            "the zone is stored all the same"
+        );
+        c.app
+            .world_mut()
+            .insert_resource(crate::cinematic::Cinematic::ended_for_test());
+        c.app
+            .world_mut()
+            .run_system_cached(super::channels::walk_when_cinematic_ends)
+            .expect("the end walk runs");
+        assert_eq!(
+            c.wire(),
+            WESTFALL_WALK,
+            "EndCinematic walks the stored zone"
+        );
+    }
 }

@@ -18,7 +18,7 @@ use benilla_ui::script::RecruitmentPlan;
 use crate::area::AreaTableRes;
 use crate::net::{ObjectStore, SelfPlayer};
 
-use super::channels::{city_word, ZoneChannelWalk, AREA_FLAG_CAPITAL};
+use super::channels::{city_word, AREA_FLAG_CAPITAL};
 use super::edit::ChannelState;
 
 /// The cascade's retry: the one-shot `[0xb6e5e4]` a run that cannot act arms (`0x49eaf5`,
@@ -94,7 +94,7 @@ pub(crate) fn cascade(auto: bool, guild_id: u32, in_capital: bool) -> Option<Cas
 fn plan(
     guild_id: u32,
     channels: &ChannelState,
-    walk: &ZoneChannelWalk,
+    zone: Option<u32>,
     areas: Option<&AreaTableRes>,
 ) -> RecruitmentPlan {
     // Wait for the chat-cache restore, which seats the latch and the mask.
@@ -105,7 +105,7 @@ fn plan(
     let Some(areas) = areas else {
         return RecruitmentPlan::Retry;
     };
-    let Some(row) = walk.zone_id.and_then(|id| areas.0.get(id)) else {
+    let Some(row) = zone.and_then(|id| areas.0.get(id)) else {
         return RecruitmentPlan::Retry;
     };
     let action = cascade(true, guild_id, row.flags & AREA_FLAG_CAPITAL != 0);
@@ -142,20 +142,20 @@ fn plan(
 pub(crate) struct RecruitmentLive<'w, 's> {
     me: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
     channels: Option<Res<'w, ChannelState>>,
-    walk: Option<Res<'w, ZoneChannelWalk>>,
+    committed: Option<Res<'w, crate::area::CommittedZone>>,
     areas: Option<Res<'w, AreaTableRes>>,
 }
 
 impl crate::script_calls::live::LiveFamily for RecruitmentLive<'_, '_> {
     fn answer(&mut self, ask: &mut benilla_ui::script::live::LiveAsk<'_>) -> bool {
         ask.answer(|_: &benilla_ui::script::RecruitmentPlanQuery| {
-            let (channels, walk) = (self.channels.as_deref()?, self.walk.as_deref()?);
+            let (channels, committed) = (self.channels.as_deref()?, self.committed.as_deref()?);
             // With no player object the cascade returns owing nothing (`0x49eac3`).
             Some(match self.me.iter().next() {
                 Some(store) => plan(
                     store.0.player_guild_id(),
                     channels,
-                    walk,
+                    committed.0,
                     self.areas.as_deref(),
                 ),
                 None => RecruitmentPlan::NoPlayer,

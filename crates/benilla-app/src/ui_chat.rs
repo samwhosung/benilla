@@ -63,7 +63,9 @@ pub(crate) use away::AfkMirror;
 pub(crate) use broadcast::Broadcast;
 /// The zone-channel catalog's seed, called from the world-entry UI load: addons read the catalog
 /// at file scope, before an `Update` push would land.
-pub(crate) use channels::{seed_zone_channel_catalog, TaxiWalk};
+pub(crate) use channels::{
+    seed_zone_channel_catalog, walk_when_cinematic_ends, TaxiWalk, ZoneCommit,
+};
 /// The joined-channel roster and the `ChatChannels.dbc` catalog.
 pub(crate) use edit::ChannelState;
 /// Test-only: `ui_script::chat_tests` checks every fired name against the live `ChatTypeInfo`.
@@ -211,19 +213,18 @@ impl Plugin for UiChatPlugin {
                     .before(channels::end_session_channels_on_disconnect)
                     .in_set(crate::client_state::InWorldGated),
             )
-            // The zone-channel auto-join, which vmangos leaves to the client. The disconnect clear
-            // runs first, so a same-frame drop cannot leave the walk diffing stale membership.
-            // After `AreaAuthoritySet`, since a stale area joins and leaves the wrong channels, and
-            // after the settle state's release, which the walk's gate reads.
+            // The zone-channel auto-join, which vmangos leaves to the client, runs inside the zone
+            // commit ([`crate::area::feed_zone_events`]). The disconnect clear runs first, so a
+            // same-frame drop cannot leave the walk diffing stale membership, and world entry
+            // arms the walk ahead of the commit.
             .add_systems(
                 Update,
                 (
                     channels::end_session_channels_on_disconnect,
-                    channels::auto_join_zone_channels.in_set(crate::client_state::InWorldGated),
+                    channels::arm_zone_channel_walk.in_set(crate::client_state::InWorldGated),
                 )
                     .chain()
-                    .after(benilla_world::terrain_stream::AreaAuthoritySet)
-                    .after(crate::player::WorldFocusSet),
+                    .before(crate::area::feed_zone_events),
             )
             // After the shutdown's `PLAYER_LOGOUT`, whose handlers read the windows and the
             // channels as they stood, and before the glue VM goes in.

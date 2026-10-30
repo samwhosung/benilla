@@ -1121,22 +1121,4 @@ mod tests {
             "the CVar callbacks run after the look session reads their knobs"
         );
     }
-
-    /// The stream focus's publish and the post-snap hold's release, which write the player's
-    /// settle state the hosts read, run among the hosts in the world's order (after the input
-    /// stage, around the stream), so a host after them reads this frame's: the zone channels'
-    /// walk, whose gate reads it, runs after the release.
-    #[test]
-    fn the_settle_state_is_published_before_its_readers() {
-        let app = headless_client();
-        let Some(order) = pass_order(&app) else {
-            return;
-        };
-        let at = |name: &str| at(&order, name);
-        let release = at("::release_post_snap_hold");
-        assert!(
-            at("::publish_view_focus") < release && release < at("::auto_join_zone_channels"),
-            "{order:?}"
-        );
-    }
 }

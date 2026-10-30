@@ -1509,9 +1509,7 @@ mod tests {
             ),
             ..Default::default()
         });
-        world.insert_resource(super::super::channels::ZoneChannelWalk::walked_for_test(
-            ELWYNN,
-        ));
+        super::super::channels::ZoneChannelWalk::seat_for_test(&mut world, ELWYNN);
         world.insert_resource(crate::area::AreaTableRes(
             benilla_formats::AreaTableCatalog::from_rows(vec![(
                 ELWYNN,
@@ -1609,9 +1607,7 @@ mod tests {
             ]),
             ..Default::default()
         });
-        world.insert_resource(super::super::channels::ZoneChannelWalk::walked_for_test(
-            STORMWIND,
-        ));
+        super::super::channels::ZoneChannelWalk::seat_for_test(world, STORMWIND);
         let row = |flags, name: &str| benilla_formats::AreaTableRow {
             map_id: 0,
             zone_id: 0,

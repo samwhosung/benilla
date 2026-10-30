@@ -406,13 +406,15 @@ pub(super) const BUILT_OUTSIDE_THE_PACKETS_IN_THE_REFERENCE: &[(&str, &[&str], &
         "the frame pass's `OnUpdate` walk (`0x764330` → `0x765650`), its screen and scale"),
     ("::ui_script::extract::paint_script", &["video::Widescreen"],
         "the UI pass's paint, after the walk, which no getter reads"),
-    ("::ui_chat::channels::auto_join_zone_channels", &["net::ObjectStore",
-        "ui_chat::edit::ChannelState"],
+    ("::area::feed_zone_events", &["net::ObjectStore", "ui_chat::edit::ChannelState"],
         "the zone text's update `0x494780`, whose walk (`0x494931`, gated on our taxi flag at \
          `0x494908`-`0x49491a`) the area poll runs in the idle pass after the packets \
-         (`0x401ece` → `0x5db900` → `0x67e510` → `0x494780`), and `EndCinematic`'s (`0x48f1d0`), \
-         in the frame pass; its runs inside a packet run there: the chat cache's load \
-         (`0x499a22`) and the taxi flag's clear (`0x5ff56e`)"),
+         (`0x401ece` → `0x5db900` → `0x67e510` → `0x494780`); its runs inside a packet run \
+         there: the chat cache's load (`0x499a22`) and the taxi flag's clear (`0x5ff56e`)"),
+    ("::ui_chat::channels::walk_when_cinematic_ends", &["net::ObjectStore",
+        "ui_chat::edit::ChannelState"],
+        "`EndCinematic`'s walk (`0x48f1d0`, gated on our taxi flag at `0x48f1c3`-`0x48f1ce`), in \
+         the frame pass where the shot ends"),
 ];
 
 /// The systems that write the VM and push no view a getter reads of what a handler writes, by a
@@ -575,12 +577,10 @@ pub(super) const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::glue_session::roster::Roster",
     // `0xb4e314`, which the party snapshot reads; only the zone feed commits it.
     "::area::CommittedZone",
-    // The walk's committed zone, which the recruitment cascade's plan reads through the host
-    // (`0x49ead7`), and the slots; the walk's poll and the notice lane's taxi walk write them
-    // through their own `ResMut`. Both sit here only because the scan cannot see an exclusive
-    // handler's writes: the chat cache's read writes both inside its section's settle, in its
-    // packet (`0x499a22`).
-    "::ui_chat::channels::ZoneChannelWalk",
+    // The slots, which the recruitment cascade's plan reads through the host (`0x49eac3`); the
+    // zone commit's walk and the notice lane's taxi walk write them through their own `ResMut`.
+    // They sit here only because the scan cannot see an exclusive handler's writes: the chat
+    // cache's read writes them inside its section's settle, in its packet (`0x499a22`).
     "::ui_chat::edit::ChannelState",
     // The console's registry, which a `ConsoleExec` a listener makes reads.
     "::console::ConsoleCommands",
@@ -1324,12 +1324,6 @@ const AT_THEIR_OWN_PLACE: &[(&str, &str)] = &[
         "::ui_script::glue_mgr::drive_glue_mgr",
         "the login and character screens' answers, which come before the in-game interface: \
          the drain runs only with it up",
-    ),
-    (
-        "::ui_chat::channels::auto_join_zone_channels",
-        "world entry only arms the zone-channel walk, whose one push is a walk's refusal onto \
-         the ui-error lane, made where the zone text's update walks, after the packets \
-         (`0x401ece` → `0x494931`)",
     ),
     (
         "::player::controller::control",

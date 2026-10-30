@@ -490,8 +490,7 @@ fn unguilded_in_a_capital(c: &mut Client) {
         ]),
     ));
     c.world()
-        .resource_mut::<super::channels::ZoneChannelWalk>()
-        .zone_id = Some(1519);
+        .insert_resource(crate::area::CommittedZone(Some(1519)));
 }
 
 /// `SetGuildRecruitmentMode(1)` runs the cascade inside the verb (`0x49ea7b` → `0x49eb55` →

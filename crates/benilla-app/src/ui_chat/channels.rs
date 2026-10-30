@@ -40,41 +40,43 @@ pub(crate) fn city_word(areas: &benilla_formats::AreaTableCatalog) -> Option<&st
 }
 
 /// The walk's own state; the joined list is not copied here, as the reference's pass 1 walks the
-/// slot array itself ([`ChannelState::joined`]).
-#[derive(Resource, Default)]
+/// slot array itself ([`ChannelState::joined`]), and the zone it walks against is the commit's
+/// ([`crate::area::CommittedZone`]).
+#[derive(Resource)]
 pub(crate) struct ZoneChannelWalk {
-    /// The top-level zone the last walk ran for; `None` walks from scratch.
-    at: Option<u32>,
-    /// The zone the walk may act on this frame, the reference's `ds:0xb4e314`, read by the walk
-    /// (`0x49a243`) and the guild-recruitment cascade (`0x49ead7`); `None` while a gate holds.
-    pub(super) zone_id: Option<u32>,
-    /// A character session is live: without it the logout frame, still `InWorld` with `at` just
-    /// cleared, would join the zone being left.
+    /// The session's channels have not been walked since they were last emptied: the next commit
+    /// walks whatever its zone text did, as a world entry's first commit does on the reference's
+    /// empty zone cache. Deviation: a dropped link re-enters the world in this session, where the
+    /// reference logs in anew.
+    owed: bool,
+    /// A character session is live: without it the logout frame, still `InWorld`, would join the
+    /// zone being left.
     live: bool,
 }
 
-impl ZoneChannelWalk {
-    /// Walk again at the next settled frame, whatever the zone: the cache loader's call
-    /// (`0x499a22`) when no zone is committed to walk it against yet, which runs the deferred
-    /// joins it just seated.
-    pub(super) fn rewalk(&mut self) {
-        self.at = None;
-    }
-
-    /// A live session that walked `zone` and holds it committed.
-    #[cfg(test)]
-    pub(super) fn walked_for_test(zone: u32) -> Self {
+impl Default for ZoneChannelWalk {
+    fn default() -> Self {
         ZoneChannelWalk {
-            at: Some(zone),
-            zone_id: Some(zone),
-            live: true,
+            owed: true,
+            live: false,
         }
+    }
+}
+
+impl ZoneChannelWalk {
+    /// A live session whose channels `zone` was walked for and committed.
+    #[cfg(test)]
+    pub(super) fn seat_for_test(world: &mut World, zone: u32) {
+        world.insert_resource(ZoneChannelWalk {
+            owed: false,
+            live: true,
+        });
+        world.insert_resource(crate::area::CommittedZone(Some(zone)));
     }
 
     /// Forget the session: the next world entry re-joins from nothing.
     fn clear_session(&mut self) {
-        self.at = None;
-        self.zone_id = None;
+        self.owed = true;
         self.live = false;
     }
 }
@@ -406,32 +408,25 @@ pub(super) fn walk_zone(
     }
 }
 
-/// Whether the zone under the player is final: an active avatar done settling, benilla's stand-in
-/// for the loading screen the reference walks after.
-fn zone_is_settled(player: Option<&crate::player::Player>) -> bool {
-    player.is_some_and(|p| p.active && !p.settling)
-}
-
 /// Whether our `UNIT_FIELD_FLAGS` has the taxi flight bit, which holds the zone commit's walk off
-/// (`0x494908`-`0x49491a`).
-fn on_a_flight(me: &Query<&crate::net::ObjectStore, With<crate::net::SelfPlayer>>) -> bool {
-    me.iter()
-        .next()
-        .is_some_and(|s| s.0.unit_flags() & crate::player::UNIT_FLAG_TAXI_FLIGHT != 0)
+/// (`0x494908`-`0x49491a`) and EndCinematic's (`0x48f1c3`-`0x48f1ce`).
+fn on_a_flight(store: &crate::net::ObjectStore) -> bool {
+    store.0.unit_flags() & crate::player::UNIT_FLAG_TAXI_FLIGHT != 0
 }
 
-/// One walk against the committed zone [`ZoneChannelWalk::zone_id`], the reference's
-/// `ds:0xb4e314`: nothing while the chat is not ready (`0x49a219`, the mask unseated) or with no
-/// zone row (`0x49a243`-`0x49a275`), else [`walk_zone`] and the zone noted. Whether it walked, for
-/// the tail ([`GuildRecruitmentCascade::tail`]).
+/// One walk against the committed zone `zone`, the reference's `ds:0xb4e314`: nothing while the
+/// chat is not ready (`0x49a219`, the mask unseated) or with no zone row (`0x49a243`-`0x49a275`),
+/// else [`walk_zone`], the walk no longer owed. Whether it walked, for the tail
+/// ([`GuildRecruitmentCascade::tail`]).
 fn walk_committed(
     channels: &mut ChannelState,
     walk: &mut ZoneChannelWalk,
+    zone: Option<u32>,
     areas: Option<&AreaTableRes>,
     net: (&NetCommands, &crate::ui_action::UiErrorKeys),
     script: Option<&mut benilla_ui::script::UiScript>,
 ) -> bool {
-    let (Some(zone_id), Some(areas)) = (walk.zone_id, areas) else {
+    let (Some(zone_id), Some(areas)) = (zone, areas) else {
         return false;
     };
     let Some(row) = areas.0.get(zone_id) else {
@@ -442,101 +437,152 @@ fn walk_committed(
     }
     let (name, flags) = (row.name.clone(), row.flags);
     walk_zone(channels, &name, flags, city_word(&areas.0), net, script);
-    walk.at = Some(zone_id);
+    walk.owed = false;
     true
 }
 
-/// The walk, re-run whenever the zone changes. It composes from the real zone name, the
-/// `GetRealZoneText` cache (`0xb4b404`), never the display text, which the indoor override
-/// (`0x67e670`) renames.
-///
-/// The reference walks in `UpdateZoneText 0x494780` on each zone change (`0x494931`), which the
-/// area poll runs in the frame's idle pass after the packets (`0x401ece` → `0x5db900` →
-/// `0x67e510` → `0x494780`), skipped while our taxi flag is set (`0x494908`-`0x49491a`); this
-/// polls the same inputs every frame. It waits while the world arrives (`Player::settling`), as
-/// the reference walks after its loading screen and our leaf area moves while terrain streams in,
-/// and for the chat cache to seat the mask, as the reference bails on its ready flag (`0x49a219`).
-/// The walks the reference makes inside a packet run there: the cache loader's
-/// ([`walk_at_settle`]) and the taxi flag's clear ([`on_field_edge`]). The walk's tail runs the
-/// recruitment cascade's retry (`0x49a6a4`-`0x49a6b2`).
-pub(super) fn auto_join_zone_channels(
-    commands: Res<NetCommands>,
-    // The slots and the walk beside the VM: the walk runs no Lua, so it is an engine turn.
-    mut vm: crate::script_calls::VmWith<WalkState>,
-    areas: Option<Res<AreaTableRes>>,
-    world: benilla_world::world_point::WorldPoint,
-    // One parameter for clippy's argument limit: the body's settle and a cinematic's view.
-    body: (
-        Option<Res<crate::player::Player>>,
-        Option<Res<crate::cinematic::Cinematic>>,
-    ),
+/// The zone's name and area flags, what the walk and the verbs compose a channel's name from.
+fn zone_row(areas: Option<&AreaTableRes>, zone: Option<u32>) -> Option<(String, u32)> {
+    areas?.0.get(zone?).map(|row| (row.name.clone(), row.flags))
+}
+
+/// World entry arms the walk; the session-end edges disarm it.
+pub(super) fn arm_zone_channel_walk(
+    mut walk: ResMut<ZoneChannelWalk>,
     mut entered: MessageReader<crate::net::EnteredWorldMessage>,
-    mut catalog_fed: Local<crate::ui_script::VmMemo<Option<(String, u32)>>>,
-    // The taxi flag the zone commit's walk waits on, and the tail's retry.
-    (errors, me, mut cascade): (
-        Res<crate::ui_action::UiErrorKeys>,
-        Query<&crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
-        ResMut<GuildRecruitmentCascade>,
-    ),
 ) {
-    let walked = vm.turn(|script, (mut channels, mut walk)| {
-        let (player, cinematic) = (&body.0, &body.1);
-        // World entry arms the walk; the session-end edges disarm it.
-        if entered.read().next().is_some() {
-            walk.live = true;
+    if entered.read().count() > 0 {
+        walk.live = true;
+    }
+}
+
+/// What the zone-text commit walks with, beside the notice lane's VM
+/// ([`crate::area::feed_zone_events`]): the slots and the walk, which the host reads, the zone
+/// rows, the wire, and our player for the commit's gates.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct ZoneCommit<'w, 's> {
+    channels: Option<ResMut<'w, ChannelState>>,
+    walk: Option<ResMut<'w, ZoneChannelWalk>>,
+    committed: Option<ResMut<'w, crate::area::CommittedZone>>,
+    areas: Option<Res<'w, AreaTableRes>>,
+    commands: Option<Res<'w, NetCommands>>,
+    errors: Option<Res<'w, crate::ui_action::UiErrorKeys>>,
+    me: Query<'w, 's, &'static crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
+}
+
+impl ZoneCommit<'_, '_> {
+    /// `UpdateZoneText` stores the zone (`0x49479a`).
+    pub(crate) fn store_zone(&mut self, zone: u32) {
+        if let Some(committed) = self.committed.as_mut() {
+            committed.set_if_neq(crate::area::CommittedZone(Some(zone)));
         }
+    }
 
-        // A cinematic suppresses the rejoin: two of the six reads of the reference's cinematic cell
-        // `[0xb4e310]`, `0x49491c` (the zone-text update) and `0x5ff565` (an `UPDATEFLAGS` reflex),
-        // skip `ZoneChannelRefresh` (`0x49a210`) while one runs, and `EndCinematic` calls it at
-        // `0x48f1d0`. A race intro flies the streaming focus far off a body that has not moved.
-        let cinematic_running = cinematic.as_deref().is_some_and(|c| c.is_playing());
-        let areas = areas.as_deref();
-
-        // `None` with no session, during a cinematic, while the world arrives, or with no area
-        // answer.
-        let zone_id = (walk.live && !cinematic_running && zone_is_settled(player.as_deref()))
-            .then(|| {
-                let areas = areas?;
-                world.area().and_then(|leaf| areas.0.top_zone(leaf))
-            })
-            .flatten();
-        walk.zone_id = zone_id;
-        let zone = zone_id
-            .and_then(|id| areas?.0.get(id))
-            .map(|row| (row.name.clone(), row.flags));
-
-        // The VM's catalog is fed before those gates: to its verbs an empty catalog means "no such
-        // built-in channel", which files `General` as a custom channel and joins one of that name.
-        // Zone-less, a zone row carries `resolved: None`, the reference's nil leg (`0x4a10d9`,
-        // `0x49ece5`).
-        let mut script = script;
-        if !channels.channels.is_empty() {
-            if let Some(script) = script.as_mut() {
-                let at = zone.clone().unwrap_or_default();
-                let fed = catalog_fed.get(script);
-                if fed.as_ref() != Some(&at) {
-                    script.set_zone_channel_catalog(zone_channel_catalog(
-                        &channels.channels,
-                        &at.0,
-                        at.1,
-                        areas.and_then(|a| city_word(&a.0)),
-                    ));
-                    *fed = Some(at);
-                }
-            }
+    /// The VM's channel catalog for the zone just stored at `0xb4e314` (`0x49479a`), which the
+    /// verbs read at their call: `JoinChannel`'s resolve (`0x4a10d9`), `EnumerateServerChannels`
+    /// (`0x4a17a8`) and the cascade's name (`0x49ece5`). Fed once per zone and VM, `fed` the
+    /// zone this VM holds; a row's `resolved` is `None` with no zone, the verbs' nil leg.
+    pub(crate) fn feed_catalog(
+        &self,
+        script: &mut benilla_ui::script::UiScript,
+        zone: Option<u32>,
+        fed: &mut Option<Option<u32>>,
+    ) {
+        let Some(channels) = self.channels.as_deref() else {
+            return;
+        };
+        if channels.channels.is_empty() || *fed == Some(zone) {
+            return;
         }
+        let areas = self.areas.as_deref();
+        let (name, flags) = zone_row(areas, zone).unwrap_or_default();
+        script.set_zone_channel_catalog(zone_channel_catalog(
+            &channels.channels,
+            &name,
+            flags,
+            areas.and_then(|a| city_word(&a.0)),
+        ));
+        *fed = Some(zone);
+    }
 
-        if zone_id.is_none() || walk.at == zone_id || on_a_flight(&me) {
-            return false; // nothing to walk against, the same zone as last frame, or aloft
+    /// Our player is held and aloft or not: the active player `0x468460` finds (`0x494904`), its
+    /// taxi bit clear (`0x494908`-`0x49491a`).
+    fn afoot(&self) -> bool {
+        self.me
+            .iter()
+            .next()
+            .is_some_and(|store| !on_a_flight(store))
+    }
+
+    /// The walk `UpdateZoneText` makes when the real zone text changed (`0x4948b7` → `0x494931`),
+    /// after the gates in the reference's order: the active player (`0x494904`), the taxi bit
+    /// (`0x494908`-`0x49491a`), a cinematic running (`0x49491c`) and one pending (`0x494928` →
+    /// `0x5efc90`, `[0xc4d75c]`). `real_changed` is that text's change; a walk the session still
+    /// owes runs whatever it did. Whether it walked, for the tail.
+    pub(crate) fn walk_on_commit(
+        &mut self,
+        script: &mut benilla_ui::script::UiScript,
+        zone: u32,
+        real_changed: bool,
+        cinematic: Option<&crate::cinematic::Cinematic>,
+    ) -> bool {
+        if !self.afoot() {
+            return false;
+        }
+        if cinematic.is_some_and(|c| c.is_playing() || c.is_pending()) {
+            return false;
+        }
+        if !real_changed && !self.walk.as_deref().is_some_and(|w| w.owed) {
+            return false;
+        }
+        self.walk_now(script, Some(zone))
+    }
+
+    /// EndCinematic's walk (`0x48f1d0`), past its own gates, the active player and the taxi bit
+    /// (`0x48f1b4`-`0x48f1ce`), the cinematic cell just cleared (`0x48f183`).
+    pub(crate) fn walk_at_cinematic_end(
+        &mut self,
+        script: &mut benilla_ui::script::UiScript,
+    ) -> bool {
+        let zone = self.committed.as_deref().and_then(|c| c.0);
+        self.afoot() && self.walk_now(script, zone)
+    }
+
+    fn walk_now(&mut self, script: &mut benilla_ui::script::UiScript, zone: Option<u32>) -> bool {
+        let (Some(channels), Some(walk), Some(commands), Some(errors)) = (
+            self.channels.as_deref_mut(),
+            self.walk.as_deref_mut(),
+            self.commands.as_deref(),
+            self.errors.as_deref(),
+        ) else {
+            return false;
+        };
+        if !walk.live {
+            return false;
         }
         walk_committed(
-            &mut channels,
-            &mut walk,
-            areas,
-            (&commands, &errors),
-            script,
+            channels,
+            walk,
+            zone,
+            self.areas.as_deref(),
+            (commands, errors),
+            Some(script),
         )
+    }
+}
+
+/// EndCinematic's walk (`0x48f1d0`), run when a cinematic has ended ([`Cinematic::take_end_walk`]):
+/// the committed zone's channels, with the tail.
+pub(crate) fn walk_when_cinematic_ends(
+    mut cine: ResMut<crate::cinematic::Cinematic>,
+    mut vm: crate::script_calls::VmWith<ZoneCommit<'static, 'static>>,
+    mut cascade: ResMut<GuildRecruitmentCascade>,
+) {
+    if !cine.take_end_walk() {
+        return;
+    }
+    let walked = vm.turn(|script, mut commit| {
+        script.is_some_and(|script| commit.walk_at_cinematic_end(script))
     });
     if walked {
         vm.run(|script| {
@@ -549,16 +595,16 @@ pub(super) fn auto_join_zone_channels(
 
 /// The cache loader's walk (`0x499a22`, after its burst), inside the chat section's settle or the
 /// interface load that reads it ([`super::settings`]), against the committed zone, with the tail.
-/// With no zone committed yet the walk would bail, and the poll walks at the first settled frame,
-/// which runs the deferred joins the loader seated.
+/// With no zone committed yet the walk would bail, and the first commit's walk, which the session
+/// still owes, runs the deferred joins the loader seated.
 pub(super) fn walk_at_settle(world: &mut World, script: &mut benilla_ui::script::UiScript) {
+    let zone = world
+        .get_resource::<crate::area::CommittedZone>()
+        .and_then(|z| z.0);
     let live = world
         .get_resource::<ZoneChannelWalk>()
-        .is_some_and(|w| w.live && w.zone_id.is_some());
-    if !live {
-        if let Some(mut walk) = world.get_resource_mut::<ZoneChannelWalk>() {
-            walk.rewalk();
-        }
+        .is_some_and(|w| w.live);
+    if !live || zone.is_none() {
         return;
     }
     let walked = world.resource_scope::<ChannelState, _>(|world, mut channels| {
@@ -572,6 +618,7 @@ pub(super) fn walk_at_settle(world: &mut World, script: &mut benilla_ui::script:
             walk_committed(
                 &mut channels,
                 &mut walk,
+                zone,
                 world.get_resource::<AreaTableRes>(),
                 (commands, errors),
                 Some(script),
@@ -592,6 +639,7 @@ pub(super) fn walk_at_settle(world: &mut World, script: &mut benilla_ui::script:
 pub(crate) struct TaxiWalk<'w> {
     channels: Option<ResMut<'w, ChannelState>>,
     walk: Option<ResMut<'w, ZoneChannelWalk>>,
+    committed: Option<Res<'w, crate::area::CommittedZone>>,
     areas: Option<Res<'w, AreaTableRes>>,
     commands: Option<Res<'w, NetCommands>>,
     errors: Option<Res<'w, crate::ui_action::UiErrorKeys>>,
@@ -621,6 +669,7 @@ impl TaxiWalk<'_> {
         walk_committed(
             channels,
             walk,
+            self.committed.as_deref().and_then(|c| c.0),
             self.areas.as_deref(),
             (commands, errors),
             script,
@@ -628,8 +677,9 @@ impl TaxiWalk<'_> {
     }
 }
 
-/// Feed the VM the zone-less catalog before any interface file runs: world entry runs FrameXML
-/// and the addons in one call, ahead of the walk's first tick.
+/// Feed a new VM the catalog for the zone stored at `0xb4e314` before any interface file runs:
+/// world entry runs FrameXML and the addons in one call, ahead of the first commit, and a reload
+/// keeps the stored zone ([`crate::area::CommittedZone`]).
 pub(crate) fn seed_zone_channel_catalog(
     world: &mut World,
     script: &mut benilla_ui::script::UiScript,
@@ -638,12 +688,19 @@ pub(crate) fn seed_zone_channel_catalog(
         return;
     };
     if channels.channels.is_empty() {
-        return; // no `ChatChannels.dbc`: nothing to feed, as in the walk
+        return; // no `ChatChannels.dbc`: nothing to feed, as in the commit
     }
-    let city = world
-        .get_resource::<AreaTableRes>()
-        .and_then(|a| city_word(&a.0));
-    script.set_zone_channel_catalog(zone_channel_catalog(&channels.channels, "", 0, city));
+    let areas = world.get_resource::<AreaTableRes>();
+    let zone = world
+        .get_resource::<crate::area::CommittedZone>()
+        .and_then(|z| z.0);
+    let (name, flags) = zone_row(areas, zone).unwrap_or_default();
+    script.set_zone_channel_catalog(zone_channel_catalog(
+        &channels.channels,
+        &name,
+        flags,
+        areas.and_then(|a| city_word(&a.0)),
+    ));
 }
 
 /// Every `ChatChannels.dbc` row as the VM needs it: the id, the Shortcut the verbs match a typed
@@ -772,27 +829,6 @@ mod tests {
     }
 
     #[test]
-    fn the_walk_waits_for_the_world_under_the_player() {
-        use crate::player::Player;
-
-        assert!(!zone_is_settled(None), "no avatar: no zone to believe");
-
-        let mut p = Player::default();
-        assert!(!zone_is_settled(Some(&p)), "inactive avatar");
-
-        p.active = true;
-        p.settling = true;
-        assert!(
-            !zone_is_settled(Some(&p)),
-            "settling — the destination's terrain and WMOs are still arriving, so the leaf area \
-             under the body is still moving"
-        );
-
-        p.settling = false;
-        assert!(zone_is_settled(Some(&p)), "settled: the zone is now final");
-    }
-
-    #[test]
     fn leaving_the_world_ends_the_channel_session() {
         let mut channels = state(SEED);
         channels.joined = vec![
@@ -800,8 +836,7 @@ mod tests {
             joined("LocalDefense - Tanaris"),
         ];
         let mut walk = ZoneChannelWalk {
-            at: Some(440),
-            zone_id: Some(440),
+            owed: false,
             live: true,
         };
         let mut cascade = GuildRecruitmentCascade::default();
@@ -810,8 +845,7 @@ mod tests {
         // No VM in a unit test: the mirror leg is the one line this cannot reach.
         end_channel_session(None, &mut channels, &mut walk, &mut cascade);
 
-        assert_eq!(walk.at, None, "the next entry re-walks from scratch");
-        assert_eq!(walk.zone_id, None);
+        assert!(walk.owed, "the next entry re-walks from scratch");
         assert!(!walk.live);
         assert!(
             channels.joined.is_empty(),
