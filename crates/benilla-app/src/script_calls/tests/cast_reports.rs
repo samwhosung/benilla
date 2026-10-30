@@ -962,7 +962,16 @@ fn a_listener_that_raises_a_cursor_takes_the_bind_leg() {
     with_quaff(&mut f, FOE, Default::default());
     once_on_change(&mut f, r#"CastSpellByName("Fortitude")"#);
     run_hosted(&mut f, "UseContainerItem(0, 1, 1)");
-    assert_eq!(casts(&f), vec![(FORTITUDE, Some(ME))]);
+    let wire: Vec<String> = f.rx.try_iter().map(|c| format!("{c:?}")).collect();
+    let fortitude = ClientCommand::CastSpell {
+        spell_id: FORTITUDE,
+        target: Some(ME),
+    };
+    assert_eq!(
+        wire,
+        [format!("{fortitude:?}")],
+        "the potion never goes out"
+    );
     assert!(!cursor_is_up(&f), "the bind emptied the word");
 }
 
