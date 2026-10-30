@@ -2048,15 +2048,27 @@ pub(crate) struct MoveStartClose<'w, 's> {
 }
 
 impl MoveStartClose<'_, '_> {
-    /// `0x48f200(1, 1, 0)` (`0x60e9dd`); nothing with no loot target latched (`0x6126b0`).
+    /// `0x48f200(1, 1, 0)` (`0x60e9dd`, `0x5f07d5`); nothing with no loot target latched
+    /// ([`loot_target_held`]), whatever window is open.
     pub(crate) fn close(&mut self) {
         let (Some(loot), Some(latch)) = (self.loot.as_deref_mut(), self.latch.as_deref_mut())
         else {
             return;
         };
+        if !loot_target_held(latch) {
+            return;
+        }
         let closed = close_on_move_start(loot, latch, &self.net, self.items.as_deref());
         self.dead.after_close(closed);
     }
+}
+
+/// `IsLooting 0x6126b0` for the active player: its loot guid `[+0x1d28]` is set (`0x6126bc`). The
+/// movement guard (`0x60e9ce`) and the stand apply (`0x5f07c6`) skip their close on a clear one
+/// (`je` past `0x60e9dd`, `0x5f07d5`), so a window a releasing refusal left open with the latch
+/// dropped (`0x5ebac2`) stays open through a move or a sit.
+pub(super) fn loot_target_held(latch: &LootLatch) -> bool {
+    latch.0.is_some()
 }
 
 /// [`close_on_move_start`], its teardown's signals on the lane or in place by `unlocks`.

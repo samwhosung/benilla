@@ -87,8 +87,11 @@ pub(crate) struct LootSteps<'w, 's> {
 impl LootSteps<'_, '_> {
     /// A probe line's stand state change's loot close, `0x48f200(1, 1, 0)` at `0x5f07d5`, with
     /// nobody to signal between its steps: the movement start's close ([`super::MoveStartClose`]),
-    /// its release sent now.
+    /// its release sent now; nothing with no loot target latched ([`super::loot_target_held`]).
     pub(crate) fn close_for_stand(&mut self) {
+        if !super::loot_target_held(&self.latch) {
+            return;
+        }
         let closed = super::close_on_move_start(
             &mut self.loot,
             &mut self.latch,
@@ -98,12 +101,16 @@ impl LootSteps<'_, '_> {
         self.dead.after_close(closed);
     }
 
-    /// A stand state change's loot close inside its call, `0x48f200(1, 1, 0)` at `0x5f07d5`: what
-    /// `dl` keeps stays ([`super::move_start_keeps`]), anything else closes as `CloseLoot` closes
-    /// it, its release now and the rest owed past `depth`, the depth returned, for the caller to
-    /// run step by step ([`Self::then_past`]) ahead of the stand's attack stop (`0x5f07e7`).
+    /// A stand state change's loot close inside its call, `0x48f200(1, 1, 0)` at `0x5f07d5`: nothing
+    /// with no loot target latched ([`super::loot_target_held`]); what `dl` keeps stays
+    /// ([`super::move_start_keeps`]), anything else closes as `CloseLoot` closes it, its release now
+    /// and the rest owed past `depth`, the depth returned, for the caller to run step by step
+    /// ([`Self::then_past`]) ahead of the stand's attack stop (`0x5f07e7`).
     pub(crate) fn close_for_stand_here(&mut self, script: &mut UiScript) -> usize {
         let depth = self.loot.then.len();
+        if !super::loot_target_held(&self.latch) {
+            return depth;
+        }
         if let Some(source) = self.loot.source() {
             if !super::move_start_keeps(&self.loot, source) {
                 self.end_window(script, false);
@@ -125,12 +132,13 @@ impl LootSteps<'_, '_> {
         true
     }
 
-    /// A movement start's close inside its call, `0x48f200(1, 1, 0)` at `0x60e9dd`: what `dl`
-    /// keeps stays ([`super::move_start_keeps`]), anything else closes as `CloseLoot` closes it,
-    /// its release now and `LOOT_CLOSED` in the call's tail, before the script's next line.
+    /// A movement start's close inside its call, `0x48f200(1, 1, 0)` at `0x60e9dd`: nothing with no
+    /// loot target latched ([`super::loot_target_held`]); what `dl` keeps stays
+    /// ([`super::move_start_keeps`]), anything else closes as `CloseLoot` closes it, its release now
+    /// and `LOOT_CLOSED` in the call's tail, before the script's next line.
     pub(crate) fn close_for_move(&mut self, script: &mut UiScript) -> Option<CallTail> {
         let source = self.loot.source()?;
-        if super::move_start_keeps(&self.loot, source) {
+        if !super::loot_target_held(&self.latch) || super::move_start_keeps(&self.loot, source) {
             return None;
         }
         let depth = self.loot.then.len();

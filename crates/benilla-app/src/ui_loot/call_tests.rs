@@ -882,6 +882,62 @@ fn a_refusal_for_another_session_shows_nothing_and_drops_the_target() {
     }
 }
 
+/// A releasing refusal of the loot target drops it and leaves the window open (`0x5ebac2`), and the
+/// movement guard and the stand apply close only while one is latched (`IsLooting 0x6126b0`,
+/// tested at `0x60e9ce` and `0x5f07c6` ahead of `0x48f200` at `0x60e9dd` and `0x5f07d5`): a move,
+/// a sit and the server's sit close the window with the target held, and once a refusal dropped it
+/// leave the window open and release nothing. The lanes fire after each step, so a close's
+/// `LOOT_CLOSED` is heard wherever it signals.
+#[test]
+fn a_move_or_a_sit_keeps_a_window_a_refusal_unlatched() {
+    use benilla_protocol::messages::loot_error;
+    /// One step, run on the client.
+    type Step = fn(&mut Loot);
+    let steps: [(&str, Step); 3] = [
+        ("a move", |l| bound(l, "MoveForwardStart()")),
+        ("a sit", |l| bound(l, "SitOrStand()")),
+        ("the server's sit", |l| {
+            packets(l, vec![SessionEvent::StandStateUpdate { state: 1 }])
+        }),
+    ];
+    let mut wrong = Vec::new();
+    for (what, step) in steps {
+        for refused in [false, true] {
+            let mut l = client();
+            let world = l.app.world_mut();
+            let me = world.resource::<GuidIndex>().0[&ME];
+            world.entity_mut(me).insert(crate::net::Embodied);
+            world.init_resource::<crate::player::CameraControl>();
+            world.init_resource::<crate::player::Player>();
+            world.resource_mut::<crate::player::Player>().active = true;
+            open(&mut l, CORPSE, 1, 0, vec![row(0, LINEN)]);
+            if refused {
+                packets(
+                    &mut l,
+                    vec![SessionEvent::LootError {
+                        guid: CORPSE,
+                        error: loot_error::TOO_FAR,
+                    }],
+                );
+                assert_eq!(l.app.world().resource::<LootLatch>().0, None, "{what}");
+            }
+            let _ = (seen(&mut l), sent(&l));
+            step(&mut l);
+            crate::lanes::flush(l.app.world_mut());
+            let released = !sent(&l).is_empty();
+            let signalled = seen(&mut l).contains("LOOT_CLOSED");
+            let open = l.app.world().resource::<LootState>().source() == Some(CORPSE);
+            if (released, signalled, open) != (!refused, !refused, refused) {
+                wrong.push(format!(
+                    "{what}, refused {refused}: released {released}, LOOT_CLOSED {signalled}, \
+                     open {open}"
+                ));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
 /// A response over an open window runs its copier's teardown first (`0x4c1cb0`): the source is
 /// zeroed (`0x4c1da0`) and `LOOT_CLOSED` signalled (`0x4c1dac`) before the new source is stored
 /// (`0x4c1dc2`), so a `CloseLoot` in its handlers finds no window (`0x48f23f`) and releases

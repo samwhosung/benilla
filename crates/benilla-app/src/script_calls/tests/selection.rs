@@ -546,6 +546,9 @@ fn a_sits_dead_loot_source_deselect_signals_ahead_of_its_attack_stop() {
         0,
         Vec::new(),
     );
+    // The loot target an admitted response leaves latched, which the leave's close asks
+    // (`0x5f07c6`).
+    world.resource_mut::<crate::ui_loot::LootLatch>().0 = Some(MOB);
     on_target_changed(&mut f, "RandomRoll(1, 2)");
     f.rx.try_iter().for_each(drop);
     run(&mut f, "SitOrStand()");

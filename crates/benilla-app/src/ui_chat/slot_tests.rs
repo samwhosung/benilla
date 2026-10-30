@@ -684,6 +684,9 @@ fn a_sit_emote_releases_the_loot_and_stops_the_attack_ahead_of_its_packet() {
         0,
         Vec::new(),
     );
+    // The loot target an admitted response leaves latched, which the leave's close asks
+    // (`0x5f07c6`).
+    c.world().resource_mut::<crate::ui_loot::LootLatch>().0 = Some(CORPSE);
     c.run("DoEmote('SIT')");
     assert_eq!(
         posture_wire(&mut c),
@@ -712,6 +715,9 @@ fn a_sit_emotes_loot_closed_listener_sends_ahead_of_its_attack_stop() {
         0,
         Vec::new(),
     );
+    // The loot target an admitted response leaves latched, which the leave's close asks
+    // (`0x5f07c6`).
+    c.world().resource_mut::<crate::ui_loot::LootLatch>().0 = Some(CORPSE);
     c.run(
         r#"local r = CreateFrame("Frame")
         r:RegisterEvent("LOOT_CLOSED")
