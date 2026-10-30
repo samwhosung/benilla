@@ -2685,6 +2685,7 @@ mod tests {
             panic!("one rebuild: {rebuilds:?}");
         };
         assert_eq!(rebuild.entity, world.resource::<GuidIndex>().0[&mob]);
+        assert_eq!(rebuild.display_id, 11, "the row it resolved");
         assert_eq!(
             rebuild.at,
             at(FIELD_UNIT_DISPLAYID),

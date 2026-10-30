@@ -1140,7 +1140,7 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
                 && old as i32 <= 0
                 && new as i32 > 0)
     };
-    let mut rebuild_owed = false;
+    let mut rebuild_owed = None;
     if matches!(kind, ObjectType::Unit | ObjectType::Player)
         && block
             .edges()
@@ -1279,10 +1279,13 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
                     old,
                     new,
                 });
-                if rebuild_owed && rebuilds(index, old, new) {
-                    sc.rebuilds
-                        .write(crate::entities::DisplayRebuilt { entity: e, at });
-                    rebuild_owed = false;
+                if let Some(display_id) = rebuild_owed.filter(|_| rebuilds(index, old, new)) {
+                    sc.rebuilds.write(crate::entities::DisplayRebuilt {
+                        entity: e,
+                        at,
+                        display_id,
+                    });
+                    rebuild_owed = None;
                 }
                 // The watcher runs at its range's place, where its first edge is written.
                 if crate::net::in_aura_watch(index) {
@@ -1407,10 +1410,13 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
         }
     }
     // A walk that wrote neither edge still owes its rebuild, after what it wrote.
-    if rebuild_owed {
+    if let Some(display_id) = rebuild_owed {
         let at = crate::lanes::stamp();
-        sc.rebuilds
-            .write(crate::entities::DisplayRebuilt { entity: e, at });
+        sc.rebuilds.write(crate::entities::DisplayRebuilt {
+            entity: e,
+            at,
+            display_id,
+        });
     }
     // The active player's coinage watcher `OnMoneyChanged` (`0x5ddf30`), registered on its own
     // object (`0x5dd8a0`): the trade offer's trim (`0x5ddfda`), at the packet, behind the
@@ -1629,39 +1635,37 @@ fn resolve_display_records(sc: &mut Scene, guid: u64, fields: &ObjectFields) {
 
 /// Slot 3's rebuild (`0x5fbe28`), after the packet's walk: announced with a stamp of its own.
 fn reactivated_rebuild(sc: &mut Scene, e: Entity, guid: u64, fields: &ObjectFields) {
-    if display_changed(sc, e, guid, fields) {
+    if let Some(display_id) = display_changed(sc, e, guid, fields) {
         let at = crate::lanes::stamp();
-        sc.rebuilds
-            .write(crate::entities::DisplayRebuilt { entity: e, at });
+        sc.rebuilds.write(crate::entities::DisplayRebuilt {
+            entity: e,
+            at,
+            display_id,
+        });
     }
 }
 
 /// `CGUnit_C::OnDisplayChanged` (`0x60abe0`), from the `UNIT_FIELD_DISPLAYID` watcher
 /// (`0x6049b5`), the health watcher's return to life (`0x604835`) and slot 3 (`0x5fbe28`): when
 /// `0x60ae10` sees a new record set the unit resolves its records again (`0x60ac21`), and a
-/// creature asks its record (`0x60b15b`). Whether it rebuilt, which the caller announces
-/// ([`crate::entities::DisplayRebuilt`]) at the watcher's place.
-fn display_changed(sc: &mut Scene, e: Entity, guid: u64, fields: &ObjectFields) -> bool {
-    let Some(creatures) = sc.creatures.as_deref() else {
-        return false;
-    };
-    let Ok(mut held) = sc.held_displays.get_mut(e) else {
-        return false;
-    };
+/// creature asks its record (`0x60b15b`). The row it rebuilt from, which the caller announces
+/// ([`crate::entities::DisplayRebuilt`]) at the watcher's place; `None` for no rebuild.
+fn display_changed(sc: &mut Scene, e: Entity, guid: u64, fields: &ObjectFields) -> Option<u32> {
+    let creatures = sc.creatures.as_deref()?;
+    let mut held = sc.held_displays.get_mut(e).ok()?;
     let display = unit_display(fields);
-    let Some(was) = held.0 else {
-        return false;
-    };
+    let was = held.0?;
     if !creatures.display_records_differ(display, was) {
-        return false;
+        return None;
     }
-    held.0 = creatures.records_row(display);
+    let row = creatures.records_row(display);
+    held.0 = row;
     // The body rebuilt (`0x60abe0`) dresses both pieces by the flag (`0x5ed802`, `0x5ed81a`).
     if let Ok(mut pins) = sc.worn_pins.get_mut(e) {
         pins.rebuilt();
     }
     sc.names.ask_creature_record(guid, fields, &sc.net);
-    true
+    row
 }
 
 /// `UNIT_FIELD_DISPLAYID` as the resolve reads it, absent as 0 (vmangos omits zero fields).

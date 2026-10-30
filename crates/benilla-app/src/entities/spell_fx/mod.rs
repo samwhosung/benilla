@@ -1323,6 +1323,44 @@ mod tests {
         }
     }
 
+    /// The rebuild runs on the unit, built or not (`0x60abe0`): with its body still to come, what
+    /// it held ends all the same, the aura re-arming for the body and the precast loop and the
+    /// flash gone.
+    #[test]
+    fn a_rebuild_before_the_body_attached_ends_what_the_unit_held() {
+        let mut app = rebuilding();
+        let flash = FxInstance {
+            persistent: false,
+            ..held(7, FxStage::OneShot, FLASH.0, FLASH.2)
+        };
+        let precast = held(116, FxStage::Relive, 10, "Spells\\Precast_Hand.mdx");
+        let aura = held(13033, FxStage::State, 9, "Spells\\Aura.mdx");
+        let unit = app
+            .world_mut()
+            .spawn((
+                Transform::default(),
+                GlobalTransform::default(),
+                crate::net::Guid(0xB0B),
+                crate::net::NetEntity {
+                    kind: benilla_protocol::EntityKind::Unit,
+                    display_id: Some(7),
+                    scale: 1.0,
+                },
+                display_field(7),
+                FxAttached {
+                    instances: vec![flash, precast, aura],
+                },
+            ))
+            .id();
+        swap_display(&mut app, unit);
+        app.update();
+        assert_eq!(
+            roots_of(&app, unit),
+            [(13033, None)],
+            "the aura waits for the body"
+        );
+    }
+
     /// A precast loop is kind 4 (`0x60ee7e`), which nothing in the rebuild plays again: it ends
     /// and stays gone.
     #[test]
@@ -1579,7 +1617,11 @@ mod tests {
         app.world_mut().entity_mut(unit).insert(display_field(8));
         app.world_mut()
             .resource_mut::<Messages<crate::entities::DisplayRebuilt>>()
-            .write(crate::entities::DisplayRebuilt { entity: unit, at });
+            .write(crate::entities::DisplayRebuilt {
+                entity: unit,
+                at,
+                display_id: 8,
+            });
     }
 
     fn display_field(display: u32) -> crate::net::ObjectStore {
