@@ -457,12 +457,12 @@ fn drive_vplates(
             world
                 .targeting
                 .wants(crate::spell::targeting::TargetingWants::Location),
-        let my_drunk = self_store
-            .and_then(|s| s.0.player_drunk_byte())
-            .unwrap_or(0);
         );
         let hovered_key = script.hovered_nameplate();
         let my_level = self_store.and_then(|s| s.0.unit_level()).unwrap_or(1);
+        let my_drunk = self_store
+            .and_then(|s| s.0.player_drunk_byte())
+            .unwrap_or(0);
         let relations = &world.relations;
         let unit_of = |guid: u64, store: &ObjectStore| relations.unit_of(guid, store);
         let judge = gate::Judge {
@@ -473,10 +473,10 @@ fn drive_vplates(
                 names: Some(&names),
                 forms: spells.as_deref().map(|s| &s.forms),
                 words: None,
-            my_drunk,
             },
             names: Some(&names),
             my_level,
+            my_drunk,
             group: Some(&group),
             mode,
         };
@@ -736,19 +736,23 @@ pub(crate) fn fire_plate_call(
     }
 }
 
-/// The bar's watcher on `guid` (`0x7cc570`) after the bridge's on the same field, with the unit's
-/// health and maximum as `store` holds them where it runs. A unit the object manager no longer
-/// holds writes nothing (`0x7cc588`, `0x7cc591`).
+/// The bars' watchers on `guid` (`0x7cc570`) and `bridge`, the unit's own watchers on the same
+/// field, in the order they were linked
+/// ([`benilla_ui::script::UiScript::nameplate_health_around`]), with the unit's health and maximum
+/// as `store` holds them where they run. A unit the object manager no longer holds has the bars
+/// write nothing (`0x7cc588`, `0x7cc591`).
 pub(crate) fn health_watch(
     script: &mut benilla_ui::script::UiScript,
     guid: u64,
     store: Option<&ObjectStore>,
+    bridge: impl FnOnce(&mut benilla_ui::script::UiScript),
 ) {
     let Some(store) = store else {
+        bridge(script);
         return;
     };
     let (health, max) = gate::bar_of(store);
-    script.nameplate_health(guid, health, max);
+    script.nameplate_health_around(guid, health, max, bridge);
 }
 
 /// [`drive_vplates`] as a one-shot, for a test over the whole client.

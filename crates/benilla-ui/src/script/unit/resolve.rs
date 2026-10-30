@@ -250,6 +250,68 @@ pub fn field_watchers_in(
         })
 }
 
+/// Where a unit takes token flags, which register its unit-field watchers when it held none
+/// (`0x60c4a0` at `0x60c4b0`): the selection's 0x1000 (`0x493540`), a party seat's 0x10 and its
+/// pet's 0x20 (`0x4e839e`, `0x4e83d6`) and a raid arrival's 0x100 and its pet's 0x200
+/// (`0x4bab2a`, `0x4bab65`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TokenSource {
+    Target,
+    Party,
+    Raid,
+}
+
+/// `globals` with `source`'s tables read as empty: what [`field_watchers_in`] finds of a unit
+/// besides the flags `source` gives it.
+pub(crate) struct Besides<'a> {
+    pub(crate) globals: &'a dyn UnitTokenGlobals,
+    pub(crate) source: TokenSource,
+}
+
+impl UnitTokenGlobals for Besides<'_> {
+    fn target(&self) -> u64 {
+        if self.source == TokenSource::Target {
+            0
+        } else {
+            self.globals.target()
+        }
+    }
+    fn mouseover(&self) -> u64 {
+        self.globals.mouseover()
+    }
+    fn npc(&self) -> u64 {
+        self.globals.npc()
+    }
+    fn party(&self, row: u32) -> u64 {
+        if self.source == TokenSource::Party {
+            0
+        } else {
+            self.globals.party(row)
+        }
+    }
+    fn raid(&self, row: u32) -> u64 {
+        if self.source == TokenSource::Raid {
+            0
+        } else {
+            self.globals.raid(row)
+        }
+    }
+    fn party_pet_record(&self, row: u32) -> u64 {
+        if self.source == TokenSource::Party {
+            0
+        } else {
+            self.globals.party_pet_record(row)
+        }
+    }
+    fn raid_pet_record(&self, row: u32) -> u64 {
+        if self.source == TokenSource::Raid {
+            0
+        } else {
+            self.globals.raid_pet_record(row)
+        }
+    }
+}
+
 /// `f` over the objects as the lent host reads them now ([`crate::script::CallHost::read_unit_tokens`]),
 /// `None` with no host free to ask or one that reads none.
 pub(crate) fn with_live_objects<T>(

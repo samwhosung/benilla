@@ -91,6 +91,28 @@ impl super::UiScript {
         .unwrap_or_else(|| guids.has_field_watchers(guid))
     }
 
+    /// [`Self::unit_has_field_watchers`] with the flags `source` gives left out: whether the unit
+    /// held others when it took them.
+    pub fn unit_has_field_watchers_besides(&self, guid: u64, source: super::TokenSource) -> bool {
+        let model = self.model_ref();
+        let guids = &model.unit_guids;
+        let globals = super::unit::LiveGlobals::asked(self.lua(), guids);
+        let besides = super::unit::Besides {
+            globals: &globals,
+            source,
+        };
+        super::unit::with_live_objects(self.lua(), |o| {
+            super::unit::field_watchers_in(&besides, o, guid)
+        })
+        .unwrap_or_else(|| {
+            let besides = super::unit::Besides {
+                globals: guids,
+                source,
+            };
+            super::unit::field_watchers_in(&besides, guids, guid)
+        })
+    }
+
     /// Push, or clear with `None`, the visible items of the player `guid` by slot id 1..=19:
     /// what the slot getters read through a token naming another player they may read
     /// (`0x4944a0`) when no host is free to ask ([`VisibleSlotQuery`]). It fires nothing: a change

@@ -704,6 +704,11 @@ impl ScriptCallHost<'_, '_> {
         if at.latched && !appliers.pet().attack_latched() {
             script.fire_event("PET_BAR_UPDATE", vec![]);
         }
+        // The store's token flag on the new selection (`0x493540` → `0x60c4a0`), which links its
+        // unit-field watchers when it held none besides.
+        if let Some(guid) = selected {
+            script.unit_tokens_added(guid, benilla_ui::script::TokenSource::Target);
+        }
         if let Some(states) = appliers.action_states().as_mut() {
             states.usable_refresh(script).fire(script);
         }

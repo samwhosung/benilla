@@ -101,6 +101,38 @@ impl NoticeFiring<'_, '_> {
             crate::vplates::fire_plate_call(script, guid, call);
             return false;
         }
+        if let FieldNotice::TokensAdded { guid, source } = notice {
+            script.unit_tokens_added(guid, source);
+            return false;
+        }
+        // The two health fields' watchers on the unit's own list, the bridge's and each plate
+        // bar's, in the order they were linked (`0x467f65`): a plate bound before the unit took
+        // a token runs ahead of the bridge. The unit tooltip's watcher follows the bridge's.
+        if let FieldNotice::Unit { guid, id } = notice {
+            use crate::field_watch::id::{UNIT_HEALTH, UNIT_MAXHEALTH};
+            if matches!(id, UNIT_HEALTH | UNIT_MAXHEALTH) {
+                let store = self
+                    .index
+                    .as_ref()
+                    .and_then(|i| i.0.get(&guid))
+                    .and_then(|&e| self.views.get(e).ok());
+                let tooltip = store.filter(|_| id == UNIT_HEALTH).map(|s| {
+                    (
+                        s.0.unit_health().unwrap_or(0),
+                        s.0.unit_max_health().unwrap_or(0),
+                    )
+                });
+                let sink = &mut self.sink;
+                crate::vplates::health_watch(script, guid, store, |script| {
+                    fire(script, sink, notice);
+                    // `0x529560`, registered by the render (`0x52a0a8`): its packet's health.
+                    if let Some((health, max)) = tooltip {
+                        script.tooltip_unit_health(guid, health, max);
+                    }
+                });
+                return false;
+            }
+        }
         if notice == FieldNotice::CorpsePlate {
             script.tooltip_corpse_refresh();
             return false;
@@ -171,24 +203,6 @@ impl NoticeFiring<'_, '_> {
             return false;
         }
         fire(script, &mut self.sink, notice);
-        if let FieldNotice::Unit { guid, id } = notice {
-            if id == crate::field_watch::id::UNIT_HEALTH {
-                self.tooltip_health(script, guid);
-            }
-            // The plates' bar watchers on the unit's two fields (`0x7cc53b`, `0x7cc562`), linked
-            // when a plate is bound, after the bridge's.
-            if matches!(
-                id,
-                crate::field_watch::id::UNIT_HEALTH | crate::field_watch::id::UNIT_MAXHEALTH
-            ) {
-                let store = self
-                    .index
-                    .as_ref()
-                    .and_then(|i| i.0.get(&guid))
-                    .and_then(|&e| self.views.get(e).ok());
-                crate::vplates::health_watch(script, guid, store);
-            }
-        }
         false
     }
 }
@@ -202,24 +216,6 @@ impl NoticeFiring<'_, '_> {
             .and_then(|i| i.0.get(&guid))
             .and_then(|&e| self.views.get(e).ok())
             .is_some_and(crate::net::ObjectStore::is_unit)
-    }
-
-    /// The unit tooltip's own watcher on the health of the unit it shows (`0x529560`, which the
-    /// render registers on the object, `0x52a0a8`), after the bridge's: `guid`'s health as its
-    /// packet left it.
-    fn tooltip_health(&self, script: &mut UiScript, guid: u64) {
-        let store = self
-            .index
-            .as_ref()
-            .and_then(|i| i.0.get(&guid))
-            .and_then(|&e| self.views.get(e).ok());
-        if let Some(store) = store {
-            script.tooltip_unit_health(
-                guid,
-                store.0.unit_health().unwrap_or(0),
-                store.0.unit_max_health().unwrap_or(0),
-            );
-        }
     }
 
     /// `SetPetGuid`'s signals in its order (`0x4bc847`-`0x4bc911`): on a change, `UNIT_PET`, then,
@@ -699,6 +695,7 @@ pub(crate) fn fire(
         | FieldNotice::PetGuidSet { .. }
         | FieldNotice::TooltipUnit { .. }
         | FieldNotice::Plate { .. }
+        | FieldNotice::TokensAdded { .. }
         | FieldNotice::CorpsePlate
         | FieldNotice::RecruitmentCascade => {}
         // Put on the trainer lane by the packet's handler ([`crate::ui_trainer::TrainerPasses`]).

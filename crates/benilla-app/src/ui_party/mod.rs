@@ -127,6 +127,9 @@ pub struct GroupState {
     /// The `RefreshNameDesc` calls the party's slot writers made, in their order, for the handler
     /// to resolve against the objects held ([`Self::take_roster_colours`]).
     pub(crate) roster_colours: Vec<RosterColour>,
+    /// The token flags the party seats and the raid arrivals gave, in their order, for the
+    /// handler to resolve against the objects held ([`Self::take_token_adds`]).
+    pub(crate) token_adds: Vec<TokenAdd>,
     /// While a test sets it, each signal with the roster cells as they stood when its handler
     /// signalled it, what a listener fired at that place would read.
     #[cfg(test)]
@@ -171,6 +174,30 @@ pub(crate) struct RosterColour {
     /// Whether the seat's (a player held) or the clear's (any unit held).
     pub(crate) seat: bool,
     pub(crate) party: [u64; 4],
+}
+
+/// A roster writer's token flags on a member it seats, held as a player, and then on that member's
+/// pet, held as a unit: a party seat's 0x10 and 0x20 (`0x4e838d` → `0x4e839e`, `0x4e83c9` →
+/// `0x4e83d6`) and a raid arrival's 0x100 and 0x200 (`0x4bab18` → `0x4bab2a`, `0x4bab55` →
+/// `0x4bab65`), each at its own place.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TokenAdd {
+    pub(crate) at: crate::lanes::Stamp,
+    pub(crate) pet_at: crate::lanes::Stamp,
+    pub(crate) guid: u64,
+    pub(crate) source: benilla_ui::script::TokenSource,
+}
+
+impl TokenAdd {
+    fn now(guid: u64, source: benilla_ui::script::TokenSource) -> Self {
+        let at = crate::lanes::stamp();
+        Self {
+            at,
+            pet_at: crate::lanes::stamp(),
+            guid,
+            source,
+        }
+    }
 }
 
 /// A selection teardown the roster raises; the handler that applied it resolves which guid it
@@ -456,6 +483,10 @@ impl GroupState {
         let mut filled = [0; 4];
         for (slot, m) in seated.iter().filter(|m| m.guid != 0).enumerate() {
             filled[slot] = m.guid;
+            self.token_adds.push(TokenAdd::now(
+                m.guid,
+                benilla_ui::script::TokenSource::Party,
+            ));
             self.roster_colours.push(RosterColour {
                 at: crate::lanes::stamp(),
                 guid: m.guid,
@@ -584,7 +615,21 @@ impl GroupState {
                 out.ask_raid_targets = true;
             }
             // The rows (`0x4ba8a4`-`0x4ba960`), each ranked against this list's leader.
+            let old_rows: Vec<u64> = if raid_held {
+                self.raid_rows().collect()
+            } else {
+                Vec::new()
+            };
             self.raid = RaidRow::rebuilt(&members, (self_guid.unwrap_or(0), own_flags), leader);
+            // Each arrival's token flags, after its departures' teardowns (`0x4bab00`-`0x4babd9`).
+            let arrivals: Vec<u64> = self
+                .raid_rows()
+                .filter(|&g| g != 0 && Some(g) != self_guid && !old_rows.contains(&g))
+                .collect();
+            for guid in arrivals {
+                self.token_adds
+                    .push(TokenAdd::now(guid, benilla_ui::script::TokenSource::Raid));
+            }
             // The rebuild counts afresh (`0x4ba89e`): each new row's lookup, ours after the
             // members' once any is listed, a zero guid asking nothing (`0x4ba9b4`). It ends in the
             // signal unless a name is pending (`0x4babdf`-`0x4babef`).
@@ -825,6 +870,11 @@ impl GroupState {
         std::mem::take(&mut self.released)
     }
 
+    /// The token flags the last list gave, in their order ([`TokenAdd`]).
+    pub(crate) fn take_token_adds(&mut self) -> Vec<TokenAdd> {
+        std::mem::take(&mut self.token_adds)
+    }
+
     /// The colour refreshes the last list or ending made, in their order ([`RosterColour`]).
     pub(crate) fn take_roster_colours(&mut self) -> Vec<RosterColour> {
         std::mem::take(&mut self.roster_colours)
@@ -1046,9 +1096,10 @@ impl GroupState {
             name_waits: _,
             raid_names_pending: _,
             saved_instances: _,
-            // The list's own teardowns and refreshes, raised before its reset.
+            // The list's own teardowns, refreshes and token flags, raised before its reset.
             released: _,
             roster_colours: _,
+            token_adds: _,
             #[cfg(test)]
                 signal_cells: _,
         } = self;

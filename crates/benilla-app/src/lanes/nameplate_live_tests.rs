@@ -425,6 +425,28 @@ fn a_guild_record_the_name_block_waited_on_gates_the_plate_at_its_packet() {
 /// `PLAYER_GUILDID`.
 const GUILD_ID: u16 = 191;
 
+/// The two health watchers on one unit run in the order they were linked onto its list
+/// (`0x467f00`, `0x467f65`): the boar's plate was bound before it was targeted, whose token flag
+/// linked its unit-field watchers then (`0x493540` → `0x60c4a0` → `0x51bbb0`), so the bar moves
+/// first and the `UNIT_HEALTH("target")` listener reads the packet's value on it. The wolf was
+/// the target before its plate was bound, its bridge ahead of the bar.
+#[test]
+fn a_units_bar_and_bridge_run_in_the_order_they_were_linked() {
+    let mut app = plated_client("return Bar():GetValue()");
+    {
+        let world = app.world_mut();
+        world.resource_mut::<crate::target::Selection>().last = Some(BOAR);
+        crate::script_calls::with_hosted_vm(world, |s| {
+            s.expect("a VM").run("TargetLastTarget()").expect("runs");
+        });
+    }
+    let _ = frame(&mut app, vec![]);
+    assert_eq!(
+        frame(&mut app, vec![values(BOAR, &health(25))]),
+        ["UNIT_HEALTH:target:25"]
+    );
+}
+
 /// [`client`] with the frame's gate able to run (`drive_vplates`): both kinds of plate on, the
 /// camera looking down on us, and the boar alone drawn, so the gate gives it the one plate. The
 /// spy's `Look` is the test's; the frame's gate has run once.
