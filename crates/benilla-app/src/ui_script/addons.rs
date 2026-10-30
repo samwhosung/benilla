@@ -263,8 +263,8 @@ const ADDONS_PREFIX: &str = "Interface/AddOns/";
 
 /// The addon folder, `<benilla-config>/AddOns/`, or `None` (always under `$WOW_CAPTURE`); addon
 /// textures and fonts resolve onto it too. Deviation: the reference reads the install's
-/// `Interface\AddOns\`; benilla reads an install and does not live in one, so its addons live in
-/// its own state folder, and only there.
+/// `Interface\AddOns\`; its addons live in its own state folder, and only there, because benilla
+/// reads an install and does not live in one.
 pub(crate) fn root() -> Option<PathBuf> {
     root_from(crate::local_state::home())
 }
@@ -681,8 +681,8 @@ pub(super) fn save_enable_state(script: &UiScript, identity: Option<&(String, St
 /// file, before `AddOns.txt`). No autosave and no dirty bit, as in the reference, whose write gate
 /// is the record's loaded byte: an addon that never loaded is not written. A scope declaring no
 /// names loses its file (`0x51f859`, `0x51f9ac`) when it ran cleanly this session.
-/// Deviation: that file is renamed to `<Name>.lua.bak`, where the reference deletes it, so an addon
-/// update that drops its toc line costs the player nothing they cannot get back.
+/// Deviation: that file is renamed to `<Name>.lua.bak`, where the reference deletes it, because
+/// that way an addon update that drops its toc line costs the player nothing they cannot get back.
 pub(super) fn save_addon_variables(script: &mut UiScript, identity: Option<&(String, String)>) {
     let account = crate::local_state::addon_saved_account_dir();
     let character = identity.and_then(|(r, c)| crate::local_state::addon_saved_character_dir(r, c));

@@ -509,8 +509,8 @@ fn open_tail(world: &mut World, place: Place) {
 /// (`0x4e35de`). In 1.12.1 a turn to a page not yet cached closes the book, which stays closed, and
 /// a letter whose author's name is not cached shows without its From line, then closes when the
 /// name lands. `0x4930d0`'s same-target test (`0x4930eb`-`0x4930f3`) only skips a unit's greeting,
-/// so this is a bug. benilla keeps the book open and shows it again ([`show_at`]): the page or the
-/// From line appears when it lands.
+/// so this is a bug, and benilla keeps the book open and shows it again ([`show_at`]) because of
+/// that: the page or the From line appears when it lands.
 fn answered(world: &mut World, wait: Wait, place: Place) {
     let Some(sess) = world
         .resource_mut::<ItemTextOpen>()

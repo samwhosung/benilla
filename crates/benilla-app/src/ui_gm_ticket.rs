@@ -166,7 +166,7 @@ fn update_ticket_args(ticket: Option<&benilla_protocol::messages::GmTicket>) -> 
 /// (`0x5e7945`) the saved ebp, the return address into the dispatcher and the handler's first
 /// argument.
 ///
-/// Deviation: those three are stack residue, so benilla sends 0 for each.
+/// Deviation: benilla sends 0 for each of those three because they are stack residue.
 fn no_ticket_args() -> Vec<ScriptValue> {
     vec![
         ScriptValue::Int(0),

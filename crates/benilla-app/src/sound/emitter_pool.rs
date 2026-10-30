@@ -51,9 +51,9 @@ struct Record {
 struct Entry {
     /// `[+0xE00]`, the SoundEntries id; 0 is free.
     id: u32,
-    /// Deviation: the reference marks an unresolvable kit by negating the id (`[+0xE00] = -id`),
-    /// so the owner's next `$DSL` re-registers into a fresh entry every cycle; a flag keeps it in
-    /// place without the churn. Both are silent.
+    /// Deviation: a flag keeps an unresolvable kit in place without the churn, because the
+    /// reference marks it by negating the id (`[+0xE00] = -id`), so the owner's next `$DSL`
+    /// re-registers into a fresh entry every cycle. Both are silent.
     failed: bool,
     /// `[+0xC00]`'s active set, in claim order.
     records: Vec<Record>,

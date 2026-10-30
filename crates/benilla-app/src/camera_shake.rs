@@ -287,9 +287,9 @@ fn fire_shakes(
 /// Fire the shake group a spell-visual kit's field 14 names, once per kit play, with no stage test
 /// and no cancel (`0x620e11`, or `0x60f4e6` when the play created no effect node).
 ///
-/// Deviation: the shake spawns at the kit play's position. The reference passes `&node+0x48` to
-/// the shake (`0x620e0e`) before `0x62101d` fills it from the attachment, so a bone-attached first
-/// node (`0x61fdd0`, which never writes it) shakes at the world origin its constructor left
+/// Deviation: the shake spawns at the kit play's position because the reference passes `&node+0x48`
+/// to the shake (`0x620e0e`) before `0x62101d` fills it from the attachment, so a bone-attached
+/// first node (`0x61fdd0`, which never writes it) shakes at the world origin its constructor left
 /// (`0x61f4c1`) and is culled beyond 80 yards of it, silencing 26 of the 58 shipped shake kits;
 /// that is a read before the write, not a behaviour.
 fn fire_kit_shakes(

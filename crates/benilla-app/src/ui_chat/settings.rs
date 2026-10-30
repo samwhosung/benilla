@@ -625,7 +625,7 @@ fn write(script: &UiScript, channels: &super::edit::ChannelState, path: &std::pa
 ///   teardown (`0x499a80` from `0x490c55`) with no dirty check (`[0xb6e5c4]` is never read); host
 ///   state such as the zone mask never marks the file dirty.
 /// - Deviation: the debounce also writes Lua's changes (`dirty`) after the quiet time, where the
-///   reference writes only at teardown, so a crash loses at most a second of changes.
+///   reference writes only at teardown, because that way a crash loses at most a second of changes.
 ///
 /// A held reader has restored nothing, so neither writes, as `0x5afed0` skips a pending section
 /// (`0x5afee0`).

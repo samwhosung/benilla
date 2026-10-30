@@ -16,7 +16,7 @@
 //!   large and soft at high resolutions.
 //! - Highlight: the mouseover or the target (`0x606f20` into `0x607080`) lights the plate.
 //!   Deviation: the bar fill brightens by `LIT_BOOST` in place of the reference's ADD
-//!   `Nameplate-Glow` rim, which reads as hard edge lines under benilla's linear blending.
+//!   `Nameplate-Glow` rim, because that reads as hard edge lines under benilla's linear blending.
 //!   Hovering a plate makes its unit the mouseover (`0x7cb850`) and turns the name yellow; a
 //!   click on it selects.
 //! - With a target, every other plate dims ([`DIM_ALPHA`]).
@@ -191,14 +191,15 @@ fn con_color(pl_level: u32, unit_level: u32) -> [f32; 4] {
 
 /// Snap a logical-pixel coordinate onto the device pixel grid, so the sharp-resampled border
 /// blits 1:1 at any scale factor. Deviation: the reference draws at fractional device
-/// coordinates; the snap keeps the magnified border crisp. Shared with the chat bubble.
+/// coordinates; here the position snaps because that keeps the magnified border crisp. Shared with
+/// the chat bubble.
 pub(crate) fn device_snap(v: f32, scale: f32) -> f32 {
     (v * scale).round() / scale
 }
 
-/// Deviation: the reference's plates grow with the diagonal without limit (`0x7705b0`), which
-/// reads too big and soft; past this diagonal, where the frame is the border art's native
-/// 128x32 px, the basis grows at [`PLATE_GROWTH_DAMP`] of that rate.
+/// Deviation: the reference's plates grow with the diagonal without limit (`0x7705b0`); past this
+/// diagonal, where the frame is the border art's native 128x32 px, the basis grows at
+/// [`PLATE_GROWTH_DAMP`] of that rate, because unlimited growth reads too big and soft.
 const PLATE_DIAG_KNEE: f32 = 1280.0;
 /// 0 pins the native size, 1 is the reference's rate.
 const PLATE_GROWTH_DAMP: f32 = 0.5;
@@ -668,8 +669,8 @@ fn drive_vplates(
                 name_height: text_px(NAME_H, basis) / seam,
                 level_height: text_px(LEVEL_H, basis) / seam,
                 // Deviation: a constant one-logical-pixel shadow, not the reference's 0.001 gx,
-                // which draws 2 px thick and too heavy at larger windows. Divided by the seam,
-                // which the shared text arm would otherwise scale it by.
+                // because that draws 2 px thick and too heavy at larger windows. Divided by the
+                // seam, which the shared text arm would otherwise scale it by.
                 shadow_offset: 1.0 / seam,
             },
             states,

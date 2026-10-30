@@ -57,8 +57,9 @@ fn fill_gray(coverage: u8) -> u8 {
 /// 4. Pack: the coverage as a 4-bit gray ([`fill_gray`]), so the pure ring is black and the fill
 ///    ramps toward it.
 ///
-/// Deviation: `r × floor(dpi)` passes, so the ring keeps its logical weight on a whole-number
-/// high-DPI raster; a fractional scale such as 1.5 rounds down to the reference's one texel a pass.
+/// Deviation: `r × floor(dpi)` passes, because that way the ring keeps its logical weight on a
+/// whole-number high-DPI raster; a fractional scale such as 1.5 rounds down to the reference's one
+/// texel a pass.
 ///
 /// It draws as one quad per glyph (`0x5ccbe0`) whose vertex colour tints the fill and leaves the
 /// ring black. Returns `(rgba, out_w, out_h, pad)`: the cell grows `pad` texels each side (the

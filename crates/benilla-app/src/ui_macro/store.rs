@@ -19,8 +19,8 @@ const LINE_BYTES: usize = 0x100;
 const NAME_DELIMS: &[u8] = b" \"\r\n";
 
 /// A token as its buffer kept it. Deviation: the reference's 255-byte cut (`0x4f0677`,
-/// `0x4f0b93`) can end inside a character and keep its stray bytes; a `String` must stay UTF-8,
-/// so the cut backs off to the character's start.
+/// `0x4f0b93`) can end inside a character and keep its stray bytes; here the cut backs off to the
+/// character's start because a `String` must stay UTF-8.
 fn token_text(bytes: Vec<u8>) -> String {
     match String::from_utf8(bytes) {
         Ok(text) => text,

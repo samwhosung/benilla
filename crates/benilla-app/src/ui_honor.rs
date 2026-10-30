@@ -37,8 +37,8 @@ impl InspectHonor {
     ///
     /// Deviation: a new target zeroes the figures too, and dropping a held reply signals
     /// `INSPECT_HONOR_UPDATE`, where `0x4c6f70` keeps the figures and clears only has-data
-    /// (`0xb71fc8`) and pending (`0xb71fcc`): a server that never answers the ask, as vmangos
-    /// often does not, would leave the last player's figures shown under the new one.
+    /// (`0xb71fc8`) and pending (`0xb71fcc`), because a server that never answers the ask, as
+    /// vmangos often does not, would leave the last player's figures shown under the new one.
     pub(crate) fn set_target(&mut self, guid: u64) -> bool {
         if guid == self.target {
             return false;

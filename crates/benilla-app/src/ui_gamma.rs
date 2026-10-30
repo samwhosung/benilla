@@ -53,20 +53,20 @@ impl Default for UiGammaLane {
 /// `__ftol(pow(i / 255, gamma) · 65535)` (`0x591680`); there is no other whole-frame grade and
 /// no `Brightness` or `Contrast` CVar.
 ///
-/// Deviation: the reference skips that upload when windowed (`byte[dev+0x20b]` is `gxWindow`), and
-/// every benilla mode is windowed, so the same curve applies in the compositor, where the slider
-/// can move pixels: [`UiGammaNode`] raises the gamma byte the RAMDAC would have read to `gamma`
-/// before its decode, the continuous form of the 256-entry ramp.
+/// Deviation: the same curve applies in the compositor, where the slider can move pixels, because
+/// the reference skips that upload when windowed (`byte[dev+0x20b]` is `gxWindow`) and every
+/// benilla mode is windowed: [`UiGammaNode`] raises the gamma byte the RAMDAC would have read to
+/// `gamma` before its decode, the continuous form of the 256-entry ramp.
 #[derive(Resource, Debug, Clone, Copy, PartialEq)]
 pub(crate) struct DisplayGamma(pub(crate) f32);
 
 /// The registered `"1.0"`: the identity ramp, at which the pass changes no byte.
 pub(crate) const DEFAULT_GAMMA: f32 = 1.0;
 
-/// Deviation: the reference never clamps (`SetGamma` `0x4891f0` writes `-4.000000` for 5), but its
-/// ramp is a fullscreen OS call and ours is the image, where an extreme exponent blacks out the
-/// panel that would undo it. The range spans the stock slider's `[0.5, 1.5]` four times over; the
-/// CVar keeps the value written and only its consumers clamp.
+/// Deviation: the reference never clamps (`SetGamma` `0x4891f0` writes `-4.000000` for 5), but here
+/// the consumers clamp because its ramp is a fullscreen OS call and ours is the image, where an
+/// extreme exponent blacks out the panel that would undo it. The range spans the stock slider's
+/// `[0.5, 1.5]` four times over; the CVar keeps the value written and only its consumers clamp.
 pub(crate) const GAMMA_RANGE: std::ops::RangeInclusive<f32> = 0.25..=4.0;
 
 impl Default for DisplayGamma {

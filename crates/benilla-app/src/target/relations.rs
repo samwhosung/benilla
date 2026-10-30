@@ -485,7 +485,7 @@ impl Relations<'_> {
 /// forced. The lookup `0x4d6490` returns the stored rank verbatim (`0x4d64b3`).
 ///
 /// Deviation: the rank is held to 7, the top of the ring scale's eight entries (`0..=7`), where the
-/// reference keeps any value; a server rank past 7 would index outside our palette.
+/// reference keeps any value, because a server rank past 7 would index outside our palette.
 pub(crate) fn forced_rank(reputations: &Reputations, faction: u32) -> Option<u8> {
     reputations
         .forced_rank(faction)

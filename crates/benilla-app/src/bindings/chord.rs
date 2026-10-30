@@ -163,7 +163,8 @@ fn fixed_name(k: KeyCode) -> Option<KeyName> {
         F13 => Word("PRINTSCREEN"),
         // `IsValidBindingKeyString` accepts `F` + any digits (`0x846c04`) and the Mac table maps
         // keycode `0x6A` to `F16` (`0x30d`). Deviation: the Windows key table stops at `VK_F12`
-        // and drops later F-keys; they are named here so a stored `F13`-`F24` can be pressed.
+        // and drops later F-keys; they are named here because that way a stored `F13`-`F24` can be
+        // pressed.
         #[cfg(not(target_os = "macos"))]
         F13 => Word("F13"),
         // On a Mac F14 and F15 are ScrollLock and Pause: keycodes `0x6B` and `0x71` map to

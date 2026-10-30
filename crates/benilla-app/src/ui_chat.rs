@@ -263,8 +263,8 @@ pub(crate) fn add_chat_lane(app: &mut App) {
 /// lines. The Lua state is itself replaced at the session end, as the reference destroys its own
 /// at logout.
 ///
-/// Deviation: not run on benilla's same-character reconnect, which the reference lacks (it
-/// returns to the login screen), so the window keeps its scrollback there.
+/// Deviation: not run on benilla's same-character reconnect, which the reference lacks (it returns
+/// to the login screen), because that way the window keeps its scrollback there.
 fn end_session_chat(
     mut hosted_vm: crate::script_calls::HostedVm,
     log: Res<ChatLog>,

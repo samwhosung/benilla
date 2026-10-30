@@ -1086,7 +1086,7 @@ fn on_update_end(
             // Deviation: a first-pass values block the clear header byte left unwritten re-fires,
             // for a live object, its last write's edges against the watch copy (`0x465570`,
             // `0x466686`); benilla compares against this packet's copies, which hold none for it,
-            // so a stale edge never fires twice.
+            // because that way a stale edge never fires twice.
             Notify::Values { guid, sent } => {
                 let moved = copies.get(&guid).unwrap_or(&none);
                 let block = Notified::new(Sent::Fields(&sent), moved);

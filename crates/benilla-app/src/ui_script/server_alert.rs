@@ -20,10 +20,10 @@
 //! client sets neither redirect flag (`0x4000`, `0x8000`); what WinINet does with an
 //! http-to-https redirect is the OS's, not in the client's bytes, and benilla does not follow one.
 //!
-//! Deviation: the body is read with 0x4000-byte reads filled to the end of the body, so what a
-//! read returns does not depend on how the network cut the packets; and the reading stops once
-//! the buffer is full, since no later byte can change it.
-//! Deviation: the connection is direct. The reference opens its session with access type 0
+//! Deviation: the body is read with 0x4000-byte reads filled to the end of the body, because that
+//! way what a read returns does not depend on how the network cut the packets; and the reading
+//! stops once the buffer is full, because no later byte can change it.
+//! Deviation: the connection is direct because the reference opens its session with access type 0
 //! (`InternetOpenA`, `0x7a6d97`), the system's proxy settings, which benilla does not read.
 
 use std::io::{self, BufRead, BufReader, Read, Write};

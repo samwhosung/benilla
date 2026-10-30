@@ -65,9 +65,10 @@ fn conform_rotation(mode: u8, n_local: Vec3) -> Quat {
 /// `CMovement+0x24`; the two agree on a uniform slope), smoothed on the up-vector.
 ///
 /// Deviation: the reference updates every unit every frame; here only units showing a flagged
-/// visual are tracked, and a parked rig skips its ray and re-seeds at the slope on waking, to bound
-/// the cost at one ray per flagged unit on screen. Nothing shows: an unflagged unit's vector is
-/// never read, and a first-sight seed at the slope seats a mount-up at once, as the reference does.
+/// visual are tracked, and a parked rig skips its ray and re-seeds at the slope on waking, because
+/// that bounds the cost at one ray per flagged unit on screen. Nothing shows: an unflagged unit's
+/// vector is never read, and a first-sight seed at the slope seats a mount-up at once, as the
+/// reference does.
 #[allow(clippy::type_complexity)] // one Bevy system's full input set
 pub(super) fn conform_units(
     time: Res<Time>,

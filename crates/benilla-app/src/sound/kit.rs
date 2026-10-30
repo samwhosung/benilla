@@ -237,8 +237,8 @@ impl Bus {
 const BUS_CAP: [u32; 13] = [0x7fff_ffff, 1, 2, 2, 1, 1, 2, 2, 1, 6, 4, 1, 2];
 
 /// How many copies of one kit may sound at once, for kits without the `NO_DUPLICATES` flag.
-/// Deviation: the reference leaves those kits uncapped; sample-aligned copies of one file sum
-/// coherently (five are one sound +14 dB), so a mass buff distorts.
+/// Deviation: the reference leaves those kits uncapped; here they are capped because sample-aligned
+/// copies of one file sum coherently (five are one sound +14 dB), so a mass buff distorts.
 const SAME_KIT_MAX: usize = 2;
 
 /// The reference's duplicate suppressor: kit flag 0x20 and a channel of the same file still live

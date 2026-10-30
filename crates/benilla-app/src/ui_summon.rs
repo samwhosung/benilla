@@ -15,9 +15,9 @@
 //! - `ConfirmSummon()` (`0x48b770`) checks no deadline, so two Accepts are two packets; vmangos
 //!   ignores the guid and checks its own `m_summon_expire`.
 //!
-//! Deviation: the latch is dropped at session end and an Accept with nothing latched sends
-//! nothing, so no stale or zero guid reaches the server. The reference never clears the guid or
-//! zone, only the deadline (`0x49014a`), so its `ConfirmSummon()` sends whatever is left.
+//! Deviation: the latch is dropped at session end and an Accept with nothing latched sends nothing,
+//! because that way no stale or zero guid reaches the server. The reference never clears the guid
+//! or zone, only the deadline (`0x49014a`), so its `ConfirmSummon()` sends whatever is left.
 
 use benilla_ui::script::SummonConfirmUiState;
 use bevy::prelude::*;

@@ -51,8 +51,9 @@ const PERP_EPSILON: f32 = 0.001;
 /// (`0x7afc10`/`0x7afc38`), which makes the per-frame re-roll crawl rather than strobe.
 const ADVECT_KEEP: f32 = 0.75;
 
-/// Deviation: a cap on one hop's sub-segment count, which the reference lacks, so a vertex run is
-/// never sized off table data alone; shipped rows peak at 12 (30 yd at `avgSegLen` 2.78).
+/// Deviation: a cap on one hop's sub-segment count, which the reference lacks, because that way a
+/// vertex run is never sized off table data alone; shipped rows peak at 12 (30 yd at `avgSegLen`
+/// 2.78).
 const MAX_SUBDIVISIONS: usize = 256;
 
 /// The caster's chain-target hop array, the reference's growable `unit+0xd44`: guids in wire

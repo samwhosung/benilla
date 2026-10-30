@@ -75,7 +75,7 @@ pub(crate) fn parse(
         .collect();
     // Deviation: a filter of 127 bytes or more puts the copy's NUL in the name buffer's first byte
     // (`0x5aec1a`), so a name an earlier tag set is scanned as more filter. benilla ends the copy
-    // at its own NUL: the run-on reads one stack buffer through another.
+    // at its own NUL because the run-on reads one stack buffer through another.
     copy.push(b' ');
     let mut builder = Builder {
         tags,
@@ -161,9 +161,9 @@ fn is_space(c: u32) -> bool {
     match c as u16 {
         0xffff => false,
         w @ 0..=0xff => matches!(w, 0x09..=0x0d | 0x20),
-        // Deviation: `C1_SPACE` from `GetStringTypeW` is the Windows system's own table, which
-        // no file of the client holds; benilla answers Unicode's `White_Space` for those units,
-        // and nothing for a lone surrogate.
+        // Deviation: benilla answers Unicode's `White_Space` for those units, and nothing for a
+        // lone surrogate, because `C1_SPACE` from `GetStringTypeW` is the Windows system's own
+        // table, which no file of the client holds.
         w => char::from_u32(u32::from(w)).is_some_and(char::is_whitespace),
     }
 }

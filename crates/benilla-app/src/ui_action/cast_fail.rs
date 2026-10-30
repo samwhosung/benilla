@@ -412,8 +412,8 @@ impl CastFailLine {
 
 /// The line for a failed cast, `None` where the reference leaves before `DisplayError` and the
 /// log; `get` is the VM's GlobalStrings lookup. An empty [`CastFailLine::text`] shows nothing and
-/// still logs. Deviation: a reason past the table prints its hex code, so an unknown reason is
-/// visible.
+/// still logs. Deviation: a reason past the table prints its hex code, because that way an unknown
+/// reason is visible.
 pub(super) fn cast_fail_text(
     caster: Caster,
     reason: u8,

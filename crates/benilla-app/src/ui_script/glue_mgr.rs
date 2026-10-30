@@ -1519,9 +1519,9 @@ impl GlueMgr {
     ///
     /// Deviation: the reference's handler completes whichever operation is current; here only the
     /// character list's does, in state 3, and a reply of another cause (a roster nothing of the
-    /// screen asked for) or of another link (before a realm change) completes nothing. Those
-    /// replies cannot be told from the operation they would be applied to in the reference, which
-    /// has one link and one request in flight; here the IO thread's park serves several.
+    /// screen asked for) or of another link (before a realm change) completes nothing, because the
+    /// reference has one link and one request in flight and so cannot tell those replies from the
+    /// operation they would be applied to, while here the IO thread's park serves several.
     fn on_roster(&mut self, roster: Vec<Character>, cause: RosterCause, epoch: u64) {
         if cause != RosterCause::Asked
             || epoch != self.link

@@ -360,8 +360,8 @@ impl TextEngine {
 
     /// [`Self::ensure_str`] without the raster: shape what is missing, so a string that is measured
     /// and never drawn never touches the sheet. Deviation: the reference's measure kernels
-    /// (`0x5c6940`, `0x5c6b70`, `0x5c6c50`, `0x5c7300`, `0x5c7470`) rasterize each character, but
-    /// the step law reads only the advance, so skipping the bitmap changes no width.
+    /// (`0x5c6940`, `0x5c6b70`, `0x5c6c50`, `0x5c7300`, `0x5c7470`) rasterize each character; here
+    /// the bitmap is skipped, which changes no width because the step law reads only the advance.
     pub(super) fn ensure_metrics(&mut self, face: usize, ppem: u16, text: &str) {
         for ch in text.chars() {
             self.ensure_char(face, ppem, None, ch);

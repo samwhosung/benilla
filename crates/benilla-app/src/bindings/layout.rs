@@ -213,10 +213,10 @@ fn one_char(key: &winit::keyboard::Key) -> Option<char> {
 /// The reference's name for the virtual key `vk`, given `MapVirtualKeyExW(vk, MAPVK_VK_TO_CHAR)`;
 /// `None` for a key `0x42d800`'s fixed table names.
 ///
-/// Deviation: a character above U+00FF names the key by itself. The reference's `MapVirtualKeyA`
-/// returns an ANSI code-page byte, which `0x42da4b` drops past `0xff` and the namer's UTF-8
-/// encoder (`0x41abb0`) otherwise reads as Latin-1, so such a key is mislabelled or dropped; named
-/// by what it types, it stays bindable and readable.
+/// Deviation: a character above U+00FF names the key by itself because the reference's
+/// `MapVirtualKeyA` returns an ANSI code-page byte, which `0x42da4b` drops past `0xff` and the
+/// namer's UTF-8 encoder (`0x41abb0`) otherwise reads as Latin-1, so such a key is mislabelled or
+/// dropped; named by what it types, it stays bindable and readable.
 #[cfg(any(target_os = "windows", test))]
 fn windows_name(vk: u32, to_char: u32) -> Option<LayoutName> {
     match vk {
@@ -288,11 +288,12 @@ mod windows {
 /// `KeyTranslate` gives the reference, or none.
 ///
 /// Deviation: a layout that is not ASCII-capable (Hebrew, Greek, Russian, Arabic, Thai) names its
-/// keys through the ASCII-capable layout macOS pairs with it, as macOS names its own shortcuts. The
-/// reference reads a non-Roman `KCHR`'s byte as MacRoman (`0x8a40f`), which names no real key.
+/// keys through the ASCII-capable layout macOS pairs with it, as macOS names its own shortcuts,
+/// because the reference reads a non-Roman `KCHR`'s byte as MacRoman (`0x8a40f`), which names no
+/// real key.
 ///
-/// Deviation: a character above U+00FF (Czech `ě`, Polish `ł`, Turkish `ş`) names the key by
-/// itself. The reference reads `KeyTranslate`'s byte as MacRoman (`0x8a40f`) and keeps it only if
+/// Deviation: a character above U+00FF (Czech `ě`, Polish `ł`, Turkish `ş`) names the key by itself
+/// because the reference reads `KeyTranslate`'s byte as MacRoman (`0x8a40f`) and keeps it only if
 /// it converts to Latin-1 (`CFStringGetBytes`, `0x8a46b`, stored at `0x8a482`), else leaves the
 /// slot `-1`, which `0x8a4aa` drops, so such a key is mislabelled or dropped; named by what it
 /// types, it stays bindable and readable.

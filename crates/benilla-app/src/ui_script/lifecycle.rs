@@ -177,7 +177,8 @@ fn new_vm<E: std::fmt::Display>(
         channels.mirror_into(&mut script);
     }
     // The reference seeds `rand` with the clock before `WinMain` (`0x5b800b`). Deviation: a
-    // capture run (`scenario_active`) keeps the CRT's default seed, 1, so its frames reproduce.
+    // capture run (`scenario_active`) keeps the CRT's default seed, 1, because that way its frames
+    // reproduce.
     if crate::run_mode::scenario_active() {
         script.lua().srand(1);
     }

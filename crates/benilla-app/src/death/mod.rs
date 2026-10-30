@@ -306,8 +306,9 @@ pub(crate) fn poll_corpse(mut vm: crate::script_calls::VmWith<CorpsePoll>) {
         let corpse = death_net.corpse.as_ref();
         let in_range = corpse.is_some_and(|cp| {
             // Deviation: `0x492130` compares the positions whatever map we stand on, so a
-            // ghost on another map at the corpse's coordinates reads in range for a reclaim
-            // the server refuses; here only the corpse's display map counts.
+            // ghost on another map at the corpse's coordinates reads in range for a reclaim the
+            // server refuses; here only the corpse's display map counts because the server refuses
+            // that reclaim.
             let on_display_map = map
                 .as_ref()
                 .is_some_and(|m| m.0 == u32::try_from(cp.display_map).unwrap_or(u32::MAX));

@@ -10,7 +10,7 @@ use super::camera::CameraControl;
 /// head, and the avatar fades out. Deviation: the starting zoom, [`CAM_DIST_DEFAULT`], is 15 yd
 /// where the reference starts at 5.55, the third-person-A row of its default table `0x84f488`
 /// that `cameraView` 1 picks (`0x50c17a`, `0x50c18b`; the `cameraDistance` CVar itself registers
-/// "0.0"), for a wider view.
+/// "0.0"), because that gives a wider view.
 pub(super) const CAM_DIST_MIN: f32 = 0.0;
 /// The zoom ceiling, yd (`ds:0x8089a4` = 50.0): the cap on [`ZoomLimit`] (`0x511309`) and the top
 /// of the distance validator `0x50b310`; also the clamp for a distance read back off disk.

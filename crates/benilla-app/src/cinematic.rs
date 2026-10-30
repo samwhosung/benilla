@@ -184,8 +184,8 @@ impl Cinematic {
 }
 
 /// One of the two letterbox bars, full-width black, top or bottom.
-/// Deviation: Bevy UI nodes computed per frame, not `CinematicFrame.xml`'s textures, so a window
-/// resized mid-cinematic stays letterboxed. `CinematicFrame` still shows and owns ESC.
+/// Deviation: Bevy UI nodes computed per frame, not `CinematicFrame.xml`'s textures, because that
+/// way a window resized mid-cinematic stays letterboxed. `CinematicFrame` still shows and owns ESC.
 #[derive(Component)]
 struct LetterboxBar;
 

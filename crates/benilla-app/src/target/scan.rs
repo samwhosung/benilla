@@ -191,9 +191,10 @@ pub(super) fn load_creature_types(mut commands: Commands, world_assets: Option<R
 
 /// Everything the scan reads, shared by TAB, the attack acquire and the pet bar's Attack.
 ///
-/// Deviation: our own body is never a candidate. The reference's friendly scan picks the player at
-/// some facings (`CanAssist(P, P)` is true, `0x6061e0`; the cone test `0x47f220`), but our scoring
-/// always puts the player dead centre at distance 0, so CTRL-TAB would pick us on every press.
+/// Deviation: our own body is never a candidate because our scoring always puts the player dead
+/// centre at distance 0, so CTRL-TAB would pick us on every press. The reference's friendly scan
+/// picks the player at some facings (`CanAssist(P, P)` is true, `0x6061e0`; the cone test
+/// `0x47f220`).
 #[derive(SystemParam)]
 #[allow(clippy::type_complexity)] // one bundled system param, the app's convention
 pub(crate) struct TargetScan<'w, 's> {
@@ -1125,8 +1126,9 @@ pub(crate) struct LastEnemy(pub(crate) Option<u64>);
 /// alive was stamped the frame it was selected, so its death's deselect (`super::died`, in a later
 /// frame's packet) leaves it remembered.
 ///
-/// Deviation: sampled each frame, not stamped in `SetSelection`, so every selection writer is
-/// covered; a selected unit that turns hostile is remembered, where the reference's is not.
+/// Deviation: sampled each frame, not stamped in `SetSelection`, because that way every selection
+/// writer is covered; a selected unit that turns hostile is remembered, where the reference's is
+/// not.
 pub(super) fn remember_last_enemy(
     selection: Res<Selection>,
     stores: Query<&ObjectStore>,

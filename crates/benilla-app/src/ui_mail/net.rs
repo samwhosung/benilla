@@ -231,7 +231,7 @@ fn on_session_end(
 ///
 /// Deviation: with no usable paper the reference reads the first record of an empty list through
 /// a null pointer (`0x4ad561`-`0x4ad56d`, `mov eax,[eax]` with `eax` 0) and faults; benilla keeps
-/// the row's wire id, so the inbox still opens.
+/// the row's wire id, because that way the inbox still opens.
 pub(super) fn mail_list(
     mails: Vec<MailListEntry>,
     mail: &mut MailOpen,

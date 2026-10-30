@@ -346,8 +346,9 @@ pub(crate) fn watch_glue_aspect(
 /// Deviation: the reference's size callback only re-scales `GlueParent` and re-lays it out
 /// (`0x46ac51`, `0x46ac56`), as its root keeps `gxResolution`'s aspect until a rebuild (`0x41ad10`
 /// at `0x46a828`) and its window keeps that shape while dragged (`0x5989d7`); here the root is the
-/// window's, which takes any shape, so the box follows it on every resize, where a rebuild would
-/// reset the screen (the create screen's character and name, the typed password, the selection).
+/// window's, which takes any shape, so the box follows it on every resize, without a rebuild
+/// because that would reset the screen (the create screen's character and name, the typed password,
+/// the selection).
 pub(super) fn on_glue_screen_resized(script: &UiScript) {
     if let Err(e) = script.run(GLUE_PARENT_RESEAT) {
         error!("ui_script: GlueParent re-seat: {e}");

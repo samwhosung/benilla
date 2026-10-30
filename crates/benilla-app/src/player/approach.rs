@@ -417,8 +417,9 @@ impl AutoMove<'_, '_> {
     /// Deviation: the reference re-projects the point's height onto the first walkable facet a
     /// zero-size box gather finds at the enemy (`0x60fe25`-`0x60fe51`); here it keeps the enemy's
     /// height. The snap radius is the stop, so the two differ only while swimming or on a steep facet.
-    /// Deviation: the reference stores the world point unconverted and reads it back as deck-local
-    /// (`0x60fe6c`, `0x610e95`), so on a transport it walks astray; here it rides the deck.
+    /// Deviation: here it rides the deck, because the reference stores the world point unconverted
+    /// and reads it back as deck-local (`0x60fe6c`, `0x610e95`) and so, on a transport, walks
+    /// astray.
     pub(crate) fn walk_into_melee(
         &mut self,
         at: Vec3,
@@ -446,9 +447,9 @@ impl AutoMove<'_, '_> {
         self.arm(Toward::FacingTurn(facing), at, 0.0, stand).is_ok()
     }
 
-    /// Deviation: the reference converts back through the transport the player stands on each
-    /// frame (`0x610e6b`), so stepping off mid-walk sends the point astray; here the deck is fixed
-    /// at the arm.
+    /// Deviation: here the deck is fixed at the arm, because the reference converts back through
+    /// the transport the player stands on each frame (`0x610e6b`), so stepping off mid-walk sends
+    /// the point astray.
     fn anchor(&self, at: Vec3) -> Anchor {
         let frame = self.player.ride.as_ref().map(|r| r.entity);
         match frame.and_then(|e| self.transports.get(e).ok().map(|tf| (e, tf))) {
@@ -662,8 +663,8 @@ pub(super) fn steer_approach(
         if d2 <= arrive * arrive {
             info!("approach: arrived at {:.2} yd", d2.sqrt());
             // The canceller faces the armed guid (`0x60fbe8`): the object, and none for the ground.
-            // Deviation: the melee arm names the player's own guid (`0x60fe5f`), so the reference
-            // turns to face itself, a fixed heading; here the melee walk does not turn.
+            // Deviation: here the melee walk does not turn, because the reference's melee arm names
+            // the player's own guid (`0x60fe5f`), so it turns to face itself, a fixed heading.
             if let Toward::Object { verb, guid } = toward {
                 if delta.x * delta.x + delta.z * delta.z > f32::EPSILON {
                     player.face_yaw = bearing;

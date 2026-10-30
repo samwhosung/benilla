@@ -19,18 +19,18 @@
 //! free (`0x61b760`). Stock `GroupLootFrame_OpenNewFrame` has four frames and drops a fifth
 //! silently, so an unqueued fifth could never be voted.
 //!
-//! Deviation: the open count is the number of rolls announced and not closed. The reference keeps
-//! a counter that its server-close paths decrement for any roll whose closed byte is clear
+//! Deviation: the open count is the number of rolls announced and not closed, because the reference
+//! keeps a counter that its server-close paths decrement for any roll whose closed byte is clear
 //! (`0x61b6f8`, `0x61bc17`), a deferred roll that never counted up included, so it under-counts
 //! and lets a fifth frame open; here a deferred roll's close changes nothing.
 //!
 //! A result's line, its `CANCEL_LOOT_ROLL` and the promotion after it wait for the result's item
 //! record and, for a win, the winner's name (`0x61b96a` → `0x61b9a0` → `0x61b9bf` → `0x61b9e0`,
 //! `0x61b5c0` → `0x61b640`); until then the roll stays listed. Deviation: a refused record or name
-//! closes the roll unspoken. In 1.12.1 the failure callbacks (`0x61bc80`, `0x61bd50`, `0x61b7d0`)
-//! free the record with no `CANCEL_LOOT_ROLL` and leave the open count unlowered, so its frame
-//! stays up, empty and dead, until a `/reload`, and holds one of the four frames, so a later
-//! fourth roll never shows; benilla closes the roll instead.
+//! closes the roll unspoken because in 1.12.1 the failure callbacks (`0x61bc80`, `0x61bd50`,
+//! `0x61b7d0`) free the record with no `CANCEL_LOOT_ROLL` and leave the open count unlowered, so
+//! its frame stays up, empty and dead, until a `/reload`, and holds one of the four frames, so a
+//! later fourth roll never shows; benilla closes the roll instead.
 //!
 //! A promoted roll's `arg2` is still the wire's countdown (`0x61b430` and `0x61b79a` push
 //! `node+0x3c`, which nothing rewrites); only the bar is short, as `GetLootRollTimeLeft` counts

@@ -92,7 +92,7 @@ impl DuelState {
 
     /// `SMSG_DUEL_COUNTDOWN` (`0x4d4ae0`): the seconds stored and `ProcessCountdown`'s body run
     /// before its timer is armed, so the first line is the packet's; the line it owes.
-    /// Deviation: zero arms nothing, where the reference prints 0 and re-arms forever on the
+    /// Deviation: zero arms nothing, because the reference prints 0 and re-arms forever on the
     /// `dec`'s wraparound, a bug vmangos never reaches (it sends 3000).
     fn apply_countdown(&mut self, seconds: u32) -> Option<OwedLine> {
         self.countdown = (seconds > 0).then(|| Countdown {

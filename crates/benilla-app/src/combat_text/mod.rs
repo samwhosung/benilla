@@ -271,7 +271,7 @@ pub(crate) fn float_combat_text(
         let size_value = scale_value(t.category, life);
         let target_px = text_px(size_value, viewport);
         // Deviation: the reference stretches a raster of at most 32 px; each whole-pixel size is
-        // rasterized here, so the crit pop stays crisp.
+        // rasterized here because that way the crit pop stays crisp.
         let mut e = atlas.lock();
         let mut glyphs = layout_text_quads(
             &mut e,

@@ -2,7 +2,7 @@
 //! line at a time as the reference's log layer writes one (`0x65ac20`): the stamp
 //! `"%u/%u %02u:%02u:%02u.%03u  "` (`0x866aa0`), the text, then `"\r\n"` (`0x82edfc`). The glue
 //! build writes its own `Logs\GlueXML.log` (`0x837024`, opened at `0x46a8ce`) the same way.
-//! Deviation: the files are under `benilla-config/Logs/`, since the install is read-only.
+//! Deviation: the files are under `benilla-config/Logs/`, because the install is read-only.
 
 use std::io::Write as _;
 

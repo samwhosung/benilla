@@ -303,8 +303,8 @@ impl ChatSender<'_, '_> {
     /// `0x508680` over `text` for drunk byte `drunk` (`[[player+0xe68]+0x1d]`, `0x49f61a`): its
     /// strength is the byte cut to 100 and scaled by 0.01 (`0x49f62c`-`0x49f64e`), its buffer 256
     /// bytes (`0x49f651`). Deviation: a line of 256 bytes or more, which reaches here only through
-    /// `chat_send`'s deviation for `0x49f604`, is slurred whole instead of cut to that buffer, so
-    /// it reaches the server whole for the refusal that deviation leaves to it.
+    /// `chat_send`'s deviation for `0x49f604`, is slurred whole instead of cut to that buffer,
+    /// because that way it reaches the server whole for the refusal that deviation leaves to it.
     fn slur(&self, script: &UiScript, text: &str, drunk: u8) -> String {
         let cap = if text.len() < 0x100 {
             0x100

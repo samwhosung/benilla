@@ -178,8 +178,9 @@ pub(crate) struct DressKey {
     pub(crate) display_id: Option<u32>,
     /// Mainhand, offhand, ranged: the display id, model kind and folded enchant ids.
     pub(crate) held: [Option<(u32, ItemModelKind, i32)>; HELD_SLOTS],
-    /// Every placed weapon's model has built parts. Deviation: the reference copies a finished
-    /// model, ours stream in, so while false the pane keeps re-taking and a late weapon is baked.
+    /// Every placed weapon's model has built parts. Deviation: while false the pane keeps re-taking
+    /// and a late weapon is baked, because the reference copies a finished model and ours stream
+    /// in.
     pub(crate) held_ready: bool,
 }
 

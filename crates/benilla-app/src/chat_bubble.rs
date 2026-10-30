@@ -22,7 +22,7 @@
 //! but the wire-type remap (`0x49a870`) that would admit other kinds is untraced.
 //!
 //! Deviation: sizes ride the plates' damped diagonal basis ([`plate_basis`]), not the unbounded
-//! reference law, so bubble text and plate text keep one em at every window size.
+//! reference law, because that way bubble text and plate text keep one em at every window size.
 //!
 //! Not built: the reference also ends a bubble whose speaker's model data is not resident
 //! (`0x7103d0`); here a speaker with no model yet only counts as not drawn.

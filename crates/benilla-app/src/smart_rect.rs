@@ -48,7 +48,7 @@ impl SmartBucket {
     }
 
     /// The seat without the claim. Deviation: the plate caller snaps the result to device
-    /// pixels before [`Self::claim`], so its border art blits 1:1.
+    /// pixels before [`Self::claim`], because that way its border art blits 1:1.
     pub(crate) fn resolve(&self, desired: Rect, viewport: Vec2) -> Rect {
         let (w, h) = (desired.width(), desired.height());
         let (half_w, half_h) = (w * 0.5, h * 0.5);

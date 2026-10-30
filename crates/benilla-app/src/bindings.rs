@@ -16,10 +16,10 @@
 //! - what the bodies call reaches the engine through the Lua binding functions
 //!   ([`benilla_ui::script::BindingInput`]) as [`BindingsState`]'s [`Input`]s.
 //!
-//! Deviation: a press with Super (Cmd) held runs no binding, so a system chord such as Cmd+Tab or
-//! Cmd+Q never acts in game. The reference has no such modifier and runs the bare key's binding:
-//! the Mac enqueues the key with Command held and skips only its text (`0x8a519`), and Windows
-//! hands `VK_LWIN`/`VK_RWIN` to the layout arm (`0x42da39`) like any key.
+//! Deviation: a press with Super (Cmd) held runs no binding because that way a system chord such as
+//! Cmd+Tab or Cmd+Q never acts in game. The reference has no such modifier and runs the bare key's
+//! binding: the Mac enqueues the key with Command held and skips only its text (`0x8a519`), and
+//! Windows hands `VK_LWIN`/`VK_RWIN` to the layout arm (`0x42da39`) like any key.
 //!
 //! Persistence: `benilla-config/bindings/account.txt` and `<Realm>-<Char>.txt` ([`store`]); the
 //! character file's existence is the character-set state, as in the reference.
@@ -636,8 +636,8 @@ pub(crate) fn world_takes_wheel(dispatch: Option<&BindingDispatch>, mods: Mods, 
 ///
 /// Deviation: a trackpad's `Pixel` deltas are carried until they make a line, and step at most
 /// once per event ([`crate::ui_script::Record::Wheel`]). The reference steps on every
-/// `WM_MOUSEWHEEL`, whatever its delta (`0x76c1a9`); carried, a trackpad does not zoom or scroll
-/// at its event rate.
+/// `WM_MOUSEWHEEL`, whatever its delta (`0x76c1a9`); the carry is kept because a carried trackpad
+/// does not zoom or scroll at its event rate.
 ///
 /// For consumers that act per notch off the sign alone: the UI's `OnMouseWheel` (stock
 /// `ScrollFrameTemplate_OnMouseWheel` moves half a pane per call, `UIPanelTemplates.lua:150`) and

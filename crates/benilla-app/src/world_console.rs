@@ -214,7 +214,7 @@ fn water_ripples(world: &mut World, args: &str) -> Vec<String> {
 /// (`0x867c50`), a NaN passing both; else `__ftol(v · 255)` of each, the first in the top byte,
 /// goes to the shadow colour setter `0x672590`. Prints nothing when it takes them.
 ///
-/// Deviation: a float the scan leaves unread is 0.0, where the reference reads whatever its
+/// Deviation: a float the scan leaves unread is 0.0, because the reference reads whatever its
 /// uninitialised stack slot holds.
 fn set_shadow(world: &mut World, args: &str) -> Vec<String> {
     let mut v = [0.0f32; 4];

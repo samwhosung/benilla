@@ -539,8 +539,9 @@ pub(crate) fn drive_nameplates(
                 ghost_visual: store.is_some_and(|s| s.0.unit_is_ghost_visual()),
                 is_self,
                 // No name over a fully faded first-person avatar. Deviation: `ShouldShowName`'s
-                // first leg is `IsSelectable` (`0x60be60`), which passes our own unit; what hides
-                // the own name in first person in 1.12.1 is untraced, so the avatar's fade stands in.
+                // first leg is `IsSelectable` (`0x60be60`), which passes our own unit; the avatar's
+                // fade stands in because what hides the own name in first person in 1.12.1 is
+                // untraced.
                 self_faded: rig
                     .as_deref()
                     .map_or(1.0, crate::player::CameraControl::self_fade)

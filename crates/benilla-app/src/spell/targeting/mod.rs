@@ -704,8 +704,8 @@ fn bind_target_unit(
 /// range." or "Target too close") and binds nothing; otherwise the emptied word commits (`SendCast
 /// 0x6e54f0`).
 ///
-/// Deviation: a range failure leaves targeting armed and working. For a cast in flight the
-/// reference's report cancels it (`0x6e2218` → `0x6e4940`): its line, `SPELLCAST_FAILED` and the
+/// Deviation: a range failure leaves targeting armed and working because, for a cast in
+/// flight, the reference's report cancels it (`0x6e2218` → `0x6e4940`): its line, `SPELLCAST_FAILED` and the
 /// tradeskill disarm,
 /// which benilla keeps; with the word the bind emptied it also sends `CMSG_CANCEL_CAST` for the
 /// unsent spell (`0x6e4970`) and clears the caster, then restores the pre-click word (`0x6e6096`),

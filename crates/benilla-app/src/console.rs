@@ -470,10 +470,10 @@ const HELP_COMMAND_LINE: usize = 0xc4;
 /// order, where the reference's one table interleaves them as start-up registers them.
 ///
 /// Deviation: a CVar lists under its registration's category with its registration's help, even
-/// when `config.toml` held it at boot. In the reference such a record was made by the config
-/// line's `set` (`0x63d569`-`0x63d582`), which registered its command in category 5 with the help
-/// `""` (`0x63ddc9`), and the later registration finds the record and returns without registering
-/// again (`0x63dc1a`-`0x63dc87`), so what `help` says would hang on what the file held.
+/// when `config.toml` held it at boot, because in the reference such a record was made by the
+/// config line's `set` (`0x63d569`-`0x63d582`), which registered its command in category 5 with the
+/// help `""` (`0x63ddc9`), and the later registration finds the record and returns without
+/// registering again (`0x63dc1a`-`0x63dc87`), so what `help` says would hang on what the file held.
 fn help(steps: &mut ConsoleSteps, args: &str) -> Vec<String> {
     if args.is_empty() {
         return vec![

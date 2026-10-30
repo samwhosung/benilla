@@ -330,7 +330,8 @@ pub(crate) struct LootState {
     /// signal's handlers (`0x4c2917`, `0x4c21dc`), cleared by the confirmed send (`0x4c281a`) and
     /// by the next response (`0x4c1df5`), not by a close.
     /// Deviation: it is the display row, where the reference's is the item index plus one
-    /// (`0x4c2885`), so an addon's `GetLootSlotInfo(arg1)` reads the row the dialog is for.
+    /// (`0x4c2885`), because that way an addon's `GetLootSlotInfo(arg1)` reads the row the dialog
+    /// is for.
     pending_bind_confirm: Option<u32>,
     /// The candidates `GetMasterLootCandidate` looked up and the name cache missed, each a
     /// registration of the callback `0x4c2fb0` (dedupe flag 0, `0x4c2f61`), spent by the name's
@@ -861,9 +862,9 @@ impl LootState {
 
     /// `0xb71b44` above 0: a row's item record is still being fetched, counted from the copier
     /// (`0x4c1e77`) until its callback (`0x4c2ac0`); a negative answer releases the row, as
-    /// [`Window::records_pending`] has it. Deviation: a row cleared meanwhile stops counting, where
-    /// `ClearLootRow` (`0x4c1f00`) cancels its callback (`0x4c1f52`) and never lowers the count
-    /// (its writers are `0x4c1def`, `0x4c1e94` and `0x4c2af6` alone), so in 1.12.1 a group
+    /// [`Window::records_pending`] has it. Deviation: a row cleared meanwhile stops counting,
+    /// because `ClearLootRow` (`0x4c1f00`) cancels its callback (`0x4c1f52`) and never lowers the
+    /// count (its writers are `0x4c1def`, `0x4c1e94` and `0x4c2af6` alone), so in 1.12.1 a group
     /// member's take of an uncached item before the answer leaves that corpse's window shut until
     /// the next loot response resets the count (`0x4c1def`), and ours opens.
     fn records_pending(&self, items: &Items) -> bool {
@@ -920,7 +921,8 @@ impl Default for LootConfig {
 /// admits vmangos' type-1 answer for the item.
 ///
 /// Deviation: our close paths clear it guid-matched, where `CloseInteraction` clears it
-/// unconditionally (`0x48f2c9`), so closing an old window keeps a newer `CMSG_LOOT`'s latch.
+/// unconditionally (`0x48f2c9`), because that way closing an old window keeps a newer `CMSG_LOOT`'s
+/// latch.
 #[derive(Resource, Default)]
 pub(crate) struct LootLatch(pub(crate) Option<u64>);
 

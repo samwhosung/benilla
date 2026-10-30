@@ -430,8 +430,8 @@ pub(crate) fn shots_path() -> Option<PathBuf> {
 /// `benilla-config/Screenshots/`: where the print-screen key writes, each image once, not through
 /// [`write_atomic`].
 ///
-/// Deviation: the reference writes `Screenshots\\` inside the install, which benilla never writes
-/// to; the folder keeps the reference's name.
+/// Deviation: the reference writes `Screenshots\\` inside the install; benilla keeps the folder in
+/// its own state because it never writes to the install, and the folder keeps the reference's name.
 pub(crate) fn screenshots_dir() -> Option<PathBuf> {
     home().map(|h| h.join("Screenshots"))
 }

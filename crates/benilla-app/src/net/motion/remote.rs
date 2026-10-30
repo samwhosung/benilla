@@ -93,8 +93,8 @@ pub(in crate::net) enum RelayOutcome {
     Seed,
     /// A server-authored pose for our own mover, handed to the controller as a
     /// [`crate::net::SelfMoveMessage`] at arrival. Deviation: the reference paces a self move
-    /// through the same replay chain as a remote's, which would only delay a correction to our own
-    /// pose.
+    /// through the same replay chain as a remote's; benilla hands it over at arrival because pacing
+    /// it would only delay a correction to our own pose.
     SelfMover,
     /// No entity for this guid: the packet changes nothing.
     Unknown,

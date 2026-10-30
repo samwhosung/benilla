@@ -86,8 +86,8 @@ pub(crate) enum Layout {
 /// with no name, belong to no frame and are dropped, as the reference applies them to a null frame
 /// (`0x4905e6`); a name no frame has drops its lines at the restore the same way.
 ///
-/// Deviation: a record's fields start empty. The reference's parser clears X, Y, W and the level
-/// at each `Frame:` (`ebx`, `edi`, `esi`, `[ebp-0x4]` at `0x49045b`–`0x490469`) but not H
+/// Deviation: a record's fields start empty because the reference's parser clears X, Y, W and the
+/// level at each `Frame:` (`ebx`, `edi`, `esi`, `[ebp-0x4]` at `0x49045b`–`0x490469`) but not H
 /// (`[ebp-0xc]`), so a record with no `H:` takes the one before's; benilla writes `H:` whenever it
 /// writes `W:`, so only a hand-edited file reaches the slip, which would size a window from
 /// another window's row.

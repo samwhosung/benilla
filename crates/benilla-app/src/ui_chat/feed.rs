@@ -395,7 +395,7 @@ impl ChatLog {
     ///
     /// Deviation: the reference holds every line that waits on its `$`-macro subject's name in
     /// the name cache's callback list (`0x49daea` → `0x55f080`) until the name answers, with no
-    /// bound; here at most [`MAX_HELD_SUBJECT_LINES`] wait, the oldest dropped past that, as a
+    /// bound; here at most [`MAX_HELD_SUBJECT_LINES`] wait, the oldest dropped past that, because a
     /// subject no player owns never answers.
     fn hold(&self, item: Pending) {
         let mut q = self.q();
