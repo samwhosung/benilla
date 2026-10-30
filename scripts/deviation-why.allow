@@ -3,18 +3,15 @@
 # gains "because ...", delete its line here; never add one. A comment off the list must carry its reason.
 crates/benilla-app/assets/ui/KeyBindingsPage.xml	every bind, unbind and reset saves at once,
 crates/benilla-app/src/bindings/layout.rs	on the Mac and Linux a key its
-crates/benilla-app/src/console.rs	a line of eight names is not left
 crates/benilla-app/src/cvars/listing.rs	the reference's list runs in creation order, the
 crates/benilla-app/src/game_tip.rs	the reference rasterizes the tip's font at most
 crates/benilla-app/src/go_templates.rs	one per entry, where the reference keeps one
 crates/benilla-app/src/loading_screen/input.rs	the world pick is cleared, where the reference's
-crates/benilla-app/src/net/objects/update.rs	the create notify uses its lookup's result untested
 crates/benilla-app/src/player/approach.rs	the reference re-projects the point's height onto the
 crates/benilla-app/src/portrait/mod.rs	the reference widget draws only its model; a
 crates/benilla-app/src/sound/mod.rs	with no character the reference leaves the listener
 crates/benilla-app/src/target/click.rs	the reference's arm reads the last object's stop
 crates/benilla-app/src/target/click.rs	it runs on the first frame with none,
-crates/benilla-app/src/ui_aura.rs	the reference clears its expiry array (`0xbc5f68`) at
 crates/benilla-app/src/ui_duel.rs	the challenger's name comes from the [`NameCache`], so
 crates/benilla-app/src/ui_guild/sort.rs	the reference ties a miss with a hit
 crates/benilla-app/src/ui_loot/mod.rs	`autoLootDefault` is benilla's own option, 1.12 auto-looting only
@@ -22,7 +19,6 @@ crates/benilla-app/src/ui_quest/verbs.rs	the row one past a full pool is
 crates/benilla-app/src/ui_social/live.rs	after a full 50 the reference reads the
 crates/benilla-app/src/ui_text/outline.rs	`r × floor(dpi)` passes as in [`outlined_cell`], the
 crates/benilla-app/src/ui_tooltip/spell_view.rs	a pet view with no pet unit costs
-crates/benilla-app/src/wdb.rs	the reference keeps a saved store's ask "pending"
 crates/benilla-assets/src/shaders/liquid.wgsl	this is the `specular`/`pixelShaders` = 1 leg the
 crates/benilla-formats/src/macro_icons.rs	of names equal but for case, benilla keeps
 crates/benilla-lua/src/heap.rs	C Lua has no such bound; past it
@@ -31,7 +27,6 @@ crates/benilla-lua/src/lib_string.rs	5.1's `match` recurses without a bound and 
 crates/benilla-lua/src/pools.rs	that sequence is not wholly the client's. A
 crates/benilla-lua/src/vm.rs	these are benilla's own needs, past what the
 crates/benilla-lua/src/vm.rs	benilla's scratch registers above a frame's `c_maxstack` (`Proto::maxstack`)
-crates/benilla-protocol/src/events/decode.rs	an out-of-range list past the first block reads
 crates/benilla-protocol/src/world/session.rs	checked per queue packet where the reference checks
 crates/benilla-ui/src/civil.rs	the zone database's offset for the date, where
 crates/benilla-ui/src/loader/mod.rs	a `<Script file=>` value with a separator joins
@@ -39,7 +34,6 @@ crates/benilla-ui/src/script/binding_abi.rs	`pow(10, n)` is the platform's, wher
 crates/benilla-ui/src/script/button.rs	the disabled-checked leg (`0x785380`) tests and reloads the
 crates/benilla-ui/src/script/chat_window.rs	one past `i32::MAX` clamps where the reference keeps
 crates/benilla-ui/src/script/glue_create.rs	past [`NAME_TRIES`] names the answer is nil, where
-crates/benilla-ui/src/script/mod.rs	the client's Lua has no such bound, as
 crates/benilla-ui/src/script/nameplate.rs	the reference's free list is FIFO (`0x6087f0`, `0x608a5a`);
 crates/benilla-ui/src/script/quest_log.rs	one signal per missed record, where the reference
 crates/benilla-ui/src/script/reputation.rs	the reference bounds the index with `jbe` against
@@ -48,7 +42,5 @@ crates/benilla-ui/src/script/sound.rs	the app plays the queued file after the
 crates/benilla-ui/src/script/stdlib.rs	a format that ends in `%` reads past
 crates/benilla-ui/src/script/stdlib.rs	with `#` and one byte of room, `_store_number`
 crates/benilla-ui/src/script/tooltip/size.rs	`0x530a52` lays it out at once; getters resolve
-crates/benilla-ui/src/script/tooltip/verbs.rs	the reference anchors a Font object through its
-crates/benilla-ui/src/script/unit/resolve.rs	`0x4e81d0` has no bound and reads past its
 crates/benilla-ui/src/script/worldmap.rs	the engine's own push (the world-enter sync) queues
 crates/benilla-world/src/collision/one_sided.rs	the reference keeps the later record in file

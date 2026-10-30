@@ -1009,7 +1009,8 @@ fn join_duration(stamp: Option<&DurationStamp>, stamp_now: f64, script_now: f64)
 
 /// The session's end: drops the lists and stamps, so nothing reaches the next character's bar.
 /// Deviation: the reference clears its expiry array (`0xbc5f68`) at every game entry, in
-/// `ResetBuffCache` (`0x4e40c0`, called from `0x48f5a9`); benilla clears it at exit instead.
+/// `ResetBuffCache` (`0x4e40c0`, called from `0x48f5a9`); benilla clears it at exit instead,
+/// because that way a buff or debuff keeps its duration timer through a teleport.
 fn end_session_aura_state(
     mut hosted_vm: crate::script_calls::HostedVm,
     mut cache: ResMut<PlayerAuraCache>,

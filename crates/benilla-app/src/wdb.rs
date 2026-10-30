@@ -343,7 +343,8 @@ struct Stores<'w> {
 ///
 /// Deviation: the reference keeps a saved store's ask "pending" for the rest of the process
 /// (`0x555740` clears only the stores built with persistence off), so a query a lost link dropped
-/// is never sent again until restart; benilla's reconnect asks it again.
+/// is never sent again until restart; benilla's reconnect asks it again because the name or text it
+/// was for would otherwise stay blank until restart.
 fn clear_saved_asks(In(ev): In<SessionEvent>, mut stores: Stores) {
     if !matches!(ev, SessionEvent::Disconnected { .. }) {
         return;

@@ -465,9 +465,10 @@ const HELP_COMMAND_LINE: usize = 0xc4;
 /// - Anything else prints nothing.
 ///
 /// Deviation: a line of eight names is not left with its trailing `, ` and a list of a multiple
-/// of eight names is not followed by `NONE`, two slips of the reference's loop (`0x63ffed`,
-/// `0x64004d`). The commands list in registration order, then the CVars in the registry's list
-/// order, where the reference's one table interleaves them as start-up registers them.
+/// of eight names is not followed by `NONE`, because those are two slips of the reference's loop
+/// (`0x63ffed`, `0x64004d`). The commands list in registration order, then the CVars in the
+/// registry's list order, where the reference's one table interleaves them as start-up registers
+/// them.
 ///
 /// Deviation: a CVar lists under its registration's category with its registration's help, even
 /// when `config.toml` held it at boot, because in the reference such a record was made by the
