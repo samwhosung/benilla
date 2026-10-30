@@ -1106,3 +1106,44 @@ fn a_cast_results_release_goes_out_before_its_chained_cast() {
     assert!(release.is_some() && cast.is_some(), "{sent:?}");
     assert!(release < cast, "{sent:?}");
 }
+
+/// Auto Shot, our auto-repeat spell.
+const AUTO_SHOT: u32 = 75;
+
+/// A failed result of our auto-repeat spell ends its precast inside the report, releasing our loot
+/// (`0x6e1a00`, `0x6e1c8e` → `0x60d10b`), ahead of the report's auto-repeat stop, whose
+/// `CMSG_CANCEL_AUTO_REPEAT_SPELL` goes out after it (`0x6e1cea` → `0x6ea080`, `0x6ea0c6`); a
+/// reason but 0x17 reaches the stop (`0x6e1ce4`).
+#[test]
+fn a_failed_auto_shots_release_goes_out_before_its_auto_repeat_stop() {
+    let mut c = looting_the_corpse();
+    let world = c.app.world_mut();
+    world.insert_resource(crate::ui_action::Spells {
+        catalog: benilla_formats::SpellCatalog::from_displays(std::collections::HashMap::from([(
+            AUTO_SHOT,
+            Default::default(),
+        )])),
+        ..crate::ui_action::Spells::empty_for_tests()
+    });
+    world.insert_resource(crate::spell::AutoRepeatActive(Some(AUTO_SHOT)));
+    let me = world.resource::<crate::net::GuidIndex>().0[&ME];
+    world.entity_mut(me).insert(crate::creature_anim::Precast {
+        spell_id: AUTO_SHOT,
+        busy: true,
+    });
+    c.seen();
+    c.sent();
+    c.frame(vec![vec![SessionEvent::CastResult {
+        spell_id: AUTO_SHOT,
+        success: false,
+        reason: Some(0x23),
+        arg: None,
+    }]]);
+    let sent = c.sent();
+    let (release, stop) = (
+        sent_at(&sent, "LootRelease"),
+        sent_at(&sent, "CancelAutoRepeat"),
+    );
+    assert!(release.is_some() && stop.is_some(), "{sent:?}");
+    assert!(release < stop, "{sent:?}");
+}

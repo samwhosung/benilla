@@ -36,9 +36,12 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::SpellRemoved, on_spell_removed)
         .net_handler(K::SpellSuperceded, on_spell_superceded)
         .init_resource::<ChainedCast>()
+        // `HandleCastResult`'s legs in its order, each after the edits the one before it queued
+        // have applied: the failure's precast end (`0x6e1c8e`), whose tail releases our loot; the
+        // rest of the report, the revert and the slot's pop; then the `modalNextSpell` chain's
+        // cast (`0x6e74aa`).
         .net_handler(K::CastResult, on_cast_result)
-        // The `modalNextSpell` chain's cast (`0x6e74aa`), after the edits the report queued have
-        // applied, its precast end's loot release among them (`0x6e1c8e`).
+        .net_handler(K::CastResult, on_cast_result_report)
         .net_handler(K::CastResult, on_cast_result_chain)
         .net_handler(K::SpellStart, on_spell_start)
         .net_handler(K::SpellGo, on_spell_go)
@@ -340,9 +343,41 @@ pub(crate) struct Reply<'w, 's> {
     items: Option<Res<'w, crate::items::Items>>,
 }
 
-/// `HandleCastResult 0x6e7330` up to its chain: the report, the slot's pop, and the spell a reply
-/// chains, which [`on_cast_result_chain`] casts once the report's edits have applied.
+/// `HandleCastResult 0x6e7330` through a failure's precast end ([`cast_result_head`]), whose tail
+/// releases our loot as the edits apply, ahead of the report's sends.
 fn on_cast_result(
+    In(ev): In<SessionEvent>,
+    edits: Res<crate::creature_anim::UnitEdits>,
+    self_guid: Res<SelfGuid>,
+    index: Res<GuidIndex>,
+    mut cooldowns: ResMut<Cooldowns>,
+    spells: Option<Res<Spells>>,
+) {
+    if let SessionEvent::CastResult {
+        spell_id,
+        success,
+        reason,
+        arg,
+    } = ev
+    {
+        cast_result_head(
+            spell_id,
+            success,
+            reason,
+            arg,
+            &edits,
+            &self_guid,
+            &index,
+            &mut cooldowns,
+            spells.as_deref(),
+        );
+    }
+}
+
+/// The rest of `HandleCastResult` up to its chain ([`cast_result_rest`]): the report past its
+/// precast end, the revert, the slot's pop, and the spell a reply chains, which
+/// [`on_cast_result_chain`] casts once this leg's edits have applied.
+fn on_cast_result_report(
     In(ev): In<SessionEvent>,
     mut ladder: CastLadder,
     mut chain: ResMut<ChainedCast>,
@@ -363,7 +398,7 @@ fn on_cast_result(
             net: &ladder.commands,
             tutorials: ladder.tutorials.as_deref(),
         };
-        let chained = cast_result(
+        let chained = cast_result_rest(
             spell_id,
             success,
             reason,
@@ -1143,12 +1178,14 @@ fn superceded_spell(
     learn_line(new_spell_id, spells)
 }
 
-/// The server's verdict on our cast (`SMSG_CAST_RESULT`, `HandleCastResult 0x6e7330`).
+/// The server's verdict on our cast (`SMSG_CAST_RESULT`, `HandleCastResult 0x6e7330`), whole: its
+/// head, then its rest, as the two legs run it with the head's edits applied between.
 ///
 /// A failure goes through the reporter first (`0x6e73ac` → `ReportCastFailure 0x6e1a00` with its
 /// server flag set): the tradeskill check, the auto-repeat cancel, the GCD clear, the line and its
 /// log line, then its tail ([`super::CastCore::report`]), which cancels the spell in flight with
 /// its failed flag and no packet, or fires the failure's event when nothing is in flight.
+#[cfg(test)]
 fn cast_result(
     spell_id: u32,
     success: bool,
@@ -1167,7 +1204,91 @@ fn cast_result(
     net: &crate::net::NetCommands,
     seq: u64,
 ) -> Option<u32> {
+    cast_result_head(
+        spell_id, success, reason, arg, edits, self_guid, index, cooldowns, spells,
+    );
+    cast_result_rest(
+        spell_id,
+        success,
+        reason,
+        arg,
+        edits,
+        self_guid,
+        index,
+        casting,
+        cast_events,
+        core,
+        cooldowns,
+        auto_repeat,
+        spells,
+        items,
+        net,
+        seq,
+    )
+}
+
+/// A failure's report up to its player cleanup's precast end (`0x6e73ac` → `0x6e1a00`, through
+/// `0x6e1c8e`): the NOT_READY record clear, then the precast of the failed spell ended with its
+/// tail, whatever the reason (`0x6e1c7f`), whose loot release (`0x60d10b`) goes out as the edits
+/// apply, ahead of the auto-repeat stop's send (`0x6e1cea`) and the line's item ask (`0x6e1ea4`).
+fn cast_result_head(
+    spell_id: u32,
+    success: bool,
+    reason: Option<u8>,
+    arg: Option<u32>,
+    edits: &crate::creature_anim::UnitEdits,
+    self_guid: &SelfGuid,
+    index: &GuidIndex,
+    cooldowns: &mut Cooldowns,
+    spells: Option<&Spells>,
+) {
     debug!("net: cast result — spell {spell_id} success={success} reason={reason:?}");
+    if success {
+        return;
+    }
+    let self_e = self_guid.0.and_then(|g| index.0.get(&g)).copied();
+    // NOT_READY with a first dword of 0, the server holding no cooldown of its own
+    // (`0x6e1af1`): a held record of the spell on our list (`0x6e1690`, `0x6e1b02`) goes with
+    // all its records (`0x6e3050(spell, 0, 0, 1)`, `0x6e1b13`). An absent dword reads -1.
+    if reason == Some(0x3c) && arg == Some(0) {
+        if let Some(d) = spells.and_then(|s| s.catalog.get(spell_id)) {
+            if cooldowns.has_on_hold_record(spell_id, 0, d.category) {
+                cooldowns.clear_spell(spell_id);
+            }
+        }
+    }
+    // The report's player cleanup ends the precast of the failed spell, with its tail, whatever
+    // the reason (`0x6e1c7f`, `0x6e1c8e`), ahead of the auto-repeat stop (`0x6e1cea`), the GCD
+    // clear and the line, so its loot close signals at this place.
+    if let Some(e) = self_e {
+        edits.push(crate::creature_anim::UnitEdit::EndPrecast {
+            entity: e,
+            spell_id: Some(spell_id),
+            tail: true,
+        });
+    }
+}
+
+/// The rest of the verdict past [`cast_result_head`]: the report from its auto-repeat stop on, the
+/// bit-25 revert, the cast state's end, the slot's pop and the `modalNextSpell` chain.
+fn cast_result_rest(
+    spell_id: u32,
+    success: bool,
+    reason: Option<u8>,
+    arg: Option<u32>,
+    edits: &crate::creature_anim::UnitEdits,
+    self_guid: &SelfGuid,
+    index: &GuidIndex,
+    casting: &Query<&Casting>,
+    cast_events: &mut MessageWriter<CastEvent>,
+    core: &mut super::CastCore,
+    cooldowns: &mut Cooldowns,
+    auto_repeat: &mut AutoRepeatActive,
+    spells: Option<&Spells>,
+    items: Option<&crate::items::Items>,
+    net: &crate::net::NetCommands,
+    seq: u64,
+) -> Option<u32> {
     let now = Instant::now();
     if !success {
         // `HandleCastFailed 0x6e1a00` clears the GCD armed at send (`0x6e1d83 → 0x6e1630`), and the
@@ -1182,26 +1303,6 @@ fn cast_result(
         // spell still in flight. vmangos sends 0x17 for real aborts.
         let dont_report = reason == Some(0x17);
         let self_e = self_guid.0.and_then(|g| index.0.get(&g)).copied();
-        // NOT_READY with a first dword of 0, the server holding no cooldown of its own
-        // (`0x6e1af1`): a held record of the spell on our list (`0x6e1690`, `0x6e1b02`) goes with
-        // all its records (`0x6e3050(spell, 0, 0, 1)`, `0x6e1b13`). An absent dword reads -1.
-        if reason == Some(0x3c) && arg == Some(0) {
-            if let Some(d) = spells.and_then(|s| s.catalog.get(spell_id)) {
-                if cooldowns.has_on_hold_record(spell_id, 0, d.category) {
-                    cooldowns.clear_spell(spell_id);
-                }
-            }
-        }
-        // The report's player cleanup ends the precast of the failed spell, with its tail, whatever
-        // the reason (`0x6e1c7f`, `0x6e1c8e`), ahead of the auto-repeat stop (`0x6e1cea`), the GCD
-        // clear and the line, so its loot close signals at this place.
-        if let Some(e) = self_e {
-            edits.push(crate::creature_anim::UnitEdit::EndPrecast {
-                entity: e,
-                spell_id: Some(spell_id),
-                tail: true,
-            });
-        }
         if auto_repeat.0 == Some(spell_id) && !dont_report {
             crate::creature_anim::cancel_auto_repeat_local(self_e, auto_repeat, edits, core);
         }
