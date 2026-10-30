@@ -116,7 +116,7 @@ pub(crate) enum SpellKitSound {
         at: crate::lanes::Stamp,
     },
     /// `ReleaseEffects` at `at` (`0x614120`): every effect the unit holds is released at once, its
-    /// sound stopped as `0x61f520` closes it, with no fade.
+    /// sound faded over 0.15 s as `0x61f520` closes it (`0x61f57d`).
     Release {
         entity: Entity,
         at: crate::lanes::Stamp,
