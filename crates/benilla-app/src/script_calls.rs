@@ -262,6 +262,31 @@ impl ScriptCallHost<'_, '_> {
         script.hosted(self, |_| ());
     }
 
+    /// The reads an engine turn's dispatcher asked for outside any call (an interaction's or an
+    /// arrival's text object, `0x5f58c0` → `0x4e32e0`), each run in place as the dispatcher's
+    /// read runs it ([`Self::read_item_texts`]), its signals' listeners running there with the
+    /// host lent, behind the cast reports made since `mark`.
+    pub(crate) fn engine_item_text_reads(
+        &mut self,
+        script: &mut UiScript,
+        mark: crate::lanes::Mark,
+    ) {
+        #[cfg(test)]
+        self.census_probe();
+        script.host_out(|script| {
+            let mut at = Signalled {
+                selected: self.appliers.select().selected(),
+                latched: self.appliers.pet().attack_latched(),
+                mark: self.appliers.reports().mark_at(mark),
+            };
+            self.read_item_texts(script, &mut at);
+            self.commit_views(script);
+            #[cfg(test)]
+            self.census_done();
+        });
+        script.hosted(self, |_| ());
+    }
+
     /// `SelectTarget(0)` (`0x493540`) from an engine writer outside any call, such as the
     /// world-enter cascade's (`0x490927`): the deselect and its teardown signal in place, a
     /// charmed player's refused (`0x493590`) and an empty selection a no-op.
@@ -1544,6 +1569,16 @@ impl<P: SystemParam + 'static> VmWith<'_, '_, P> {
             }
         }
         pay(self.set.p0(), select.owed);
+    }
+
+    /// An engine turn's reads in place with the host ([`ScriptCallHost::engine_item_text_reads`]);
+    /// with no VM or no host, nothing opens them.
+    pub(crate) fn engine_item_text_reads(&mut self, mark: crate::lanes::Mark) {
+        if let Some(script) = self.script.as_deref_mut() {
+            if let Some(host) = self.set.p1().as_mut() {
+                host.engine_item_text_reads(script, mark);
+            }
+        }
     }
 
     /// A field watcher's usable refresh in place with the host

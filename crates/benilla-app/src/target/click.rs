@@ -1639,6 +1639,8 @@ pub(super) fn act_on_interact(
             &mut set.p1(),
             &mut selection
         ));
+        // A text object's read opens inside its use (`0x5f86b0` → `0x5f58c0` → `0x4e32e0`).
+        vm.engine_item_text_reads(mark);
     }
 }
 
@@ -1651,10 +1653,14 @@ pub(super) fn act_on_arrival(
     index: Res<crate::net::GuidIndex>,
     kinds: Query<&crate::net::NetEntity>,
 ) {
-    vm.turn(|mut script, mut dispatch| {
-        act_on_arrival_with(&mut dispatch, script.as_deref_mut(), &index, &kinds);
-        dispatch.auto.signal_follow_end(script);
+    let mark = crate::lanes::mark();
+    vm.turn(|script, mut dispatch| {
+        act_on_arrival_with(&mut dispatch, script, &index, &kinds);
     });
+    // A text object's read opens inside the dispatcher (`0x5f58c0` → `0x4e32e0`), ahead of the
+    // follow's end it returns to.
+    vm.engine_item_text_reads(mark);
+    vm.turn(|script, mut dispatch| dispatch.auto.signal_follow_end(script));
 }
 
 fn act_on_arrival_with(
@@ -2217,6 +2223,10 @@ pub(super) fn clear_owing(
 #[cfg(test)]
 #[path = "click_loot_tests.rs"]
 mod loot_tests;
+
+#[cfg(test)]
+#[path = "click_read_tests.rs"]
+mod read_tests;
 
 #[cfg(test)]
 mod tests {
