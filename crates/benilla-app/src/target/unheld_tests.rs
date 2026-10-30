@@ -666,11 +666,103 @@ fn a_far_spell_at_a_selection_with_no_object_sends_with_no_target() {
                 _ => None,
             })
             .collect();
-        (sent, f.cursor_is_up())
+        let targeting = f.app.world().resource::<crate::spell::SpellTargeting>();
+        (sent, targeting.active(), targeting.shown())
     };
-    assert_eq!(cast(MIND_VISION_2), (vec![None], false), "Mind Vision 2");
-    assert_eq!(cast(EAGLE_EYE), (vec![None], false), "Eagle Eye");
-    assert_eq!(cast(MIND_VISION_1), (vec![], true), "Mind Vision 1");
+    // The send leaves the word standing (`0x6e5467`) and lowers only the cursor (`0x6e5547`).
+    assert_eq!(
+        cast(MIND_VISION_2),
+        (vec![None], true, false),
+        "Mind Vision 2"
+    );
+    assert_eq!(cast(EAGLE_EYE), (vec![None], true, false), "Eagle Eye");
+    assert_eq!(cast(MIND_VISION_1), (vec![], true, true), "Mind Vision 1");
+}
+
+/// The far send leaves the arm's word standing (`0x6e5454`-`0x6e5467`), so the script reads
+/// targeting up after it (`0x6e48a0`), and the next press cancels it as a cursor (`0x6e4d71`):
+/// the far cast's `SPELLCAST_FAILED`, with no packet, and no "Another action is in progress".
+#[test]
+fn a_far_send_leaves_targeting_up() {
+    const MIND_VISION_2: u32 = 10909;
+    const HEAL: u32 = 2050;
+    let mut f = grouped();
+    select_unheld(&mut f, MEMBER);
+    let mut spells = crate::ui_action::Spells::empty_for_tests();
+    spells.catalog = benilla_formats::SpellCatalog::from_displays(
+        [
+            (
+                MIND_VISION_2,
+                benilla_formats::SpellDisplay {
+                    name: "Mind Vision".into(),
+                    implicit_target_a1: 25,
+                    range_index: 13,
+                    ..Default::default()
+                },
+            ),
+            (
+                HEAL,
+                benilla_formats::SpellDisplay {
+                    name: "Heal".into(),
+                    ..Default::default()
+                },
+            ),
+        ]
+        .into(),
+    );
+    spells.ranges = benilla_formats::SpellRangeCatalog::from_rows(
+        [(
+            13,
+            benilla_formats::SpellRange {
+                min: 0.0,
+                max: 50_000.0,
+                flags: 0,
+            },
+        )]
+        .into(),
+    );
+    let world = f.app.world_mut();
+    world.insert_resource(spells);
+    world.init_resource::<crate::ui_action::PlayerActions>();
+    world
+        .resource_mut::<crate::ui_action::PlayerActions>()
+        .spells
+        .extend([MIND_VISION_2, HEAL]);
+    run(
+        &mut f,
+        r#"SEEN = {}
+        local r = CreateFrame("Frame")
+        r:RegisterEvent("SPELLCAST_FAILED")
+        r:RegisterEvent("UI_ERROR_MESSAGE")
+        r:SetScript("OnEvent", function() table.insert(SEEN, arg1 or event) end)
+        CastSpellByName("Mind Vision")
+        UP = SpellIsTargeting() and 1 or 0"#,
+    );
+    let up = f
+        .app
+        .world_mut()
+        .non_send_resource_mut::<benilla_ui::script::UiScript>()
+        .eval::<Option<i64>>("return UP")
+        .expect("the global reads");
+    assert_eq!(up, Some(1));
+    f.rx.try_iter().for_each(drop);
+    run(
+        &mut f,
+        r#"SEEN = {} CastSpellByName("Heal") SEEN = table.concat(SEEN, ",")"#,
+    );
+    let seen = f
+        .app
+        .world_mut()
+        .non_send_resource_mut::<benilla_ui::script::UiScript>()
+        .eval::<String>("return SEEN")
+        .expect("the global reads");
+    assert!(!seen.contains("SPELL_FAILED_SPELL_IN_PROGRESS"), "{seen}");
+    assert!(
+        !f.rx
+            .try_iter()
+            .any(|c| matches!(c, ClientCommand::CancelCast { .. })),
+        "the word's cancel sends nothing"
+    );
 }
 
 /// A transfer releases no target (`~CGUnit_C 0x5fb5e0` never reaches `0x493910`): a groupmate

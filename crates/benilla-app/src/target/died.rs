@@ -1035,7 +1035,9 @@ mod tests {
     }
 
     /// The far cast at a unit the client does not hold parks its guid in the record's target
-    /// (`0x6e5454`), which the unit's death reads once it is held (`0x6058c7`).
+    /// (`0x6e5454`), which the unit's death reads once it is held (`0x6058c7`). Its send left the
+    /// arm's word standing (`0x6e5467`), so the death's cancel drops the word with no packet
+    /// (`0x6e4955`) as it pops the cast.
     #[test]
     fn a_far_casts_parked_target_dying_cancels_it() {
         let mut c = client();
@@ -1056,13 +1058,15 @@ mod tests {
         );
         let unit = c.world().spawn(Guid(UNHELD)).id();
         c.dies(unit, UNHELD, ObjectType::Player);
-        assert!(c.sent().iter().any(|s| matches!(
-            s,
-            ClientCommand::CancelCast {
-                spell_id: MIND_VISION
-            }
-        )));
+        assert!(!c
+            .sent()
+            .iter()
+            .any(|s| matches!(s, ClientCommand::CancelCast { .. })));
         assert_eq!(c.in_flight(), None);
+        assert!(!c
+            .world()
+            .resource::<crate::spell::SpellTargeting>()
+            .active());
     }
 
     /// The cursor's click binds the clicked unit into the record's target (`BindTarget`,

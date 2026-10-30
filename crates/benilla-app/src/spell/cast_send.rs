@@ -900,10 +900,10 @@ impl CastLadder<'_, '_> {
             // Word 0 sends the record as it stands (`0x6e5342` → `0x6e5349`).
             CastWireTarget::SelfImplicit => return self.run_stage(send),
             // The last leg parks the candidate in the record's target and sends at once
-            // (`0x6e5454`-`0x6e5467`).
+            // (`0x6e5454`-`0x6e5467`), its word left standing: the send lowers only the cursor
+            // (`0x6e5547`), so targeting reads as up after it.
             CastWireTarget::Parked(guid) => {
                 self.pending.bind_target(guid);
-                self.ground.clear();
                 return self.run_stage(send);
             }
             CastWireTarget::Unit(guid) => TargetedBind::Unit(guid),
