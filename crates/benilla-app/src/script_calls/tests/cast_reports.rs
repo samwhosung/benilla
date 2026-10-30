@@ -836,3 +836,154 @@ fn a_cancel_at_the_push_signal_leaves_the_cast_unsent() {
     run_hosted(&mut f, r#"CastSpellByName("Heal")"#);
     assert_eq!(casts_and_cancels(&f), vec![("cancel", HEAL)]);
 }
+
+/// `spells` in the catalog and the book together.
+fn seat_spells(f: &mut Frame, spells: Vec<(u32, benilla_formats::SpellDisplay)>) {
+    let world = f.app.world_mut();
+    let ids: Vec<u32> = spells.iter().map(|(id, _)| *id).collect();
+    world.insert_resource(crate::ui_action::Spells {
+        catalog: benilla_formats::SpellCatalog::from_displays(spells.into_iter().collect()),
+        ..crate::ui_action::Spells::empty_for_tests()
+    });
+    let mut actions = world.resource_mut::<crate::ui_action::PlayerActions>();
+    actions.spells.extend(ids);
+}
+
+/// The potion's on-use spell.
+const QUAFF: u32 = 4321;
+/// Power Word: Fortitude's word, an assist unit (implicit target 21).
+const FORTITUDE: u32 = 1243;
+
+/// Backpack slot 1 holds a potion casting [`QUAFF`], an item with no `ITEM_FLAG_PLAYERCAST`, so
+/// its attempt pushes nothing (`0x6e500b`-`0x6e501f`) and a listener's cast is not refused as in
+/// progress; `quaff` is the spell's record. `OLD` is selected, of template `old`.
+fn with_quaff(f: &mut Frame, old: u32, quaff: benilla_formats::SpellDisplay) {
+    let mut t = crate::items::test_template("Potion");
+    t.spells = vec![benilla_protocol::messages::ItemSpellEntry {
+        index: 0,
+        spell_id: QUAFF,
+        trigger: 0,
+        charges: 0,
+        cooldown_ms: -1,
+        category: 0,
+        category_cooldown_ms: -1,
+    }];
+    t.use_spell = Some(benilla_protocol::messages::ItemUseSpell {
+        spell_id: QUAFF,
+        cooldown_ms: -1,
+        category: 0,
+        category_cooldown_ms: -1,
+    });
+    with_potion(f, t);
+    with_factions(f, old, &[(2, 0x19), (FLAGS, 0x8)]);
+    // The faction fixture's descriptor for us, with the backpack slot the potion sits in.
+    typed(
+        f.app.world_mut(),
+        ME,
+        &[(532, POTION as u32), (533, (POTION >> 32) as u32)],
+    );
+    seat_spells(
+        f,
+        vec![
+            (
+                QUAFF,
+                benilla_formats::SpellDisplay {
+                    name: "Quaff".into(),
+                    ..quaff
+                },
+            ),
+            (
+                FORTITUDE,
+                benilla_formats::SpellDisplay {
+                    name: "Fortitude".into(),
+                    implicit_target_a1: 21,
+                    ..Default::default()
+                },
+            ),
+        ],
+    );
+}
+
+/// A listener of `CURRENT_SPELL_CAST_CHANGED` that runs `lua` the first time it hears it.
+fn once_on_change(f: &mut Frame, lua: &str) {
+    run(
+        f,
+        &format!(
+            r#"local r = CreateFrame("Frame")
+            r:RegisterEvent("CURRENT_SPELL_CAST_CHANGED")
+            r:SetScript("OnEvent", function()
+                if not ONCE then ONCE = 1 {lua} end
+            end)"#
+        ),
+    );
+    f.rx.try_iter().for_each(drop);
+}
+
+/// `ArmCast` reads its candidate past the attempt's push and arm signals (`0x6e5333` →
+/// `0x6e539f`): a listener there that targets another unit binds the cast to that unit.
+#[test]
+fn a_push_listener_that_retargets_binds_the_cast_to_its_target() {
+    let mut f = frame(true);
+    with_factions(&mut f, FRIEND, &[(2, 0x19), (FLAGS, 0x8)]);
+    with_friendly_party1(&mut f, true);
+    with_book_spell(
+        &mut f,
+        MOTW,
+        "Mark of the Wild",
+        benilla_formats::SpellDisplay {
+            implicit_target_a1: 21,
+            ..Default::default()
+        },
+    );
+    once_on_change(&mut f, r#"TargetUnit("party1")"#);
+    run_hosted(&mut f, r#"CastSpellByName("Mark of the Wild")"#);
+    assert_eq!(casts(&f), vec![(MOTW, Some(NEW))]);
+    assert_eq!(selected(&f), Some(NEW));
+}
+
+/// A cursor a listener raises at the arm's signal stands in the word the arm tests (`0x6e5338`),
+/// so the arm takes its bind leg on that cursor's record (`0x6e5359`): its own candidate, the
+/// player its use was aimed at (`0x6e5393`), binds the listener's spell (`0x6e53c3`), which goes
+/// out at the player (`0x6e60d7`).
+#[test]
+fn a_listener_that_raises_a_cursor_takes_the_bind_leg() {
+    let mut f = frame(true);
+    with_quaff(&mut f, FOE, Default::default());
+    once_on_change(&mut f, r#"CastSpellByName("Fortitude")"#);
+    run_hosted(&mut f, "UseContainerItem(0, 1, 1)");
+    assert_eq!(casts(&f), vec![(FORTITUDE, Some(ME))]);
+    assert!(!cursor_is_up(&f), "the bind emptied the word");
+}
+
+/// A listener's attempt that refills the record and is refused at its own arm's tail empties the
+/// word (`0x6e5098`) and, never pushed, keeps the record's caster (`0x6e2228`), so the arm finds
+/// the word empty and sends the record as the listener left it (`0x6e5338` → `0x6e5349`): the
+/// potion goes out with no target, and the attempt's own refusal never comes.
+#[test]
+fn a_listener_that_refills_the_record_without_sending_has_it_sent() {
+    let mut f = frame(true);
+    with_quaff(
+        &mut f,
+        FRIEND,
+        benilla_formats::SpellDisplay {
+            implicit_target_a1: 6,
+            ..Default::default()
+        },
+    );
+    record_changes(&mut f);
+    once_on_change(&mut f, "UseContainerItem(0, 1)");
+    run_hosted(&mut f, &format!("UseContainerItem(0, 1) {CHANGES}"));
+    let uses: Vec<_> =
+        f.rx.try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::UseItem { target, .. } => Some(target),
+                _ => None,
+            })
+            .collect();
+    assert_eq!(
+        uses,
+        vec![benilla_protocol::messages::UseItemTarget::SelfImplicit]
+    );
+    let failures = seen(&mut f).matches("SPELL_FAILED_BAD_TARGETS").count();
+    assert_eq!(failures, 1, "the listener's refusal alone");
+}
