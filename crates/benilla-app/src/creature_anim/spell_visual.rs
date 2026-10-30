@@ -78,13 +78,16 @@ pub(crate) enum SpellKitSound {
         entity: Entity,
         spell_id: u32,
         kit_sound: u32,
+        /// Rung by a cast's hold, a precast's or a channel's kit, which a replacing hold stops
+        /// ([`Self::StopHold`] with no spell).
+        cast_hold: bool,
         /// Its packet's place ([`SpellKitFx::at`]), which a hold loop keeps for
         /// [`Self::Rebuilt`].
         at: Option<crate::lanes::Stamp>,
     },
-    /// Stop the unit's hold loop: for `Some(spell)`, only a loop that spell's kit rang, as
-    /// `0x614150(spell, 0)` stops only the effects whose spell matches (`0x614167`); for `None`,
-    /// whatever loop it holds, as a new hold replaces the old.
+    /// Stop the unit's hold loops: for `Some(spell)`, every loop that spell's kits rang, as
+    /// `0x614150(spell, 0)` stops every effect whose spell matches (`0x614167`); for `None`, every
+    /// loop a cast's hold rang, as a new hold replaces the old.
     StopHold {
         entity: Entity,
         spell_id: Option<u32>,
@@ -108,6 +111,8 @@ pub(crate) enum SpellKitSound {
         entity: Entity,
         spell_id: u32,
         kit_sound: u32,
+        /// The channel's, a cast's hold ([`Self::Play`]).
+        cast_hold: bool,
         at: crate::lanes::Stamp,
     },
 }
@@ -630,6 +635,7 @@ fn play_kit(
             entity,
             spell_id,
             kit_sound,
+            cast_hold: false,
             at: out.at,
         });
     }
@@ -934,6 +940,7 @@ pub(super) fn route_cast_visuals(
                             entity: ev.entity,
                             spell_id: ev.spell_id,
                             kit_sound,
+                            cast_hold: true,
                             at: ev.at,
                         });
                     }
@@ -1227,6 +1234,7 @@ pub(super) fn route_cast_visuals(
                         entity,
                         spell_id: cur,
                         kit_sound,
+                        cast_hold: true,
                         at: None,
                     });
                 }
@@ -1417,6 +1425,7 @@ pub(crate) fn arm_aura_state_fx(
                     entity,
                     spell_id,
                     kit_sound,
+                    cast_hold: false,
                     at: aura_at.get(&entity).copied(),
                 });
             }
@@ -1689,20 +1698,21 @@ pub(crate) fn replay_rebuilt_kit_sounds(
         }
         let state = auras.into_iter().map(|spell_id| {
             let kit = resolve_kit(spells, &visuals.0, spell_id, |s| s.state, || None);
-            (spell_id, kit)
+            (spell_id, kit, false)
         });
         let channel = Some(store.0.unit_channel_spell())
             .filter(|&c| c != 0)
             .map(|spell_id| {
                 let kit = resolve_kit(spells, &visuals.0, spell_id, |s| s.channel, || None);
-                (spell_id, kit)
+                (spell_id, kit, true)
             });
-        for (spell_id, kit) in state.chain(channel) {
+        for (spell_id, kit, cast_hold) in state.chain(channel) {
             if let Some(kit_sound) = kit.and_then(|k| k.sound) {
                 sounds.write(SpellKitSound::Replay {
                     entity: swap.entity,
                     spell_id,
                     kit_sound,
+                    cast_hold,
                     at,
                 });
             }

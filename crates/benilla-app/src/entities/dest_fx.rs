@@ -166,6 +166,7 @@ pub(super) fn arm_ground_effects(
                     entity: anchor,
                     spell_id,
                     kit_sound,
+                    cast_hold: false,
                     // A ground arrival of the frame, after every packet.
                     at: None,
                 });

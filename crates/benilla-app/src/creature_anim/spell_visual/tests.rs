@@ -784,6 +784,7 @@ fn a_rebuild_rings_the_aura_and_channel_kits_again() {
                 spell_id,
                 kit_sound,
                 at,
+                ..
             } => Some((entity, spell_id, kit_sound, at)),
             _ => None,
         })
@@ -2744,8 +2745,9 @@ fn esc_with_a_cursor_up_leaves_the_running_channels_hold_and_loop() {
                 entity,
                 spell_id,
                 kit_sound: AM_HUM,
+                cast_hold,
                 at,
-            } => loops.rang(entity, (spell_id, AM_HUM), at),
+            } => loops.rang(entity, (spell_id, AM_HUM), cast_hold, at),
             SpellKitSound::StopHold { entity, spell_id } => {
                 loops.stop_hold(entity, spell_id);
             }
@@ -2754,7 +2756,7 @@ fn esc_with_a_cursor_up_leaves_the_running_channels_hold_and_loop() {
     }
     assert_eq!(
         loops.held(me),
-        Some((ARCANE_MISSILES, AM_HUM)),
+        [(ARCANE_MISSILES, AM_HUM)],
         "Blizzard's reap stops none of the channel's sound (got {after:?})"
     );
 }
@@ -2791,8 +2793,9 @@ fn a_go_stops_the_running_auto_repeat_spells_hold_and_loop_on_its_caster() {
                     entity,
                     spell_id,
                     kit_sound: AUTO_SHOT_LOOP,
+                    cast_hold,
                     at,
-                } => loops.rang(entity, (spell_id, AUTO_SHOT_LOOP), at),
+                } => loops.rang(entity, (spell_id, AUTO_SHOT_LOOP), cast_hold, at),
                 SpellKitSound::StopHold { entity, spell_id } => {
                     loops.stop_hold(entity, spell_id);
                 }
@@ -2856,7 +2859,7 @@ fn a_go_stops_the_running_auto_repeat_spells_hold_and_loop_on_its_caster() {
         ],
     );
     assert_eq!(hold(&app, hunter), Some(AUTO_SHOT));
-    assert_eq!(loops.held(hunter), Some((AUTO_SHOT, AUTO_SHOT_LOOP)));
+    assert_eq!(loops.held(hunter), [(AUTO_SHOT, AUTO_SHOT_LOOP)]);
 
     let reaped = frame(
         &mut app,
@@ -2864,7 +2867,7 @@ fn a_go_stops_the_running_auto_repeat_spells_hold_and_loop_on_its_caster() {
         &[cast_event(hunter, ARCANE_SHOT, CastEventKind::Go)],
     );
     assert_eq!(hold(&app, hunter), None, "the caster's Auto Shot hold");
-    assert_eq!(loops.held(hunter), None, "and its loop");
+    assert_eq!(loops.held(hunter), [], "and its loop");
     assert_eq!(
         reaped,
         vec![(hunter, ARCANE_SHOT), (hunter, AUTO_SHOT)],
@@ -2873,7 +2876,7 @@ fn a_go_stops_the_running_auto_repeat_spells_hold_and_loop_on_its_caster() {
     assert_eq!(hold(&app, other), Some(AUTO_SHOT), "another unit's hold");
     assert_eq!(
         loops.held(other),
-        Some((AUTO_SHOT, AUTO_SHOT_LOOP)),
+        [(AUTO_SHOT, AUTO_SHOT_LOOP)],
         "and its loop"
     );
 
@@ -2890,7 +2893,7 @@ fn a_go_stops_the_running_auto_repeat_spells_hold_and_loop_on_its_caster() {
         &[cast_event(hunter, ARCANE_SHOT, CastEventKind::Go)],
     );
     assert_eq!(hold(&app, hunter), Some(AUTO_SHOT));
-    assert_eq!(loops.held(hunter), Some((AUTO_SHOT, AUTO_SHOT_LOOP)));
+    assert_eq!(loops.held(hunter), [(AUTO_SHOT, AUTO_SHOT_LOOP)]);
 }
 
 /// A GO of `hits` and `misses` (target, code, reflect byte) under `target_mask`, at `dest`.

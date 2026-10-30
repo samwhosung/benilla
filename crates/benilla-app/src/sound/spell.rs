@@ -19,62 +19,115 @@ use super::kit::{
 };
 use super::{AudioListener, SoundConfig, SoundOutput};
 
-/// Each unit's live hold loop. The reference's sound rides the kit's effect, which carries its
-/// spell (`+0x18`), and `0x614150(spell, 0)` takes only a matching effect (`0x614167`), so one
-/// spell's stop spares another spell's loop.
+/// Each unit's live looping kit sounds, one per kit, as each rides an effect of its own on the
+/// unit's list (`0x61fedc`). The effect carries its spell (`+0x18`), and `0x614150(spell, 0)` takes
+/// every matching effect (`0x614167`), so one spell's stop spares another spell's loops.
 #[derive(Default)]
-pub(crate) struct HoldLoops(EntityHashMap<Hold>);
+pub(crate) struct HoldLoops(EntityHashMap<Vec<Hold>>);
 
 #[derive(Clone, Copy)]
 struct Hold {
     /// The spell whose kit rang it, and the kit.
     kit: (u32, u32),
+    /// Rung by a cast's hold ([`SpellKitSound::Play`]'s `cast_hold`).
+    cast_hold: bool,
     /// Its packet's place, which a display rebuild compares.
     at: Stamp,
 }
 
+/// One kit sound an edge stops on its unit, and how it fades.
+pub(crate) struct KitStop {
+    pub(crate) entity: Entity,
+    pub(crate) kit_sound: u32,
+    pub(crate) fade: kira::Tween,
+}
+
 impl HoldLoops {
-    /// A looping kit (`spell_id`, `kit_sound`) rang on `entity`: the unit's hold loop now. A
-    /// play without a packet stamp rang now, after every packet already read.
-    pub(crate) fn rang(&mut self, entity: Entity, kit: (u32, u32), at: Option<Stamp>) {
+    /// A looping kit (`spell_id`, `kit_sound`) rang on `entity`, one of its loops now; a kit rung
+    /// again is the same loop, as a stop takes every channel on it. A play without a packet
+    /// stamp rang now, after every packet already read.
+    pub(crate) fn rang(
+        &mut self,
+        entity: Entity,
+        kit: (u32, u32),
+        cast_hold: bool,
+        at: Option<Stamp>,
+    ) {
         let at = at.unwrap_or_else(crate::lanes::stamp);
-        self.0.insert(entity, Hold { kit, at });
+        let holds = self.0.entry(entity).or_default();
+        holds.retain(|h| h.kit.1 != kit.1);
+        holds.push(Hold { kit, cast_hold, at });
     }
 
-    /// [`SpellKitSound::StopHold`]: the kit to stop, the unit's loop when `spell_id` names its
-    /// spell or is `None`.
-    pub(crate) fn stop_hold(&mut self, entity: Entity, spell_id: Option<u32>) -> Option<u32> {
-        let (held, kit_sound) = self.0.get(&entity)?.kit;
-        if spell_id.is_some_and(|s| s != held) {
-            return None;
-        }
-        self.0.remove(&entity);
-        Some(kit_sound)
+    /// The kit sounds `edge` stops on its unit, the books moved to match: a hold's stop and a
+    /// rebuild take the loops they name, an aura's stop and a replay their kit, a play nothing.
+    pub(crate) fn stops(&mut self, edge: &SpellKitSound) -> Vec<KitStop> {
+        let declick = super::mixer::declick;
+        let (entity, kits, fade) = match *edge {
+            SpellKitSound::Play { .. } | SpellKitSound::PlayAt { .. } => return Vec::new(),
+            SpellKitSound::StopHold { entity, spell_id } => {
+                (entity, self.stop_hold(entity, spell_id), declick())
+            }
+            SpellKitSound::StopKit { entity, kit_sound } => {
+                // An aura-drop reap stops the kit's channels; an unrelated loop survives.
+                self.take(entity, |h| h.kit.1 == kit_sound);
+                (entity, vec![kit_sound], declick())
+            }
+            SpellKitSound::Rebuilt { entity, at } => {
+                (entity, self.take(entity, |h| h.at < at), kit_stop_fade())
+            }
+            SpellKitSound::Replay {
+                entity, kit_sound, ..
+            } => {
+                // Whatever the unit still sounds on the kit fades as the rebuild stopped its
+                // effect; the replay rings afresh.
+                self.take(entity, |h| h.kit.1 == kit_sound);
+                (entity, vec![kit_sound], kit_stop_fade())
+            }
+        };
+        kits.into_iter()
+            .map(|kit_sound| KitStop {
+                entity,
+                kit_sound,
+                fade,
+            })
+            .collect()
     }
 
-    /// An aura's kit sound stopped by id: the loop is gone when it was that kit.
-    fn stopped_kit(&mut self, entity: Entity, kit_sound: u32) {
-        if self.0.get(&entity).is_some_and(|h| h.kit.1 == kit_sound) {
+    /// [`SpellKitSound::StopHold`]: the kits to stop, every loop `spell_id`'s kits rang, or with
+    /// none every loop a cast's hold rang.
+    pub(crate) fn stop_hold(&mut self, entity: Entity, spell_id: Option<u32>) -> Vec<u32> {
+        self.take(entity, |h| match spell_id {
+            Some(spell_id) => h.kit.0 == spell_id,
+            None => h.cast_hold,
+        })
+    }
+
+    /// Drop `entity`'s loops that are `gone`, returning their kits.
+    fn take(&mut self, entity: Entity, mut gone: impl FnMut(&Hold) -> bool) -> Vec<u32> {
+        let Some(holds) = self.0.get_mut(&entity) else {
+            return Vec::new();
+        };
+        let mut kits = Vec::new();
+        holds.retain(|h| {
+            let stop = gone(h);
+            if stop {
+                kits.push(h.kit.1);
+            }
+            !stop
+        });
+        if holds.is_empty() {
             self.0.remove(&entity);
         }
+        kits
     }
 
-    /// [`SpellKitSound::Rebuilt`]: the kit to stop, the unit's loop when it rang before `at`. A
-    /// channel's or an aura's goes too: the rebuild's replay rings it afresh
-    /// ([`SpellKitSound::Replay`]).
-    pub(crate) fn rebuilt(&mut self, entity: Entity, at: Stamp) -> Option<u32> {
-        let hold = *self.0.get(&entity)?;
-        if hold.at >= at {
-            return None;
-        }
-        self.0.remove(&entity);
-        Some(hold.kit.1)
-    }
-
-    /// The loop the unit holds: its spell and kit.
+    /// The loops the unit holds, in ring order: each one's spell and kit.
     #[cfg(test)]
-    pub(crate) fn held(&self, entity: Entity) -> Option<(u32, u32)> {
-        self.0.get(&entity).map(|h| h.kit)
+    pub(crate) fn held(&self, entity: Entity) -> Vec<(u32, u32)> {
+        self.0
+            .get(&entity)
+            .map_or_else(Vec::new, |holds| holds.iter().map(|h| h.kit).collect())
     }
 }
 
@@ -95,12 +148,12 @@ fn route_spell_kit_sounds(
     mut out: NonSendMut<SoundOutput>,
     config: Res<SoundConfig>,
     listener: Res<AudioListener>,
-    // Each unit's live hold loop, so StopHold reaps only that kit's channels.
+    // Each unit's live loops, so a stop reaps only the kits it names.
     mut hold_loops: Local<HoldLoops>,
     mut despawned: RemovedComponents<NetEntity>,
 ) {
     for entity in despawned.read() {
-        hold_loops.0.remove(&entity); // the channel dies with the source-channel despawn reaper
+        hold_loops.0.remove(&entity); // the channels die with the source-channel despawn reaper
     }
     if events.is_empty() {
         return;
@@ -115,29 +168,30 @@ fn route_spell_kit_sounds(
     // Each edge where it falls: every play a router stamps is written ahead of the visuals set
     // that raises a rebuild, and the rebuild's replay after it.
     for ev in events.read() {
-        let (entity, spell_id, kit_sound, at) = match *ev {
+        for stop in hold_loops.stops(ev) {
+            super::kit::stop_source_kit_with(&mut out, stop.entity, stop.kit_sound, stop.fade);
+        }
+        let (entity, spell_id, kit_sound, cast_hold, at) = match *ev {
             SpellKitSound::Play {
                 entity,
                 spell_id,
                 kit_sound,
+                cast_hold,
                 at,
             } => {
                 if played_now.contains(&(entity, kit_sound)) {
                     continue;
                 }
-                (entity, spell_id, kit_sound, at)
+                (entity, spell_id, kit_sound, cast_hold, at)
             }
+            // The replay rings afresh, a ring this frame or not.
             SpellKitSound::Replay {
                 entity,
                 spell_id,
                 kit_sound,
+                cast_hold,
                 at,
-            } => {
-                // Whatever the unit still sounds on the kit fades as the rebuild stopped its
-                // effect; the replay rings afresh, a ring this frame or not.
-                super::kit::stop_source_kit_with(&mut out, entity, kit_sound, kit_stop_fade());
-                (entity, spell_id, kit_sound, Some(at))
-            }
+            } => (entity, spell_id, kit_sound, cast_hold, Some(at)),
             SpellKitSound::PlayAt { pos, kit_sound } => {
                 // A bare positional one-shot with no owner or dedup: its one caller is a
                 // missile's ground arrival.
@@ -156,24 +210,9 @@ fn route_spell_kit_sounds(
                 }
                 continue;
             }
-            SpellKitSound::StopHold { entity, spell_id } => {
-                if let Some(kit_sound) = hold_loops.stop_hold(entity, spell_id) {
-                    super::kit::stop_source_kit(&mut out, entity, kit_sound);
-                }
-                continue;
-            }
-            SpellKitSound::StopKit { entity, kit_sound } => {
-                // An aura-drop reap: stop this kit's channels; an unrelated hold loop survives.
-                hold_loops.stopped_kit(entity, kit_sound);
-                super::kit::stop_source_kit(&mut out, entity, kit_sound);
-                continue;
-            }
-            SpellKitSound::Rebuilt { entity, at } => {
-                if let Some(kit_sound) = hold_loops.rebuilt(entity, at) {
-                    super::kit::stop_source_kit_with(&mut out, entity, kit_sound, kit_stop_fade());
-                }
-                continue;
-            }
+            SpellKitSound::StopHold { .. }
+            | SpellKitSound::StopKit { .. }
+            | SpellKitSound::Rebuilt { .. } => continue,
         };
         played_now.push((entity, kit_sound));
         let pos = transforms.get(entity).map(|t| t.translation).ok();
@@ -208,7 +247,7 @@ fn route_spell_kit_sounds(
             )
         };
         match played {
-            Ok(_) if looping => hold_loops.rang(entity, (spell_id, kit_sound), at),
+            Ok(_) if looping => hold_loops.rang(entity, (spell_id, kit_sound), cast_hold, at),
             Ok(_) => {}
             Err(e) => warn!("spell kit sound {kit_sound}: {e:#}"),
         }
@@ -224,53 +263,139 @@ pub(super) fn plugin(app: &mut App) {
 mod tests {
     use super::*;
 
+    const ARCANE_MISSILES: u32 = 5143;
+    const AM_HUM: u32 = 3136;
+    const FIREBALL: u32 = 133;
+    const BUILDUP: u32 = 702;
+    const ARCANE_INTELLECT: u32 = 1459;
+    const AURA_LOOP: u32 = 4001;
+    const NONE: [u32; 0] = [];
+
+    /// The router's books over one edge: the kits it stops, then its ring, every kit a loop.
+    fn edge(loops: &mut HoldLoops, edge: SpellKitSound) -> Vec<u32> {
+        let stopped = loops
+            .stops(&edge)
+            .into_iter()
+            .map(|s| s.kit_sound)
+            .collect();
+        match edge {
+            SpellKitSound::Play {
+                entity,
+                spell_id,
+                kit_sound,
+                cast_hold,
+                at,
+            } => loops.rang(entity, (spell_id, kit_sound), cast_hold, at),
+            SpellKitSound::Replay {
+                entity,
+                spell_id,
+                kit_sound,
+                cast_hold,
+                at,
+            } => loops.rang(entity, (spell_id, kit_sound), cast_hold, Some(at)),
+            _ => {}
+        }
+        stopped
+    }
+
+    fn play(spell_id: u32, kit_sound: u32, cast_hold: bool, at: Option<Stamp>) -> SpellKitSound {
+        SpellKitSound::Play {
+            entity: Entity::PLACEHOLDER,
+            spell_id,
+            kit_sound,
+            cast_hold,
+            at,
+        }
+    }
+
     /// `0x614150(spell, 0)` takes only its own spell's effects (`0x614167`): a stop keyed to
-    /// another spell leaves the loop, its own takes it, and a replacing hold takes any.
+    /// another spell leaves the loop, its own takes it, and a replacing hold takes any cast's.
     #[test]
     fn a_hold_stop_takes_only_its_own_spells_loop() {
-        const ARCANE_MISSILES: u32 = 5143;
-        const AM_HUM: u32 = 3136;
-        const BLIZZARD: u32 = 10;
         let unit = Entity::PLACEHOLDER;
         let mut loops = HoldLoops::default();
-        loops.rang(unit, (ARCANE_MISSILES, AM_HUM), None);
-        assert_eq!(loops.stop_hold(unit, Some(BLIZZARD)), None);
-        assert_eq!(loops.held(unit), Some((ARCANE_MISSILES, AM_HUM)));
-        assert_eq!(loops.stop_hold(unit, Some(ARCANE_MISSILES)), Some(AM_HUM));
-        assert_eq!(loops.held(unit), None);
-        loops.rang(unit, (ARCANE_MISSILES, AM_HUM), None);
-        assert_eq!(loops.stop_hold(unit, None), Some(AM_HUM));
+        edge(&mut loops, play(ARCANE_MISSILES, AM_HUM, true, None));
+        assert_eq!(loops.stop_hold(unit, Some(10)), NONE, "Blizzard's stop");
+        assert_eq!(loops.held(unit), [(ARCANE_MISSILES, AM_HUM)]);
+        assert_eq!(loops.stop_hold(unit, Some(ARCANE_MISSILES)), [AM_HUM]);
+        assert_eq!(loops.held(unit), []);
+        edge(&mut loops, play(ARCANE_MISSILES, AM_HUM, true, None));
+        assert_eq!(loops.stop_hold(unit, None), [AM_HUM]);
+    }
+
+    /// Each loop is an effect of its own on the unit's list (`0x61fedc`): a precast rung after a
+    /// rebuild, in the frame the rebuild replays an aura's loop, still stops at its spell's go
+    /// (`0x614150`), and the aura's at its removal; a replacing hold spares the aura's.
+    #[test]
+    fn each_loop_stops_with_its_own_kit() {
+        let unit = Entity::PLACEHOLDER;
+        let mut loops = HoldLoops::default();
+        edge(
+            &mut loops,
+            play(
+                ARCANE_INTELLECT,
+                AURA_LOOP,
+                false,
+                Some(crate::lanes::stamp()),
+            ),
+        );
+        let rebuild = crate::lanes::stamp();
+        // The rebuild's frame in the router's order: a later packet's precast, then the rebuild
+        // and its replay.
+        let precast = play(FIREBALL, BUILDUP, true, Some(crate::lanes::stamp()));
+        assert_eq!(edge(&mut loops, precast), NONE);
+        let rebuilt = SpellKitSound::Rebuilt {
+            entity: unit,
+            at: rebuild,
+        };
+        assert_eq!(edge(&mut loops, rebuilt), [AURA_LOOP], "rang before it");
+        let replay = SpellKitSound::Replay {
+            entity: unit,
+            spell_id: ARCANE_INTELLECT,
+            kit_sound: AURA_LOOP,
+            cast_hold: false,
+            at: rebuild,
+        };
+        edge(&mut loops, replay);
+        assert_eq!(
+            loops.held(unit),
+            [(FIREBALL, BUILDUP), (ARCANE_INTELLECT, AURA_LOOP)]
+        );
+
+        let replacing = SpellKitSound::StopHold {
+            entity: unit,
+            spell_id: None,
+        };
+        assert_eq!(edge(&mut loops, replacing), [BUILDUP], "a new cast's");
+        edge(&mut loops, precast);
+        let go = SpellKitSound::StopHold {
+            entity: unit,
+            spell_id: Some(FIREBALL),
+        };
+        assert_eq!(edge(&mut loops, go), [BUILDUP], "the precast's go");
+        let removal = SpellKitSound::StopKit {
+            entity: unit,
+            kit_sound: AURA_LOOP,
+        };
+        assert_eq!(edge(&mut loops, removal), [AURA_LOOP], "the aura's removal");
+        assert_eq!(loops.held(unit), []);
     }
 
     /// The rebuild's loop `0x60ac10` stops every effect the unit holds, kit sounds included
-    /// (`0x61fedc` links them there): a hold rung before the swap stops, the channel's too, whose
+    /// (`0x61fedc` links them there): a loop rung before the swap stops, the channel's too, whose
     /// kit the replay rings afresh; one rung after it plays on.
     #[test]
     fn a_rebuild_stops_every_hold_loop_rung_before_it() {
-        const FIREBALL: u32 = 133;
-        const BUILDUP: u32 = 702;
-        const ARCANE_MISSILES: u32 = 5143;
-        const AM_HUM: u32 = 3136;
         let unit = Entity::PLACEHOLDER;
         let mut loops = HoldLoops::default();
+        let rebuilt = |at| SpellKitSound::Rebuilt { entity: unit, at };
 
-        let precast = crate::lanes::stamp();
+        edge(&mut loops, play(ARCANE_MISSILES, AM_HUM, true, None));
         let swap = crate::lanes::stamp();
-        loops.rang(unit, (FIREBALL, BUILDUP), Some(precast));
-        assert_eq!(loops.rebuilt(unit, swap), Some(BUILDUP), "rang before");
-        assert_eq!(loops.held(unit), None);
-
-        let swap = crate::lanes::stamp();
-        loops.rang(unit, (FIREBALL, BUILDUP), Some(crate::lanes::stamp()));
-        assert_eq!(loops.rebuilt(unit, swap), None, "rang after");
-        assert_eq!(loops.held(unit), Some((FIREBALL, BUILDUP)));
-
-        loops.rang(unit, (ARCANE_MISSILES, AM_HUM), None);
-        assert_eq!(
-            loops.rebuilt(unit, crate::lanes::stamp()),
-            Some(AM_HUM),
-            "the channel's"
-        );
+        let precast = play(FIREBALL, BUILDUP, true, Some(crate::lanes::stamp()));
+        edge(&mut loops, precast);
+        assert_eq!(edge(&mut loops, rebuilt(swap)), [AM_HUM], "the channel's");
+        assert_eq!(loops.held(unit), [(FIREBALL, BUILDUP)], "rang after");
     }
 
     /// The rebuild's stop is `0x6203e0`'s: the sound fades over 0.15 s (`0x6204b6` → `0x7a5a10`),
