@@ -76,7 +76,7 @@ impl CallHost for Tracing<'_, '_, '_> {
         if let ScriptCall::WorldClick(ClickCall::Arm(_)) = call {
             let at = script.click_press().at.map(Vec2::from);
             let pick = self.0.set.p0().0.map(|mut tracer| tracer.trace(at));
-            #[cfg(test)]
+            #[cfg(debug_assertions)]
             self.0.set.end_lend();
             if let (Some(pick), Some(mut host)) = (pick, self.host()) {
                 if let Some(mut arm) = host.appliers.click().arm() {

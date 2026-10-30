@@ -629,7 +629,7 @@ pub(crate) fn hold(lua: &Lua, held: Held) {
     let input = model.protected.events();
     let muted = model.sound_suppression;
     model.push_waiting(Waiting::Lua { held, input, muted });
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(debug_assertions)]
     super::census::held();
 }
 
@@ -873,7 +873,7 @@ fn drain_within(lua: &Lua) {
                 // key, click or Enter that made it, and only inside that: a queued call gets
                 // exactly its events.
                 let tail = script.with_input_events(input, |script| {
-                    #[cfg(any(test, feature = "test-support"))]
+                    #[cfg(debug_assertions)]
                     let _census = super::census::Applying::new(&call);
                     super::host::with_host(lua, |host| host.apply(script, call)).flatten()
                 });

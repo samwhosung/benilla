@@ -75,7 +75,7 @@ impl CastReports {
     /// Stamp `report` and queue it behind everything stamped before it.
     fn push(&mut self, report: CastReport) {
         // A call's host signals it at its next point: the census counts a send made before then.
-        #[cfg(test)]
+        #[cfg(debug_assertions)]
         benilla_ui::script::census::queued();
         let stamp = crate::lanes::stamp();
         let at = self.0.partition_point(|(s, _)| *s < stamp);

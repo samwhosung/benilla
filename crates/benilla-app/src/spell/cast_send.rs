@@ -182,6 +182,10 @@ pub(crate) enum CastStage {
     CursorSent { spell_id: u32, now: Instant },
     /// A cursor's commit past its pop's signal, with nothing left.
     Done,
+    /// The arm tail's refusal past its line's signals (`0x6e21dd`, `0x6e21fc`): the reporter's
+    /// tail (`0x6e2201`), whose cancel of the spell in flight goes on the wire (`0x6e4970`), then
+    /// the tail's signal as it leaves (`0x6e5069`).
+    Refused { fail: CastFail, reaches: bool },
 }
 
 /// An attempt parked at `ArmCast`'s word test (`0x6e5338`). Past the signal the arm reads the word
@@ -654,6 +658,11 @@ impl CastLadder<'_, '_> {
                 None
             }
             CastStage::Done => None,
+            CastStage::Refused { fail, reaches } => {
+                self.core().report_tail(fail, false, reaches);
+                self.reports.changed();
+                None
+            }
             CastStage::Sent { spell_id, attempt } => {
                 let def = self.spells.as_ref().and_then(|s| s.catalog.get(spell_id));
                 // The GCD arms at the send (`0x6e2de0` from `0x6e58fb`), after the packet; a
@@ -934,15 +943,18 @@ impl CastLadder<'_, '_> {
             // reason)`): the word is already zero, so the cancel goes on the wire (`0x6e4970`),
             // the pop restores the save, and the record's caster fires `SPELLCAST_FAILED`. An item
             // without `ITEM_FLAG_PLAYERCAST` was never pushed, and its report fires the event
-            // itself. The tail signals once more as it leaves (`0x6e5069`).
+            // itself. The tail signals once more as it leaves (`0x6e5069`). The line's listeners
+            // run ahead of the cancel ([`CastStage::Refused`]).
             CastWireTarget::Refused(reason) | CastWireTarget::RefusedAtArm(reason) => {
                 debug!(
                     "ui_action: cast {spell_id} refused locally — the cast-arm tail ({reason:#x})"
                 );
                 self.drop_word();
-                self.report_local(CastFail::local(spell_id, reason));
-                self.reports.changed();
-                return None;
+                let fail = CastFail::local(spell_id, reason);
+                let reaches =
+                    reaches_tail(&fail, self.spells.as_deref(), &self.items, &self.commands);
+                self.core().report_line(fail);
+                return Some(CastStage::Refused { fail, reaches });
             }
         };
         // `BindTarget` binds the candidate and, the word emptied, signals and sends

@@ -50,7 +50,7 @@ macro_rules! disjoint_set {
             world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell<'w>,
             change_tick: bevy::ecs::change_detection::Tick,
             /// The tick and member of the lend running now, while the census watches writes.
-            #[cfg(test)]
+            #[cfg(debug_assertions)]
             lend: Option<(bevy::ecs::change_detection::Tick, &'static str)>,
         }
 
@@ -146,7 +146,7 @@ macro_rules! disjoint_set {
                     meta: meta.clone(),
                     world,
                     change_tick,
-                    #[cfg(test)]
+                    #[cfg(debug_assertions)]
                     lend: None,
                 }
             }
@@ -155,13 +155,13 @@ macro_rules! disjoint_set {
         impl $name<'_, '_> {
             /// Whether the census watches this set's lends: one marked `watched`, the state a call
             /// writes, and not a set of reads.
-            #[cfg(test)]
+            #[cfg(debug_assertions)]
             const WATCHED: bool = false $(|| { let _ = stringify!($watched); true })?;
 
             /// The lend that ended with the last member's item has written or not, for the census
             /// ([`crate::script_calls::disjoint::end_lend`]): the host calls this where its
             /// members are all unlent, such as the end of an apply and ahead of a signal point.
-            #[cfg(test)]
+            #[cfg(debug_assertions)]
             #[allow(dead_code)]
             pub(crate) fn end_lend(&mut self) {
                 crate::script_calls::disjoint::end_lend(self.world, &mut self.lend);
@@ -173,7 +173,7 @@ macro_rules! disjoint_set {
                 pub(crate) fn $field(
                     &mut self,
                 ) -> bevy::ecs::system::SystemParamItem<'_, '_, $ty> {
-                    #[cfg(test)]
+                    #[cfg(debug_assertions)]
                     let change_tick = if Self::WATCHED {
                         crate::script_calls::disjoint::begin_lend(
                             self.world,
@@ -184,7 +184,7 @@ macro_rules! disjoint_set {
                     } else {
                         self.change_tick
                     };
-                    #[cfg(not(test))]
+                    #[cfg(not(debug_assertions))]
                     let change_tick = self.change_tick;
                     // SAFETY: the set registered this member's access, and `&mut self` keeps
                     // every other member of the set unlent while this one lives.
@@ -211,7 +211,7 @@ pub(crate) struct Pair<'w, 's, A: SystemParam, B: SystemParam> {
     world: UnsafeWorldCell<'w>,
     change_tick: Tick,
     /// The tick and name of the first member's lend running now, while the census watches writes.
-    #[cfg(test)]
+    #[cfg(debug_assertions)]
     lend: Option<(Tick, &'static str)>,
 }
 
@@ -270,7 +270,7 @@ unsafe impl<A: SystemParam, B: SystemParam> SystemParam for Pair<'_, '_, A, B> {
             meta: meta.clone(),
             world,
             change_tick,
-            #[cfg(test)]
+            #[cfg(debug_assertions)]
             lend: None,
         }
     }
@@ -279,16 +279,16 @@ unsafe impl<A: SystemParam, B: SystemParam> SystemParam for Pair<'_, '_, A, B> {
 impl<A: SystemParam, B: SystemParam> Pair<'_, '_, A, B> {
     /// The first member, the second unlent while it lives.
     pub(crate) fn p0(&mut self) -> SystemParamItem<'_, '_, A> {
-        #[cfg(test)]
+        #[cfg(debug_assertions)]
         let change_tick = begin_lend(self.world, &mut self.lend, self.change_tick, "p0");
-        #[cfg(not(test))]
+        #[cfg(not(debug_assertions))]
         let change_tick = self.change_tick;
         // SAFETY: the pair registered `A`'s access, and `&mut self` keeps `B` unlent.
         unsafe { A::get_param(&mut self.states.0, &self.meta, self.world, change_tick) }
     }
 
     /// The first member's lend has ended, for the census ([`end_lend`]): its item has dropped.
-    #[cfg(test)]
+    #[cfg(debug_assertions)]
     pub(crate) fn end_lend(&mut self) {
         end_lend(self.world, &mut self.lend);
     }
@@ -304,7 +304,7 @@ impl<A: SystemParam, B: SystemParam> Pair<'_, '_, A, B> {
 /// watches writes ([`benilla_ui::script::census::watching_writes`]) the lend takes a change tick
 /// of its own, which only its writes carry, to be found by [`end_lend`]. `system` is the tick the
 /// system runs at, which every lend carries otherwise.
-#[cfg(test)]
+#[cfg(debug_assertions)]
 pub(crate) fn begin_lend(
     world: UnsafeWorldCell,
     lend: &mut Option<(Tick, &'static str)>,
@@ -323,13 +323,22 @@ pub(crate) fn begin_lend(
 }
 
 /// End the lend begun last, for the census: when a handler is held, it reports whether the lend
-/// wrote. Every item the lend gave has dropped: the lends are `&mut` borrows of the set, and the
-/// next begins, or the host ends this one, only once they have ended.
-#[cfg(test)]
+/// wrote, and a write that follows the handler's signal panics, unless the member only publishes
+/// ([`super::census::EPILOGUE`]). Every item the lend gave has dropped: the lends are `&mut`
+/// borrows of the set, and the next begins, or the host ends this one, only once they have ended.
+#[cfg(debug_assertions)]
 pub(crate) fn end_lend(world: UnsafeWorldCell, lend: &mut Option<(Tick, &'static str)>) {
     use benilla_ui::script::census;
-    if let Some((tick, member)) = lend.take() {
-        census::lend_ends(census::window_open() && written_at(world, tick), member);
+    let Some((tick, member)) = lend.take() else {
+        return;
+    };
+    let after = census::lend_ends(census::window_open() && written_at(world, tick), member);
+    if after && !super::census::EPILOGUE.contains(&member) && !std::thread::panicking() {
+        panic!(
+            "census: `{member}` written after a handler its apply signalled was held, which the \
+             reference runs before the write: `SignalEvent` (0x703e50) runs every listener before \
+             the verb goes on"
+        );
     }
 }
 
@@ -337,7 +346,7 @@ pub(crate) fn end_lend(world: UnsafeWorldCell, lend: &mut Option<(Tick, &'static
 /// component of any entity. A write through a `ResMut` or a `Mut` stamps the tick its lend was
 /// given, so a lend with a tick of its own wrote exactly if something carries it. Commands
 /// queued by the lend and sparse-set components are not seen.
-#[cfg(test)]
+#[cfg(debug_assertions)]
 fn written_at(world: UnsafeWorldCell, tick: Tick) -> bool {
     // SAFETY: only the change ticks are read, as plain values, with no member of the set lent
     // (the caller's contract above) and no other thread running.

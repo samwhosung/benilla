@@ -1241,3 +1241,38 @@ fn a_cursor_rearmed_at_the_arm_signal_keeps_its_cast_in_flight() {
         vec![("cast", MOTW), ("cancel", MOTW)]
     );
 }
+
+/// The arm tail's refusal reports (`0x6e507b` → `0x6e1a00`): its line signals
+/// `UI_ERROR_MESSAGE` (`0x6e21dd`) ahead of the tail's cancel of the pushed spell (`0x6e2218`),
+/// whose `CMSG_CANCEL_CAST` (`0x6e4970`) follows what the line's listeners sent.
+#[test]
+fn the_arm_tails_refusal_sends_its_cancel_after_its_lines_listeners() {
+    const BOLT: u32 = 133;
+    let mut f = frame(false);
+    with_book_spell(
+        &mut f,
+        BOLT,
+        "Bolt",
+        benilla_formats::SpellDisplay {
+            implicit_target_a1: 6,
+            ..Default::default()
+        },
+    );
+    run(
+        &mut f,
+        r#"local l = CreateFrame("Frame")
+        l:RegisterEvent("UI_ERROR_MESSAGE")
+        l:SetScript("OnEvent", function() SendChatMessage("seen", "SAY") end)"#,
+    );
+    f.rx.try_iter().for_each(drop);
+    run_hosted(&mut f, r#"CastSpellByName("Bolt", 1)"#);
+    let wire: Vec<&str> =
+        f.rx.try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::Chat { .. } => Some("chat"),
+                ClientCommand::CancelCast { .. } => Some("cancel"),
+                _ => None,
+            })
+            .collect();
+    assert_eq!(wire, ["chat", "cancel"]);
+}

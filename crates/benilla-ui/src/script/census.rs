@@ -1,15 +1,16 @@
 //! The census of the sends a call's apply or an engine turn makes while a handler it signalled is
 //! held, or a signal it queued on a lane of its own waits for its host's next point ([`queued`]),
-//! for test builds. `SignalEvent` (`0x703e50`) runs every listener before the verb goes on,
-//! so a send made while one waits goes out ahead of the packets its handler sends in 1.12.1. Each
-//! such send is counted under its call's kind, or `turn@` and its turn's caller
+//! in debug builds. `SignalEvent` (`0x703e50`) runs every listener before the verb goes on, so a
+//! send made while one waits goes out ahead of the packets its handler sends in 1.12.1. Such a
+//! send is counted under its call's kind, or `turn@` and its turn's caller
 //! ([`super::UiScript::host_out`]), from the first handler held to the signal point that runs it
-//! ([`super::UiScript::signal_point`]) or the apply's or turn's end, for the engine half's tests to
-//! hold to an allowlist that only shrinks. With `BENILLA_SEND_CENSUS` naming a file, each count is
-//! also appended to it as `kind count test site`, a whole suite's survey (`test` is the test's name
-//! under nextest, else its thread's, and `site` the frames of the app crate that held the first
-//! handler). A survey also gives every in-game VM a frame that hears every event, so the whole
-//! suite is swept ([`survey_listener`]).
+//! ([`super::UiScript::signal_point`]) or the apply's or turn's end, and panics there. With
+//! `BENILLA_SEND_CENSUS` naming a file, each count is first appended to it as `kind count test
+//! site`, a whole suite's survey (`test` is the test's name under nextest, else its thread's, and
+//! `site` the frames of the app crate that held the first handler). A survey also gives every
+//! in-game VM a frame that hears every event, so the whole suite is swept ([`survey_listener`]).
+//! The count reads the channel's length, which the network thread drains in a live run: there it
+//! misses what was drained meanwhile, and never counts a send that was not made.
 //!
 //! A listener that runs late also reads the state the apply wrote after the signal, which no send
 //! shows. The host reports each lend of its state (a call applier's, an engine turn's) as it ends,
@@ -18,9 +19,10 @@
 //! before the lend began (the write follows the signal) and `within` when it was first held during
 //! the lend (the order inside the lend is unobserved, so the hit is a candidate to read). A lend
 //! counts as a write when anything it lent was dereferenced mutably, so an applier that takes its
-//! state `&mut` without changing it is counted too: each hit is read before it is believed. It watches only where asked
-//! ([`watch_writes`], or the survey file named): a lend then takes a change tick of its own to tell
-//! its writes from the system's.
+//! state `&mut` without changing it is counted too, and the host says which members only publish
+//! ([`lend_ends`]'s caller panics over the rest). It watches only where asked ([`watch_writes`],
+//! or the survey file named): a lend then takes a change tick of its own to tell its writes from
+//! the system's, and the scan for them costs too much to run on every lend of a live client.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -71,19 +73,37 @@ impl Census {
         self.probe.as_ref().map_or(0, |probe| probe())
     }
 
-    /// Count what the innermost apply sent since its first held handler, closing its window.
-    fn close(&mut self) {
+    /// Count what the innermost apply sent since its first held handler, closing its window: the
+    /// count, for [`refuse`], when it sent any.
+    fn close(&mut self) -> Option<Counted> {
         let sent = self.sent();
-        let Some(apply) = self.applying.last_mut() else {
-            return;
-        };
-        if let Some(mark) = apply.mark.take() {
-            let n = sent.saturating_sub(mark);
-            if n > 0 {
-                *self.counts.entry(apply.kind.clone()).or_default() += n;
-                survey(&apply.kind, n, &apply.site);
-            }
+        let apply = self.applying.last_mut()?;
+        let n = sent.saturating_sub(apply.mark.take()?);
+        if n == 0 {
+            return None;
         }
+        *self.counts.entry(apply.kind.clone()).or_default() += n;
+        survey(&apply.kind, n, &apply.site);
+        Some(Counted {
+            kind: apply.kind.clone(),
+            n,
+        })
+    }
+}
+
+/// The sends an apply made while a handler it signalled was held ([`Census::close`]).
+struct Counted {
+    kind: String,
+    n: usize,
+}
+
+/// Panic over `counted`, past the census's borrow, unless the thread is unwinding already.
+fn refuse(counted: Option<Counted>) {
+    if let (Some(Counted { kind, n }), false) = (counted, std::thread::panicking()) {
+        panic!(
+            "census: `{kind}` sent {n} while a handler it signalled was held, ahead of the point \
+             that runs it: `SignalEvent` (0x703e50) runs every listener before the verb goes on"
+        );
     }
 }
 
@@ -210,11 +230,13 @@ impl Applying {
 
 impl Drop for Applying {
     fn drop(&mut self) {
-        CENSUS.with(|c| {
+        let counted = CENSUS.with(|c| {
             let mut c = c.borrow_mut();
-            c.close();
+            let counted = c.close();
             c.applying.pop();
+            counted
         });
+        refuse(counted);
     }
 }
 
@@ -255,15 +277,16 @@ pub fn lend_begins() {
 }
 
 /// The innermost apply's lend of `member` ends, having written or not. One that wrote while a
-/// handler was held is counted ([`Writes`]).
-pub fn lend_ends(wrote: bool, member: &str) {
+/// handler was held is counted ([`Writes`]): whether it began after the handler was held, a write
+/// that follows the signal, for the host to panic over unless the member only publishes.
+pub fn lend_ends(wrote: bool, member: &str) -> bool {
     CENSUS.with(|c| {
         let mut c = c.borrow_mut();
         let Some(apply) = c.applying.last() else {
-            return;
+            return false;
         };
         if !wrote || apply.mark.is_none() {
-            return;
+            return false;
         }
         let (kind, after, site) = (
             format!("{}:{member}", apply.kind),
@@ -281,12 +304,14 @@ pub fn lend_ends(wrote: bool, member: &str) {
             1,
             &site,
         );
-    });
+        after
+    })
 }
 
-/// A signal point runs what the innermost apply held: its window closes.
+/// A signal point runs what the innermost apply held: its window closes, a send made in it
+/// refused ([`refuse`]).
 pub(crate) fn point() {
-    CENSUS.with(|c| c.borrow_mut().close());
+    refuse(CENSUS.with(|c| c.borrow_mut().close()));
 }
 
 #[cfg(test)]
@@ -314,38 +339,9 @@ mod tests {
         }
     }
 
-    /// A send made while the apply holds a handler is counted under its call's kind; one made
-    /// after a signal point ran the handler is not.
-    #[test]
-    fn a_send_made_while_a_handler_is_held_is_counted_under_its_call() {
-        for point in [false, true] {
-            let mut s = UiScript::new().unwrap();
-            s.run(
-                r#"local f = CreateFrame("Frame")
-                f:RegisterEvent("PLAYER_TARGET_CHANGED")
-                f:SetScript("OnEvent", function() end)"#,
-            )
-            .unwrap();
-            let sent = Rc::new(Cell::new(0));
-            let probe = sent.clone();
-            super::probe(move || probe.get());
-            super::take();
-            s.hosted(&mut Sending { sent, point }, |s| s.run("ClearTarget()"))
-                .unwrap();
-            let counted = super::take();
-            if point {
-                assert_eq!(counted, BTreeMap::new());
-            } else {
-                assert_eq!(counted, BTreeMap::from([("ClearTarget".to_string(), 1)]));
-            }
-        }
-    }
-
-    /// An engine turn's send made while a handler it signalled is held is counted under the
-    /// turn's caller.
-    #[test]
-    fn a_turns_send_made_while_a_handler_is_held_is_counted_under_its_caller() {
-        let mut s = UiScript::new().unwrap();
+    /// A VM with a frame that hears `PLAYER_TARGET_CHANGED`, and a send counter the census reads.
+    fn listened() -> (UiScript, Rc<Cell<usize>>) {
+        let s = UiScript::new().unwrap();
         s.run(
             r#"local f = CreateFrame("Frame")
             f:RegisterEvent("PLAYER_TARGET_CHANGED")
@@ -356,16 +352,40 @@ mod tests {
         let probe = sent.clone();
         super::probe(move || probe.get());
         super::take();
-        let line = line!() + 1;
+        (s, sent)
+    }
+
+    /// A send made after a signal point ran the handler is not counted.
+    #[test]
+    fn a_send_made_past_the_point_is_not_counted() {
+        let (mut s, sent) = listened();
+        s.hosted(&mut Sending { sent, point: true }, |s| {
+            s.run("ClearTarget()")
+        })
+        .unwrap();
+        assert_eq!(super::take(), BTreeMap::new());
+    }
+
+    /// A send made while the apply holds a handler is refused under its call's kind.
+    #[test]
+    #[should_panic(expected = "census: `ClearTarget` sent 1 while a handler it signalled was held")]
+    fn a_send_made_while_a_handler_is_held_panics_under_its_call() {
+        let (mut s, sent) = listened();
+        let _ = s.hosted(&mut Sending { sent, point: false }, |s| {
+            s.run("ClearTarget()")
+        });
+    }
+
+    /// An engine turn's send made while a handler it signalled is held is refused under the
+    /// turn's caller.
+    #[test]
+    #[should_panic(expected = "census: `turn@script/census.rs:")]
+    fn a_turns_send_made_while_a_handler_is_held_panics_under_its_caller() {
+        let (mut s, sent) = listened();
         s.host_out(|s| {
             s.fire_event("PLAYER_TARGET_CHANGED", vec![]);
             sent.set(sent.get() + 1);
         });
-        s.refuse_waiting();
-        assert_eq!(
-            super::take(),
-            BTreeMap::from([(format!("turn@script/census.rs:{line}"), 1)])
-        );
     }
 
     /// A host whose apply writes in lends, reported to the census as the host would: one before

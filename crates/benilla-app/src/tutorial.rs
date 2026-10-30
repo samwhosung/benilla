@@ -312,7 +312,7 @@ impl TutorialState {
     fn push(&mut self, ask: TutorialAsk) {
         // A trigger or a selection's ladder a call queued fires at its host's next point
         // ([`TutorialSteps::fire_since`]): the census counts a send made before then.
-        #[cfg(test)]
+        #[cfg(debug_assertions)]
         if matches!(
             ask,
             TutorialAsk::Trigger { .. } | TutorialAsk::Fire { .. } | TutorialAsk::Selected { .. }

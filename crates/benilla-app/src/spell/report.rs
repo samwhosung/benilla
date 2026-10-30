@@ -274,13 +274,24 @@ impl CastCore<'_> {
     /// refusal (`0x6e2213 sete`); another spell in flight fires nothing (`0x6e2228`), nor does
     /// "Another action is in progress" (`0x6e2234`); anything else fires the failure's edge.
     pub(crate) fn report(&mut self, fail: CastFail, from_server: bool, reaches_tail: bool) {
-        let (spell_id, reason) = (fail.spell_id, fail.reason);
+        self.report_line(fail);
+        self.report_tail(fail, from_server, reaches_tail);
+    }
+
+    /// [`Self::report`]'s line (`0x6e1cca`-`0x6e21fc`): `UI_ERROR_MESSAGE` (`0x6e21dd`) and the
+    /// combat log's line (`0x6e21fc`), which signal ahead of the tail.
+    pub(crate) fn report_line(&mut self, fail: CastFail) {
         // The player cleanup's switch, ahead of the line: `NEED_AMMO` triggers Ammunition
         // (`0x6e1cc3`-`0x6e1cca`).
-        if reason == REASON_NEED_AMMO {
+        if fail.reason == REASON_NEED_AMMO {
             self.trigger_tutorial(crate::tutorial::id::AMMUNITION);
         }
         self.reports.refused(fail);
+    }
+
+    /// [`Self::report`]'s tail (`0x6e2201`-`0x6e224a`), past its line's signals.
+    pub(crate) fn report_tail(&mut self, fail: CastFail, from_server: bool, reaches_tail: bool) {
+        let (spell_id, reason) = (fail.spell_id, fail.reason);
         if !reaches_tail {
             return;
         }

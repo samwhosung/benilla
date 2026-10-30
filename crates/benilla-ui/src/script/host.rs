@@ -433,7 +433,7 @@ impl UiScript {
         let lua = self.lua().clone();
         let _open = Open::new(slot(&lua));
         let _hold = Hold::new(slot(&lua), true);
-        #[cfg(any(test, feature = "test-support"))]
+        #[cfg(debug_assertions)]
         let _census = super::census::Applying::turn(std::panic::Location::caller());
         f(self)
     }
@@ -496,7 +496,7 @@ impl UiScript {
             !free(&lua) && slot(&lua).hold.get(),
             "a signal point is only inside a call's apply"
         );
-        #[cfg(any(test, feature = "test-support"))]
+        #[cfg(debug_assertions)]
         super::census::point();
         lend(&lua, host, || {
             in_place(&lua, || super::calls::settle(&lua, self));
