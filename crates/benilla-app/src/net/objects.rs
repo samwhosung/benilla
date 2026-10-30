@@ -24,8 +24,7 @@ use super::motion::{
 };
 use super::{
     ActiveMover, FieldChanged, Guid, GuidIndex, NetCommands, NetEntity, NetHandlerApp, ObjectStore,
-    RelaySeed, RemoteMotion, SelfGuid, SelfPlayer, SpeedChangeMessage, Spline, UnitMoveModes,
-    UnitSpeeds,
+    RemoteMotion, SelfGuid, SelfPlayer, SpeedChangeMessage, Spline, UnitMoveModes, UnitSpeeds,
 };
 
 mod arrival;
@@ -84,8 +83,6 @@ pub(crate) struct Scene<'w, 's> {
     stores: Query<'w, 's, &'static mut ObjectStore>,
     countdowns: Query<'w, 's, &'static mut crate::items::Countdowns>,
     remote: Query<'w, 's, &'static mut RemoteMotion>,
-    /// What a create left on a unit's mover before its first relay.
-    seeds: Query<'w, 's, &'static mut RelaySeed>,
     modes: Query<'w, 's, &'static mut UnitMoveModes>,
     xp_awarded: Query<'w, 's, (), With<crate::ui_chat::combat::watch::XpAwarded>>,
     client_controlled: Query<'w, 's, (), With<super::ClientControlled>>,
@@ -614,8 +611,6 @@ fn on_move_time_skipped(In(ev): In<SessionEvent>, mut sc: Scene) {
         };
         if let Ok(mut m) = sc.remote.get_mut(e) {
             m.relay.skip_time(lag_ms);
-        } else if let Ok(mut seed) = sc.seeds.get_mut(e) {
-            seed.chain.skip_time(lag_ms);
         }
     }
 }
@@ -657,7 +652,6 @@ fn on_unit_move(In(ev): In<SessionEvent>, mut sc: Scene, world: Option<MoverWorl
             &sc.index,
             &sc.self_guid,
             &mut sc.remote,
-            &sc.seeds,
             &mut sc.transforms,
             &sc.stores,
             &sc.speeds,
@@ -942,41 +936,59 @@ fn object_create(
     // `WOW_CREATE_SPLINE=off` run still records what the wire offered.
     trace_create_spline(guid, spline.as_ref());
     let walk = spline.and_then(create_spline);
-    // A unit's status applies forced (`0x619320` → `0x618c30`), re-seeding the mover's replay
-    // chain from the block's stamp and the clock; a held unit's ring is its own, kept.
-    let seed = matches!(kind, EntityKind::Unit | EntityKind::Player)
+    // A unit's status applies forced (`0x619320` → `0x618c30`): the mover takes the block's pose
+    // and its flags word (`new & 0x75a07dff` over the word `0x61936e` cleared), and its replay
+    // chain re-seeds from the block's stamp and the clock, on its own ring, which a held unit
+    // keeps; the queue empties. `UpdateActiveState` (`0x619426` → `0x618940`) then lists it while a
+    // flag of `0x20ff` is set, so a unit created moving is dead-reckoned from its create. The
+    // mover state is [`RemoteMotion`]: every other player's, and a creature's created moving with
+    // no path to walk or already relayed, since a creature's path is its [`Spline`]'s and one
+    // standing has nothing to reckon.
+    let motion = matches!(kind, EntityKind::Unit | EntityKind::Player)
         .then_some(mover)
         .flatten()
         .filter(|_| sc.self_guid.0 != Some(guid))
-        .map(|m| {
+        .and_then(|m| {
             let held = match &landing {
-                Landing::Live(e) => sc
-                    .remote
-                    .get(*e)
-                    .map(|rm| rm.relay.clone())
-                    .or_else(|_| sc.seeds.get(*e).map(|s| s.chain.clone()))
-                    .ok(),
+                Landing::Live(e) => sc.remote.get(*e).ok().map(|rm| rm.relay.clone()),
                 Landing::New { .. } => None,
             };
-            let mut chain = held.unwrap_or_default();
-            chain.seed_at_create(m.time, sc.real.elapsed_secs_f64() * 1000.0);
-            RelaySeed {
-                chain,
-                flags: crate::creature_anim::move_flags::merge_server_authored(0, m.flags),
-            }
+            let flags = crate::creature_anim::move_flags::merge_server_authored(0, m.flags);
+            let moving = flags & crate::creature_anim::move_flags::INTEGRATED != 0;
+            let reckoned =
+                kind == EntityKind::Player || held.is_some() || (moving && walk.is_none());
+            reckoned.then(|| {
+                let now_ms = sc.real.elapsed_secs_f64() * 1000.0;
+                let mut relay = held.unwrap_or_default();
+                relay.seed_at_create(m.time, now_ms);
+                RemoteMotion {
+                    wow_pos: position,
+                    orientation: seat.map_or(orientation, |(_, yaw)| yaw),
+                    flags,
+                    pitch: m.pitch,
+                    speed: 0.0,
+                    vertical_velocity: 0.0,
+                    jump_xy_vel: [0.0; 2],
+                    fall_start: None,
+                    pending: std::collections::VecDeque::new(),
+                    relay,
+                    last_apply_ms: now_ms,
+                    last_apply_pos: position,
+                }
+            })
         });
     let commands = &mut sc.commands;
     match landing {
         Landing::Live(e) => {
-            // A re-create is a fresh snapshot: refresh identity and a unit's pose, drop any
-            // extrapolation; the mover's chain goes on in the seed.
-            commands.entity(e).insert(net).remove::<RemoteMotion>();
-            match seed {
-                Some(seed) => {
-                    commands.entity(e).insert(seed);
+            // A re-create is a fresh snapshot: refresh identity and a unit's pose, and the mover
+            // state from the block, its chain going on.
+            commands.entity(e).insert(net);
+            match motion {
+                Some(motion) => {
+                    commands.entity(e).insert(motion);
                 }
                 None => {
-                    commands.entity(e).remove::<RelaySeed>();
+                    commands.entity(e).remove::<RemoteMotion>();
                 }
             }
             // The set is replaced whole; a `SMSG_FORCE_*_SPEED_CHANGE` in the same tick lands on
@@ -1061,8 +1073,8 @@ fn object_create(
             if let Some(s) = walk {
                 entity.insert(s);
             }
-            if let Some(seed) = seed {
-                entity.insert(seed);
+            if let Some(motion) = motion {
+                entity.insert(motion);
             }
             // Our own player is the active one from its write: the reference finds it by its guid
             // (`0x468550`), here by the tag, given in the same commands as the entity.
@@ -1193,7 +1205,6 @@ fn unit_move(
     index: &GuidIndex,
     self_guid: &SelfGuid,
     remote_motion: &mut Query<&mut RemoteMotion>,
-    seeds: &Query<&mut RelaySeed>,
     transforms: &mut Query<&mut Transform>,
     stores: &Query<&mut ObjectStore>,
     speeds: &Query<&mut UnitSpeeds>,
@@ -1249,8 +1260,12 @@ fn unit_move(
         world,
     };
     {
-        // The server's pose supersedes a stale spline.
-        commands.entity(e).remove::<Spline>();
+        // The server's pose supersedes a stale spline, and takes the unit's Z back from the
+        // clamp a path handed it to ([`super::motion::spline::ground_derived`]).
+        commands
+            .entity(e)
+            .remove::<Spline>()
+            .remove::<super::motion::spline::GroundClamped>();
         if let Ok(mut rm) = remote_motion.get_mut(e) {
             // The chain reads the state before this move applies, as the reference times the
             // packet off the live `[esi+0x40]`/`[esi+0x150]`.
@@ -1277,17 +1292,11 @@ fn unit_move(
                 rm.pending.push_back(PendingMove { fire_ms, mv });
             }
         } else {
-            // The first move builds the unit's motion where it stands, on what its create left:
-            // the chain and the flags word its schedule reads as the mover's ([`RelaySeed`]). A
-            // unit whose create carried no status seeds the chain here, its fire-time the arrival
-            // (`@0x618c54`), past the movement clock, so it waits for this frame's tick like any
-            // idle mover's, unless the lever applies it at once, its facing shown then.
-            let seed = seeds.get(e).ok().cloned();
-            let created = seed.is_some();
-            let (relay, flags) = seed.map_or_else(
-                || (crate::net::motion::RelayChain::default(), 0),
-                |s| (s.chain, s.flags),
-            );
+            // A unit its create left without mover state, a creature standing, or one whose
+            // create carried no status, builds it at its first move, where it stands, and seeds
+            // the chain there: the fire-time is the arrival (`@0x618c54`), past the movement
+            // clock, so the move waits for this frame's tick like any idle mover's, unless the
+            // lever applies it at once, its facing shown then.
             let (wow_pos, orientation) =
                 transforms
                     .get(e)
@@ -1300,29 +1309,24 @@ fn unit_move(
             let mut rm = RemoteMotion {
                 wow_pos,
                 orientation,
-                flags,
+                flags: 0,
                 pitch: 0.0,
                 speed: 0.0,
                 vertical_velocity: 0.0,
                 jump_xy_vel: [0.0; 2],
                 fall_start: None,
                 pending: std::collections::VecDeque::new(),
-                relay,
+                relay: Default::default(),
                 last_apply_ms: now_ms,
                 last_apply_pos: wow_pos,
             };
-            let fire_ms = rm.relay.schedule(mv.wire_ms, now_ms, flags, true);
-            debug_assert!(
-                created || fire_ms == now_ms,
+            let fire_ms = rm.relay.schedule(mv.wire_ms, now_ms, 0, true);
+            debug_assert_eq!(
+                fire_ms, now_ms,
                 "a seeding packet's fire-time is its arrival"
             );
             if arrival_snap() || rm.fires_at_arrival(fire_ms, tick) {
-                let outcome = if created {
-                    RelayOutcome::Now
-                } else {
-                    RelayOutcome::Seed
-                };
-                trace_relay(guid, &mv, &rm.relay, now_ms, 0, outcome);
+                trace_relay(guid, &mv, &rm.relay, now_ms, 0, RelayOutcome::Seed);
                 apply_move(e, &mv, &mut rm, now_ms, commands, landings);
                 write_pose(
                     commands,
@@ -1336,7 +1340,7 @@ fn unit_move(
                 trace_relay(guid, &mv, &rm.relay, now_ms, 0, RelayOutcome::Queued);
                 rm.pending.push_back(PendingMove { fire_ms, mv });
             }
-            commands.entity(e).insert(rm).remove::<RelaySeed>();
+            commands.entity(e).insert(rm);
         }
     }
 }

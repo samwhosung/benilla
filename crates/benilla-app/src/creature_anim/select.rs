@@ -820,7 +820,8 @@ pub(super) fn scaled_rate(clip: &AnimClip, speed: f32, model_scale: f32) -> Opti
 }
 
 /// The unified movement view, first present winning: the controller's [`MovementState`], a
-/// remote's relayed flags ([`RemoteMotion`]), a creature's spline, else still.
+/// unit's spline, a remote's relayed flags ([`RemoteMotion`]), else still. A path outranks the
+/// mover state it rides on: the spline drives the mover while it lives.
 /// `creature_swimming` supplies the `SWIMMING` the wire never sends for a creature; `modes`, the
 /// `SMSG_SPLINE_MOVE_*` grants, join the remote and creature flags (one word in the reference).
 pub(crate) fn unify(
@@ -836,7 +837,7 @@ pub(crate) fn unify(
         return MovementState { flying, ..*m };
     }
     let granted = modes.map_or(0, |m| m.0);
-    if let Some(r) = remote {
+    if let Some(r) = remote.filter(|_| spline.is_none()) {
         return MovementState {
             speed: r.speed,
             flags: r.flags | granted,

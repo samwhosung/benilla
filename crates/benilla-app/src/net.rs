@@ -55,7 +55,7 @@ use motion::{
 // `pub(crate)`: `creature_anim` reads the shuffle latch it produces, and a test runs both.
 pub(crate) use motion::drive_display_facing;
 pub(crate) use motion::{
-    grounded_y, jump_seed, CreatureSwimming, FacingStep, MoveTick, RelaySeed, RemoteMotion, Spline,
+    grounded_y, jump_seed, CreatureSwimming, FacingStep, MoveTick, RemoteMotion, Spline,
     SplineStopped, UnitMoveModes,
 };
 

@@ -332,6 +332,8 @@ pub(in crate::net) fn sample_splines(
         // Who turns to the end's facing through the display smoother.
         Option<&NetEntity>,
         Has<ActiveMover>,
+        // The mover state the path's end stops ([`stop_at_path_end`]).
+        Option<&mut crate::net::RemoteMotion>,
     )>,
     // A `Target` facing's unit when it is not on a path itself.
     standing: Query<&Transform, Without<Spline>>,
@@ -349,7 +351,7 @@ pub(in crate::net) fn sample_splines(
     // The paths that ended facing a unit, resolved once every path has moved this frame; `true`
     // for a deck path, whose rider takes the facing.
     let mut facing_targets: Vec<(Entity, u64, [f32; 3], bool)> = Vec::new();
-    for (entity, spline, mut t, swimming, guid, rider, net, mover) in &mut q {
+    for (entity, spline, mut t, swimming, guid, rider, net, mover, motion) in &mut q {
         let (wow_pos, facing, pitch) = spline.sample(now);
         // A deck path's sample is the rider's transport-local pose, composed later this frame.
         if let Some(deck) = spline.deck {
@@ -380,6 +382,10 @@ pub(in crate::net) fn sample_splines(
                 }
             }
             if done {
+                // Its world pose and facing are the deck's to compose (`compose_riders`).
+                if let Some(mut rm) = motion {
+                    rm.flags &= !PATH_END_STOP;
+                }
                 commands.entity(entity).remove::<Spline>();
             }
             continue;
@@ -414,10 +420,14 @@ pub(in crate::net) fn sample_splines(
             // The end writes the raw facing (`0x61a820`, `0x61a882`-`0x61a8db`): an `Angle` as
             // sent, else a `Target` as the heading to that unit's position now, else a `Spot` as
             // the heading to the point (`0x47f220`), each from where the path left the unit.
-            match spline.final_facing {
-                MonsterMoveFacing::Target(g) => facing_targets.push((entity, g, wow_pos, false)),
+            let rest = match spline.final_facing {
+                MonsterMoveFacing::Target(g) => {
+                    facing_targets.push((entity, g, wow_pos, false));
+                    None
+                }
                 other => {
-                    if let Some(f) = resolve_facing(other, wow_pos, |_| None) {
+                    let rest = resolve_facing(other, wow_pos, |_| None);
+                    if let Some(f) = rest {
                         rest_facing(
                             &mut commands,
                             entity,
@@ -426,7 +436,11 @@ pub(in crate::net) fn sample_splines(
                             f,
                         );
                     }
+                    rest
                 }
+            };
+            if let Some(mut rm) = motion {
+                stop_at_path_end(&mut rm, wow_pos, rest.or(facing));
             }
             if tracing {
                 benilla_assets::trace::line(
@@ -449,7 +463,7 @@ pub(in crate::net) fn sample_splines(
         let Some(f) = resolve_facing(MonsterMoveFacing::Target(guid), at, |_| target) else {
             continue;
         };
-        let Ok((_, _, mut t, _, _, rider, net, mover)) = q.get_mut(entity) else {
+        let Ok((_, _, mut t, _, _, rider, net, mover, motion)) = q.get_mut(entity) else {
             continue;
         };
         if on_deck {
@@ -459,8 +473,27 @@ pub(in crate::net) fn sample_splines(
         } else {
             let smooth = smoothed(net.map(|n| n.kind), mover);
             rest_facing(&mut commands, entity, &mut t, smooth, f);
+            if let Some(mut rm) = motion {
+                rm.orientation = f;
+            }
         }
     }
+}
+
+/// The bits a path's end clears on its mover, `0x7c6c00`'s: forward, back and the deferred
+/// forward (`0x8000`).
+const PATH_END_STOP: u32 =
+    crate::creature_anim::move_flags::FORWARD | crate::creature_anim::move_flags::BACKWARD | 0x8000;
+
+/// A world path's end on its unit's mover state: the mover stops where the path left it
+/// (`0x7c6c00`), facing `facing` when the end names one, so its dead-reckoning goes on from
+/// there; a later frame's clamp keeps its Z ([`ground_clamp_creatures`]).
+fn stop_at_path_end(rm: &mut crate::net::RemoteMotion, at: [f32; 3], facing: Option<f32>) {
+    rm.wow_pos = at;
+    if let Some(f) = facing {
+        rm.orientation = f;
+    }
+    rm.flags &= !PATH_END_STOP;
 }
 
 /// A finished path's raw facing `f`. A smoothed unit takes it as the goal its display facing
@@ -503,22 +536,22 @@ fn trace_ride(guid: u64, spline: &Spline, pos: [f32; 3], was: [f32; 3], now: Ins
 /// [`ground_clamp_creatures`]. The reference never asks the kind: `0x6187a0` links any unit a
 /// `SMSG_MONSTER_MOVE` names (`0x619ca0`), and the per-frame vertical-zero gate
 /// (`0x616cec`-`0x616d03`) reads only the mover's flags. So: every `Unit`; a `Player` a server
-/// spline has moved, until the relay takes it back (`derived_before` is [`GroundClamped`]'s
-/// presence); never the body we steer ([`crate::net::Embodied`]); nothing else. A relayed player's
-/// Z comes grounded by its own client, and a down-ray would flatten its dead-reckoned jump arc.
+/// spline moves or has moved, until a relayed move takes it back (`derived_before` is
+/// [`GroundClamped`]'s presence, which the relay clears); never the body we steer
+/// ([`crate::net::Embodied`]); nothing else. A relayed player's Z comes grounded by its own client,
+/// and a down-ray would flatten its dead-reckoned jump arc.
 pub(crate) fn ground_derived(
     kind: EntityKind,
     splined: bool,
     derived_before: bool,
     embodied: bool,
-    relayed: bool,
 ) -> bool {
     if embodied {
         return false;
     }
     match kind {
         EntityKind::Unit => true,
-        EntityKind::Player => !relayed && (splined || derived_before),
+        EntityKind::Player => splined || derived_before,
         _ => false,
     }
 }
@@ -581,9 +614,10 @@ pub(in crate::net) fn ground_clamp_creatures(
         Has<CreatureSwimming>,
         // HOVER and WATERWALKING both move the answer.
         Option<&crate::net::UnitMoveModes>,
-        // [`ground_derived`]'s other Z authorities: the controller and the relay's dead-reckoning.
+        // [`ground_derived`]'s other Z authority, the controller.
         Has<crate::net::Embodied>,
-        Has<crate::net::RemoteMotion>,
+        // The mover state a re-grounded unit's dead-reckoning goes on from.
+        Option<&mut crate::net::RemoteMotion>,
     )>,
 ) {
     let cost = clamp_cost_enabled();
@@ -600,15 +634,9 @@ pub(in crate::net) fn ground_clamp_creatures(
     // (`armed`); a nonzero steady-state `armed` means the collider set is churning.
     let (mut reseat, mut armed) = (0u32, 0u32);
 
-    for (entity, net, spline, mut t, mut clamped, swimming, modes, embodied, relayed) in &mut q {
+    for (entity, net, spline, mut t, mut clamped, swimming, modes, embodied, mut motion) in &mut q {
         visited += 1;
-        if !ground_derived(
-            net.kind,
-            spline.is_some(),
-            clamped.is_some(),
-            embodied,
-            relayed,
-        ) {
+        if !ground_derived(net.kind, spline.is_some(), clamped.is_some(), embodied) {
             skipped += 1;
             continue; // somebody else owns this body's Z
         }
@@ -782,6 +810,12 @@ pub(in crate::net) fn ground_clamp_creatures(
         if y != t.translation.y {
             moved += 1;
             t.translation.y = y;
+            // Its mover stands where the clamp put it, as the walk resolve re-derives the mover's
+            // own Z (`0x6367b0`): a path's end leaves it there, and a relayed creature's
+            // dead-reckoning steps on from it.
+            if let Some(rm) = motion.as_deref_mut() {
+                rm.wow_pos = bevy_to_wow(t.translation);
+            }
         }
         let state = GroundClamped {
             xz,
@@ -857,7 +891,6 @@ type SwimMarkQuery = (
     Has<Spline>,
     Has<GroundClamped>,
     Has<crate::net::Embodied>,
-    Has<crate::net::RemoteMotion>,
 );
 
 /// The stamp [`mark_swimming_creatures`] leaves once a unit's room claim settles; 1.12 water is
@@ -947,10 +980,8 @@ pub(in crate::net) fn mark_swimming_creatures(
             commands.entity(e).remove::<SwimEvaluated>();
         }
     }
-    for (e, net, t, collision, store, marked, evaluated, splined, clamped, embodied, relayed) in
-        &units
-    {
-        if !ground_derived(net.kind, splined, clamped, embodied, relayed) {
+    for (e, net, t, collision, store, marked, evaluated, splined, clamped, embodied) in &units {
+        if !ground_derived(net.kind, splined, clamped, embodied) {
             continue; // GameObjects don't swim; a relayed player's flag arrives on the wire
         }
         // The unit's own room decides whose liquid answers (an interior's, not the ADT water over
@@ -1678,25 +1709,45 @@ mod server_moved_players {
         );
     }
 
-    /// A remote player is the relay's, both freshly streamed in and under a live [`RemoteMotion`].
+    /// A remote player is the relay's streamed in, and a server path's while one drives it, its
+    /// [`RemoteMotion`] riding under the path as the reference's one mover does (`+0xa4` on the
+    /// `CMovement`), until a relayed move takes it back: the path and the clamp's mark go.
     #[test]
-    fn a_relayed_player_is_left_to_the_relay() {
+    fn a_relayed_player_is_the_paths_until_the_relay_takes_it_back() {
         let (mut app, body) = hollow(EntityKind::Player);
+        app.world_mut().entity_mut(body).insert(relayed());
         clamp(&mut app);
         assert_eq!(
             y_of(&app, body),
             RIM_Z,
-            "streamed in, never moved by anyone: not ours to ground"
+            "streamed in, never moved by a path: not ours to ground"
         );
 
-        app.world_mut().entity_mut(body).insert(relayed());
         walking(&mut app, body);
         clamp(&mut app);
-        assert_eq!(
-            y_of(&app, body),
-            RIM_Z,
-            "the relay stream outranks a spline that has not displaced it"
+        assert_grounded(
+            &app,
+            body,
+            "a path drives it, its mover state under the path",
         );
+        assert_eq!(
+            app.world().get::<RemoteMotion>(body).unwrap().wow_pos[2],
+            benilla_assets::coords::bevy_to_wow(
+                app.world().get::<Transform>(body).unwrap().translation
+            )[2],
+            "and the mover stands where the clamp put it"
+        );
+
+        app.world_mut()
+            .entity_mut(body)
+            .remove::<Spline>()
+            .remove::<GroundClamped>()
+            .get_mut::<Transform>()
+            .unwrap()
+            .translation
+            .y = RIM_Z;
+        clamp(&mut app);
+        assert_eq!(y_of(&app, body), RIM_Z, "the relay's again");
     }
 
     /// A swimming body keeps its wire Z, a Player included.
@@ -1756,34 +1807,31 @@ mod server_moved_players {
     /// The subject rule as a table, with a GameObject and the ways a Player leaves the set.
     #[test]
     fn the_subject_rule() {
-        let unit = |splined, memo, embodied, relayed| {
-            ground_derived(EntityKind::Unit, splined, memo, embodied, relayed)
-        };
-        let player = |splined, memo, embodied, relayed| {
-            ground_derived(EntityKind::Player, splined, memo, embodied, relayed)
-        };
+        let unit =
+            |splined, memo, embodied| ground_derived(EntityKind::Unit, splined, memo, embodied);
+        let player =
+            |splined, memo, embodied| ground_derived(EntityKind::Player, splined, memo, embodied);
         // A creature is ours walking or idle.
-        assert!(unit(true, true, false, false));
-        assert!(unit(false, false, false, false));
+        assert!(unit(true, true, false));
+        assert!(unit(false, false, false));
         // A possessed creature is the controller's.
-        assert!(!unit(true, true, true, false));
-        assert!(!unit(false, false, true, false));
+        assert!(!unit(true, true, true));
+        assert!(!unit(false, false, true));
 
-        assert!(player(true, false, false, false), "a bot's first path");
+        assert!(player(true, false, false), "a bot's first path");
         assert!(
-            player(false, true, false, false),
-            "and every frame after it"
+            player(false, true, false),
+            "and every frame after it, until a relayed move"
         );
         assert!(
-            !player(false, false, false, false),
-            "before anything moves it"
+            !player(false, false, false),
+            "before anything moves it, and under the relay stream"
         );
-        assert!(!player(true, true, true, false), "the body we steer");
-        assert!(!player(true, true, false, true), "under the relay stream");
+        assert!(!player(true, true, true), "the body we steer");
 
         for kind in [EntityKind::GameObject, EntityKind::Corpse] {
             assert!(
-                !ground_derived(kind, true, true, false, false),
+                !ground_derived(kind, true, true, false),
                 "{kind:?} sits at the Z it was authored at"
             );
         }

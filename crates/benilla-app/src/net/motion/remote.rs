@@ -42,16 +42,6 @@ pub(crate) struct RemoteMotion {
     pub(crate) last_apply_pos: [f32; 3],
 }
 
-/// What a unit's create leaves on its mover for the relays to come, until its first relay builds
-/// its [`RemoteMotion`]: the replay chain the create's forced apply seeded
-/// ([`RelayChain::seed_at_create`]) and the flags word it wrote (`new & 0x75a07dff` over a cleared
-/// word, `0x61936e`, `0x618de7`), which the first relay's schedule reads as the mover's.
-#[derive(Component, Clone)]
-pub(crate) struct RelaySeed {
-    pub(crate) chain: RelayChain,
-    pub(crate) flags: u32,
-}
-
 /// A relayed pose's height in both frames its packet carries: the world's, and the deck's while
 /// aboard (`ON_TRANSPORT`'s tail).
 #[derive(Clone, Copy, Debug, PartialEq)]

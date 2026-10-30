@@ -950,6 +950,36 @@ fn first_move_after(flags: u32) -> Vec<String> {
     c.eval(false, "return Maps")
 }
 
+/// A member created running is dead-reckoned from its create, before any relayed move: the create
+/// applies its block and lists the mover while a flag of `0x20ff` is set (`0x619426` →
+/// `0x618940`), so each frame's tick steps it on (`0x616800` → `0x615b10`). Eleven frames of
+/// 16 ms at a run speed of 7 carry it 1.232 yd along its facing, +x, where a later packet's
+/// listener reads it.
+#[test]
+fn a_listener_reads_a_member_created_running_where_it_has_run_to() {
+    let mut c = client();
+    c.app
+        .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            std::time::Duration::from_millis(16),
+        ));
+    map_spy(&mut c, "party1");
+    fine_map_spy(&mut c, "party1");
+    let mut create = living(mate_created([500.0, 600.0, 0.0], None), FORWARD, 0);
+    if let SessionEvent::ObjectCreate { speeds, .. } = &mut create {
+        *speeds = Some(benilla_protocol::MoveSpeeds {
+            run: 7.0,
+            ..Default::default()
+        });
+    }
+    c.frame(vec![vec![create]]);
+    for _ in 0..10 {
+        c.frame(vec![]);
+    }
+    c.frame(vec![vec![member_at(MATE, 20, ELWYNN, (100, 200))]]);
+    let seen: Vec<String> = c.eval(false, "return Fine");
+    assert_eq!(seen, ["0.5012,0.6000"]);
+}
+
 /// A member's first move after a create that showed it moving is due at arrival, and seats in its
 /// handler where a later packet's listener reads it: a moving mover is not re-based
 /// (`@0x618ce4`), so the move fires 32 ms before its arrival, at the create's clock, before the

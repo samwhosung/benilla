@@ -66,9 +66,11 @@ const AFTER_THE_PACKETS_IN_THE_REFERENCE: &[(&str, &[&str], &str)] = &[
         "Commands net::motion::spline::Spline", "Transform"],
         "turns the units' models toward their facing; unit movement is \
          frame time, which the reference runs after the packets (`0x420d63` after `0x420d55`)"),
-    ("::net::motion::spline::ground_clamp_creatures", &["Transform"],
-        "settles the creatures on the ground; unit movement is \
-         frame time, which the reference runs after the packets (`0x420d63` after `0x420d55`)"),
+    ("::net::motion::spline::ground_clamp_creatures", &["Transform",
+        "net::motion::remote::RemoteMotion"],
+        "settles the creatures on the ground, and a re-grounded mover's state with them; unit \
+         movement is frame time, which the reference runs after the packets (`0x420d63` after \
+         `0x420d55`)"),
     ("::net::motion::remote::extrapolate_remote_units", &["Commands net::motion::spline::Spline",
         "Transform", "net::motion::remote::RemoteMotion"],
         "dead-reckons the remote players between their packets in the movement tick (event 5's \
@@ -97,9 +99,10 @@ const AFTER_THE_PACKETS_IN_THE_REFERENCE: &[(&str, &[&str], &str)] = &[
          → `0x6435a0`, which the reference runs after the packets (`0x420d63` after \
          `0x420d55`)"),
     ("::net::motion::spline::sample_splines", &["Commands net::motion::spline::Spline",
-        "Transform"],
-        "moves the units along their splines; unit movement is \
-         frame time, which the reference runs after the packets (`0x420d63` after `0x420d55`)"),
+        "Transform", "net::motion::remote::RemoteMotion"],
+        "moves the units along their splines and stops a mover where its path ends; unit \
+         movement is frame time, which the reference runs after the packets (`0x420d63` after \
+         `0x420d55`)"),
     ("::transport::ground_deck_riders", &["Transform", "net::motion::remote::RemoteMotion"],
         "settles the riders on their decks; unit movement is \
          frame time, which the reference runs after the packets (`0x420d63` after `0x420d55`)"),
