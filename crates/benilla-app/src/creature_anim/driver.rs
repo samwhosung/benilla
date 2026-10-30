@@ -331,14 +331,25 @@ pub(super) fn drive_animations(
         Option<Res<crate::ui_session::InteractNpc>>,
         // `ChrClasses.dbc`, for the setter's class test on the ranged state.
         Option<Res<crate::chr_classes::ChrClassTable>>,
+        // `+0xcb4`, stamped as a unit's Death ends (`0x5fc95a`).
+        Option<ResMut<super::DeathStamps>>,
     ),
     // The variation roll's LCG, the reference's single CRT `_rand` stream shared by every play.
     mut rng: ResMut<benilla_assets::AnimRng>,
     // The last anim trace line per traced unit; the trace writes only on change.
     mut anim_trace_last: Local<std::collections::HashMap<Entity, String>>,
 ) {
-    let (emote_sounds, loot_kneel, time, names, mut recomputes, riders, interact, class_table) =
-        aux;
+    let (
+        emote_sounds,
+        loot_kneel,
+        time,
+        names,
+        mut recomputes,
+        riders,
+        interact,
+        class_table,
+        mut death_stamps,
+    ) = aux;
     let classes = class_table.as_deref().map(|t| &t.0);
     let dt = time.delta_secs();
     // This frame's one-shot plays per unit, replayed in the reference's call order (`PlaySeq`
@@ -616,6 +627,9 @@ pub(super) fn drive_animations(
                     },
                     if first { ", streamed in dead" } else { "" }
                 );
+                // The death settles as the clip's pass ends: `0x5fc920` stamps `+0xcb4` for Death
+                // (`0x5fc95a`). One streamed in dead, or with no clip, is settled at once.
+                drv.death_end = Some(time.elapsed_secs());
                 if let Some(c) = find_resolved(anims, DEATH, catalog)
                     .or_else(|| find_resolved(anims, STAND, catalog))
                 {
@@ -632,6 +646,9 @@ pub(super) fn drive_animations(
                     } else if first {
                         active.seek_to(c.duration); // streamed in dead: settled, not replayed
                     }
+                    if !first {
+                        drv.death_end = Some(time.elapsed_secs() + c.duration);
+                    }
                 }
                 // A blended bone-0 arm overwrites bone 0's secondary slot: it evicts a full-body
                 // wound; a masked wound on the key bone decays out on its own.
@@ -642,6 +659,12 @@ pub(super) fn drive_animations(
                 drv.gait = Some(DEATH);
                 drv.gait_pinned = false; // a death is never pinned (`0x5fda90`)
                 drv.deferred = None; // a normal arm clears the cache
+            }
+            if drv.death_end.is_some_and(|end| time.elapsed_secs() >= end) {
+                drv.death_end = None;
+                if let Some(stamps) = death_stamps.as_deref_mut() {
+                    stamps.stamp(entity);
+                }
             }
             continue;
         }

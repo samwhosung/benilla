@@ -954,6 +954,7 @@ pub(crate) mod spell_visual;
 use blood::{blood_spurts, load_blood_tables};
 use env_damage::{hard_landing_dust, load_env_damage_table};
 pub(crate) use env_damage::{EnvDamageTable, HardLanding, HARD_LANDING_DESCENT};
+pub(crate) use spell_visual::DeathStamps;
 use spell_visual::{
     arm_aura_state_fx, arm_level_up_fx, arm_loot_fx, arm_morph_latch, arm_mount_poof_fx,
     load_spell_visuals, replay_morph_kit, route_cast_visuals, MorphLatch,
@@ -1038,6 +1039,8 @@ pub(crate) struct AnimDriver {
     /// short kick, its mechanism open: the reference's blend source keeps running, so it stays
     /// scoped to the airborne cut.
     frozen: Option<bevy::animation::graph::AnimationNodeIndex>,
+    /// When the armed Death clip's pass ends, at which the death settles ([`DeathStamps`]).
+    death_end: Option<f32>,
 }
 
 impl AnimDriver {
@@ -1115,6 +1118,7 @@ impl Default for AnimDriver {
             mount_display: 0,
             last_special: None,
             frozen: None,
+            death_end: None,
         }
     }
 }
@@ -1202,6 +1206,7 @@ impl Plugin for CreatureAnimPlugin {
             .add_message::<HardLanding>()
             // The pending-morph latch, the reference's per-unit `[+0xd54]`.
             .init_resource::<MorphLatch>()
+            .init_resource::<DeathStamps>()
             .add_systems(
                 Startup,
                 (

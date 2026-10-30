@@ -1474,18 +1474,43 @@ pub(crate) fn arm_aura_state_fx(
     pinned.retain(|e, _| units.contains(*e));
 }
 
+/// Each unit's death stamp, the reference's `+0xcb4`: set as its Death clip ends (`0x5fc920` at
+/// `0x5fc95a`), as it is created dead (`0x5fba26`) or as it comes back dead (`0x5fbe64`), never in
+/// the update it dies in; cleared as it comes back to life (`0x5fef70` at `0x5fef85`). The loot
+/// sparkle and the dynamic-flags watcher's release wait on it.
+#[derive(Resource, Default)]
+pub(crate) struct DeathStamps {
+    stamped: EntityHashSet,
+    /// Stamped since the loot watcher last looked: the sparkle hangs at the stamp (`0x5fc962`,
+    /// `0x5fba33`, `0x5fbe6d`).
+    fresh: EntityHashSet,
+}
+
+impl DeathStamps {
+    /// The unit's death settled.
+    pub(crate) fn stamp(&mut self, unit: Entity) {
+        self.stamped.insert(unit);
+        self.fresh.insert(unit);
+    }
+
+    /// Whether the unit's death is stamped.
+    pub(crate) fn settled(&self, unit: Entity) -> bool {
+        self.stamped.contains(&unit)
+    }
+}
+
 /// Arm and reap the loot sparkle on a dead lootable unit and on a corpse object with
 /// `CORPSE_FIELD_DYNAMIC_FLAGS` bit 0 (`0x5d6de0`): the `"HARDCODED Loot Art"` row at `0x13`.
 /// Edge-driven (`0x600440`) with no viewer or distance logic, since the server strips the flag per
-/// viewer; the falling edge reaps with no fade (`0x600680`).
+/// viewer; the falling edge reaps with no fade (`0x600680`). A unit's sparkle waits for its death
+/// stamp ([`DeathStamps`]): it hangs as the stamp is set, or at a dynamic-flags write once it is.
 ///
 /// Here too the unit's effects are released at once (`ReleaseEffects`, `0x614120`), at its two
 /// watcher sites, in wire order: the health watcher's death runs `OnDied` (`0x6047a3` →
 /// `0x605860`), which releases at `0x605922`; the dynamic-flags watcher, on any write that leaves
 /// bit 0x1 set on a unit whose death is stamped (`+0xcb4` above 0, `0x600574`, `0x60057c`),
-/// releases (`0x600587`) and hangs the sparkle again (`0x60058e`). The stamp is the time the
-/// death's animation ended (`0x5fc95a`) or a create found the unit dead (`0x5fba26`), never the
-/// update it died in; benilla keeps no such stamp, so a unit dead before this frame stands for it.
+/// releases (`0x600587`) and hangs the sparkle again (`0x60058e`).
+#[allow(clippy::too_many_arguments)] // one Bevy system's full input set
 pub(super) fn arm_loot_fx(
     // Re-read on an edge of any of the four fields and on first sight (armed at build, `0x5d6e30`).
     units: Query<(Entity, &ObjectStore, &crate::net::NetEntity)>,
@@ -1494,6 +1519,7 @@ pub(super) fn arm_loot_fx(
     visuals: Option<Res<SpellVisuals>>,
     mut fx: MessageWriter<SpellKitFx>,
     mut sounds: MessageWriter<SpellKitSound>,
+    mut stamps: ResMut<DeathStamps>,
     mut armed: Local<EntityHashSet>,
 ) {
     use benilla_protocol::field::{
@@ -1504,7 +1530,6 @@ pub(super) fn arm_loot_fx(
     let art = visuals.as_ref().and_then(|v| v.0.loot_art_effect());
     let mut loot_at: EntityHashMap<crate::lanes::Stamp> = EntityHashMap::default();
     let mut due: EntityHashSet = arrived.iter().collect();
-    let mut died = EntityHashSet::default();
     let mut rehang = EntityHashSet::default();
     let mut release = |entity: Entity, at: crate::lanes::Stamp| {
         fx.write(SpellKitFx::Release {
@@ -1515,8 +1540,12 @@ pub(super) fn arm_loot_fx(
     };
     for e in edges.read() {
         if e.unit_died() {
-            died.insert(e.entity);
             release(e.entity, e.at);
+        }
+        // The health watcher's return to life clears the stamp (`0x6047ee` → `0x5fef70`).
+        if e.unit_field(FIELD_UNIT_HEALTH) && e.old as i32 <= 0 && e.new as i32 > 0 {
+            stamps.stamped.remove(&e.entity);
+            stamps.fresh.remove(&e.entity);
         }
         let watched = e.unit_field(FIELD_UNIT_DYNAMIC_FLAGS)
             || e.unit_field(FIELD_UNIT_HEALTH)
@@ -1530,20 +1559,30 @@ pub(super) fn arm_loot_fx(
         // The last of the fields to move, after which the unit reads dead and lootable.
         let at = loot_at.entry(e.entity).or_insert(e.at);
         *at = (*at).max(e.at);
-        let settled = !died.contains(&e.entity)
-            && units
-                .get(e.entity)
-                .is_ok_and(|(_, store, _)| store.0.unit_is_dead());
-        if e.unit_field(FIELD_UNIT_DYNAMIC_FLAGS) && e.new & 0x1 != 0 && settled {
+        if e.unit_field(FIELD_UNIT_DYNAMIC_FLAGS) && e.new & 0x1 != 0 && stamps.settled(e.entity) {
             release(e.entity, e.at);
             rehang.insert(e.entity);
         }
     }
+    // A unit created or brought back dead is stamped (`0x5fba1d`-`0x5fba26`, `0x5fbe51`-`0x5fbe64`).
+    for (entity, store, net) in arrived.iter().filter_map(|e| units.get(e).ok()) {
+        let unit = matches!(
+            net.kind,
+            benilla_protocol::EntityKind::Unit | benilla_protocol::EntityKind::Player
+        );
+        if unit && store.0.unit_is_dead() {
+            stamps.stamp(entity);
+        }
+    }
+    due.extend(stamps.fresh.drain());
     let scan = if full_sweep {
         units.iter().collect::<Vec<_>>()
     } else {
         due.into_iter().filter_map(|e| units.get(e).ok()).collect()
     };
+    // Streamed units despawn on range-out; drop their rows.
+    armed.retain(|e| units.contains(*e));
+    stamps.stamped.retain(|e| units.contains(*e));
     let Some((effect, path)) = art else {
         return; // no client data or no such row
     };
@@ -1552,7 +1591,7 @@ pub(super) fn arm_loot_fx(
         let lootable = if net.kind == benilla_protocol::EntityKind::Corpse {
             store.0.corpse_lootable()
         } else {
-            store.0.unit_is_dead() && store.0.unit_lootable()
+            stamps.settled(entity) && store.0.unit_lootable()
         };
         // A release took the sparkle with the rest; the watcher hangs it again.
         if lootable && (armed.insert(entity) | rehang.contains(&entity)) {
@@ -1586,8 +1625,6 @@ pub(super) fn arm_loot_fx(
             });
         }
     }
-    // Streamed units despawn on range-out; drop their rows.
-    armed.retain(|e| units.contains(*e));
 }
 
 /// The level-up ding: any streamed unit's `UNIT_FIELD_LEVEL` change (`0x6045b0`) spawns

@@ -161,6 +161,45 @@ fn app() -> App {
     app
 }
 
+/// The death settles as its Death clip's pass ends (`0x5fc920` stamps `+0xcb4` at `0x5fc95a`),
+/// not as the unit dies: the stamp waits out the clip.
+#[test]
+fn a_death_is_stamped_as_its_clip_ends() {
+    let mut app = app();
+    app.init_resource::<crate::creature_anim::DeathStamps>();
+    let model = ModelAnimations {
+        clips: vec![clip(0, 1, true), clip(1, 2, false)], // Stand, Death
+        ..caster_model()
+    };
+    let unit = app
+        .world_mut()
+        .spawn((
+            model,
+            AnimationPlayer::default(),
+            AnimationTransitions::new(),
+            AnimDriver::default(),
+            crate::net::ObjectStore(alive(&[])),
+        ))
+        .id();
+    let settled = |app: &App| {
+        app.world()
+            .resource::<crate::creature_anim::DeathStamps>()
+            .settled(unit)
+    };
+    app.update();
+    app.world_mut()
+        .entity_mut(unit)
+        .insert(crate::net::ObjectStore(ObjectFields::from_pairs(&[(
+            22, 0,
+        )])));
+    app.update();
+    assert!(!settled(&app), "dying");
+    advance(&mut app, 500);
+    assert!(!settled(&app), "mid-clip");
+    advance(&mut app, 600);
+    assert!(settled(&app), "the clip's pass ended");
+}
+
 /// vmangos sets every creature's sheath to melee at spawn (`Creature.cpp:605`), so the hold clip's
 /// force-stow is what stows a caster's staff.
 #[test]

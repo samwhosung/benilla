@@ -786,17 +786,21 @@ fn a_rebuild_rings_the_aura_and_channel_kits_again() {
     );
 }
 
-/// `ReleaseEffects` (`0x614120`) at its two watcher sites, in wire order: the death's `OnDied`
-/// (`0x6047a3` → `0x605922`) at the health edge, and the dynamic-flags watcher on a corpse whose
-/// death is settled (`0x600587`), on any write that leaves it lootable, which hangs the sparkle
-/// again (`0x60058e`). In the update the unit dies in, the flags write releases nothing more.
+/// `ReleaseEffects` (`0x614120`) at its two watcher sites, in wire order, and the loot sparkle,
+/// both gated on the death stamp (`+0xcb4`). The death's `OnDied` (`0x6047a3` → `0x605922`)
+/// releases at the health edge. While the Death clip plays the stamp is 0, so a lootable flags
+/// write in a later frame releases and hangs nothing (`0x600574`). The stamp hangs the sparkle
+/// (`0x5fc962`), after which any flags write that leaves the unit lootable releases and hangs it
+/// again (`0x600587`, `0x60058e`). A return to life clears the stamp (`0x5fef85`), and a unit
+/// created dead is stamped at once (`0x5fba26`).
 #[test]
-fn a_death_and_a_settled_corpses_lootable_flags_release_its_effects() {
+fn the_death_stamp_gates_the_loot_sparkle_and_the_flags_release() {
     use benilla_protocol::field::{FIELD_UNIT_DYNAMIC_FLAGS, FIELD_UNIT_HEALTH};
     let mut app = App::new();
     app.add_message::<crate::net::FieldChanged>()
         .add_message::<SpellKitFx>()
         .add_message::<SpellKitSound>()
+        .init_resource::<super::DeathStamps>()
         .insert_resource(SpellVisuals(
             SpellVisualCatalog::from_tables(HashMap::new(), HashMap::new()).with_hardcoded(
                 "HARDCODED Loot Art",
@@ -811,18 +815,19 @@ fn a_death_and_a_settled_corpses_lootable_flags_release_its_effects() {
             (FIELD_UNIT_DYNAMIC_FLAGS, flags),
         ]))
     };
-    let mob = app
-        .world_mut()
-        .spawn((
-            fields(100, 0),
-            crate::net::NetEntity {
-                kind: benilla_protocol::EntityKind::Unit,
-                display_id: Some(7),
-                scale: 1.0,
-            },
-        ))
-        .id();
-    app.update();
+    let unit = |app: &mut App, health, flags| {
+        app.world_mut()
+            .spawn((
+                fields(health, flags),
+                crate::net::NetEntity {
+                    kind: benilla_protocol::EntityKind::Unit,
+                    display_id: Some(7),
+                    scale: 1.0,
+                },
+            ))
+            .id()
+    };
+    let mob = unit(&mut app, 100, 0);
     let edge = |index, old, new| crate::net::FieldChanged {
         at: crate::lanes::stamp(),
         entity: mob,
@@ -832,13 +837,13 @@ fn a_death_and_a_settled_corpses_lootable_flags_release_its_effects() {
         old,
         new,
     };
-    let frame = |app: &mut App, flags: u32, edges: &[crate::net::FieldChanged]| {
-        app.world_mut().entity_mut(mob).insert(fields(0, flags));
+    type Fx = Vec<(&'static str, Option<crate::lanes::Stamp>)>;
+    let frame = |app: &mut App, edges: &[crate::net::FieldChanged]| -> (Fx, Vec<_>) {
         for &e in edges {
             app.world_mut().write_message(e);
         }
         app.update();
-        let fx: Vec<_> = app
+        let fx = app
             .world_mut()
             .resource_mut::<Messages<SpellKitFx>>()
             .drain()
@@ -848,7 +853,7 @@ fn a_death_and_a_settled_corpses_lootable_flags_release_its_effects() {
                 SpellKitFx::Reap { at, .. } => ("reap", at),
             })
             .collect();
-        let sounds: Vec<_> = app
+        let sounds = app
             .world_mut()
             .resource_mut::<Messages<SpellKitSound>>()
             .drain()
@@ -859,25 +864,55 @@ fn a_death_and_a_settled_corpses_lootable_flags_release_its_effects() {
             .collect();
         (fx, sounds)
     };
+    let set = |app: &mut App, health, flags| {
+        app.world_mut()
+            .entity_mut(mob)
+            .insert(fields(health, flags));
+    };
+    frame(&mut app, &[]);
 
     // The killing update, in field order: the health, then the lootable flag.
     let died = edge(FIELD_UNIT_HEALTH, 100, 0);
-    let lootable = edge(FIELD_UNIT_DYNAMIC_FLAGS, 0, 1);
-    let (fx, sounds) = frame(&mut app, 1, &[died, lootable]);
-    assert_eq!(
-        fx,
-        [("release", Some(died.at)), ("sparkle", Some(lootable.at))]
-    );
+    set(&mut app, 0, 1);
+    let (fx, sounds) = frame(&mut app, &[died, edge(FIELD_UNIT_DYNAMIC_FLAGS, 0, 1)]);
+    assert_eq!(fx, [("release", Some(died.at))], "OnDied's release alone");
     assert_eq!(sounds, [died.at]);
 
-    // A later write that leaves the flag set.
-    let tapped = edge(FIELD_UNIT_DYNAMIC_FLAGS, 1, 5);
-    let (fx, sounds) = frame(&mut app, 5, &[tapped]);
+    // A later frame, the Death clip still playing: the stamp is 0.
+    set(&mut app, 0, 5);
+    let (fx, sounds) = frame(&mut app, &[edge(FIELD_UNIT_DYNAMIC_FLAGS, 1, 5)]);
+    assert_eq!((fx, sounds), (vec![], vec![]), "nothing before the stamp");
+
+    // The Death clip ends: the stamp hangs the sparkle.
+    app.world_mut()
+        .resource_mut::<super::DeathStamps>()
+        .stamp(mob);
+    let (fx, _) = frame(&mut app, &[]);
+    assert_eq!(fx, [("sparkle", None)]);
+
+    // A write that leaves the flag set, now the death is stamped.
+    let tapped = edge(FIELD_UNIT_DYNAMIC_FLAGS, 5, 1);
+    set(&mut app, 0, 1);
+    let (fx, sounds) = frame(&mut app, &[tapped]);
     assert_eq!(
         fx,
         [("release", Some(tapped.at)), ("sparkle", Some(tapped.at))]
     );
     assert_eq!(sounds, [tapped.at]);
+
+    // Back to life: the stamp clears, and a lootable write releases nothing.
+    let revived = edge(FIELD_UNIT_HEALTH, 0, 100);
+    set(&mut app, 100, 1);
+    let (fx, _) = frame(&mut app, &[revived]);
+    assert_eq!(fx, [("reap", Some(revived.at))]);
+    let (fx, sounds) = frame(&mut app, &[edge(FIELD_UNIT_DYNAMIC_FLAGS, 1, 5)]);
+    assert_eq!((fx, sounds), (vec![], vec![]));
+
+    // A unit created dead and lootable is stamped, and hangs its sparkle, at once.
+    let corpse = unit(&mut app, 0, 1);
+    let (fx, _) = frame(&mut app, &[]);
+    assert_eq!(fx, [("sparkle", None)]);
+    assert!(app.world().resource::<super::DeathStamps>().settled(corpse));
 }
 
 /// The ranged weapon-visual merge (`0x60d450`): a spell with `Attributes & 0x2` fills every zero
