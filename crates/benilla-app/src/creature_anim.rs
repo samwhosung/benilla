@@ -336,8 +336,8 @@ pub(crate) fn start_attack_local(
     spells: Option<&crate::ui_action::Spells>,
     core: &mut crate::spell::CastCore,
 ) {
-    if start_attack_head(entity, verdict, gate, stop_word, stand, edits, spells, core) {
-        start_attack_tail(
+    match start_attack_head(entity, verdict, gate, stand, edits, spells, core) {
+        StartHead::Go => start_attack_tail(
             entity,
             target,
             stop_word,
@@ -346,34 +346,52 @@ pub(crate) fn start_attack_local(
             edits,
             spells,
             core,
-        );
+        ),
+        StartHead::Stop(tail) => {
+            stop_attack_send(tail, stop_word, core);
+            core.cancel_queued_save();
+        }
+        StartHead::Returned => {}
     }
+}
+
+/// How StartAttack's head ends ([`start_attack_head`]).
+#[must_use]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StartHead {
+    /// It goes on to its select (`0x5ecca0`-`0x5eccaa`) and [`start_attack_tail`].
+    Go,
+    /// It returned with nothing stopped.
+    Returned,
+    /// A refused target's StopAttack (`0x5ecc48`) ran its head, its tutorials queued; what
+    /// follows ([`stop_attack_send`], then the save's leg), past their listeners, and StartAttack
+    /// returns (`0x5ecc53`).
+    Stop(StopTail),
 }
 
 /// StartAttack up to its select (`0x5ecb70`-`0x5ecc9b`): it returns first when
 /// [`StartGate::refuses`] or the target is [`StartTarget::Unheld`]; a [`StartTarget::Refused`]
-/// target stops a running attack and returns. Then it reads the caster's precast, cancelling the
-/// cast in flight for a ranged one, and stands a seated player. Whether it goes on to its select
-/// (`0x5ecca0`-`0x5eccaa`) and [`start_attack_tail`]. The player's own legs of the attack test
-/// (`0x605f30`, mounted at `0x5ecc06`) are the callers'.
+/// target stops a running attack and returns, its StopAttack's head run here
+/// ([`StartHead::Stop`]). Then it reads the caster's precast, cancelling the cast in flight for a
+/// ranged one, and stands a seated player. The player's own legs of the attack test (`0x605f30`,
+/// mounted at `0x5ecc06`) are the callers'.
 pub(crate) fn start_attack_head(
     entity: Entity,
     verdict: StartTarget,
     gate: StartGate,
-    stop_word: &mut AttackStopInFlight,
     stand: &mut MessageWriter<crate::player::StandStateRequest>,
     edits: &UnitEdits,
     spells: Option<&crate::ui_action::Spells>,
     core: &mut crate::spell::CastCore,
-) -> bool {
+) -> StartHead {
     if gate.refuses() {
-        return false;
+        return StartHead::Returned;
     }
     match verdict {
-        StartTarget::Unheld => return false,
+        StartTarget::Unheld => return StartHead::Returned,
         StartTarget::Refused => {
-            stop_attack_local(Some(entity), gate.low, edits, stop_word, core);
-            return false;
+            return stop_attack_head(Some(entity), gate.low, edits, core)
+                .map_or(StartHead::Returned, StartHead::Stop);
         }
         StartTarget::Attackable => {}
     }
@@ -406,7 +424,7 @@ pub(crate) fn start_attack_head(
             stand,
         );
     }
-    true
+    StartHead::Go
 }
 
 /// StartAttack past its select (`0x5eccaf` on): a precast that auto-attack interrupts returns;
@@ -598,31 +616,39 @@ impl AttackSeam<'_, '_> {
         if self.engaged() && self.start_gate().has_control() {
             self.stop();
         } else {
-            // The validator's final gate passed `target` (`0x613169`).
-            self.start(target, StartTarget::Attackable);
+            // The validator's final gate passed `target` (`0x613169`), so nothing is refused.
+            if self.start_head(StartTarget::Attackable) == StartHead::Go {
+                self.start_tail(target);
+            }
         }
     }
 
     /// StartAttack (`0x5ecb70`) at `target`, which the caller selected already, so its own select
     /// (`0x5eccaa`) is the setter's dedup ([`start_attack_local`]); a no-op before our own entity
-    /// streams in.
-    pub(crate) fn start(&mut self, target: u64, verdict: StartTarget) {
-        if self.start_head(verdict) {
-            self.start_tail(target);
+    /// streams in. A refused target's stop past its head, for the caller to run past its
+    /// tutorials' listeners ([`StartHead::Stop`]).
+    #[must_use]
+    pub(crate) fn start(&mut self, target: u64, verdict: StartTarget) -> Option<StopTail> {
+        match self.start_head(verdict) {
+            StartHead::Go => {
+                self.start_tail(target);
+                None
+            }
+            StartHead::Stop(tail) => Some(tail),
+            StartHead::Returned => None,
         }
     }
 
-    /// StartAttack up to its select ([`start_attack_head`]): whether it goes on.
-    pub(crate) fn start_head(&mut self, verdict: StartTarget) -> bool {
+    /// StartAttack up to its select ([`start_attack_head`]).
+    pub(crate) fn start_head(&mut self, verdict: StartTarget) -> StartHead {
         let Ok(e) = self.me.single() else {
-            return false;
+            return StartHead::Returned;
         };
         let gate = self.start_gate();
         start_attack_head(
             e,
             verdict,
             gate,
-            &mut self.stop_word,
             &mut self.stand,
             &self.edits,
             self.spells.as_deref(),

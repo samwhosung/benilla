@@ -1541,6 +1541,7 @@ fn interact_legs(
             } else if dispatch
                 .seam
                 .start_head(crate::creature_anim::StartTarget::Attackable)
+                == crate::creature_anim::StartHead::Go
             {
                 debug!("right-click attack: {guid:#x}");
                 return Some(Owed::Attack { entity, guid });

@@ -595,7 +595,10 @@ impl Owed {
         }
         if let Some(swing) = self.swing {
             // Nothing ran since the commit, so the selection is the guid it stored.
-            swing.pay(selection, seam, StartTarget::Unheld);
+            if let Some(stop) = swing.pay(selection, seam, StartTarget::Unheld) {
+                seam.stop_send(stop);
+                seam.stop_save();
+            }
         }
     }
 }
@@ -617,21 +620,21 @@ impl OwedSwing {
     /// selection's address, `0xb4e2d8`, which a listener of the signal may have moved. Our own
     /// guid gets none (`0x4938ae`-`0x4938c1`), nothing selected finds no unit (`0x5ecbef`), and a
     /// unit a listener selected is judged `now`. The swing goes out despite the lock, the stop
-    /// just set `[+0xc54]` (`0x5eccda`); a refused target stops again (`0x5ecc48`).
+    /// just set `[+0xc54]` (`0x5eccda`); a refused target stops again (`0x5ecc48`), its stop's
+    /// rest owed past its tutorials' listeners.
+    #[must_use]
     pub(crate) fn pay(
         self,
         selection: &Selection,
         seam: &mut crate::creature_anim::AttackSeam,
         now: StartTarget,
-    ) {
-        let Some(guid) = selection.guid else {
-            return;
-        };
+    ) -> Option<crate::creature_anim::StopTail> {
+        let guid = selection.guid?;
         if self.self_guid == Some(guid) {
-            return;
+            return None;
         }
         let verdict = if guid == self.guid { self.verdict } else { now };
-        seam.start(guid, verdict);
+        seam.start(guid, verdict)
     }
 }
 

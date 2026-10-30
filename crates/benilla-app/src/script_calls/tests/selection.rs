@@ -438,6 +438,89 @@ fn a_switch_to_a_friend_while_swinging_stops_again() {
     );
 }
 
+/// We swing at the selected `OLD`, now friendly, and `party1` targets it, with `assistAttack`
+/// on: `AssistUnit("party1")`'s select is the setter's dedup, so its StartAttack's refused target
+/// (`0x5ecc2e`) makes the call's first StopAttack (`0x5ecc48` → `0x5ecac0`). A listener of
+/// `event` rolls.
+fn assist_a_friend_while_swinging(f: &mut Frame, event: &str) {
+    with_factions(f, FRIEND, &[]);
+    let world = f.app.world_mut();
+    world.resource_mut::<crate::target::AssistAttack>().0 = true;
+    let new = world.resource::<GuidIndex>().0[&NEW];
+    world
+        .get_mut::<ObjectStore>(new)
+        .unwrap()
+        .0
+        .merge(benilla_protocol::ObjectFields::from_pairs(&[
+            (16, OLD as u32),
+            (17, (OLD >> 32) as u32),
+        ]));
+    swinging_at_old(f);
+    run(
+        f,
+        &format!(
+            r#"local r = CreateFrame("Frame")
+            r:RegisterEvent("{event}")
+            r:SetScript("OnEvent", function() RandomRoll(1, 2) end)"#
+        ),
+    );
+    f.rx.try_iter().for_each(drop);
+}
+
+/// The attack stops, cancels and rolls sent, in order.
+fn stop_wire(f: &Frame) -> Vec<String> {
+    f.rx.try_iter()
+        .filter_map(|c| match c {
+            ClientCommand::AttackStop => Some("AttackStop".to_string()),
+            ClientCommand::CancelCast { spell_id } => Some(format!("CancelCast {spell_id}")),
+            ClientCommand::RandomRoll { .. } => Some("RandomRoll".to_string()),
+            ClientCommand::SetSelection { guid } => Some(format!("SetSelection {guid:#x}")),
+            ClientCommand::AttackSwing { guid } => Some(format!("AttackSwing {guid:#x}")),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A refused StartAttack's stop (`0x5ecc48`) triggers its tutorials (`0x5ecb17`, `0x5ecb54`),
+/// whose listeners run before its `CMSG_ATTACKSTOP` (`0x5ecb5b`).
+#[test]
+fn a_refused_assists_stop_tutorial_listener_sends_ahead_of_its_attack_stop() {
+    let mut f = frame(true);
+    f.app
+        .world()
+        .resource::<crate::tutorial::Tutorials>()
+        .lock()
+        .apply_flags(&[0u8; 32]);
+    assist_a_friend_while_swinging(&mut f, "TUTORIAL_TRIGGER");
+    run(&mut f, r#"AssistUnit("party1")"#);
+    assert_eq!(selected(&f), Some(OLD));
+    assert_eq!(stop_wire(&f), ["RandomRoll", "AttackStop"]);
+}
+
+/// The refused StartAttack's stop cancels the slot's strike (`0x6e6f68`), whose listeners run
+/// before the save's strike goes on the wire (`0x6e6ff3`): Cleave over a queued Heroic Strike.
+#[test]
+fn a_refused_assists_slot_cancel_listener_sends_ahead_of_the_saves_cancel() {
+    const CLEAVE: u32 = 845;
+    let mut f = frame(true);
+    queue_strike(&mut f);
+    f.app
+        .world_mut()
+        .resource_mut::<crate::spell::QueuedMeleeSpell>()
+        .hold(CLEAVE, 78);
+    assist_a_friend_while_swinging(&mut f, "SPELLCAST_STOP");
+    run(&mut f, r#"AssistUnit("party1")"#);
+    assert_eq!(
+        stop_wire(&f),
+        [
+            "AttackStop",
+            "CancelCast 845",
+            "RandomRoll",
+            "CancelCast 78"
+        ]
+    );
+}
+
 /// The keys of the refusals a handler queued for the action feed's lines.
 fn error_keys(f: &Frame) -> Vec<String> {
     f.app

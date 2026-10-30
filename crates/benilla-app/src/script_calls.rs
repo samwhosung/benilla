@@ -773,8 +773,9 @@ impl ScriptCallHost<'_, '_> {
     /// (`0x493a0f`), whose `PET_BAR_UPDATE` (`0x4bd6b4`) runs its own before the store and the
     /// send (`0x4936e2`, `0x493871`), the change's signals run theirs before the re-swing
     /// (`0x4938c8`), and a payment that selects again (StartAttack's own select, `0x5eccaa`)
-    /// signals in turn before what it owes. A selection a listener makes at a point signals
-    /// itself, nested, so each point moves the mark to the selection as the listeners left it.
+    /// signals in turn before what it owes, as a refused target's stop (`0x5ecc48`) does. A
+    /// selection a listener makes at a point signals itself, nested, so each point moves the mark
+    /// to the selection as the listeners left it.
     fn settle_selection(
         &mut self,
         script: &mut UiScript,
@@ -782,6 +783,17 @@ impl ScriptCallHost<'_, '_> {
         mut owed: crate::target::SelectDebt,
     ) {
         loop {
+            // A payment's StartAttack at a refused target stops a running attack (`0x5ecc48` →
+            // `0x5ecac0`) and returns: its tutorials' listeners before its `CMSG_ATTACKSTOP`
+            // (`0x5ecb17`, `0x5ecb54`, `0x5ecb5b`), its next-swing cancel's (`0x6e6f68`) before the
+            // save's `CMSG_CANCEL_CAST` (`0x6e6ff3`).
+            if let Some(stop) = owed.take_stop() {
+                self.at_point(script, at);
+                if self.appliers.select().stop_send(stop) {
+                    self.at_point(script, at);
+                }
+                self.appliers.select().stop_save();
+            }
             if let Some(mut send) = owed.take_send() {
                 // The teardown's StopAttack runs with the selection zeroed (`0x4939d3`): its
                 // tutorials' listeners before its `CMSG_ATTACKSTOP` (`0x5ecb17`, `0x5ecb54`,

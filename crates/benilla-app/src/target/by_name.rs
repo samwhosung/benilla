@@ -615,12 +615,14 @@ enum OwedSwing {
 }
 
 /// What a selecting verb owes after its signals, for its caller to pay once their listeners ran
-/// ([`SelectCommit::owing`]): the send after the teardown's `PET_BAR_UPDATE`, then the swings after
+/// ([`SelectCommit::owing`]): the send after the teardown's `PET_BAR_UPDATE`, or the rest of a
+/// refused StartAttack's stop after its tutorials' (`0x5ecc48`), then the swings after
 /// `PLAYER_TARGET_CHANGED`, in the order owed.
 #[must_use]
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct SelectDebt {
     send: Option<scan::OwedSend>,
+    stop: Option<crate::creature_anim::StopTail>,
     swings: Vec<OwedSwing>,
 }
 
@@ -628,6 +630,7 @@ impl From<scan::Owed> for SelectDebt {
     fn from(owed: scan::Owed) -> Self {
         Self {
             send: owed.send,
+            stop: None,
             swings: owed.swing.map(OwedSwing::Again).into_iter().collect(),
         }
     }
@@ -637,6 +640,12 @@ impl SelectDebt {
     /// The send owed after the teardown's signal.
     pub(crate) fn take_send(&mut self) -> Option<scan::OwedSend> {
         self.send.take()
+    }
+
+    /// A refused StartAttack's stop past its head (`0x5ecc48`), owed after its tutorials'
+    /// signal, ahead of the swings still owed.
+    pub(crate) fn take_stop(&mut self) -> Option<crate::creature_anim::StopTail> {
+        self.stop.take()
     }
 
     /// Whether swings are owed after the selection's signal.
@@ -661,9 +670,18 @@ impl SelectDebt {
         if let Some(send) = self.send {
             send.pay(selection, seam);
         }
+        if let Some(stop) = self.stop {
+            seam.stop_send(stop);
+            seam.stop_save();
+        }
         for swing in self.swings {
             match swing {
-                OwedSwing::Again(owed) => owed.pay(selection, seam, StartTarget::Unheld),
+                OwedSwing::Again(owed) => {
+                    if let Some(stop) = owed.pay(selection, seam, StartTarget::Unheld) {
+                        seam.stop_send(stop);
+                        seam.stop_save();
+                    }
+                }
                 OwedSwing::Tail { guid } => seam.start_tail(guid),
                 // The assist tail is a call's alone ([`SelectCommit::assist`]).
                 OwedSwing::Assist { .. } => {}
@@ -724,6 +742,18 @@ impl SelectCommit<'_, '_> {
         }
     }
 
+    /// Owe a refused StartAttack's stop past its head while [`Self::owing`] runs; finish it now
+    /// otherwise.
+    fn owe_stop(&mut self, stop: crate::creature_anim::StopTail) {
+        if self.owing.on {
+            debug_assert!(self.owing.debt.stop.is_none(), "one stop per payment");
+            self.owing.debt.stop = Some(stop);
+        } else {
+            self.seam.stop_send(stop);
+            self.seam.stop_save();
+        }
+    }
+
     /// Owe `send` while [`Self::owing`] runs; send it now otherwise.
     fn owe_send(&mut self, send: scan::OwedSend) {
         if self.owing.on {
@@ -755,30 +785,35 @@ impl SelectCommit<'_, '_> {
         send.run_pet_leg(&mut self.seam)
     }
 
-    /// The teardown's StopAttack past its head
+    /// A StopAttack past its head, the teardown's or a refused StartAttack's
     /// ([`crate::creature_anim::AttackSeam::stop_send`]): whether its next-swing cancel ran.
     pub(crate) fn stop_send(&mut self, stop: crate::creature_anim::StopTail) -> bool {
         self.seam.stop_send(stop)
     }
 
-    /// The teardown's StopAttack's save leg ([`crate::creature_anim::AttackSeam::stop_save`]).
+    /// That StopAttack's save leg ([`crate::creature_anim::AttackSeam::stop_save`]).
     pub(crate) fn stop_save(&mut self) {
         self.seam.stop_save();
     }
 
     /// Pay what `debt` still owes, in order, now that the signals' listeners have run, up to a
-    /// payment whose own select moved the selection (StartAttack's, `0x5eccaa`): what that one
-    /// owes, ahead of the rest, for the caller to run its signals' listeners first and pay again.
-    /// A payment that moved nothing has nothing to signal, and what it owes is paid in place.
+    /// payment whose own select moved the selection (StartAttack's, `0x5eccaa`) or whose refused
+    /// target's stop ran its head (`0x5ecc48`): what that one owes, ahead of the rest, for the
+    /// caller to run its signals' listeners first and pay again. A payment that moved nothing has
+    /// nothing to signal, and what it owes is paid in place.
     pub(crate) fn pay(&mut self, debt: SelectDebt) -> SelectDebt {
         if let Some(send) = debt.send {
             self.pay_send(send);
+        }
+        if let Some(stop) = debt.stop {
+            self.stop_send(stop);
+            self.stop_save();
         }
         let mut swings: std::collections::VecDeque<OwedSwing> = debt.swings.into();
         while let Some(swing) = swings.pop_front() {
             let before = self.selection.guid;
             let mut owed = self.owing(|commit| commit.pay_one(swing));
-            if owed.send.is_some() || self.selection.guid != before {
+            if owed.send.is_some() || owed.stop.is_some() || self.selection.guid != before {
                 owed.swings.extend(swings);
                 return owed;
             }
@@ -804,7 +839,9 @@ impl SelectCommit<'_, '_> {
                     .selection
                     .guid
                     .map_or(StartTarget::Unheld, |guid| self.start_target(guid));
-                owed.pay(&self.selection, &mut self.seam, now);
+                if let Some(stop) = owed.pay(&self.selection, &mut self.seam, now) {
+                    self.owe_stop(stop);
+                }
             }
             OwedSwing::Assist { guid } => {
                 if self.assist_attack.0 {
@@ -830,11 +867,13 @@ impl SelectCommit<'_, '_> {
     /// between its checks and stand and its swing: [`Self::commit`], the setter's dedup for a guid
     /// selected already, else the whole `SetSelection`, whose re-swing reaches StartAttack again
     /// at the same guid and is deduped there. The rest is owed past that select's signals while
-    /// [`Self::owing`] runs.
+    /// [`Self::owing`] runs, and so is a refused target's stop past its tutorials' (`0x5ecc48`).
     pub(crate) fn start_attack(&mut self, guid: u64) {
         let verdict = self.start_target(guid);
-        if !self.seam.start_head(verdict) {
-            return;
+        match self.seam.start_head(verdict) {
+            crate::creature_anim::StartHead::Go => {}
+            crate::creature_anim::StartHead::Stop(stop) => return self.owe_stop(stop),
+            crate::creature_anim::StartHead::Returned => return,
         }
         if let Some(entity) = self.held_unit(guid) {
             self.commit(entity, guid);

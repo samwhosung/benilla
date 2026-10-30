@@ -5,8 +5,7 @@
 //! The census only counts; the reference says whether a count is a defect. No call writes after a
 //! handler the reference runs ahead of the write. No call sends while a handler it signalled is
 //! held, but these, whose signals still wait behind their sends: the cast ladder's push and bind
-//! signals (`0x4b3250`) behind its `SendCast` (`0x6e54f0`), and StartAttack's stop of a refused
-//! target (`0x5ecc48`).
+//! signals (`0x4b3250`) behind its `SendCast` (`0x6e54f0`).
 
 /// The members every call's epilogue lends after its signals and publishes through: the cast
 /// ladder's permit, the reports and the cast views it commits, the selection's and the cursor's

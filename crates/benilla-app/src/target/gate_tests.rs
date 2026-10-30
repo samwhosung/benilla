@@ -721,7 +721,7 @@ fn talking_to_an_npc_with_status_one_triggers_unavailable_quest_givers() {
             .world_mut()
             .resource_mut::<crate::ui_quest::QuestGiver>()
             .set_status(NPC, status);
-        let mut script = UiScript::new().expect("a VM");
+        let script = UiScript::new().expect("a VM");
         script
             .run(
                 r#"FIRED = {}
