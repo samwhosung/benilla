@@ -1017,9 +1017,14 @@ fn object_create(
             } else {
                 (0.0, [0.0; 2])
             };
-            let fall_start = airborne.then(|| crate::net::motion::FallHeight {
-                world_z: position[2],
-                aboard: transport.map(|t| (t.guid, t.pos.z)),
+            let fall_start = airborne.then(|| {
+                crate::net::motion::FallHeight::airborne(
+                    position,
+                    transport.as_ref(),
+                    m.jump,
+                    m.fall_time,
+                    flags & move_flags::SAFE_FALL != 0,
+                )
             });
             {
                 let now_ms = sc.real.elapsed_secs_f64() * 1000.0;

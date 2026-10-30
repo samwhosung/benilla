@@ -30,8 +30,9 @@ pub(crate) struct RemoteMotion {
     pub(crate) vertical_velocity: f32,
     /// The launch's `(cos, sin) * xyspeed`, frozen for the arc; `[0; 2]` on the ground.
     pub(crate) jump_xy_vel: [f32; 2],
-    /// This arc's takeoff height, `None` if the mover entered view airborne; on landing, its
-    /// drop to the landing is the fall height that gates the grunt and dust puff.
+    /// This arc's start height (`+0x7c`), which every airborne apply re-derives from the packet
+    /// ([`FallHeight::airborne`]); `None` on the ground. On landing, its drop to the landing is
+    /// the fall height that gates the grunt and dust puff.
     pub(crate) fall_start: Option<FallHeight>,
     /// Not-yet-due relayed moves by fire-time, the reference's `CMovement+0x150` queue.
     pub(crate) pending: std::collections::VecDeque<PendingMove>,
@@ -60,6 +61,24 @@ impl FallHeight {
         Self {
             world_z: ev.position[2],
             aboard: ev.transport.as_ref().map(|t| (t.guid, t.pos.z)),
+        }
+    }
+
+    /// The start height an airborne status puts on its mover: the pose's height raised by the
+    /// arc's drop over the status's fall time, `z + D(ms)` (`0x7c6490` → `0x7c5f30`, stored at
+    /// `0x7c64b2`; the same at `0x61a7dc`), the launch speed and the cap the status's own. Aboard,
+    /// the deck-local height rises by the same drop (`0x7c6900`).
+    pub(crate) fn airborne(
+        position: [f32; 3],
+        transport: Option<&benilla_protocol::TransportPose>,
+        jump: Option<JumpInfo>,
+        fall_time: u32,
+        feather: bool,
+    ) -> Self {
+        let drop = fall_drop(jump.map_or(0.0, |j| j.zspeed), fall_time, feather);
+        Self {
+            world_z: position[2] + drop,
+            aboard: transport.map(|t| (t.guid, t.pos.z + drop)),
         }
     }
 
@@ -309,8 +328,18 @@ pub(in crate::net) fn apply_move(
     let now_falling = ev.flags & FALLING != 0;
     // The `FALLING` to grounded edge is a landing; its fall height gates the grunt and dust puff.
     let was_falling = rm.flags & FALLING != 0;
-    let (new_start, descent) =
-        fall_arc_step(was_falling, now_falling, rm.fall_start, FallHeight::of(ev));
+    let packet = if now_falling {
+        FallHeight::airborne(
+            ev.position,
+            ev.transport.as_ref(),
+            ev.jump,
+            ev.fall_time,
+            ev.flags & move_flags::SAFE_FALL != 0,
+        )
+    } else {
+        FallHeight::of(ev)
+    };
+    let (new_start, descent) = fall_arc_step(was_falling, now_falling, rm.fall_start, packet);
     rm.fall_start = new_start;
     if let Some(descent) = descent {
         landings.write(crate::creature_anim::HardLanding { entity: e, descent });
@@ -696,8 +725,24 @@ pub(crate) fn jump_seed(jump: Option<JumpInfo>, fall_time: u32, feather: bool) -
     }
 }
 
+/// The drop `D(t)` `fall_time` ms into an arc launched at `zspeed` (down-positive), `0x7c5e70`:
+/// the parabola to the cap, then straight at it, the cap 7.0 under feather fall.
+pub(in crate::net) fn fall_drop(zspeed: f32, fall_time: u32, feather: bool) -> f32 {
+    let terminal = if feather {
+        crate::player::FEATHER_TERMINAL_VELOCITY
+    } else {
+        TERMINAL_VELOCITY
+    };
+    let t = fall_time as f32 * 0.001;
+    // `fall_step` is up-positive: its mean times `t` is the rise, the drop's negative.
+    let (_, mean) = crate::player::mover::fall_step(-zspeed, t, terminal);
+    -mean * t
+}
+
 /// One packet's step of the landing predictor: `(fall_start, descent)`, the descent
-/// `takeoff - landing` only on the `FALLING` to grounded edge with a known takeoff.
+/// `start - landing` only on the `FALLING` to grounded edge with a known start. `packet` is an
+/// airborne packet's start height ([`FallHeight::airborne`]), which each one re-derives, or a
+/// grounded one's height.
 pub(in crate::net) fn fall_arc_step(
     was_falling: bool,
     now_falling: bool,
@@ -706,7 +751,7 @@ pub(in crate::net) fn fall_arc_step(
 ) -> (Option<FallHeight>, Option<f32>) {
     match (was_falling, now_falling) {
         (false, true) => (Some(packet), None), // takeoff
-        (true, true) => (fall_start, None),    // still airborne
+        (true, true) => (Some(packet), None),  // still airborne: re-derived
         (true, false) => (None, fall_start.map(|start| start.drop_to(packet))), // landing edge
         (false, false) => (None, None),        // grounded
     }

@@ -42,9 +42,10 @@ fn remote_fall_arc_reports_height_only_on_the_landing_edge() {
         fall_arc_step(false, true, None, at(100.0)),
         (Some(at(100.0)), None)
     );
+    // Each airborne packet re-derives the start (`0x7c6490`).
     assert_eq!(
         fall_arc_step(true, true, Some(at(100.0)), at(80.0)),
-        (Some(at(100.0)), None)
+        (Some(at(80.0)), None)
     );
     assert_eq!(
         fall_arc_step(true, false, Some(at(100.0)), at(70.0)),
@@ -77,6 +78,46 @@ fn a_remote_jump_on_a_descending_lift_lands_with_no_fall_height() {
         fall_arc_step(true, false, start, aboard(100.0)),
         (None, Some(20.0))
     );
+}
+
+/// An airborne status's start height is its height plus the arc's drop over its fall time
+/// (`0x7c6490` → `0x7c5f30`), in the world and on the deck: a second into a fall from rest is
+/// g/2, 9.6455 yd, and under feather fall the 7.0 cap takes over at 0.3629 s, 5.7300 yd.
+#[test]
+fn an_airborne_status_starts_its_arc_its_drop_above_it() {
+    const DECK: u64 = 0x1fc0_0000_0000_0002;
+    let rest = Some(JumpInfo::default());
+    let tail = benilla_protocol::TransportPose {
+        guid: DECK,
+        pos: benilla_protocol::wire::Vector3d {
+            x: 0.0,
+            y: 0.0,
+            z: 2.0,
+        },
+        orientation: 0.0,
+    };
+    let start = FallHeight::airborne([0.0, 0.0, 50.0], Some(&tail), rest, 1000, false);
+    assert!(
+        (start.world_z - 59.6455).abs() < 1e-3,
+        "{} yd",
+        start.world_z
+    );
+    let deck = start.aboard.expect("aboard").1;
+    assert!((deck - 11.6455).abs() < 1e-3, "{deck} yd on the deck");
+    let feather = FallHeight::airborne([0.0, 0.0, 50.0], None, rest, 1000, true);
+    assert!(
+        (feather.world_z - 55.73).abs() < 1e-3,
+        "{} yd",
+        feather.world_z
+    );
+    // Through the relay's apply: a mover first seen a second into its fall lands 19.6455 yd
+    // below where its arc began, not 10.
+    let mut falling = observed(move_flags::FALLING, [0.0, 0.0, 50.0], RelayVerb::Pose);
+    falling.fall_time = 1000;
+    falling.jump = rest;
+    let airborne = apply_observed(motion(0, 0.0), &falling);
+    let start = airborne.fall_start.expect("a fall start").world_z;
+    assert!((start - 59.6455).abs() < 1e-3, "{start} yd");
 }
 
 fn motion(flags: u32, orientation: f32) -> RemoteMotion {

@@ -1280,6 +1280,30 @@ fn a_listener_reads_a_member_created_mid_jump_where_its_arc_has_carried_it() {
     assert_eq!(seen, ["0.5012,0.6000"]);
 }
 
+/// A member created a second into a fall from rest starts its arc g/2, 9.6455 yd, above where it
+/// is created: the create's apply puts `z + D(ms)` at the mover's `+0x7c` (`0x618e1b` →
+/// `0x7c6490` → `0x7c5f30`), the height its landing measures its fall from.
+#[test]
+fn a_member_created_mid_fall_starts_its_arc_above_its_create() {
+    let mut c = client();
+    let falling = crate::creature_anim::move_flags::FALLING;
+    let mut create = living(mate_created([500.0, 600.0, 50.0], None), falling, 0);
+    if let SessionEvent::ObjectCreate { mover: Some(m), .. } = &mut create {
+        m.fall_time = 1000;
+        m.jump = Some(benilla_protocol::JumpInfo::default());
+    }
+    c.frame(vec![vec![create]]);
+    let mate = c.app.world().resource::<crate::net::GuidIndex>().0[&MATE];
+    let start = c
+        .app
+        .world()
+        .get::<crate::net::RemoteMotion>(mate)
+        .and_then(|rm| rm.fall_start)
+        .expect("a fall start")
+        .world_z;
+    assert!((start - 59.6455).abs() < 1e-3, "{start} yd");
+}
+
 /// A member's first move after a create that showed it moving is due at arrival, and seats in its
 /// handler where a later packet's listener reads it: a moving mover is not re-based
 /// (`@0x618ce4`), so the move fires 32 ms before its arrival, at the create's clock, before the
