@@ -1256,3 +1256,36 @@ fn a_tooltip_on_a_unit_not_held_links_no_health_watcher() {
     );
     assert!(s.take_errors().is_empty());
 }
+
+/// The walk reads each next watcher off the list after the one before returns (`0x4655dc` →
+/// `0x4655df`-`0x4655e6`), so a watcher an earlier one unlinked never runs: targeted before the
+/// build, the unit's own watchers run first, and a `UNIT_HEALTH` handler that hides the tooltip
+/// clears it and unlinks its watcher (`0x53007c`), whose bar keeps the build's seed.
+#[test]
+fn a_watcher_an_earlier_one_unlinked_does_not_run() {
+    let mut s = health_tooltip();
+    s.set_unit("target", Some(wolf()));
+    let guid = wolf().guid;
+    s.set_unit_guids(&UnitGuids {
+        target: guid,
+        held: [(guid, 0)].into_iter().collect(),
+        ..Default::default()
+    });
+    s.unit_token_flags(guid, TokenChange::Add(TOKEN_TARGET));
+    s.run(r#"GameTooltip:SetOwner(UIParent, "ANCHOR_NONE") GameTooltip:SetUnit("target")"#)
+        .unwrap();
+    let watch = HealthWatch {
+        bar: None,
+        tooltip: Some((10, 50)),
+    };
+    s.unit_health_watchers(guid, watch, |s| {
+        s.run("GameTooltip:Hide()").unwrap();
+    });
+    assert_eq!(
+        s.eval::<f64>("return GameTooltipStatusBar:GetValue()")
+            .unwrap(),
+        30.0,
+        "the hidden tooltip's watcher was unlinked before its turn"
+    );
+    assert!(s.take_errors().is_empty());
+}

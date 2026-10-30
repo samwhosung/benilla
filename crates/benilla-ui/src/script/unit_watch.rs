@@ -167,6 +167,11 @@ impl super::UiScript {
     /// to it ([`super::nameplate`]); and on the health field each tooltip showing it, whose bar
     /// takes the range and value (`0x52958c`-`0x5295b1`). A unit with no watchers linked runs
     /// `bridge` first, which signals nothing for it.
+    ///
+    /// The walk reads each next watcher off the list as it stands after the one before returns
+    /// (`0x4655dc` → `0x4655df`-`0x4655e6`): one an earlier watcher unlinked never runs, and one
+    /// linked during the walk keeps a copy of the field as it now stands, so its compare finds no
+    /// change (`0x4655bb`) and it runs neither.
     pub fn unit_health_watchers(
         &mut self,
         guid: u64,
@@ -178,34 +183,20 @@ impl super::UiScript {
             return;
         }
         self.observe_bridge(guid);
-        let mut list: Vec<(u64, Watcher)> = {
+        let (linked, last) = {
             let model = self.model_ref();
             let watches = &model.unit_watches;
-            let mut list = vec![(
-                watches.bridges.get(&guid).copied().unwrap_or(0),
-                Watcher::Bridge,
-            )];
-            if watch.bar.is_some() {
-                list.extend(
-                    super::nameplate::bars_watching(&model, guid)
-                        .into_iter()
-                        .map(|(at, bar)| (at, Watcher::Bar(bar))),
-                );
-            }
-            if watch.tooltip.is_some() {
-                list.extend(
-                    watches
-                        .tooltips
-                        .iter()
-                        .filter(|&(&h, _)| super::tooltip_unit::shows(&model, h, guid))
-                        .map(|(&h, &at)| (at, Watcher::Tooltip(h))),
-                );
-            }
-            list
+            (watches.bridges.contains_key(&guid), watches.links)
         };
-        list.sort_by_key(|&(at, _)| at);
         let mut bridge = Some(bridge);
-        for (_, watcher) in list {
+        if !linked {
+            if let Some(bridge) = bridge.take() {
+                bridge(self);
+            }
+        }
+        let mut after = 0;
+        while let Some((at, watcher)) = self.next_health_watcher(guid, watch, after, last) {
+            after = at;
             match watcher {
                 Watcher::Bridge => {
                     if let Some(bridge) = bridge.take() {
@@ -224,5 +215,37 @@ impl super::UiScript {
                 }
             }
         }
+    }
+
+    /// The first of `guid`'s health watchers still linked past link `after`, among those linked
+    /// by link `last`, when the walk began.
+    fn next_health_watcher(
+        &self,
+        guid: u64,
+        watch: HealthWatch,
+        after: u64,
+        last: u64,
+    ) -> Option<(u64, Watcher)> {
+        let model = self.model_ref();
+        let watches = &model.unit_watches;
+        let bridge = watches.bridges.get(&guid).map(|&at| (at, Watcher::Bridge));
+        let bars = watch
+            .bar
+            .map(|_| super::nameplate::bars_watching(&model, guid))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(at, bar)| (at, Watcher::Bar(bar)));
+        let tooltips = watches
+            .tooltips
+            .iter()
+            .filter(|_| watch.tooltip.is_some())
+            .filter(|&(&h, _)| super::tooltip_unit::shows(&model, h, guid))
+            .map(|(&h, &at)| (at, Watcher::Tooltip(h)));
+        bridge
+            .into_iter()
+            .chain(bars)
+            .chain(tooltips)
+            .filter(|&(at, _)| at > after && at <= last)
+            .min_by_key(|&(at, _)| at)
     }
 }
