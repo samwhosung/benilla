@@ -997,6 +997,27 @@ fn a_listener_reads_a_member_whose_path_stopped_where_the_path_left_it() {
     assert_eq!(seen, ["0.7,0.6"]);
 }
 
+/// A relayed move takes its member's swim state back from the water-at-feet mark a server path
+/// left on it, so a player feared through water and relayed on land does not swim on: the relay's
+/// word carries the swim bit (`0x618de7`), and nothing re-asks the water for a relayed player.
+#[test]
+fn a_relayed_move_drops_the_swim_mark_a_path_left() {
+    let mut c = seated(0);
+    let mate = c.app.world().resource::<crate::net::GuidIndex>().0[&MATE];
+    c.app
+        .world_mut()
+        .entity_mut(mate)
+        .insert(crate::net::CreatureSwimming);
+    c.frame(vec![vec![heartbeat(MATE, [500.0, 600.0, 0.0], 0, None)]]);
+    assert!(
+        c.app
+            .world()
+            .get::<crate::net::CreatureSwimming>(mate)
+            .is_none(),
+        "the relay's dry word, not the mark, says whether it swims"
+    );
+}
+
 /// `SMSG_MONSTER_MOVE` stopping `guid` at `at`.
 fn halt(guid: u64, at: [f32; 3]) -> SessionEvent {
     SessionEvent::MonsterMove {
