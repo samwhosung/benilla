@@ -278,6 +278,18 @@ pub(crate) enum ArmCandidate {
 }
 
 impl CastContext<'_> {
+    /// The selection, as read here, passed as `TryCast`'s guid: an item use's (`0x4fa163`,
+    /// `0x4c8e1d`, through `CGItem::Use` `0x5d9249` → `0x6e5a90`) and the attack pick's write
+    /// (`0x6e4efb`). The arm then takes the guid (`0x6e5393`) and never reads the selection again;
+    /// with nothing selected the guid is 0, and the arm reads the selection where it reaches it
+    /// (`0x6e539f`).
+    pub(crate) fn selection_passed(mut self) -> Self {
+        if let (ArmCandidate::Selection, Some(guid)) = (self.candidate, self.selection_guid) {
+            self.candidate = ArmCandidate::Guid(guid);
+        }
+        self
+    }
+
     /// Applies the self-cast modifier, `onSelf`: the caster replaces the selection as the bind
     /// candidate, guid and store both, the pair the autoSelfCast fallback swaps (`0x6e53d7`). It
     /// is the explicit guid `CastSpell` and `CastSpellByName` hand `ArmCast 0x6e5250` (`0x4b4345`,

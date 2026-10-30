@@ -3,6 +3,7 @@
 //! and `UseAction 0x4e5ee0`), so the line after a cast reads the state it left.
 
 use super::*;
+use benilla_protocol::messages::UseItemTarget;
 
 /// The `CMSG_CAST_SPELL`s and `CMSG_CANCEL_CAST`s sent, in order.
 fn casts_and_cancels(f: &Frame) -> Vec<(&'static str, u32)> {
@@ -904,6 +905,16 @@ fn with_quaff(f: &mut Frame, old: u32, quaff: benilla_formats::SpellDisplay) {
     );
 }
 
+/// The targets of the `CMSG_USE_ITEM`s sent.
+fn item_targets(f: &Frame) -> Vec<UseItemTarget> {
+    f.rx.try_iter()
+        .filter_map(|c| match c {
+            ClientCommand::UseItem { target, .. } => Some(target),
+            _ => None,
+        })
+        .collect()
+}
+
 /// A listener of `CURRENT_SPELL_CAST_CHANGED` that runs `lua` the first time it hears it.
 fn once_on_change(f: &mut Frame, lua: &str) {
     run(
@@ -973,17 +984,28 @@ fn a_listener_that_refills_the_record_without_sending_has_it_sent() {
     record_changes(&mut f);
     once_on_change(&mut f, "UseContainerItem(0, 1)");
     run_hosted(&mut f, &format!("UseContainerItem(0, 1) {CHANGES}"));
-    let uses: Vec<_> =
-        f.rx.try_iter()
-            .filter_map(|c| match c {
-                ClientCommand::UseItem { target, .. } => Some(target),
-                _ => None,
-            })
-            .collect();
-    assert_eq!(
-        uses,
-        vec![benilla_protocol::messages::UseItemTarget::SelfImplicit]
-    );
+    assert_eq!(item_targets(&f), vec![UseItemTarget::SelfImplicit]);
     let failures = seen(&mut f).matches("SPELL_FAILED_BAD_TARGETS").count();
     assert_eq!(failures, 1, "the listener's refusal alone");
+}
+
+/// An item use passes the selection, as its verb read it, as `TryCast`'s guid (`0x4fa163`,
+/// `0x5d9249` → `0x6e5a90`), which the arm takes (`0x6e5393`) without reading the selection again:
+/// a listener's retarget at the arm's signal leaves the bind where the use aimed it.
+#[test]
+fn an_item_use_binds_the_unit_selected_at_its_call() {
+    let mut f = frame(true);
+    with_quaff(
+        &mut f,
+        FRIEND,
+        benilla_formats::SpellDisplay {
+            implicit_target_a1: 21,
+            ..Default::default()
+        },
+    );
+    with_friendly_party1(&mut f, true);
+    once_on_change(&mut f, r#"TargetUnit("party1")"#);
+    run_hosted(&mut f, "UseContainerItem(0, 1)");
+    assert_eq!(item_targets(&f), vec![UseItemTarget::Unit(OLD)]);
+    assert_eq!(selected(&f), Some(NEW));
 }

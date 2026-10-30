@@ -1507,7 +1507,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
                         self.settle_selection(script, &mut at, owed.into());
                         if self.appliers.attack().settle_attack().is_some() {
                             let mut cast = self.appliers.cast();
-                            let ctx = cast.targeting.context();
+                            let ctx = cast.targeting.context().selection_passed();
                             cast.ladder.resume_after_pick(held, &ctx);
                             self.run_casts(script, &mut at);
                         }
