@@ -143,6 +143,8 @@ live_reads! {
         requirements: crate::ui_items::RequirementsLive<'static, 'static>,
         /// The item set blocks: the set table, the member names and the bonuses.
         item_sets: crate::ui_items::ItemSetLive<'static, 'static>,
+        /// The item records' views as the tooltip build reads them, and the bind point's area.
+        item_views: crate::ui_items::ItemViewLive<'static, 'static>,
         /// The questgiver panel's cells, its rows' records and the turn-in's held counts.
         quest_giver: crate::ui_quest::QuestGiverLive<'static, 'static>,
         /// The trade window's offers, its partner cell and the money offers.

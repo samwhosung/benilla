@@ -49,7 +49,7 @@ pub(crate) use mods::{CategoryPad, SpellModifiers, OP_CAST_TIME, OP_COST, OP_GCD
 pub(crate) use mods::{OP_COOLDOWN, OP_RANGE};
 pub(crate) use range_units::{with_ranged_slot, RangeUnits, DEFAULT_REACH};
 pub(crate) use report::{
-    CastCore, CastSlots, CursorCancel, Held, REASON_ERROR, REASON_TARGETS_DEAD,
+    CastCore, CastSlots, CursorCancel, Held, ItemCastLeg, REASON_ERROR, REASON_TARGETS_DEAD,
 };
 // `TargetingWants` is exported for the ground reticle, which draws for the location word alone.
 pub(crate) use targeting::{
@@ -352,24 +352,6 @@ fn line_skill_value(
         }
     }
     0
-}
-
-/// Each skill slot's line and effective value, all [`spell_skill_value`] reads: a text built
-/// against one snapshot is rebuilt when the next differs.
-pub(crate) type SkillSnapshot =
-    [(u16, u32); benilla_protocol::messages::PLAYER_SKILL_SLOTS as usize];
-
-/// The [`SkillSnapshot`] of the player; all zeros without one.
-pub(crate) fn skill_snapshot(me: Option<&crate::net::ObjectStore>) -> SkillSnapshot {
-    std::array::from_fn(|slot| {
-        me.and_then(|s| s.0.player_skill(slot as u8))
-            .map_or((0, 0), |s| {
-                (
-                    s.skill_id,
-                    line_skill_value(std::iter::once(s), s.skill_id.into()),
-                )
-            })
-    })
 }
 
 #[cfg(test)]

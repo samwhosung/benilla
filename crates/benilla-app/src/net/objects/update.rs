@@ -190,11 +190,11 @@ impl Released {
     }
 
     /// A new object of type `type_id` frees the oldest released one of that type (`0x466e55`,
-    /// the head of the list).
-    fn free_oldest(&mut self, type_id: u8) {
-        if let Some(guid) = self.reuse.get_mut(&type_id).and_then(VecDeque::pop_front) {
-            self.objects.remove(&guid);
-        }
+    /// the head of the list); the guid it freed.
+    fn free_oldest(&mut self, type_id: u8) -> Option<u64> {
+        let guid = self.reuse.get_mut(&type_id).and_then(VecDeque::pop_front)?;
+        self.objects.remove(&guid);
+        Some(guid)
     }
 
     /// Frees every released object, as leaving the world does (`0x467700`).
@@ -376,7 +376,19 @@ fn on_object_create(In(ev): In<SessionEvent>, mut sc: Scene) {
 /// allocated apart and frees nothing (`0x466e0c`).
 fn allocate(sc: &mut Scene, guid: u64, ty: ObjectType) {
     if sc.self_guid.0 != Some(guid) {
-        sc.released.free_oldest(type_id(ty));
+        if let Some(freed) = sc.released.free_oldest(type_id(ty)) {
+            free_item(sc, freed);
+        }
+    }
+}
+
+/// An object freed here: an item's lock goes with it, at this place among the packet's runs
+/// ([`crate::item_watch::Freed`]).
+fn free_item(sc: &mut Scene, object: u64) {
+    if guid::is_item(object) {
+        sc.item_lane.push(crate::item_watch::Run::freeing(
+            crate::item_watch::Freed::Items(vec![object]),
+        ));
     }
 }
 
@@ -775,15 +787,18 @@ fn on_object_destroyed(In(ev): In<SessionEvent>, mut sc: Scene, script: Option<N
         return;
     };
     crate::death::net::forget_corpse(guid, &mut sc.death_net);
-    // A released object ran its deactivate as it left.
+    // A released object ran its deactivate as it left, and is freed now.
     if sc.released.take(guid).is_some() {
+        free_item(&mut sc, guid);
         return;
     }
-    if let Some(&e) = sc.index.0.get(&guid) {
-        if held_by_play(&sc, e) {
-            sc.commands.entity(e).insert(ReleasePending);
-            return;
-        }
+    // A guid neither live nor released has nothing to release (`0x464931`, `0x46493a`).
+    let Some(&e) = sc.index.0.get(&guid) else {
+        return;
+    };
+    if held_by_play(&sc, e) {
+        sc.commands.entity(e).insert(ReleasePending);
+        return;
     }
     deactivate(&mut sc, guid, script.as_deref());
     log_destroy(&mut sc, guid);
@@ -795,18 +810,23 @@ fn on_object_destroyed(In(ev): In<SessionEvent>, mut sc: Scene, script: Option<N
     if let Some(mover) = sc.mover.as_deref_mut() {
         mover.forget(guid);
     }
-    // An item has no model to fade, so it goes now with its countdown cells.
+    // An item has no model to fade, so it goes now with its countdown cells, its lock behind its
+    // deactivate's run.
     if benilla_protocol::guid::is_item(guid) {
         sc.commands.entity(e).despawn();
+        free_item(&mut sc, guid);
         return;
     }
     sc.commands.entity(e).queue(super::tear_down);
 }
 
 /// The deactivate a release runs (vtable slot 1, `0x46496f`), reading the descriptor about to go:
-/// the item's (`0x5d8660`) and the party member's, which snapshots its record and sends
-/// `CMSG_REQUEST_PARTY_MEMBER_STATS`.
+/// the item's (`0x5d8660`), its head ([`super::item_deactivate::head`]) then its interface tail,
+/// and the party member's, which snapshots its record and sends `CMSG_REQUEST_PARTY_MEMBER_STATS`.
 fn deactivate(sc: &mut Scene, guid: u64, script: Option<&UiScript>) {
+    if benilla_protocol::guid::is_item(guid) {
+        super::item_deactivate::head(sc, guid);
+    }
     let gone = item_watch(&sc.index, &sc.stores, &sc.self_guid, &sc.items).destroyed_run(guid);
     sc.item_lane.push(gone.unwrap_or_default());
     let held = |g: u64| sc.index.0.get(&g).and_then(|e| sc.stores.get(*e).ok());
@@ -1405,37 +1425,7 @@ fn create_hook(
         return;
     };
     match kind {
-        Created::Item => {
-            // The record, set up at once when cached, for our item in the world, and its signal
-            // for the owner of any item.
-            let run = item_watch(&sc.index, &sc.stores, &sc.self_guid, &sc.items).created_run(
-                guid,
-                &fields,
-                &sc.bag_cache,
-            );
-            // The set-up asks for the record of every item, whoever's, with the callback
-            // `0x5d8390` (`0x5d8300` into `0x55ba30`): the readers of a held item only read it.
-            if let Some(entry) = fields.object_entry() {
-                if sc
-                    .items
-                    .template(entry, guid, Ask::Event(&sc.net))
-                    .is_none()
-                {
-                    sc.items
-                        .wait(entry, crate::items::RecordCallback::SetUp(guid));
-                }
-            }
-            if let Some(crate::item_watch::ItemNotice::Record { guid, .. }) = run.notice {
-                super::replay_enchant_times(
-                    &mut sc.items,
-                    &mut sc.countdowns,
-                    &sc.index,
-                    &mut sc.view_log,
-                    guid,
-                );
-            }
-            sc.item_lane.push(run);
-        }
+        Created::Item => request_item_record(sc, guid, &fields),
         Created::World(EntityKind::Player) => {
             // Our own create runs the world-enter cascade (`0x5deb60` → `0x4908c0`), whose bag
             // watcher set-up zeroes and rescans the bag cache (`0x49098d` → `0x4f8cc0`).
@@ -1492,7 +1482,9 @@ fn create_hook(
 /// when its records changed while it was away (`0x5fbe28` → `0x60abe0`); a player's `PostUpdate`
 /// (`0x5dec90`) runs the unit's, then compares its party record (`0x5decb7`), with no
 /// active-player gate, as the active player is never released; a game object's (`0x5f7ed0`) asks
-/// its template when it holds none (`+0x214`, `0x558560` at `0x5f7f31`).
+/// its template when it holds none (`+0x214`, `0x558560` at `0x5f7f31`); an item's and a bag's
+/// (`0x5d8430` → `0x5d8300`) request their record as their create did, set up at once when
+/// cached ([`request_item_record`]).
 fn reactivated_end(sc: &mut Scene, guid: u64, script: Option<&UiScript>) {
     let Some(e) = sc.index.0.get(&guid).copied() else {
         return;
@@ -1509,8 +1501,42 @@ fn reactivated_end(sc: &mut Scene, guid: u64, script: Option<&UiScript>) {
             compare_party_record(sc, guid, &fields, script);
         }
         Some(ObjectType::GameObject) => sc.go_templates.request_at_create(guid, &fields, &sc.net),
+        Some(ObjectType::Item | ObjectType::Container) => request_item_record(sc, guid, &fields),
         _ => {}
     }
+}
+
+/// `CGItem_C::RequestRecord` (`0x5d8300`), an item's create hook (`0x5d8400`) and its slot 3
+/// (`EndReactivation 0x5d8430`): the record, set up at once when cached (`0x5d834a` →
+/// `0x5d8440`), for our item in the world, and its signal for the owner of any item; a miss asks
+/// for it with the callback `0x5d8390` (`0x5d833f` → `0x55ba30`), whoever's the item. The readers
+/// of a held item only read it.
+fn request_item_record(sc: &mut Scene, guid: u64, fields: &ObjectFields) {
+    let run = item_watch(&sc.index, &sc.stores, &sc.self_guid, &sc.items).created_run(
+        guid,
+        fields,
+        &sc.bag_cache,
+    );
+    if let Some(entry) = fields.object_entry() {
+        if sc
+            .items
+            .template(entry, guid, Ask::Event(&sc.net))
+            .is_none()
+        {
+            sc.items
+                .wait(entry, crate::items::RecordCallback::SetUp(guid));
+        }
+    }
+    if let Some(crate::item_watch::ItemNotice::Record { guid, .. }) = run.notice {
+        super::replay_enchant_times(
+            &mut sc.items,
+            &mut sc.countdowns,
+            &sc.index,
+            &mut sc.view_log,
+            guid,
+        );
+    }
+    sc.item_lane.push(run);
 }
 
 /// `CGUnit_C::ResolveDisplayRecords` from the unit's `PostInit` (`0x5fb88b` → `0x60afb0`): the

@@ -936,26 +936,28 @@ mod tests {
         assert!(rx.try_recv().is_err(), "no sale");
     }
 
-    /// An item picked up before its record landed parks `AutoEquipCursorItem` on it
-    /// (`0x5e160c`), sending nothing and keeping the item held and locked. The record's callback
-    /// (`0x5e17a0`) runs the call again once the bag view has it: a projectile by its class
+    /// An item picked up whose record the cache lacks parks `AutoEquipCursorItem` on it
+    /// (`0x5e160c`), sending no equip and keeping the item held and locked. Once the cache holds
+    /// the record ahead of the VM's copy (a new VM, a cache file's load), the call acts on it in
+    /// its body (`0x5e163b`), its copy seated from the cache: a projectile by its class
     /// (`0x5e16ff`), not its inventory type, so `CMSG_SET_AMMO` goes out and the arm's
     /// `ClearCursor(1,1)` lets it go (`0x5e1711`, `0x5e1763`).
     #[test]
-    fn a_projectile_picked_up_unresolved_waits_then_loads_by_class_and_unlocks() {
-        use bevy::ecs::system::RunSystemOnce;
+    fn a_projectile_waits_on_a_missing_record_and_loads_by_class_on_a_cached_one() {
         let (mut app, rx) = open_the_clam();
         while rx.try_recv().is_ok() {} // drain the clam's own send
-        let push = |app: &mut App, cached: bool| {
-            let slot = benilla_ui::script::ContainerSlot {
-                item_id: CLAM_ENTRY,
-                count: 1,
-                guid: CLAM,
-                item_class: cached.then_some(ITEM_CLASS_PROJECTILE),
-                quality: cached.then_some(1),
-                ..Default::default()
-            };
+                                       // The record leaves the cache, as another realm's file replaces it.
+        app.world_mut().resource_mut::<Items>().forget_templates();
+        // The slot as the feed pushes it with the record in flight.
+        let slot = benilla_ui::script::ContainerSlot {
+            item_id: CLAM_ENTRY,
+            count: 1,
+            guid: CLAM,
+            ..Default::default()
+        };
+        {
             let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+            script.unlock_item(CLAM);
             script.set_container(
                 0,
                 Some(benilla_ui::script::ContainerState {
@@ -964,17 +966,21 @@ mod tests {
                     ..Default::default()
                 }),
             );
-            script.seat_item_records();
-        };
-        app.world_mut()
-            .non_send_resource_mut::<UiScript>()
-            .unlock_item(CLAM);
-        // The slot as the feed pushes it with the record in flight.
-        push(&mut app, false);
-        app.world_mut()
-            .non_send_resource_mut::<UiScript>()
-            .run("PickupContainerItem(0, 1) AutoEquipCursorItem()")
-            .unwrap();
+            script
+                .run("PickupContainerItem(0, 1) AutoEquipCursorItem()")
+                .unwrap();
+        }
+        crate::ui_items::calls::apply_kept_item_calls(app.world_mut());
+        assert!(
+            !rx.try_iter()
+                .any(|c| matches!(c, ClientCommand::SetAmmo { .. })),
+            "no equip while it waits"
+        );
+        {
+            let script = app.world().non_send_resource::<UiScript>();
+            assert_eq!(script.cursor_item().map(|i| i.guid), Some(CLAM), "held");
+            assert!(script.item_locked(CLAM), "the pickup's lock");
+        }
         app.world_mut().resource_mut::<Items>().insert_template(
             CLAM_ENTRY,
             Some(ItemInfo {
@@ -982,17 +988,9 @@ mod tests {
                 ..crate::items::test_template("Odd Arrow")
             }),
         );
-        crate::ui_items::calls::apply_kept_item_calls(app.world_mut());
-        assert!(rx.try_recv().is_err(), "nothing sent while it waits");
-        {
-            let script = app.world().non_send_resource::<UiScript>();
-            assert_eq!(script.cursor_item().map(|i| i.guid), Some(CLAM), "held");
-            assert!(script.item_locked(CLAM), "the pickup's lock");
-        }
-        // The feed pushes the answer, then the callback runs.
-        push(&mut app, true);
         app.world_mut()
-            .run_system_once(crate::ui_bind_confirm::replay_equip_records)
+            .non_send_resource_mut::<UiScript>()
+            .run("AutoEquipCursorItem()")
             .unwrap();
         crate::ui_items::calls::apply_kept_item_calls(app.world_mut());
         assert!(matches!(
@@ -1049,15 +1047,10 @@ mod tests {
             .resource_mut::<Items>()
             .take_callbacks(UNKNOWN);
         assert_eq!(callbacks, [RecordCallback::AutoEquip, RecordCallback::Swap]);
-        // Refused: the callbacks run with nothing found.
+        // Refused: the callbacks run at the answer with nothing found.
         for cb in callbacks {
-            app.world()
-                .resource::<Items>()
-                .run_with_vm(UNKNOWN, cb, false);
+            crate::ui_bind_confirm::replay_at_answer(app.world_mut(), UNKNOWN, cb, false);
         }
-        app.world_mut()
-            .run_system_once(crate::ui_bind_confirm::replay_equip_records)
-            .unwrap();
         crate::ui_items::calls::apply_kept_item_calls(app.world_mut());
         assert_eq!(
             app.world()
@@ -1716,28 +1709,27 @@ mod bind_confirm_tests {
         );
     }
 
-    /// A place whose item's record the bag view does not hold yet parks on it (`0x5e0dbe`): no
-    /// question, nothing sent, the axe held, a record in the table. The callback (`0x5e1020`)
-    /// replays the swap once the view has the record, which asks now (`0x5e0ee4`), and frees the
-    /// parked record (`0x5e10cf`).
+    /// A place whose item's record the VM's copy lacks but the cache holds (a new VM, a cache
+    /// file's load) parks nothing (`0x5e0db1`): the call acts on the cached record in its body,
+    /// its copy seated from the cache, and asks (`0x5e0e54`, `0x5e0ee4`), nothing sent and the axe
+    /// held, its question's record the one in the table.
     #[test]
-    fn a_place_on_an_uncached_record_waits_then_asks_on_its_arrival() {
+    fn a_place_on_a_record_the_copy_lacks_asks_inside_the_call() {
         benilla_formats::wow_data_or_skip!();
-        use bevy::ecs::system::RunSystemOnce;
         let pending = |s: &mut UiScript| {
             let mut bag = bag_with_the_axe(4);
             bag.slots.get_mut(&1).expect("the axe").quality = None;
             s.set_container(0, Some(bag));
         };
         let (mut app, rx) = place_the_axe_after(2, 4, false, pending);
-        assert!(!shown(&mut app, "EQUIP_BIND"), "no question while it waits");
+        assert!(shown(&mut app, "EQUIP_BIND"), "the call asks");
         assert!(rx.try_iter().next().is_none(), "nothing sent");
         assert_eq!(
             app.world()
                 .resource::<crate::ui_bind_confirm::PendingEquips>()
                 .live(),
             1,
-            "the parked move holds a record"
+            "its question's record alone: nothing parked"
         );
         assert_eq!(
             app.world()
@@ -1745,24 +1737,6 @@ mod bind_confirm_tests {
                 .cursor_item()
                 .map(|i| i.guid),
             Some(AXE_GUID)
-        );
-        // The bag view takes the record, then the callback replays the swap.
-        {
-            let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
-            script.set_container(0, Some(bag_with_the_axe(4)));
-            script.seat_item_records();
-        }
-        app.world_mut()
-            .run_system_once(crate::ui_bind_confirm::replay_equip_records)
-            .unwrap();
-        crate::ui_items::calls::apply_kept_item_calls(app.world_mut());
-        assert!(shown(&mut app, "EQUIP_BIND"), "the replay asks");
-        assert_eq!(
-            app.world()
-                .resource::<crate::ui_bind_confirm::PendingEquips>()
-                .live(),
-            1,
-            "its question's record alone: the parked one is freed"
         );
     }
 

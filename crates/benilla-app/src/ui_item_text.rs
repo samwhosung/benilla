@@ -258,6 +258,41 @@ pub(crate) fn close_core(world: &mut World) {
     emit(world, Place::Here, serial, TextSignal::Closed);
 }
 
+/// The reader's state for an item's deactivate, whose release or destroy runs in an object
+/// packet's handler; absent in a harness without the reader.
+#[derive(SystemParam)]
+pub(crate) struct ItemTextLeg<'w> {
+    open: Option<ResMut<'w, ItemTextOpen>>,
+    lane: Option<ResMut<'w, ItemTextLane>>,
+    latch: crate::ui_session::LatchSteps<'w>,
+}
+
+impl ItemTextLeg<'_> {
+    /// `CGItem_C::Deactivate`'s reader leg (`0x5d86ee`-`0x5d8713`): an `item` the reader's cell
+    /// names (`[0xbc3fa0]`) closes it as `0x4e32e0` of a zero guid, the core [`close_core`] runs,
+    /// at the packet's place: the latch release (`0x4e3357`), which re-enters the core while the
+    /// reader holds the latch and signals there first, the cell cleared (`0x4e3364`) and
+    /// `ITEM_TEXT_CLOSED` (`0x4e33a2`) on the lane.
+    pub(crate) fn run(&mut self, item: u64) {
+        let (Some(open), Some(lane)) = (self.open.as_deref_mut(), self.lane.as_deref_mut()) else {
+            return;
+        };
+        let Some(serial) = open
+            .pending
+            .as_ref()
+            .filter(|s| s.object_guid == item)
+            .map(|s| s.serial)
+        else {
+            return;
+        };
+        if self.latch.release(item) {
+            lane.push(serial, TextSignal::Closed);
+        }
+        open.pending = None;
+        lane.push(serial, TextSignal::Closed);
+    }
+}
+
 /// What the reader signals (`0x703e50`): `ITEM_TEXT_BEGIN` (293), `ITEM_TEXT_TRANSLATION` (294)
 /// with its seconds, `ITEM_TEXT_READY` (295), `ITEM_TEXT_CLOSED` (296).
 #[derive(Clone, Copy, Debug, PartialEq)]

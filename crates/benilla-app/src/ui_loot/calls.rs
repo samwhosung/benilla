@@ -435,7 +435,7 @@ impl LootSteps<'_, '_> {
     fn sweep_end(&mut self, script: &mut UiScript, flag: bool) {
         self.byte.0 = false;
         self.loot.coin_line_shown = true; // `0x4c221e`
-        if self.loot.has_contents(&self.objects) {
+        if self.loot.sweep_has_contents(&self.objects) {
             if !flag {
                 script.fire_event("LOOT_OPENED", vec![]);
             }

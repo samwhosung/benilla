@@ -29,6 +29,7 @@ fn wire(events: impl IntoIterator<Item = SessionEvent>) -> Vec<SessionEvent> {
             let block = matches!(
                 ev,
                 SessionEvent::ObjectCreate { .. }
+                    | SessionEvent::ItemCreate { .. }
                     | SessionEvent::ObjectValues { .. }
                     | SessionEvent::ObjectsRemoved(_)
             );
@@ -46,6 +47,7 @@ pub(super) fn wire_packets(packets: Vec<Vec<SessionEvent>>) -> Vec<SessionEvent>
                 matches!(
                     ev,
                     SessionEvent::ObjectCreate { .. }
+                        | SessionEvent::ItemCreate { .. }
                         | SessionEvent::ObjectValues { .. }
                         | SessionEvent::ObjectsRemoved(_)
                 )

@@ -104,22 +104,23 @@ pub(super) enum Question {
 /// (`0x5e15d6`, `0x5e0d75`) or a set `suppress` (`0x5e15e3`, `0x5e0d82`) sends; else the record
 /// lookup in the item cache (`0x5e1603`, `0x5e0db1`) waits on a miss; else the record's bonding
 /// `+0x194` is 2 (`0x5e163b`, `0x5e0e54`) and the player can use the item (`0x5ea930`) to ask.
-/// No quality leg. The cache is the VM's copy of the app's item records (`Model::item_templates`,
-/// seated whole for a new VM and topped up as each record lands), not a bag view's fields.
+/// No quality leg. `record` is the item's record as the lookup finds it in the cache at the call
+/// ([`crate::script::item_stats::cached_record`]), not a bag view's fields.
 pub(super) fn equip_question(
     lua: &Lua,
     model: &Model,
     item: EquipFacts,
+    record: Option<&crate::script::ItemTemplateView>,
     suppress: bool,
 ) -> Question {
     if item.bound || suppress {
         return Question::Send;
     }
-    let Some(record) = model.item_templates.get(&item.item_id) else {
+    let Some(record) = record else {
         return Question::Wait(item.item_id);
     };
     if record.bonding == BIND_WHEN_EQUIPPED
-        && crate::script::item_stats::item_usable_by_id(lua, model, item.item_id)
+        && crate::script::item_stats::record_refusal(lua, model, record).is_none()
     {
         Question::Ask
     } else {
@@ -187,12 +188,13 @@ pub(crate) fn auto_equip_held(
         return AutoEquip::None;
     };
     let (bag, slot, guid) = (item.bag, item.slot, item.guid);
-    let step = match equip_question(lua, model, facts, suppress) {
+    let record = crate::script::item_stats::cached_record(lua, model, facts.item_id);
+    let step = match equip_question(lua, model, facts, record.as_ref(), suppress) {
         Question::Ask => AutoEquip::Asked { bag, slot, guid },
         Question::Wait(entry) => AutoEquip::Waits { entry },
         Question::Send => AutoEquip::Sent { bag, slot, guid },
     };
-    let ammo = projectile_entry(model, facts.item_id);
+    let ammo = projectile_entry(record.as_ref(), facts.item_id);
     hand_over(model, step, ammo, picked);
     if let AutoEquip::Sent { .. } = step {
         clear(
@@ -210,10 +212,8 @@ pub(crate) fn auto_equip_held(
 /// The sent item's entry when its record, in the item cache `GetItemClass` reads (`0x5d9f30`
 /// at `0x5e16ff`), is a projectile's (`0x5e1704`): the one place that decides between
 /// `CMSG_SET_AMMO` and `CMSG_AUTOEQUIP_ITEM`, and the clear's unlock. An uncached record is none.
-fn projectile_entry(model: &Model, item_id: u32) -> Option<u32> {
-    model
-        .item_templates
-        .get(&item_id)
+fn projectile_entry(record: Option<&crate::script::ItemTemplateView>, item_id: u32) -> Option<u32> {
+    record
         .is_some_and(|t| t.class == ITEM_CLASS_PROJECTILE)
         .then_some(item_id)
 }

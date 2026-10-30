@@ -967,11 +967,19 @@ impl super::UiScript {
         out
     }
 
-    /// Forget item `guid`'s lock with no event: its item object is gone, and the next object
+    /// Forget item `guid`'s lock with no event: its item object was freed, and the next object
     /// with that guid starts unlocked, as the item constructor zeroes the bit (`0x5d821f`,
     /// `0x5d823e`).
     pub fn forget_item_lock(&mut self, guid: u64) {
         self.model_mut().set_item_lock(guid, false);
+    }
+
+    /// Forget every lock with no event: every object was freed (`0x467800`), and each new one
+    /// starts unlocked ([`Self::forget_item_lock`]).
+    pub fn forget_all_item_locks(&mut self) {
+        for guid in self.item_locks() {
+            self.model_mut().set_item_lock(guid, false);
+        }
     }
 
     /// Seat a fresh VM's locks before anything runs on it, with no event.

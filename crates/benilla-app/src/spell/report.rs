@@ -231,6 +231,7 @@ impl CastCore<'_> {
         }
         self.ground.enter_as(spell_id, commit, word, in_slot);
         self.pending.fill_record();
+        self.pending.fill_record_item(commit.item_guid());
     }
 
     /// `StopSpellTargeting 0x6e4900`: while the word is up, the cancel with its failed flag and
@@ -320,6 +321,55 @@ impl CastSlots<'_> {
     /// The tutorial bank, for the attack seams' other sites (`0x4b5390`).
     pub(crate) fn tutorials(&self) -> Option<&crate::tutorial::Tutorials> {
         self.tutorials.as_deref()
+    }
+}
+
+/// The reporters' state for an item's deactivate, whose release or destroy runs in an object
+/// packet's handler; absent pieces, in a harness without the spell plugin, leave the leg out.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct ItemCastLeg<'w> {
+    pending: Option<ResMut<'w, PendingCast>>,
+    queued_melee: Option<ResMut<'w, QueuedMeleeSpell>>,
+    ground: Option<ResMut<'w, SpellTargeting>>,
+    reports: Option<ResMut<'w, CastReports>>,
+    tutorials: Option<Res<'w, crate::tutorial::Tutorials>>,
+    spells: Option<Res<'w, crate::ui_action::Spells>>,
+    edits: Option<Res<'w, crate::creature_anim::UnitEdits>>,
+}
+
+impl ItemCastLeg<'_> {
+    /// `CGItem_C::Deactivate`'s cast leg (`0x5d86a0`-`0x5d86c4`): an `item` the pending record's
+    /// source names ([`PendingCast::record_item`]) cancels the record's cast as `CancelCast(1, 0,
+    /// 0x1c)`, nothing sent, with the tail's reap for `player`, the active player's object.
+    pub(crate) fn run(&mut self, item: u64, net: &NetCommands, player: Option<Entity>) {
+        let (Some(pending), Some(queued_melee), Some(ground), Some(reports), Some(edits)) = (
+            self.pending.as_deref_mut(),
+            self.queued_melee.as_deref_mut(),
+            self.ground.as_deref_mut(),
+            self.reports.as_deref_mut(),
+            self.edits.as_deref(),
+        ) else {
+            return;
+        };
+        if pending.record_item() != Some(item) {
+            return;
+        }
+        let mut core = CastCore {
+            pending,
+            queued_melee,
+            ground,
+            reports,
+            net,
+            tutorials: self.tutorials.as_deref(),
+        };
+        core.cancel_reaping(
+            true,
+            false,
+            REASON_ERROR,
+            self.spells.as_deref(),
+            player,
+            edits,
+        );
     }
 }
 

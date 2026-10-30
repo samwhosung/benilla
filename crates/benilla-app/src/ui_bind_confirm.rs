@@ -213,15 +213,10 @@ impl BindGate<'_> {
 }
 
 /// The lookup's miss (`0x55ba30`): ask the record with the callback, which its answer runs. A
-/// record the cache holds, which the VM's copy had not caught up with (a new VM's seat, a cache
-/// file's load), runs it as the frame's drain comes rather than wait for an answer that has come
-/// ([`replay_equip_records`]). A refused entry holds no record, its node destroyed with the
+/// record the cache holds never comes here: the call acts on it in its body (`0x5e163b`,
+/// [`crate::ui_items::ItemSteps`]). A refused entry holds no record, its node destroyed with the
 /// refusal (`0x55bed2`), so its lookup waits and asks again.
 fn wait_for(entry: u32, callback: RecordCallback, items: &Items, commands: &NetCommands) {
-    if items.template(entry, 0, Ask::Read).is_some() {
-        items.run_with_vm(entry, callback, true);
-        return;
-    }
     items.wait(entry, callback);
     let _ = items.template(entry, 0, Ask::Event(commands));
 }
@@ -282,36 +277,4 @@ pub(crate) fn replay_at_answer(
         }
         crate::creature_anim::apply_unit_edits(world);
     });
-}
-
-/// The equip callbacks a lookup ran on a record the cache held and the VM's copy lacked
-/// ([`wait_for`]), with the VM and the host lent, after the record feed has pushed it.
-pub(crate) fn replay_equip_records(mut vm: ReplayVm) {
-    let ran = vm.own().0.take_vm_callbacks();
-    for (entry, callback, found) in ran {
-        replay(&mut vm, entry, callback, found);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    /// The replays read the VM's item records, so they run after the record feed has pushed the
-    /// answer.
-    #[test]
-    fn the_equip_replays_run_after_the_record_feed() {
-        let app = crate::game_plugins::schedule_tests::headless_client();
-        let order = &app.world().resource::<crate::vm_pass::PassOrder>().0;
-        if !order.iter().any(|n| n.contains("benilla_app::")) {
-            eprintln!("skipped: this build carries no type names");
-            return;
-        }
-        let at = |name: &str| {
-            order
-                .iter()
-                .position(|n| n.ends_with(name))
-                .unwrap_or_else(|| panic!("`{name}` is in the pass"))
-        };
-        let replay = at("::ui_bind_confirm::replay_equip_records");
-        assert!(at("::ui_items::feed::feed_item_stats") < replay);
-    }
 }

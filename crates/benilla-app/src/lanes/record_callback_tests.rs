@@ -351,8 +351,6 @@ fn an_equip_on_a_refused_record_asks_again_and_waits() {
         )
     });
     assert!(asked, "the record is asked again");
-    let items = app.world().resource::<crate::items::Items>();
-    assert!(items.take_vm_callbacks().is_empty(), "nothing runs at once");
     assert_eq!(
         app.world_mut()
             .resource_mut::<crate::items::Items>()
@@ -360,6 +358,47 @@ fn an_equip_on_a_refused_record_asks_again_and_waits() {
         1,
         "the callback waits for the next answer"
     );
+}
+
+/// A record the cache holds ahead of the VM's copy, as a cache file's load lands one outside an
+/// answer, is found by the lookup inside the call (`0x5e1603`, `0x5e0db1`): `AutoEquipCursorItem`
+/// sends in its body (`0x5e1757`) and a place's `SwapItem` in its (`0x5e0fdb`), before the call
+/// returns, with nothing asked or parked for a later replay.
+#[test]
+fn an_equip_on_a_record_the_cache_holds_sends_inside_the_call() {
+    for (chunk, send) in [
+        (
+            "PickupContainerItem(0, 1) AutoEquipCursorItem()",
+            "AutoEquipItem",
+        ),
+        ("PickupContainerItem(0, 1) PickupInventoryItem(1)", "Swap"),
+    ] {
+        let (mut app, sent) = holding_client();
+        let mut t = crate::items::test_template("Plain Helm");
+        (t.class, t.inventory_type) = (4, 1);
+        app.world_mut()
+            .resource_mut::<crate::items::Items>()
+            .insert_template(HELM_ENTRY, Some(t));
+        sent.try_iter().for_each(drop);
+        hosted(&mut app, chunk);
+        let sent: Vec<ClientCommand> = sent.try_iter().collect();
+        assert!(
+            !sent
+                .iter()
+                .any(|c| matches!(c, ClientCommand::ItemQuery { .. })),
+            "{chunk}: nothing asked"
+        );
+        let (tx, rx) = crossbeam_channel::unbounded();
+        sent.into_iter().for_each(|c| tx.send(c).unwrap());
+        assert_eq!(equips_and_duels(&rx), [send], "{chunk}");
+        assert_eq!(
+            app.world()
+                .resource::<crate::ui_bind_confirm::PendingEquips>()
+                .live(),
+            0,
+            "{chunk}: nothing parked"
+        );
+    }
 }
 
 /// A bind-on-equip record's answer replays `AutoEquipCursorItem` inside its handler, which asks

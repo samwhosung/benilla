@@ -6,10 +6,9 @@
 //! ours set up or changing its stack count unlocks its entry or itself (`0x5d8590`, `0x5d85ab`,
 //! `0x5d94af`, `0x5d94ca`); a sale's refusal's on the item lane too (`0x5dd26b`); an inventory
 //! refusal's on its own lane ([`super::EquipErrors`]); a loot close's and the copier's ending's on
-//! the loot lane ([`crate::ui_loot::close_interaction`]). What is left here is the locks whose
-//! objects went ([`forget_gone_item_locks`]).
-
-use std::collections::HashMap;
+//! the loot lane ([`crate::ui_loot::close_interaction`]). The lock goes silently with its object
+//! where the object is freed, on the item lane at the free's place ([`crate::item_watch::Freed`]);
+//! what is left here is the lock's life across a `/reload`.
 
 use benilla_ui::script::UiScript;
 use bevy::prelude::*;
@@ -52,8 +51,7 @@ pub(crate) fn fold_dying_vm_item_locks(world: &mut World) {
 }
 
 /// Seat the new VM's locks and cursor before any file or event runs on it: a `/reload`'s are the
-/// dying VM's, a world entry's none. A world entry's watch starts over ([`LockWatch`]); a
-/// `/reload`'s carries on.
+/// dying VM's, a world entry's none, as its item objects are built afresh.
 pub(crate) fn seed_vm_item_locks(world: &mut World, script: &mut UiScript, reload: bool) {
     let held = world
         .get_resource_mut::<HeldItemLocks>()
@@ -64,128 +62,5 @@ pub(crate) fn seed_vm_item_locks(world: &mut World, script: &mut UiScript, reloa
         script.seed_held_cursor(held.cursor);
     } else {
         script.seed_item_locks(Vec::new());
-        if let Some(mut watch) = world.get_resource_mut::<LockWatch>() {
-            *watch = LockWatch::default();
-        }
-    }
-}
-
-/// The entity behind each locked item, as last seen: the lock is the object's, so one that is
-/// despawned or rebuilt under the same guid drops it.
-#[derive(Default, Resource)]
-pub(crate) struct LockWatch {
-    lock_owners: HashMap<u64, Entity>,
-}
-
-/// Forget the locks whose objects went: a locked item whose object went away, or came back as a
-/// new one (a cross-map worldport rebuilds them all), loses the lock silently, as it lived on the
-/// old object and the new one is built unlocked (`0x5d821f`, `0x5d823e`). No event fires.
-pub(crate) fn forget_gone_item_locks(
-    mut vm: crate::script_calls::HostedVm,
-    index: Res<crate::net::GuidIndex>,
-    mut watch: ResMut<LockWatch>,
-) {
-    vm.run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        let mut owners = HashMap::new();
-        for guid in script.item_locks() {
-            let now = index.0.get(&guid).copied();
-            let was = watch.lock_owners.get(&guid).copied();
-            match now {
-                Some(e) if was.is_none_or(|w| w == e) => {
-                    owners.insert(guid, e);
-                }
-                _ => script.forget_item_lock(guid),
-            }
-        }
-        watch.lock_owners = owners;
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use benilla_protocol::ObjectFields;
-
-    const A: u64 = 0x4000_0000_0000_00a1;
-    const ME: u64 = 0x2a;
-    const F_OBJECT_TYPE: u16 = 2;
-    const F_OBJECT_ENTRY: u16 = 3;
-    const F_ITEM_OWNER: u16 = 6;
-    const F_ITEM_STACK_COUNT: u16 = 14;
-    const ARROWS: u32 = 2512;
-
-    fn arrows(count: u32) -> ObjectFields {
-        ObjectFields::from_pairs(&[
-            (F_OBJECT_TYPE, 0x3),
-            (F_ITEM_OWNER, ME as u32),
-            (F_ITEM_OWNER + 1, 0),
-            (F_OBJECT_ENTRY, ARROWS),
-            (F_ITEM_STACK_COUNT, count),
-        ])
-    }
-
-    /// The lock watch over a world with the arrows as an item object, and a VM that counts
-    /// `ITEM_LOCK_CHANGED`.
-    fn arrow_world() -> App {
-        let mut app = App::new();
-        app.init_resource::<crate::items::Items>()
-            .init_resource::<LockWatch>()
-            .init_resource::<crate::net::GuidIndex>()
-            .add_systems(Update, forget_gone_item_locks);
-        crate::items::test_spawn_item(app.world_mut(), A, arrows(200), false);
-        let script = UiScript::new().unwrap();
-        script
-            .run(
-                "SEEN = {} local f = CreateFrame('Frame') f:RegisterEvent('ITEM_LOCK_CHANGED') \
-                 f:SetScript('OnEvent', function() table.insert(SEEN, event) end)",
-            )
-            .unwrap();
-        app.insert_non_send_resource(script);
-        app.update();
-        app
-    }
-
-    fn heard(app: &mut App) -> usize {
-        let script = app.world_mut().non_send_resource_mut::<UiScript>();
-        let n = script.eval::<usize>("return table.getn(SEEN)").unwrap();
-        script.run("SEEN = {}").unwrap();
-        n
-    }
-
-    /// The lock is the item object's: one rebuilt under the same guid (a cross-map worldport)
-    /// comes back unlocked (`0x5d821f`, `0x5d823e`), and one despawned takes its lock with it,
-    /// with no event either way.
-    #[test]
-    fn a_rebuilt_or_despawned_item_loses_its_lock_silently() {
-        let mut app = arrow_world();
-        app.world_mut()
-            .non_send_resource_mut::<UiScript>()
-            .lock_item(A);
-        app.update();
-        let _ = heard(&mut app);
-        let old = app.world().resource::<crate::net::GuidIndex>().0[&A];
-        app.world_mut().despawn(old);
-        crate::items::test_spawn_item(app.world_mut(), A, arrows(200), false);
-        app.update();
-        assert!(!app.world().non_send_resource::<UiScript>().item_locked(A));
-        assert_eq!(heard(&mut app), 0, "no event for the rebuild");
-
-        app.world_mut()
-            .non_send_resource_mut::<UiScript>()
-            .lock_item(A);
-        app.update();
-        let _ = heard(&mut app);
-        let e = app.world().resource::<crate::net::GuidIndex>().0[&A];
-        app.world_mut().despawn(e);
-        app.world_mut()
-            .resource_mut::<crate::net::GuidIndex>()
-            .0
-            .remove(&A);
-        app.update();
-        assert!(!app.world().non_send_resource::<UiScript>().item_locked(A));
-        assert_eq!(heard(&mut app), 0, "no event for the drop itself");
     }
 }

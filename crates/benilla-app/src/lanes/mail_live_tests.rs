@@ -692,8 +692,9 @@ fn a_paper_picked_up_between_rebuilds_changes_nothing_until_the_next() {
 }
 
 /// Each `GetSendMailItem` call before the record answers keeps its own callback `0x4ae710`
-/// (dedupe flag 0, `0x4ae5ea`), while the cache sends the one query in flight: two calls, one
-/// query, two `MAIL_SEND_INFO_UPDATE` at the answer (`0x4ae71f`).
+/// (dedupe flag 0, `0x4ae5ea`), while the cache holds the one query in flight, the item's create's
+/// (`0x5d8300`): two calls, no query of theirs, two `MAIL_SEND_INFO_UPDATE` at the answer
+/// (`0x4ae71f`).
 #[test]
 fn two_attachment_reads_before_the_answer_send_one_query_and_two_updates() {
     let mut c = client();
@@ -713,7 +714,7 @@ fn two_attachment_reads_before_the_answer_send_one_query_and_two_updates() {
         .into_iter()
         .filter(|s| s.starts_with("ItemQuery"))
         .count();
-    assert_eq!(queries, 1, "one query in flight");
+    assert_eq!(queries, 0, "the create's query is in flight");
     c.frame(vec![vec![SessionEvent::ItemTemplate {
         entry: WOOL,
         info: Some(Box::new(crate::items::test_template("Wool Cloth"))),

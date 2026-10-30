@@ -30,6 +30,9 @@ pub(crate) struct ItemSteps<'w, 's> {
     purse: Option<crate::ui_merchant::RepairPurse<'w, 's>>,
     /// The bags the bind answer's re-issue reads, the host being out while it applies.
     bags: Option<super::BagLive<'w, 's>>,
+    /// The tables a record's copy is built through, for a lookup the VM's copy missed
+    /// ([`super::feed::seat_record`]).
+    records: super::feed::RecordViews<'w>,
 }
 
 impl ItemSteps<'_, '_> {
@@ -45,6 +48,7 @@ impl ItemSteps<'_, '_> {
             merchant,
             purse,
             bags,
+            records,
         } = self;
         let store = self_q.iter().next();
         // The verbs' own reads of the bags, with the host out while it applies.
@@ -57,8 +61,28 @@ impl ItemSteps<'_, '_> {
                     crate::ui_bind_confirm::PendingEquip::swap(&mv, None),
                 );
             }
-            ItemCall::SwapWait { mv, entry } => gate.park_swap(&mv, entry, items, net),
-            ItemCall::AutoEquipWait { entry } => gate.await_auto_equip(entry, items, net),
+            // The question's lookup missed the VM's copy with no host lent to read the cache
+            // through (an engine turn's call): a record the cache holds is acted on inside the
+            // call (`0x5e163b`), its copy seated and the verb run again on it; only a record the
+            // cache lacks parks the move or waits (`0x5e0dbe`, `0x5e1603`).
+            ItemCall::SwapWait { mv, entry } => {
+                if super::feed::seat_record(script, records, items, entry) {
+                    if let Err(e) = script.replay_swap(mv) {
+                        debug!("ui_items: swap on cached record {entry} raised: {e}");
+                    }
+                } else {
+                    gate.park_swap(&mv, entry, items, net);
+                }
+            }
+            ItemCall::AutoEquipWait { entry } => {
+                if super::feed::seat_record(script, records, items, entry) {
+                    if let Err(e) = script.replay_auto_equip(entry) {
+                        debug!("ui_items: auto-equip on cached record {entry} raised: {e}");
+                    }
+                } else {
+                    gate.await_auto_equip(entry, items, net);
+                }
+            }
             // The destination is a bag, not a slot (`0x4c7c00` into `0x5e12e0`):
             // `CMSG_AUTOSTORE_BAG_ITEM` names `(srcbag, srcslot, dstbag)` and the server picks the
             // slot. A split carry sends `CMSG_SPLIT_ITEM` instead (`0x5e1210`, the fork on

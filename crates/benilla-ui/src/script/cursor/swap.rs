@@ -94,7 +94,10 @@ pub(crate) fn swap_items(lua: &Lua, model: &mut Model, mv: ContainerMove, confir
     let question = match other_end(lua, model, &mv) {
         OtherEnd::NoBag => return Swap::NoBag(mv),
         OtherEnd::Unasked => Question::Send,
-        OtherEnd::Item(item) => equip_question(lua, model, item, confirm),
+        OtherEnd::Item(item) => {
+            let record = crate::script::item_stats::cached_record(lua, model, item.item_id);
+            equip_question(lua, model, item, record.as_ref(), confirm)
+        }
     };
     let (swap, call) = match question {
         Question::Ask => (Swap::Asked(mv.clone()), ItemCall::SwapAsk(mv)),

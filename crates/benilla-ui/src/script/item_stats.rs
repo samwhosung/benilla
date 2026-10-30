@@ -236,7 +236,15 @@ pub(super) fn item_refusal_by_id(
     if item_id == 0 {
         return None;
     }
-    let v = model.item_templates.get(&item_id)?;
+    record_refusal(lua, model, model.item_templates.get(&item_id)?)
+}
+
+/// [`item_refusal`] on the record `v`, against the player as the call runs.
+pub(super) fn record_refusal(
+    lua: &Lua,
+    model: &super::Model,
+    v: &ItemTemplateView,
+) -> Option<&'static str> {
     let req = super::requirements::player_req(lua, model);
     // With no active player every predicate caller reads the item usable (`0x4fb293`).
     if matches!(req, super::requirements::ReqNow::NoPlayer) {
@@ -376,6 +384,97 @@ pub(crate) fn live_item_set(lua: &Lua, id: u32) -> Option<Option<ItemSetView>> {
 /// Set `id`'s block now ([`live_item_set`]), else the VM's copy.
 pub(crate) fn item_set(lua: &Lua, model: &Model, id: u32) -> Option<ItemSetView> {
     live_item_set(lua, id).unwrap_or_else(|| model.item_sets.get(&id).cloned())
+}
+
+/// The question: item `0`'s record as the call finds it in the item cache (`0x55ba30`), its spell
+/// lines expanded against the active player as it stands, as the tooltip build expands each at the
+/// build (`0x5075f0` at `0x52da24`), and its reputation line's label gendered by it (`0x52d80f`);
+/// `None` for a record the cache lacks.
+pub struct ItemViewQuery(pub u32);
+
+/// A record's view as the host builds it at the call: the view, its spell lines' texts and its
+/// reputation line left to the VM's strings where they show.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LiveItemView {
+    /// The record, each spell line's text empty and the reputation line `None`.
+    pub view: ItemTemplateView,
+    /// Each spell line's expanded description, in [`ItemTemplateView::spell_lines`]' order.
+    pub spell_texts: Vec<super::TooltipText>,
+    /// The reputation requirement's faction name (`UNKNOWN` for a faction with no row,
+    /// `0x838044`) and whether its standing label is the female one.
+    pub rep: Option<(String, bool)>,
+}
+
+impl super::live::LiveQuery for ItemViewQuery {
+    type Answer = Option<LiveItemView>;
+}
+
+impl LiveItemView {
+    /// The view with its texts read from the VM's strings now: a description that comes out empty
+    /// drops its line (`0x52da29`), and an install without `ITEM_REQ_REPUTATION` shows no
+    /// reputation line.
+    pub(crate) fn resolve(self, lua: &Lua) -> ItemTemplateView {
+        let LiveItemView {
+            mut view,
+            spell_texts,
+            rep,
+        } = self;
+        view.spell_lines = std::mem::take(&mut view.spell_lines)
+            .into_iter()
+            .zip(spell_texts)
+            .filter_map(|(line, text)| {
+                Some(ItemSpellLine {
+                    text: text.line(lua)?,
+                    ..line
+                })
+            })
+            .collect();
+        view.required_rep_line = rep.and_then(|(faction, female)| {
+            reputation_line(
+                crate::strings::Strings::Vm(lua),
+                &faction,
+                view.required_rep_rank,
+                female,
+            )
+        });
+        view
+    }
+}
+
+/// Item `id`'s record as the call runs, through the lent host: `Some(None)` for a record the
+/// cache lacks, `None` with no host lent, where the VM's copy answers, which a harness or a
+/// capture seats. The texts are read from the VM's strings now.
+pub(crate) fn live_record(lua: &Lua, id: u32) -> Option<Option<ItemTemplateView>> {
+    let live = super::live::ask(lua, &ItemViewQuery(id))?;
+    Some(live.map(|v| v.resolve(lua)))
+}
+
+/// Item `id`'s record as the call finds it in the item cache (`0x55ba30`), its texts unread:
+/// through the lent host, else the VM's copy in `model`. The equip questions read no text.
+pub(crate) fn cached_record(lua: &Lua, model: &Model, id: u32) -> Option<ItemTemplateView> {
+    match super::live::ask(lua, &ItemViewQuery(id)) {
+        Some(live) => live.map(|v| v.view),
+        None => model.item_templates.get(&id).cloned(),
+    }
+}
+
+/// "Requires <Faction> - <Standing>" (`ITEM_REQ_REPUTATION`, `0x854b8c`): the faction, then the
+/// standing's label, gendered (`0x52d80f`) and empty for an absent one; `None` when the install
+/// lacks the key.
+pub fn reputation_line(
+    strings: crate::strings::Strings<'_>,
+    faction: &str,
+    rank: u32,
+    female: bool,
+) -> Option<String> {
+    let standing = crate::strings::standing_label(strings, rank, female);
+    Some(crate::strings::fill(
+        &strings.global("ITEM_REQ_REPUTATION")?,
+        &[
+            crate::strings::Arg::S(faction),
+            crate::strings::Arg::S(&standing),
+        ],
+    ))
 }
 
 #[cfg(any(test, feature = "test-support"))]

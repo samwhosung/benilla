@@ -338,6 +338,11 @@ pub(crate) struct LootState {
     /// (`0x48f264` → `0x4c1fa0`), run by its step on the lane ([`Step::Sweep`]), which holds the
     /// VM; a response or a close since cancels it.
     sweep_owed: bool,
+    /// The owed sweep's close ran in its item source's own deactivate, the item still in the live
+    /// table (`0x46496f`): the sweep, which the reference runs inside that close (`0x48f264`),
+    /// reads the source resolving at its end (`0x4c2228` → `0x4c2a8c`), though the release has
+    /// unlinked it by the time the lane fires.
+    sweep_source_live: bool,
     /// The `UnlockItem` (`0x495420`) calls a close owes on an item source that a call or a turn
     /// runs in place, after its line ([`close_interaction_in_place`]); a window's clear keeps
     /// them. The flag marks a window source's, owed only while the guid resolves as a live item
@@ -368,7 +373,7 @@ impl LootState {
         // ahead of the step whose firing signals the ended session's `LOOT_CLOSED` (`0x4c1dac`),
         // and clears the money line's flag (`0x4c1d95`).
         if let Some(old) = self.window.source {
-            self.queue_source_unlocks(old, 1);
+            self.queue_source_unlocks(old, 1, Source::CheckedAtTheFire);
             self.coin_line_shown = false;
         }
         let ended = Window {
@@ -392,6 +397,7 @@ impl LootState {
         };
         self.pending_bind_confirm = None; // `0x4c1df5`
         self.sweep_owed = false;
+        self.sweep_source_live = false;
         self.copier_due = true;
         self.queue(Step::Opened {
             ended,
@@ -675,6 +681,7 @@ impl LootState {
         }
         self.copier_due = false;
         self.sweep_owed = false;
+        self.sweep_source_live = false;
         open
     }
 
@@ -738,10 +745,12 @@ impl LootState {
 
     /// `n` of the window teardown's `UnlockItem`s on its source, on the lane at the caller's
     /// place, ahead of what it queues next: each runs only while the source resolves as a live
-    /// item object (`0x48f299`/`0x48f2ab`, `0x4c1cdf`/`0x4c1d23`), checked as the step fires.
-    fn queue_source_unlocks(&mut self, guid: u64, n: usize) {
+    /// item object (`0x48f299`/`0x48f2ab`, `0x4c1cdf`/`0x4c1d23`), checked as the step fires
+    /// unless the caller knows it does ([`Source`]).
+    fn queue_source_unlocks(&mut self, guid: u64, n: usize, source: Source) {
         if benilla_protocol::guid::is_item(guid) {
-            self.queue(Step::Unlocks(vec![(guid, true); n], self.window.clone()));
+            let checked = source == Source::CheckedAtTheFire;
+            self.queue(Step::Unlocks(vec![(guid, checked); n], self.window.clone()));
         }
     }
 
@@ -797,6 +806,16 @@ impl LootState {
         self.window
             .source
             .is_some_and(|source| objects.entity(source).is_some())
+            && !self.window.is_empty()
+    }
+
+    /// [`Self::has_contents`] at a sweep's end (`0x4c2228`), which reads the source resolving
+    /// when its close found it live ([`Self::sweep_source_live`]), the fact spent.
+    pub(super) fn sweep_has_contents(&mut self, objects: &crate::net::Objects) -> bool {
+        let live = std::mem::take(&mut self.sweep_source_live);
+        self.window
+            .source
+            .is_some_and(|source| live || objects.entity(source).is_some())
             && !self.window.is_empty()
     }
 
@@ -1433,6 +1452,9 @@ fn fire_step(vm: &mut LootVm, reads: &LootReads, step: Step) {
                 }
             });
             run_then(vm);
+            // A sweep that stopped short of its end leaves the fact to no other.
+            let (mut steps, _) = vm.own();
+            steps.loot.sweep_source_live = false;
         }
         Step::Push(r, at) => on_its_window(vm, at, |vm| {
             let still = emit_pushes(vm, vec![r], &reads.pushes());
@@ -1471,6 +1493,7 @@ fn end_superseded_open<X: bevy::ecs::system::SystemParam + 'static>(
     let loot = &mut *s.loot;
     loot.coin_line_shown = false;
     loot.sweep_owed = false;
+    loot.sweep_source_live = false;
     loot.pending_bind_confirm = None;
 }
 
@@ -1715,7 +1738,41 @@ pub(crate) fn close_interaction(
     latch: &mut LootLatch,
     release: Option<&NetCommands>,
 ) -> Option<u64> {
-    close_with(loot, latch, release, Unlocks::OnTheLane)
+    close_with(
+        loot,
+        latch,
+        release,
+        Unlocks::OnTheLane(Source::CheckedAtTheFire),
+    )
+}
+
+/// `EndLootWindow 0x48f200(1, 0, 0)` from an engine step: nothing with no window (`0x48f23f`); a
+/// disenchant window with rows left owes its sweep (`0x48f24f`, `0x48f264`); any other closes with
+/// its release ([`close_interaction`]). The selection teardown's (`0x493974`) and our own death's
+/// (`0x5e9a5c`).
+pub(crate) fn end_loot_window(loot: &mut LootState, latch: &mut LootLatch, net: &NetCommands) {
+    end_window_with(loot, latch, net, Source::CheckedAtTheFire);
+}
+
+/// [`end_loot_window`] from the item source's own deactivate (`0x5d869b`), which runs while the
+/// item is still in the live table (`0x46496f`, ahead of its unlink after `0x464974`): both of
+/// the close's `UnlockItem`s find it (`0x48f299`, `0x4c1cdf`), though the release has unlinked it
+/// by the time the lane fires.
+pub(crate) fn end_loot_window_on_its_item(
+    loot: &mut LootState,
+    latch: &mut LootLatch,
+    net: &NetCommands,
+) {
+    end_window_with(loot, latch, net, Source::LiveAtTheClose);
+}
+
+fn end_window_with(loot: &mut LootState, latch: &mut LootLatch, net: &NetCommands, source: Source) {
+    if loot.disenchant_holds() {
+        loot.owe_sweep();
+        loot.sweep_source_live = source == Source::LiveAtTheClose;
+        return;
+    }
+    close_with(loot, latch, Some(net), Unlocks::OnTheLane(source));
 }
 
 /// [`close_interaction`] for a call or a turn that signals the unlocks and the teardown in place
@@ -1734,8 +1791,17 @@ pub(crate) fn close_interaction_in_place(
 /// Where a close's two unlocks go.
 #[derive(Clone, Copy)]
 enum Unlocks {
-    OnTheLane,
+    OnTheLane(Source),
     InPlace,
+}
+
+/// Where a window source's unlocks learn whether it resolves as a live item object.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Source {
+    /// As the step fires.
+    CheckedAtTheFire,
+    /// It does at the close's place, its caller knows.
+    LiveAtTheClose,
 }
 
 fn close_with(
@@ -1754,8 +1820,8 @@ fn close_with(
     // teardown's `LOOT_CLOSED` (`0x4c1dac`). A move-start close, the one with `dl` set, returns
     // before both and never reaches here with an item.
     match unlocks {
-        Unlocks::OnTheLane => {
-            loot.queue_source_unlocks(source, 2);
+        Unlocks::OnTheLane(live) => {
+            loot.queue_source_unlocks(source, 2, live);
             loot.clear();
         }
         Unlocks::InPlace => {
@@ -1917,7 +1983,12 @@ fn close_on_move_start(
     latch: &mut LootLatch,
     commands: &NetCommands,
 ) -> Option<u64> {
-    move_start_close(loot, latch, commands, Unlocks::OnTheLane)
+    move_start_close(
+        loot,
+        latch,
+        commands,
+        Unlocks::OnTheLane(Source::CheckedAtTheFire),
+    )
 }
 
 /// The move-start close where a packet's handler runs it, the movement guard `0x60e990` with

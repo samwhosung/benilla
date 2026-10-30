@@ -28,6 +28,7 @@ use super::{
 };
 
 mod arrival;
+mod item_deactivate;
 mod update;
 
 pub(crate) use update::{release_unheld, Listed, ReleasePending, Released};
@@ -125,6 +126,11 @@ pub(crate) struct Scene<'w, 's> {
     house: Option<ResMut<'w, crate::ui_auction::HouseLane>>,
     // The loot window's rows and the pushes that wait on an item's record.
     loot: Option<ResMut<'w, crate::ui_loot::LootState>>,
+    /// What an item's deactivate lets go of besides the window above (`0x5d8660`): the loot
+    /// latch, the pending record's cast and the reader.
+    loot_latch: Option<ResMut<'w, crate::ui_loot::LootLatch>>,
+    item_cast: crate::spell::ItemCastLeg<'w>,
+    item_text: crate::ui_item_text::ItemTextLeg<'w>,
     // The group loot rolls and their lines that wait on an item's record.
     loot_rolls: crate::ui_loot_roll::RollRecordAnswers<'w>,
     // The vendor window's row and buy-back callbacks.

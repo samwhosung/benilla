@@ -68,7 +68,7 @@ mod addon_enable;
 pub mod addon_gate;
 mod char_name;
 mod client;
-pub use client::FrameTimeRing;
+pub use client::{BindLocationQuery, FrameTimeRing};
 mod clock;
 mod cooldown_read;
 mod cvar_checks;
@@ -385,8 +385,8 @@ pub(crate) use font_block::{face_loads, font_size_loads, own_font_lua, SAME_FONT
 pub use inspect::{InspectCall, UnitReach, UnitReachQuery, VisibleSlotQuery};
 pub use instance::InstanceCall;
 pub use item_stats::{
-    item_usable, ItemRecipe, ItemSetQuery, ItemSetView, ItemSpellLine, ItemTemplateView,
-    LiveItemSet, PlayerReqState, TaughtSpell,
+    item_usable, reputation_line, ItemRecipe, ItemSetQuery, ItemSetView, ItemSpellLine,
+    ItemTemplateView, ItemViewQuery, LiveItemSet, LiveItemView, PlayerReqState, TaughtSpell,
 };
 pub use item_text::{ItemTextCall, ItemTextCreator, ItemTextQuery, ItemTextState, ItemTextView};
 pub use layout_cache::{AnchorLayout, FrameLayout, LayoutPoint};

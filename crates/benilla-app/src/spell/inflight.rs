@@ -40,6 +40,9 @@ pub(crate) struct PendingCast {
     caster_is_player: bool,
     record_spell: u32,
     record_target: Option<u64>,
+    /// The record's source (`0xceac48 + 0x00`) when it is an item, which the item's deactivate
+    /// compares ([`Self::record_item`]).
+    record_item: Option<u64>,
 }
 
 struct PendingCastState {
@@ -105,6 +108,7 @@ impl PendingCast {
     pub(crate) fn fill_record(&mut self) {
         self.caster_is_player = true;
         self.record_target = None;
+        self.record_item = None;
     }
 
     /// [`Self::fill_record`] for a caster other than the active player (the pet bar's presses
@@ -112,6 +116,20 @@ impl PendingCast {
     pub(crate) fn fill_unit_record(&mut self) {
         self.caster_is_player = false;
         self.record_target = None;
+        self.record_item = None;
+    }
+
+    /// The attempt's source write (`0x6e4f8f`-`0x6e4fa1`): the casting item's guid when the
+    /// attempt got one, else the caster's, which no item's deactivate matches. The auto-repeat
+    /// re-arm writes the caster's (`0x6e747d`), as [`Self::fill_record`] leaves it.
+    pub(crate) fn fill_record_item(&mut self, item: Option<u64>) {
+        self.record_item = item;
+    }
+
+    /// The item the record's source names (`GetPendingCastBlock 0x6e3d40`, `[0xceac48]`), which
+    /// an item's deactivate cancels the record's cast off (`0x5d86ab`-`0x5d86c4`).
+    pub(crate) fn record_item(&self) -> Option<u64> {
+        self.record_item
     }
 
     /// The gate of `AbortCast 0x6e4940`'s events: `SPELLCAST_STOP`, `_FAILED` or `_INTERRUPTED`

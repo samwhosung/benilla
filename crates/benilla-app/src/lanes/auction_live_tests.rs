@@ -521,7 +521,8 @@ const DEPOSIT: &str = "return CalculateAuctionDeposit(120)";
 /// `CalculateAuctionDeposit` and `GetAuctionSellItemInfo` on a sell slot item whose record the
 /// cache lacks answer the miss (`0x4ce2ca`, `0x4ce726`) and keep the callback `0x4ce2f0` with the
 /// item's guid (`0x4ce25e`, `0x4ce5e3`), one per call, which signals `NEW_AUCTION_UPDATE` at the
-/// record's packet (`0x4ce2fa`); the getters then answer its price and the deposit on it.
+/// record's packet (`0x4ce2fa`), their lookups finding the query the item's create sent in
+/// flight (`0x5d8300`); the getters then answer its price and the deposit on it.
 #[test]
 fn a_sell_item_whose_record_lands_later_signals_the_new_auction_update() {
     let guid = item_guid(1);
@@ -533,13 +534,9 @@ fn a_sell_item_whose_record_lands_later_signals_the_new_auction_update() {
         .into_iter()
         .filter(|s| s.starts_with("ItemQuery"))
         .collect();
-    assert_eq!(
-        queries,
-        [format!(
-            "{:?}",
-            crate::net::ClientCommand::ItemQuery { entry: WOOL, guid }
-        )],
-        "one query in flight, with the item's guid"
+    assert!(
+        queries.is_empty(),
+        "the create's query is in flight: {queries:?}"
     );
     c.frame(vec![vec![wool_record()]]);
     assert_eq!(c.eval::<i64>(true, "return Infos"), 2, "one per call");

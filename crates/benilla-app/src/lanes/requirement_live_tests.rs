@@ -22,6 +22,8 @@ const LOCKBOX_ENTRY: u32 = 4632;
 const LOCK_ID: u32 = 7;
 /// A recipe, the craft it teaches, and an item with a required level.
 const RECIPE_ENTRY: u32 = 2406;
+/// The recipe's use spell, a learn (`Effect[0]` 36) whose trigger spell is the craft.
+const LEARN: u32 = 2540;
 const TAUGHT: u32 = 2541;
 const AXE_ENTRY: u32 = 1311;
 /// A crafted item whose maker the name cache lacks, and a charter whose record it lacks.
@@ -58,9 +60,9 @@ fn item(entry: u32, extra: &[(u16, u32)]) -> ObjectFields {
 }
 
 /// The client with us in the world, a level-10 human warrior carrying the lockbox, the key, the
-/// crafted bar and the charter in backpack slots 1 to 4 and their records cached, the VM's copy
-/// pushed as a level-60 player who knows nothing and opens nothing, and the VM's item records and
-/// the lock row seated.
+/// crafted bar and the charter in backpack slots 1 to 4, their records, the recipe's and the axe's
+/// cached, the VM's copy pushed as a level-60 player who knows nothing and opens nothing, and the
+/// VM's item records and the lock row seated.
 fn client() -> (App, Receiver<ClientCommand>) {
     let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
     let (tx, rx) = crossbeam_channel::unbounded();
@@ -100,25 +102,63 @@ fn client() -> (App, Receiver<ClientCommand>) {
         item(CHARTER_ENTRY, &[(ITEM_ENCHANT_0, PETITION_ID)]),
         false,
     );
-    // The records the item cache holds, as the bags read them.
+    // The recipe's learn spell, which its record's view names the craft through.
+    let mut spells = crate::ui_action::Spells::empty_for_tests();
+    spells.catalog =
+        benilla_formats::SpellCatalog::from_displays(std::collections::HashMap::from([(
+            LEARN,
+            benilla_formats::SpellDisplay {
+                id: LEARN,
+                effects: [36, 0, 0],
+                effect_trigger_spell: [TAUGHT, 0, 0],
+                ..Default::default()
+            },
+        )]));
+    world.insert_resource(spells);
+    // The records the item cache holds, which the bags and a build with the host lent read.
     let mut items = world.resource_mut::<crate::items::Items>();
-    for (entry, name, flags) in [
-        (LOCKBOX_ENTRY, "Lockbox", 0),
-        (KEY_ENTRY, "Key", 0),
-        (CRAFTED_ENTRY, "Bar", 0),
+    let record = crate::items::test_template;
+    for (entry, t) in [
+        (
+            LOCKBOX_ENTRY,
+            benilla_protocol::messages::ItemInfo {
+                lock_id: LOCK_ID,
+                ..record("Lockbox")
+            },
+        ),
+        (KEY_ENTRY, record("Key")),
+        (CRAFTED_ENTRY, record("Bar")),
         (
             CHARTER_ENTRY,
-            "Charter",
-            benilla_protocol::messages::ITEM_FLAG_CHARTER,
+            benilla_protocol::messages::ItemInfo {
+                flags: benilla_protocol::messages::ITEM_FLAG_CHARTER,
+                ..record("Charter")
+            },
+        ),
+        (
+            RECIPE_ENTRY,
+            benilla_protocol::messages::ItemInfo {
+                spells: vec![benilla_protocol::messages::ItemSpellEntry {
+                    index: 0,
+                    spell_id: LEARN,
+                    trigger: 0,
+                    charges: 0,
+                    cooldown_ms: -1,
+                    category: 0,
+                    category_cooldown_ms: -1,
+                }],
+                ..record("Recipe")
+            },
+        ),
+        (
+            AXE_ENTRY,
+            benilla_protocol::messages::ItemInfo {
+                required_level: 20,
+                ..record("Axe")
+            },
         ),
     ] {
-        items.insert_template(
-            entry,
-            Some(benilla_protocol::messages::ItemInfo {
-                flags,
-                ..crate::items::test_template(name)
-            }),
-        );
+        items.insert_template(entry, Some(t));
     }
     let mut script = world.non_send_resource_mut::<UiScript>();
     crate::ui_script::test_ui::load_tooltip_template(&script);
@@ -333,6 +373,13 @@ fn set_client() -> (App, Receiver<ClientCommand>) {
             },
         )]));
     world.insert_resource(spells);
+    world.resource_mut::<crate::items::Items>().insert_template(
+        MARK,
+        Some(benilla_protocol::messages::ItemInfo {
+            item_set: SET,
+            ..crate::items::test_template("Defias Mark")
+        }),
+    );
     let mut script = world.non_send_resource_mut::<UiScript>();
     script.set_item_template(
         MARK,

@@ -138,18 +138,26 @@ pub(crate) struct Bridge<'w, 's> {
     mover: Option<ResMut<'w, super::MoverClaim>>,
     /// Our player's far-sight latch, which the teardowns free with it.
     far_sight: Option<Res<'w, crate::player::FarSight>>,
+    /// The item lane, where the teardowns' free takes every item's lock with its object.
+    item_lane: Option<ResMut<'w, crate::item_lane::ItemLane>>,
 }
 
 impl Bridge<'_, '_> {
     /// Every object freed (`0x467700` → `0x467800`), our own player too: the active mover it
-    /// names is zeroed unless its unit is still held (`0x5fb650`), and its far-sight latch goes
-    /// with it ([`crate::player::FarSight::free`]).
+    /// names is zeroed unless its unit is still held (`0x5fb650`), its far-sight latch goes
+    /// with it ([`crate::player::FarSight::free`]), and every item's lock with its item
+    /// ([`crate::item_watch::Freed::All`]).
     fn objects_freed(&mut self) {
         if let Some(mover) = self.mover.as_deref_mut() {
             mover.forget_unless_held(&self.index);
         }
         if let Some(far_sight) = self.far_sight.as_deref() {
             far_sight.free();
+        }
+        if let Some(lane) = self.item_lane.as_deref_mut() {
+            lane.push(crate::item_watch::Run::freeing(
+                crate::item_watch::Freed::All,
+            ));
         }
     }
 }

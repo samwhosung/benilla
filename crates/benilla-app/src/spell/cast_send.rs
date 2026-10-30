@@ -1103,14 +1103,15 @@ fn send_spell_cast(
             None => return,
         }
     }
-    // Every rung passed: the attempt fills the pending record with the spell (`0x6e4f88`) and its
-    // caster (`0x6e4fb1`), ahead of the arm and whatever it decides.
+    // Every rung passed: the attempt fills the pending record with the spell (`0x6e4f88`), its
+    // source (`0x6e4fa1`) and its caster (`0x6e4fb1`), ahead of the arm and whatever it decides.
     if player_caster {
         core.pending.fill_record();
     } else {
         core.pending.fill_unit_record();
     }
     core.pending.fill_record_spell(spell_id);
+    core.pending.fill_record_item(commit.item_guid());
     // The arm's bind writes the record's target (`0x6e5b40`, `0x6e5454`), which a unit's death
     // reads (`0x6058c7`).
     if let Some(guid) = target.or(explicit_object).or(parked) {
@@ -2506,6 +2507,31 @@ mod tests {
             );
             assert!(world.resource::<CastReports>().refusals().is_empty());
         }
+    }
+
+    /// The attempt writes the record's source (`0x6e4f8f`-`0x6e4fa1`) whether or not the slot
+    /// takes the spell: the used item's guid, which the item's deactivate cancels the record's cast
+    /// off (`0x5d86c4`); a spell's attempt writes its caster's, which names no item.
+    #[test]
+    fn the_attempt_records_the_used_item_as_its_source() {
+        const MINOR_HEALING_POTION: u32 = 118;
+        const POTION_SPELL: u32 = 439;
+        const POTION: u64 = 0x4000_0000_0000_0042;
+        let potion = CastCommit::Item {
+            bag_index: 255,
+            slot: 25,
+            entry: MINOR_HEALING_POTION,
+            guid: Some(POTION),
+            spell_index: 0,
+            on_object: None,
+        };
+        let (mut world, rx) = world();
+        send(&mut world, POTION_SPELL, potion);
+        assert!(matches!(rx.try_recv(), Ok(ClientCommand::UseItem { .. })));
+        let record = |world: &World| world.resource::<crate::spell::PendingCast>().record_item();
+        assert_eq!(record(&world), Some(POTION), "the potion's attempt");
+        send(&mut world, MOUNT, CastCommit::Spell);
+        assert_eq!(record(&world), None, "a spell's attempt");
     }
 
     /// The spell awaiting its click is in flight (`0x6e5026` precedes the arm that raises the

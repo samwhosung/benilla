@@ -1,10 +1,19 @@
 //! The client-identity and script verbs: build, locale, realm, bind location and framerate, with
-//! `RunScript` and `FrameXML_Debug`. The realm, bind location and framerate read slots the app
-//! pushes.
+//! `RunScript` and `FrameXML_Debug`. The realm and framerate read slots the app pushes; the bind
+//! location reads the bind point at the call ([`BindLocationQuery`]).
 
 use mlua::{Lua, MultiValue, Value};
 
 use super::{Model, UiScript};
+
+/// The question: the bind point's area name as `GetBindLocation` reads it at the call
+/// (`0x5ed420`, then the `AreaTable` row's name at `+0x2c`, `0x48db07`); `None` for a zone with no
+/// row, or no bind point yet.
+pub struct BindLocationQuery;
+
+impl super::live::LiveQuery for BindLocationQuery {
+    type Answer = Option<String>;
+}
 
 /// The 1.12.1 client's build identity, as the strings in its binary spell it.
 pub(super) const VERSION: &str = "1.12.1";
@@ -201,18 +210,20 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `GetBindLocation()`: the hearthstone's bind location name, which the instance-boot dialog
-    // formats into its text (`StaticPopup.lua:1742`). A bind zone below 0, past the max or without
-    // an AreaTable row, which is every zone before `SMSG_BINDPOINTUPDATE` lands, answers the
-    // `HOME_INN` text (`48db19`-`48db2c`), never nil.
+    // `GetBindLocation()` (`0x48dae0`): the hearthstone's bind location name, which the
+    // instance-boot dialog formats into its text (`StaticPopup.lua:1742`), read off the bind point
+    // at the call (`0x48dae3` → `0x5ed420`) through the lent host, else the VM's copy. A bind zone
+    // below 0, past the max or without an AreaTable row, which is every zone before
+    // `SMSG_BINDPOINTUPDATE` lands, answers the `HOME_INN` text (`48db19`-`48db2c`), never nil.
     g.set(
         "GetBindLocation",
         lua.create_function(|lua, ()| {
-            let named = lua
-                .app_data_ref::<Model>()
-                .expect("model app_data")
-                .bind_location
-                .clone();
+            let named = super::live::ask(lua, &BindLocationQuery).unwrap_or_else(|| {
+                lua.app_data_ref::<Model>()
+                    .expect("model app_data")
+                    .bind_location
+                    .clone()
+            });
             match named {
                 Some(name) => lua.create_string(name),
                 None => lua.create_string(super::glue_core::global_text(lua, "HOME_INN")),
@@ -249,15 +260,14 @@ impl super::UiScript {
         self.take_calls_like(&super::ScriptCall::OpeningCinematic) as u32
     }
 
-    /// The bind location's name as `GetBindLocation` has it pushed: `None` while the bind zone has
-    /// no AreaTable row, which the `$z` token reads as the `HOME_INN` text.
+    /// The bind location's name as the VM's copy holds it ([`Self::set_bind_location`]).
     pub fn bind_location(&self) -> Option<String> {
         self.model_ref().bind_location.clone()
     }
 
-    /// Push the bind location's name, resolved from `SMSG_BINDPOINTUPDATE`'s AreaTable id through
-    /// the catalog the hearthstone's `$z` uses, so the two agree; `None` until the packet lands, or
-    /// for an area with no row, which `GetBindLocation` answers with the `HOME_INN` text.
+    /// Seat the bind location's name `GetBindLocation` answers with no host lent, as a harness
+    /// seats it; with one lent it reads the bind point at the call ([`BindLocationQuery`]).
+    /// `None` answers the `HOME_INN` text.
     pub fn set_bind_location(&mut self, area_name: Option<&str>) {
         let mut model = self.model_mut();
         if model.bind_location.as_deref() != area_name {
