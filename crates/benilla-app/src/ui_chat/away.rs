@@ -185,6 +185,8 @@ pub(crate) fn reconcile_afk_mirror(
 /// and keyboard turn (`0x514fca`). They sit in the movement emitters, so only a key press
 /// clears; mouse-look turning never reaches `0x514f50`, and knockback, fear and splines press
 /// nothing. Jump is here but not in `player::follow`'s cancel set: two separate reference tables.
+/// A call's own press cleared inside it ([`crate::player::TickLegs`]); this takes the presses no
+/// call settled.
 pub(crate) fn movement_clears_afk(
     // The mirror shares the host's param set, whose chat sends write it too, and so does the
     // registry, whose callbacks run inside the calls that write it, and the input state, which
@@ -212,7 +214,7 @@ pub(crate) fn movement_clears_afk(
         Input::TurnRight,
     ]
     .iter()
-    .any(|&c| binds.just_pressed(c));
+    .any(|&c| binds.just_pressed(c) && !binds.settled(c));
     if !moved {
         return;
     }

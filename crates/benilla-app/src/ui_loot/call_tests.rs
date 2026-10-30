@@ -185,6 +185,12 @@ pub(super) fn feed(l: &mut Loot) {
     super::feed_loot_once(l.app.world_mut());
 }
 
+/// Run `lua` as a key's body, the hardware event raised for the movement gate (`0x494a50(0)`).
+fn bound(l: &mut Loot, lua: &str) {
+    with_hosted_vm(l.app.world_mut(), |s| s.expect("a VM").run_binding(lua))
+        .expect("the chunk runs");
+}
+
 /// Run `lua` with the host lent, as every entry that runs Lua lends it.
 pub(super) fn run(l: &mut Loot, lua: &str) {
     with_hosted_vm(l.app.world_mut(), |s| s.expect("a VM").run(lua)).expect("the chunk runs");
@@ -390,6 +396,99 @@ fn close_loot_closes_inside_its_call() {
     ));
     assert_eq!(seen(&mut l), "LOOT_CLOSED");
     assert_eq!(eval::<i64>(&mut l, "return N"), 0);
+}
+
+/// A movement start's tick closes the loot inside its call (`0x60dc6a` → `0x60e990` →
+/// `0x48f200(1, 1, 0)` at `0x60e9dd`), and so does `Jump` (`0x60deae`, after its gates): the release
+/// is out and `LOOT_CLOSED` has run on the next line. A turn under no mouse button starts too
+/// (`0x60dd55`), and an item's loot stays (`0x48f2ab`). Main closed at the frame's input pass, and
+/// a jump never closed.
+#[test]
+fn a_movement_start_closes_the_loot_inside_its_call() {
+    for start in ["MoveForwardStart()", "TurnLeftStart()", "Jump()"] {
+        let mut l = client();
+        let world = l.app.world_mut();
+        let me = world.resource::<crate::net::GuidIndex>().0[&ME];
+        world.entity_mut(me).insert(crate::net::Embodied);
+        world.init_resource::<crate::player::CameraControl>();
+        world.init_resource::<crate::player::Player>();
+        world.resource_mut::<crate::player::Player>().active = true;
+        open(&mut l, CORPSE, 1, 0, vec![row(0, LINEN)]);
+        let _ = (seen(&mut l), sent(&l));
+        bound(&mut l, &format!("{start} N = GetNumLootItems()"));
+        assert!(
+            matches!(sent(&l)[..], [ClientCommand::LootRelease { guid: CORPSE }]),
+            "{start}"
+        );
+        assert_eq!(seen(&mut l), "LOOT_CLOSED", "{start}");
+        assert_eq!(eval::<i64>(&mut l, "return N"), 0, "{start}");
+        bound(&mut l, "MoveForwardStop() TurnLeftStop()");
+        open(&mut l, LOCKBOX, 1, 0, vec![row(0, LINEN)]);
+        let _ = (seen(&mut l), sent(&l));
+        bound(&mut l, "StrafeLeftStart()");
+        assert!(sent(&l).is_empty(), "an item's loot stays");
+    }
+}
+
+/// A swimmer's pitch start runs the movement guard too (`0x60ddaa` → `0x60e990` → `0x48f200`): the
+/// loot closes inside the call.
+#[test]
+fn a_swimmers_pitch_start_closes_the_loot_inside_its_call() {
+    let mut l = client();
+    let world = l.app.world_mut();
+    let me = world.resource::<crate::net::GuidIndex>().0[&ME];
+    world.entity_mut(me).insert(crate::net::Embodied);
+    world.init_resource::<crate::player::CameraControl>();
+    world.insert_resource(crate::player::Player::with_move_flags(
+        crate::creature_anim::move_flags::SWIMMING,
+    ));
+    world.resource_mut::<crate::player::Player>().active = true;
+    open(&mut l, CORPSE, 1, 0, vec![row(0, LINEN)]);
+    let _ = (seen(&mut l), sent(&l));
+    bound(&mut l, "PitchDownStart() N = GetNumLootItems()");
+    assert!(matches!(
+        sent(&l)[..],
+        [ClientCommand::LootRelease { guid: CORPSE }]
+    ));
+    assert_eq!(seen(&mut l), "LOOT_CLOSED");
+    assert_eq!(eval::<i64>(&mut l, "return N"), 0);
+}
+
+/// A swimmer's pitch edge, the start and the stop alike, runs the movement guard inside its call
+/// (`0x60ddaa`, `0x60ddda` → `0x60e990(1, 0)`), which stops the auto-move (`0x60e9b5`) before it
+/// ends the loot window (`0x60e9dd`): a follow's `AUTOFOLLOW_END` runs ahead of `LOOT_CLOSED`.
+#[test]
+fn a_pitch_edge_ends_the_follow_then_closes_the_loot_inside_its_call() {
+    for (before, edge) in [
+        ("", "PitchDownStart()"),
+        ("PitchDownStart()", "PitchDownStop()"),
+    ] {
+        let mut l = client();
+        let world = l.app.world_mut();
+        let me = world.resource::<crate::net::GuidIndex>().0[&ME];
+        world.entity_mut(me).insert(crate::net::Embodied);
+        world.init_resource::<crate::player::CameraControl>();
+        world.insert_resource(crate::player::Player::with_move_flags(
+            crate::creature_anim::move_flags::SWIMMING,
+        ));
+        world.resource_mut::<crate::player::Player>().active = true;
+        run(
+            &mut l,
+            r#"local g = CreateFrame("Frame") g:RegisterEvent("AUTOFOLLOW_END")
+            g:SetScript("OnEvent", function() tinsert(SEEN, event) end)"#,
+        );
+        if !before.is_empty() {
+            bound(&mut l, before);
+        }
+        l.app
+            .world_mut()
+            .resource_mut::<crate::player::FollowState>()
+            .start(0x77, "Bob".into());
+        open(&mut l, CORPSE, 1, 0, vec![row(0, LINEN)]);
+        let _ = (seen(&mut l), sent(&l));
+        bound(&mut l, edge);
+        assert_eq!(seen(&mut l), "AUTOFOLLOW_END,LOOT_CLOSED", "{edge}");
+    }
 }
 
 /// The verbs apply in call order. `GiveMasterLoot` after `CloseLoot` finds no source

@@ -836,8 +836,8 @@ pub(crate) use gesture::{select_gesture, Gesture, GestureQueue};
 
 /// The Bevy systems that execute the state machine `select` picks.
 mod driver;
-pub(crate) use driver::oneshot_is_live;
 use driver::{drive_animations, drive_hand_grip};
+pub(crate) use driver::{oneshot_is_live, toggle_model_refuses};
 
 /// The model event-keyframe scanner.
 mod events;

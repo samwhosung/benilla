@@ -1140,6 +1140,9 @@ pub(crate) fn run_pending_reload(world: &mut World) {
         if let Some(mut rig) = world.get_resource_mut::<crate::player::CameraControl>() {
             rig.world_mouse.release_all();
         }
+        if let Some(mut binds) = world.get_resource_mut::<crate::bindings::BindingsState>() {
+            binds.release_primaries();
+        }
         if let Some(mut arm) = world.get_resource_mut::<crate::target::ClickArm>() {
             arm.disarm();
         }

@@ -304,6 +304,10 @@ pub enum ScriptCall {
     /// (`0x515090`) with the cast cancel a new direction makes (`0x5150ce`-`0x515193`), a
     /// one-shot, or a camera axis.
     Input(super::BindingInput),
+    /// A look-session call ([`super::LookCall`]) on the camera's mouse state, inside the call:
+    /// `MouselookStart`/`Stop`'s TurnOrAction bit through `SetCommands` (`0x514231`, `0x51425b`),
+    /// `ToggleMouseMove` (`0x50f910`) or a mouse bit's release argument.
+    Look(super::LookCall),
     /// `DropItemOnUnit(unit)` (`0x48d960`) on the token: the trade leg, then the pet leg's feed
     /// on the unit it names, inside the call.
     DropItemOnUnit(String),

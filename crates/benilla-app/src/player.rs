@@ -95,9 +95,11 @@ use controller::control;
 pub(crate) use controller::LookSample;
 // The private camera and `state` items are re-imported for the modules beside this one, which
 // name them `super::X`.
-pub(crate) use camera::{head_height, CameraControl, CameraPivot, LookConfig, PressGesture};
+pub(crate) use camera::{
+    head_height, CameraControl, CameraPivot, LookConfig, LookLive, LookSteps, Looked, PressGesture,
+};
 use camera::{model_pivot_height, run_look_session, FlyCam, LookButton};
-use camera_zoom::{apply_zoom_scroll, CAM_DIST_DEFAULT};
+use camera_zoom::{glide_zoom, CAM_DIST_DEFAULT};
 // `/follow`: chat sends the request, `crate::target` resolves the subject into the state, and
 // `follow` owns the motion.
 #[cfg(test)]
@@ -110,8 +112,8 @@ pub(crate) use approach::{
     ApproachVerb, AutoMove, AutoMoveStop, Refused, Subject, RANGE_STOP_FRACTION, TALK_STOP,
 };
 /// `SetStandState` run inside a script call.
-pub(crate) use posture::{stand_up_for_attack, stand_up_refused, StandSetter};
-pub(crate) use press::{CallAutorun, CommandSteps};
+pub(crate) use posture::{stand_up_for_attack, stand_up_refused, SheathToggle, StandSetter};
+pub(crate) use press::{CallAutorun, Called, CommandSteps, TickLegs};
 pub(crate) use state::{
     view_is_out, MoverInput, MoverLock, OwnControlLost, Player, PlayerCapsule, StandPending,
     CAPSULE_HEIGHT, CAPSULE_RADIUS, CREATURE_STEP_UP_HEIGHT, DEFAULT_COLLISION_HEIGHT,
@@ -336,6 +338,7 @@ impl Plugin for PlayerPlugin {
         app.init_resource::<MoverLock>();
         app.init_resource::<StandPending>();
         app.init_resource::<press::CallAutorun>();
+        app.init_resource::<press::CallPitch>();
         app.init_resource::<camera_dynamics::CameraOptions>();
         // Far sight resolves `PLAYER_FARSIGHT` to a pose before `control` seats the camera: a
         // separate system, as `control` holds our `Transform` mutably and cannot read another's.
@@ -472,6 +475,7 @@ impl Plugin for PlayerPlugin {
             Update,
             (
                 controller::sample_look,
+                camera::focus_on_look_edges,
                 press::press_commands,
                 press::press_tick,
             )

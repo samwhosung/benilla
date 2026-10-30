@@ -484,3 +484,189 @@ fn an_on_mouse_up_that_unpushes_the_button_cancels_the_click() {
     press_release(&mut s);
     assert_eq!(log_of(&mut s), "A:enter A:down:LeftButton up:PUSHED");
 }
+
+// ── The focus change (`0x764dc0`) ────────────────────────────────────────────────────────────
+
+/// `two_frames` with a `WorldFrame` under them, the cursor on A.
+fn under_the_world_frame(kind: &str) -> UiScript {
+    let mut s = two_frames(kind);
+    s.run(r#"WorldFrame = CreateFrame("WorldFrame", "WorldFrame") WorldFrame:SetAllPoints()"#)
+        .unwrap();
+    s.resolve();
+    s.mouse_move(200.0, 300.0);
+    s
+}
+
+fn focus(s: &UiScript) -> String {
+    s.eval::<String>("return GetMouseFocus():GetName()")
+        .unwrap()
+}
+
+/// The focus change with the world frame (`0x764dc0`): the hover's leave (`0x764ddf`), then the
+/// press A holds gets its button-up with the press's button (`0x764e98`), and the capture goes
+/// (`0x764e9b`): the real release reaches no frame, and no click fires at the zeroed point.
+#[test]
+fn the_focus_change_leaves_the_hover_then_releases_the_held_press() {
+    let mut s = under_the_world_frame("Button");
+    s.run(r#"A:SetScript("OnClick", function() table.insert(log, "A:click") end)"#)
+        .unwrap();
+    s.mouse_button(200.0, 300.0, "LeftButton", true);
+    s.focus_world_frame();
+    assert_eq!(focus(&s), "WorldFrame");
+    assert!(s.model_ref().mouse_capture.is_none());
+    assert_eq!(
+        log_of(&mut s),
+        "A:enter A:down:LeftButton A:leave A:up:LeftButton"
+    );
+    s.mouse_button(200.0, 300.0, "LeftButton", false);
+    assert_eq!(
+        log_of(&mut s),
+        "A:enter A:down:LeftButton A:leave A:up:LeftButton",
+        "no second OnMouseUp and no click"
+    );
+    // With the world frame already the hover and nothing held, it does nothing.
+    s.focus_world_frame();
+    assert_eq!(
+        log_of(&mut s),
+        "A:enter A:down:LeftButton A:leave A:up:LeftButton"
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// The release is the stored event with x and y zeroed (`0x764e87`, `0x764e8e`): a Button over
+/// the origin clicks with the press's button. After a move the stored event is the move's, whose
+/// button is 0 (`0x76615f`), so `OnMouseUp` names it `UNKNOWN` (`0x76c0e5`) and nothing clicks.
+#[test]
+fn the_focus_changes_release_is_the_stored_event_at_the_origin() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"log = {}
+        WorldFrame = CreateFrame("WorldFrame", "WorldFrame") WorldFrame:SetAllPoints()
+        O = CreateFrame("Button", "O")
+        O:SetPoint("BOTTOMLEFT", 0, 0) O:SetWidth(50) O:SetHeight(50) O:EnableMouse(true)
+        O:SetScript("OnMouseUp", function() table.insert(log, "up:"..arg1) end)
+        O:SetScript("OnClick", function() table.insert(log, "click:"..arg1) end)"#,
+    )
+    .unwrap();
+    s.resolve();
+    s.mouse_move(25.0, 25.0);
+    s.mouse_button(25.0, 25.0, "LeftButton", true);
+    s.focus_world_frame();
+    assert_eq!(log_of(&mut s), "up:LeftButton click:LeftButton");
+    s.mouse_button(25.0, 25.0, "LeftButton", false);
+    s.run("log = {}").unwrap();
+    s.mouse_move(20.0, 20.0);
+    s.mouse_button(20.0, 20.0, "LeftButton", true);
+    s.mouse_move(30.0, 30.0);
+    s.focus_world_frame();
+    assert_eq!(log_of(&mut s), "up:UNKNOWN");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// A started drag of the held frame stands: the move that started it is the stored event, whose
+/// button 0 misses the base up's mask test (`0x76c050`), so the frame gets `OnMouseUp` with
+/// `UNKNOWN` and no `OnDragStop`, and its gesture is left as the reference leaves `[+0x104]`.
+#[test]
+fn the_focus_change_leaves_a_started_drag_standing() {
+    let mut s = under_the_world_frame("Frame");
+    s.run(
+        r#"A:RegisterForDrag("LeftButton")
+        A:SetScript("OnDragStart", function() table.insert(log, "A:dragstart") end)
+        A:SetScript("OnDragStop", function() table.insert(log, "A:dragstop") end)"#,
+    )
+    .unwrap();
+    s.mouse_button(200.0, 300.0, "LeftButton", true);
+    s.mouse_move(260.0, 300.0);
+    assert!(
+        log_of(&mut s).ends_with("A:dragstart"),
+        "{}",
+        log_of(&mut s)
+    );
+    s.run("log = {}").unwrap();
+    s.focus_world_frame();
+    assert_eq!(log_of(&mut s), "A:leave A:up:UNKNOWN");
+    assert!(s.model_ref().drag.as_ref().is_some_and(|d| d.started));
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+// ── Who a press belongs to ───────────────────────────────────────────────────────────────────
+
+/// A press while a frame holds a button goes to that frame (`0x76637f`), over the world too, and is
+/// the interface's: the world frame's binding takes none of it.
+#[test]
+fn a_press_while_a_frame_holds_a_button_is_that_frames_over_the_world_too() {
+    let mut s = under_the_world_frame("Frame");
+    s.mouse_button(200.0, 300.0, "LeftButton", true);
+    s.mouse_move(700.0, 300.0);
+    assert!(
+        s.mouse_button(700.0, 300.0, "RightButton", true),
+        "the interface's"
+    );
+    assert!(log_of(&mut s).ends_with("A:leave A:down:RightButton"));
+}
+
+/// A chord's second button over a frame joins the press the world frame holds: it goes to the
+/// world frame (`0x76637f`), whose binding runs, and the frame under the cursor sees none of it.
+#[test]
+fn a_chords_second_button_over_a_frame_joins_the_world_frames_press() {
+    let mut s = under_the_world_frame("Frame");
+    s.run(
+        r#"WorldFrame:SetScript("OnMouseDown", function() table.insert(log, "W:down:"..arg1) end)"#,
+    )
+    .unwrap();
+    s.mouse_move(700.0, 300.0);
+    s.mouse_button(700.0, 300.0, "RightButton", true);
+    s.mouse_move(500.0, 300.0);
+    assert!(
+        !s.mouse_button(500.0, 300.0, "LeftButton", true),
+        "the world frame's"
+    );
+    assert_eq!(
+        log_of(&mut s),
+        "A:enter A:leave W:down:RightButton B:enter W:down:LeftButton"
+    );
+}
+
+/// In freelook the mouse is relative, and with nothing held the hook gives every press and
+/// release to the world frame's slots (`0x492bc1`, `0x492bd9`, `0x492be5`): the frame under the
+/// cursor sees neither, nothing is captured, and the world frame's binding runs.
+#[test]
+fn in_freelook_the_hook_gives_the_world_frame_every_press() {
+    use crate::script::live::LiveAsk;
+    use crate::script::{FreelookQuery, LiveReader, PointerTarget};
+    struct Looking;
+    impl LiveReader for Looking {
+        fn read_live(&mut self, ask: &mut LiveAsk<'_>) -> bool {
+            ask.answer(|_: &FreelookQuery| Some(true))
+        }
+    }
+    let mut s = under_the_world_frame("Frame");
+    s.run(
+        r#"WorldFrame:SetScript("OnMouseDown", function() table.insert(log, "W:down:"..arg1) end)
+        WorldFrame:SetScript("OnMouseUp", function() table.insert(log, "W:up:"..arg1) end)"#,
+    )
+    .unwrap();
+    let (down, held, up) = s.reading(&mut Looking, |s| {
+        let down = s.mouse_button_to(200.0, 300.0, "RightButton", true);
+        let held = s.model_ref().mouse_capture.is_some();
+        let up = s.mouse_button_to(200.0, 300.0, "RightButton", false);
+        (down, held, up)
+    });
+    assert_eq!(
+        (down, held, up),
+        (PointerTarget::World, false, PointerTarget::World)
+    );
+    assert_eq!(
+        log_of(&mut s),
+        "A:enter W:down:RightButton W:up:RightButton"
+    );
+    // A frame holding a button keeps the press, freelook or not.
+    s.run("log = {}").unwrap();
+    s.mouse_button(200.0, 300.0, "LeftButton", true);
+    let target = s.reading(&mut Looking, |s| {
+        s.mouse_button_to(200.0, 300.0, "RightButton", true)
+    });
+    assert_eq!(target, PointerTarget::Ui);
+    assert_eq!(log_of(&mut s), "A:down:LeftButton A:down:RightButton");
+}

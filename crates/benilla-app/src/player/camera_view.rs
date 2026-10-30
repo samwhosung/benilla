@@ -206,6 +206,8 @@ fn load_saved_views(cvars: Res<crate::cvars::Cvars>, mut views: ResMut<CameraVie
 pub(crate) struct ViewSteps<'w, 's> {
     views: Option<ResMut<'w, CameraViews>>,
     rig: Option<ResMut<'w, CameraControl>>,
+    /// `cameraDistanceMoveSpeed`, the zoom's rate (`[0xbe0fbc]+0x24`, `0x50fc63`).
+    zoom: Option<Res<'w, super::camera_zoom::ZoomLimit>>,
     cam: Query<'w, 's, &'static mut FlyCam, With<WorldCamera>>,
     player: Option<Res<'w, Player>>,
     /// Capture parks the camera itself; a view must not move it.
@@ -213,6 +215,26 @@ pub(crate) struct ViewSteps<'w, 's> {
 }
 
 impl ViewSteps<'_, '_> {
+    /// `MoveView*Start`/`Stop` inside the call (`0x50b4b0` → `0x50fd40`, `0x50b4e0` → `0x50fd90`):
+    /// the axis's bits on the rig, which the camera's update runs (`0x5112d0`).
+    pub(crate) fn move_axis(&mut self, axis: benilla_ui::script::ViewAxis, start: bool) {
+        if let Some(rig) = self.rig.as_deref_mut() {
+            rig.view_axes.apply(&[(axis, start)]);
+        }
+    }
+
+    /// `CameraZoomIn`/`Out(yards)` inside the call (`0x50b400` → `0x50fc60`, `0x50b450` →
+    /// `0x50fcd0`): the distance axis queued for the yards' span on the rig.
+    pub(crate) fn zoom(&mut self, out: bool, yards: f32) {
+        let speed = self.zoom.as_deref().map_or_else(
+            || super::camera_zoom::ZoomLimit::default().move_speed,
+            |z| z.move_speed,
+        );
+        if let Some(rig) = self.rig.as_deref_mut() {
+            rig.view_axes.zoom(out, yards, speed);
+        }
+    }
+
     /// Apply `request`, and the CVar writes it makes, `(name, value)` in order, for the registry
     /// to take inside the same call.
     pub(crate) fn apply(&mut self, request: CameraViewRequest) -> Vec<(&'static str, String)> {
@@ -348,6 +370,50 @@ mod tests {
             .expect("the chunk runs");
         assert_eq!(active, "3");
         assert_eq!(distance, "13.880000");
+    }
+
+    /// `MoveViewLeftStart()` sets its axis's bit on the camera inside the call (`0x50b540` →
+    /// `0x50b4b0` → `0x50fd40`), so the call returns with the axis running and the camera's next
+    /// update moves it (`0x5112d0`). Main left an edge for the frame's controller.
+    #[test]
+    fn a_move_view_call_starts_its_axis_inside_the_call() {
+        use benilla_ui::script::ViewAxis;
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        app.insert_resource(crate::net::NetCommands(tx));
+        app.world_mut().init_resource::<CameraControl>();
+        app.insert_non_send_resource(benilla_ui::script::UiScript::new().expect("a VM"));
+        let left = |app: &mut App, chunk: &str| {
+            crate::script_calls::with_hosted_vm(app.world_mut(), |s| s.expect("a VM").run(chunk))
+                .expect("the chunk runs");
+            app.world()
+                .resource::<CameraControl>()
+                .view_axes
+                .active(ViewAxis::Left)
+        };
+        assert!(
+            left(&mut app, "MoveViewLeftStart()"),
+            "running as it returns"
+        );
+        assert!(
+            app.world()
+                .resource::<crate::bindings::BindingsState>()
+                .view_calls()
+                .is_empty(),
+            "nothing waits for the frame"
+        );
+        // A zoom stops the opposite axis inside its call (`0x50fc83`): of `In` then `Out`, the
+        // in axis returns stopping and the out axis running, its span queued.
+        crate::script_calls::with_hosted_vm(app.world_mut(), |s| {
+            s.expect("a VM").run("CameraZoomIn(1) CameraZoomOut(1)")
+        })
+        .expect("the chunk runs");
+        let axes = &app.world().resource::<CameraControl>().view_axes;
+        assert_eq!(
+            (axes.stopping(ViewAxis::In), axes.active(ViewAxis::Out)),
+            (true, true),
+            "both set as the call returns"
+        );
     }
 
     #[test]

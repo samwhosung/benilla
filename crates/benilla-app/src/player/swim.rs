@@ -128,29 +128,33 @@ fn stop_pitch(player: &mut Player, was: bool) {
 /// latch `0x80000`), and a zero net stops a latched one (`0x60ddd0`); a latched pitch holds
 /// through a change of direction until the net passes zero. A unit that may not turn stops a
 /// latched pitch instead, sending only while swimming (`0x5147ca`-`0x5147fa`). The latch is the
-/// input's, so it outlives the water.
+/// input's, so it outlives the water. Whether it started or stopped a pitch, each of which runs the
+/// movement guard `0x60e990(1, 0)` (`0x60ddaa`, `0x60ddda`): the auto-move's stop and the loot
+/// close.
 pub(super) fn pitch_emitter(
     player: &mut Player,
     (up, down): (bool, bool),
     turn_or_action: bool,
     may_turn: bool,
     swimming: bool,
-) {
+) -> bool {
     use crate::net::MoveKind;
     if !may_turn {
         if std::mem::take(&mut player.pitch_latch) && swimming {
             stop_pitch_keys(player);
+            return true;
         }
-        return;
+        return false;
     }
     if !swimming || turn_or_action {
-        return;
+        return false;
     }
     let net = i32::from(up) - i32::from(down);
     match net.signum() {
         0 => {
             if std::mem::take(&mut player.pitch_latch) {
                 stop_pitch_keys(player);
+                return true;
             }
         }
         sign if !player.pitch_latch => {
@@ -164,9 +168,11 @@ pub(super) fn pitch_emitter(
                 MoveKind::StartPitchDown
             });
             player.pitch_latch = true;
+            return true;
         }
         _ => {}
     }
+    false
 }
 
 /// The mouse-look pitch hand-off, `0x515330` through `0x60de70` to `SetPitch` (`0x7c6f70`): the
@@ -505,7 +511,8 @@ mod tests {
         use crate::net::MoveKind;
         let mut p = Player::default();
         let tick = |p: &mut Player, keys, turn, may_turn, swim| {
-            pitch_emitter(p, keys, turn, may_turn, swim);
+            let emitted = pitch_emitter(p, keys, turn, may_turn, swim);
+            assert_eq!(emitted, p.pitch_send.is_some());
             p.pitch_send.take()
         };
         assert_eq!(

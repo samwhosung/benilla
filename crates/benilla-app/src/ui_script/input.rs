@@ -6,7 +6,7 @@ use bevy::input::ButtonState;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
-use benilla_ui::script::{ClickPress, KeyWalk, UiScript, WheelWalk};
+use benilla_ui::script::{ClickPress, KeyWalk, PointerTarget, UiScript, WheelWalk};
 
 use super::{PlayerUiClickConsumed, PlayerUiHover, PlayerUiPressConsumed, UiKeyboardCapture};
 use crate::textinput::{self, keymap, HostClipboard};
@@ -29,7 +29,6 @@ pub(super) struct PointerFeed<'w> {
     egui_keyboard: Res<'w, super::EguiKeyboard>,
     /// The dev overlay holds the pointer: a press then is no frame's and not the world's.
     egui_pointer: Option<Res<'w, super::EguiPointerOver>>,
-    presses: ResMut<'w, super::WorldPresses>,
 }
 
 impl PointerFeed<'_> {
@@ -111,10 +110,15 @@ impl WorldWheelSlot for WorldSlot<'_, '_> {
 /// hover was last walked at, the record it stopped after for that record's world steps
 /// ([`crate::target::world_steps`]), and a right press it stopped ahead of the binding of, for the
 /// world frame's hook ([`crate::target::right_press_hook`]): the press's record and whether a
-/// frame took it.
+/// frame took it; and whether the frame's records came in relative mode.
 #[derive(Resource, Default)]
 pub(crate) struct RecordWalk {
     begun: bool,
+    /// The camera was in freelook as the frame's records were queued: the window posts the mouse
+    /// as deltas then (`0x42d31c` → `0x42d34a`, category 0xd), which `0x766250` hands the world
+    /// frame's hook without a hover walk, so no record moves the hover; only the re-pick flag
+    /// `[root+0x1100]` does.
+    relative: bool,
     next: usize,
     walked: Option<Vec2>,
     stopped: Option<super::InputRecord>,
@@ -233,16 +237,14 @@ pub(super) fn feed_ui_input(
     // field still reaches the game.
     let egui_keyboard = pointer.egui_keyboard.0;
     let egui_pointer = pointer.egui_pointer.as_ref().is_some_and(|e| e.0);
-    let (hover, click_consumed, press_consumed, presses) = (
+    let (hover, click_consumed, press_consumed) = (
         &mut pointer.hover,
         &mut pointer.click_consumed,
         &mut pointer.press_consumed,
-        &mut pointer.presses,
     );
     if first {
         click_consumed.0 = false;
         press_consumed.0 = false;
-        presses.0.clear();
         capture.consumed.clear();
         if let Some(script) = script.as_mut() {
             script.take_click_stepped();
@@ -262,16 +264,10 @@ pub(super) fn feed_ui_input(
                 let over_ui = hover.0.is_some() || egui_pointer;
                 let mut legs = |mut s: Option<&mut UiScript>| {
                     for r in records.iter().skip(start) {
-                        match &r.record {
-                            super::Record::Button { button, state } => {
-                                if *state == ButtonState::Pressed {
-                                    presses.0.push((*button, over_ui));
-                                }
-                            }
-                            // No sweep: every notch is the world's, unless the dev overlay holds
-                            // the pointer.
-                            super::Record::Wheel { .. } if egui_pointer => continue,
-                            _ => {}
+                        // No sweep: every notch is the world's, unless the dev overlay holds the
+                        // pointer.
+                        if matches!(r.record, super::Record::Wheel { .. }) && egui_pointer {
+                            continue;
                         }
                         let verdict = crate::bindings::KeyVerdict::default();
                         world_frame_leg(
@@ -279,7 +275,7 @@ pub(super) fn feed_ui_input(
                             s.as_deref_mut(),
                             r,
                             verdict,
-                            over_ui,
+                            reach(r, over_ui, PointerTarget::Nothing),
                             &layout,
                         );
                     }
@@ -319,7 +315,9 @@ pub(super) fn feed_ui_input(
         if first {
             pressed.reconcile(keys);
             walk.walked = None;
+            walk.relative = script.freelook_now().unwrap_or(false);
         }
+        let relative = walk.relative;
         // The point the hover was last walked at this pass: a move to it again is ignored, as
         // `0x7660d0` ignores a move to the stored position.
         let walked = &mut walk.walked;
@@ -347,16 +345,18 @@ pub(super) fn feed_ui_input(
             // (`[frame+0xa0]+0x1118`, `0x481f1d`), the record's own.
             script.set_click_press(click_press(r, false));
             // The hover the record meets is the cursor's when it was queued: the moves before it
-            // are records of their own (category 0xc, `0x7660d0`).
-            if let Some(at) = at {
+            // are records of their own (category 0xc, `0x7660d0`). In relative mode there are none.
+            if let Some(at) = at.filter(|_| !relative) {
                 move_to(script, hover, at);
             }
             let mut verdict = crate::bindings::KeyVerdict::default();
             // The world frame's binding leg, unless the record's walk ran it.
             let mut leg = true;
             // Whose the record's press is: a hovered frame's, the interface's when it consumed the
-            // press, the dev overlay's, else the world frame's (`WorldPresses`).
+            // press, the dev overlay's, else the world frame's, whose binding runs.
             let mut over_ui = hover.0.is_some() || egui_pointer;
+            // Where a release went, which picks its binding's up-half; a press's is `over_ui`.
+            let mut released_to = PointerTarget::Nothing;
             match &r.record {
                 super::Record::Button { .. } if resumed.is_some() => {
                     over_ui = resumed.unwrap_or(over_ui);
@@ -377,11 +377,17 @@ pub(super) fn feed_ui_input(
                         {
                             click_consumed.0 = true;
                         }
-                        // A press the UI consumed is not the world's, hovered frame or not.
-                        let took = script.mouse_button(at.x, at.y, name, down);
+                        // The event is the world frame's as its target is, not the hover's: a
+                        // press goes to the frame holding a button, else the hover (`0x76637f`),
+                        // and in freelook with none held to the world frame (`0x492bd9`); a
+                        // release to the capture, or the world frame in freelook (`0x492be5`).
+                        let target = script.mouse_button_to(at.x, at.y, name, down);
+                        let took = target == PointerTarget::Ui;
                         if down {
                             press_consumed.0 |= took;
-                            over_ui |= took;
+                            over_ui = took || egui_pointer;
+                        } else {
+                            released_to = target;
                         }
                     } else if *button == MouseButton::Right && *state == ButtonState::Pressed {
                         // No point to walk at: the world input hook still runs ahead of the world
@@ -389,9 +395,6 @@ pub(super) fn feed_ui_input(
                         let took = script.hook_right_press();
                         press_consumed.0 |= took;
                         over_ui |= took;
-                    }
-                    if *state == ButtonState::Pressed {
-                        presses.0.push((*button, over_ui));
                     }
                 }
                 // The walk above was the move's handler.
@@ -473,7 +476,7 @@ pub(super) fn feed_ui_input(
                     Some(&mut *script),
                     r,
                     verdict,
-                    over_ui,
+                    reach(r, over_ui, released_to),
                     &layout,
                 );
             }
@@ -501,14 +504,18 @@ pub(super) fn feed_ui_input(
         // ── The hover after the frame's records ── at the window's cursor, so a frame that moved
         // under a still cursor is re-picked. A cursor off the window leaves the hovered frame once
         // and disarms any press or drag every frame, since no release ends it and a stale gesture
-        // would fire on re-entry.
-        if let Some(end) = end {
-            move_to(script, hover, end);
-        } else if !synthetic {
-            if hover.0.take().is_some() {
-                script.pointer_left_hover();
+        // would fire on re-entry. In freelook the cursor is the camera's, and the hover stands.
+        let looking = relative || script.freelook_now().unwrap_or(false);
+        match end {
+            _ if looking => {}
+            Some(end) => move_to(script, hover, end),
+            None if !synthetic => {
+                if hover.0.take().is_some() {
+                    script.pointer_left_hover();
+                }
+                script.pointer_left_window();
             }
-            script.pointer_left_window();
+            None => {}
         }
 
         for err in script.take_errors() {
@@ -534,16 +541,29 @@ fn world_frame_leg(
     script: Option<&mut UiScript>,
     r: &super::InputRecord,
     verdict: crate::bindings::KeyVerdict,
-    over_ui: bool,
+    reach: PointerTarget,
     layout: &crate::bindings::LayoutNames,
 ) {
     match &r.record {
         super::Record::Key(ev) => world_frame.key(script, ev, r.mods, verdict, layout),
         super::Record::Button { button, state } => {
-            world_frame.button(script, *button, *state, r.mods, over_ui)
+            world_frame.button(script, *button, *state, r.mods, reach)
         }
         super::Record::Move => {}
         super::Record::Wheel { up } => world_frame.wheel(script, r.mods, *up),
+    }
+}
+
+/// Where a button record went, for its binding's leg: a press the interface's when `over_ui`, else
+/// the world frame's; a release where the walk sent it, `released_to`.
+fn reach(r: &super::InputRecord, over_ui: bool, released_to: PointerTarget) -> PointerTarget {
+    match r.record {
+        super::Record::Button {
+            state: ButtonState::Released,
+            ..
+        } => released_to,
+        _ if over_ui => PointerTarget::Ui,
+        _ => PointerTarget::World,
     }
 }
 

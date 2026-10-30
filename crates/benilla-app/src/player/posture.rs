@@ -107,8 +107,9 @@ pub(super) fn update(
         );
     }
     let stand_now = pending.stand_state(stand_byte);
-    // The sheath toggle (Z) cycles the anim layer's committed sheath state through its one setter
-    // ([`crate::creature_anim::SheathRequest`]), which sends `CMSG_SETSHEATHED`; only it plays the
+    // A sheath toggle (Z) made with no host lent (a lent one ran in its call, [`SheathToggle`])
+    // cycles the anim layer's committed sheath state through the setter's request
+    // ([`crate::creature_anim::SheathRequest`]), which sends `CMSG_SETSHEATHED` and plays the
     // ceremony (`bInstant = 0` in `ToggleSheath` `0x5eb480`). No body model yet drops the press.
     if binds.fired(crate::bindings::Input::ToggleSheath) {
         if let Some((e, Some((drv, committed)), store, engaged, wielded, precast, _)) = me {
@@ -117,7 +118,7 @@ pub(super) fn update(
                 engaged,
                 precast,
                 seated: stand_now != 0,
-                mid_ceremony: drv.sheath_ceremony_active(),
+                mid_ceremony: drv.sheath_ceremony_active() || committed.ceremony_owed(),
             };
             if toggle_refused(store.map(|s| &s.0), toggle) {
                 debug!("sheath toggle refused ({toggle:?})");
@@ -314,6 +315,74 @@ fn stand_gates(fields: &ObjectFields, precast: bool) -> state::StandGates {
         reads_dead: fields.unit_is_dead() || fields.unit_dynflag_dead(),
         channelling: fields.unit_channel_spell() != 0,
         precast,
+    }
+}
+
+/// `ToggleSheath()` inside its call (`0x48a070` → `0x5eb480`): the toggle's player gates, its cycle
+/// over what is worn, the model's tests, then the setter's commit and its `CMSG_SETSHEATHED`
+/// (`0x611dbc`), so the packet leaves ahead of the script's next verb; the driver plays the
+/// ceremony ([`crate::creature_anim::CommittedSheath::toggle_now`]). Each absent in a harness
+/// without it.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct SheathToggle<'w, 's> {
+    net: Res<'w, NetCommands>,
+    pending: Option<Res<'w, super::StandPending>>,
+    control: Option<Res<'w, super::OwnControlLost>>,
+    classes: Option<Res<'w, crate::chr_classes::ChrClassTable>>,
+    edits: Option<Res<'w, crate::creature_anim::UnitEdits>>,
+    me: Query<'w, 's, ToggleRow, With<SelfPlayer>>,
+}
+
+/// The active player's driver, model and committed state, as the toggle's call reads them.
+type ToggleRow = (
+    Entity,
+    &'static crate::creature_anim::AnimDriver,
+    &'static AnimationPlayer,
+    &'static bevy::animation::transition::AnimationTransitions,
+    &'static benilla_assets::ModelAnimations,
+    &'static mut crate::creature_anim::CommittedSheath,
+    Option<&'static ObjectStore>,
+    Option<&'static crate::creature_anim::Wielded>,
+);
+
+impl SheathToggle<'_, '_> {
+    /// The toggle, as [`update`] runs a press no call settled.
+    pub(crate) fn toggle(&mut self) {
+        let Ok((e, drv, player, tr, anims, mut committed, store, wielded)) = self.me.single_mut()
+        else {
+            return;
+        };
+        let fields = store.map(|s| &s.0);
+        let edits = self.edits.as_deref();
+        let byte = fields.map_or(0, ObjectFields::unit_stand_state);
+        let toggle = ToggleGates {
+            control_lost: self.control.as_deref().is_some_and(|c| c.0),
+            engaged: edits.is_some_and(|x| x.attacking(e)),
+            precast: edits.is_some_and(|x| x.precast(e).is_some()),
+            seated: self
+                .pending
+                .as_deref()
+                .map_or(byte, |p| p.stand_state(byte))
+                != 0,
+            mid_ceremony: drv.sheath_ceremony_active() || committed.ceremony_owed(),
+        };
+        if toggle_refused(fields, toggle) {
+            debug!("sheath toggle refused in a call ({toggle:?})");
+            return;
+        }
+        let classes = self.classes.as_deref().map(|t| &t.0);
+        let worn = toggle_worn(&wielded.copied().unwrap_or_default(), fields, classes);
+        let next = crate::creature_anim::toggle_sheath_next(committed.state().unwrap_or(0), worn);
+        let Some(state) = next else { return };
+        if crate::creature_anim::toggle_model_refuses(drv, player, tr, anims) {
+            debug!("sheath toggle refused in a call by its model");
+            return;
+        }
+        if committed.toggle_now(state, fields, classes) {
+            let _ = self.net.0.send(ClientCommand::SetSheathed {
+                state: u32::from(state),
+            });
+        }
     }
 }
 

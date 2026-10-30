@@ -399,10 +399,13 @@ fn a_late_mouselook_start_over_a_left_drag_hands_the_facing_and_pitch_off() {
         .single_mut(world)
         .expect("the camera")
         .yaw = 1.0;
-    world
-        .resource_mut::<CameraControl>()
-        .world_mouse
-        .late_mouselook_start_over_a_left_drag();
+    world.resource_scope(|world, mut binds: Mut<BindingsState>| {
+        use benilla_ui::script::LookCall;
+        binds.apply_unhosted(Start(HeldInput::CameraOrSelectOrMove));
+        let mut rig = world.resource_mut::<CameraControl>();
+        rig.world_mouse
+            .late_call_for_test(LookCall::Mouselook(true), &mut binds);
+    });
     world.run_system(embody).expect("the embodiment runs");
     world.run_system(drive).expect("the controller runs");
     let player = client.player();
@@ -873,6 +876,96 @@ fn a_strafe_press_while_following_stops_then_strafes() {
     );
 }
 
+/// A `ToggleMouseMove` during a right drag leaves freelook (`0x50f910` → `0x50f940`) and keeps bit
+/// 0x1 held, so a turn key strafes (`0x514e98`-`0x514eb1`) and starts no turn (`0x514f6d`): the
+/// split reads the command bit, not the look.
+#[test]
+fn a_turn_key_strafes_under_bit_one_after_a_toggle_left_the_drag() {
+    use crate::creature_anim::move_flags::STRAFE_LEFT;
+    use crate::net::MoveKind::StartStrafeLeft;
+    let mut client = Client::standing(Body::Own);
+    let right = || vec![Start(HeldInput::TurnOrAction)];
+    client.traced(vec![], right(), |_| {});
+    assert!(client.app.world().resource::<CameraControl>().is_looking());
+    // The toggle as a call with no host lent hands it to the session.
+    client
+        .app
+        .world_mut()
+        .resource_scope(|world, mut rig: Mut<CameraControl>| {
+            let mut binds = world.resource_mut::<BindingsState>();
+            rig.world_mouse
+                .late_call_for_test(benilla_ui::script::LookCall::ToggleMouseMove, &mut binds);
+        });
+    let sent = client.traced(right(), vec![Start(HeldInput::TurnLeft)], |_| {});
+    assert!(
+        !client.app.world().resource::<CameraControl>().is_looking(),
+        "the toggle left freelook"
+    );
+    assert_eq!(
+        sent,
+        vec![(When::Input, Sent::Move(StartStrafeLeft, STRAFE_LEFT))]
+    );
+}
+
+/// A follow ends at the mouse's hand-off to the body, whose facing write reaches the move guard
+/// (`0x5103e0` → `0x5152e0` → `0x60de30` → `0x60e990(1, 1)`), behind bit 0x1 (`0x5145fa`): a
+/// right press that has not moved the mouse hands nothing off and keeps it, and the first motion
+/// ends it.
+#[test]
+fn a_right_drag_ends_a_follow_at_its_first_motion() {
+    use bevy::input::mouse::AccumulatedMouseMotion;
+    let mut client = Client::standing(Body::Own);
+    let leader = client.app.world_mut().spawn(Transform::default()).id();
+    client
+        .app
+        .world_mut()
+        .resource_mut::<GuidIndex>()
+        .0
+        .insert(0xCC, leader);
+    follow(&mut client);
+    let steer = |client: &mut Client| {
+        client
+            .app
+            .world_mut()
+            .run_system_once(super::super::follow::steer_follow)
+            .expect("the follow steers");
+    };
+    let right = || vec![Start(HeldInput::TurnOrAction)];
+    client.traced(vec![], right(), |_| {});
+    steer(&mut client);
+    assert!(following(&mut client), "a still press hands nothing off");
+    client
+        .app
+        .world_mut()
+        .resource_mut::<AccumulatedMouseMotion>()
+        .delta = Vec2::new(10.0, 0.0);
+    client.traced(right(), vec![], |_| {});
+    steer(&mut client);
+    assert!(!following(&mut client), "the motion's hand-off ended it");
+}
+
+/// The pitch latch a call left yields to the frame's own writes of it: the mouse hand-off clears
+/// the latch (`0x515378`) in a frame whose word did not change, where the press's tick, which takes
+/// the calls' latch over only past its changed-word gate, never runs, so the next call reads the
+/// cleared latch, not the call's.
+#[test]
+fn the_mouse_hand_off_supersedes_the_pitch_latch_a_call_left() {
+    use super::super::press::CallPitch;
+    use bevy::input::mouse::AccumulatedMouseMotion;
+    let mut client = Client::standing(Body::Own);
+    let right = || vec![Start(HeldInput::TurnOrAction)];
+    client.traced(vec![], right(), |_| {});
+    let world = client.app.world_mut();
+    world.resource_mut::<CallPitch>().set_for_test(true);
+    world.resource_mut::<AccumulatedMouseMotion>().delta = Vec2::new(10.0, 0.0);
+    client.traced(right(), vec![], |_| {});
+    assert_eq!(
+        client.app.world().resource::<CallPitch>().called(),
+        None,
+        "the hand-off's clear is the latch the calls read"
+    );
+}
+
 /// A move key while seated: the forward emitter stands the body (`0x514e0c` → `0x5ed430`, sent at
 /// once) before it queues the start (`0x514e6e`).
 #[test]
@@ -891,6 +984,31 @@ fn a_move_key_while_seated_stands_before_it_starts() {
             (When::Input, Sent::Move(StartForward, FORWARD)),
         ]
     );
+}
+
+/// The tick runs in the air: its translate predicate tests root alone (`0x514560` tests `0x1200`,
+/// not the fall bit `0x2000`), so a key pressed while falling runs its emitter's start, whose
+/// `0x60e990` closes the loot at the press (`0x60dc6a`) and ends a follow, before the frame time.
+#[test]
+fn a_move_key_in_the_air_closes_the_loot_and_ends_a_follow_at_the_press() {
+    let mut client = Client::new(Body::Own, |_| {});
+    client.frame(vec![], vec![]);
+    assert!(
+        client.player().move_flags & crate::creature_anim::move_flags::FALLING != 0,
+        "falling through the empty world"
+    );
+    follow(&mut client);
+    let world = client.app.world_mut();
+    world.resource_mut::<crate::ui_loot::LootMoveStart>().0 = false;
+    *world.resource_mut::<BindingsState>() = BindingsState::after_calls(vec![], forward());
+    for system in [client.sample, client.commands, client.cancel, client.press] {
+        world.run_system(system).expect("the press runs");
+    }
+    assert!(
+        world.resource::<crate::ui_loot::LootMoveStart>().0,
+        "the loot closes at the press"
+    );
+    assert!(!following(&mut client), "and the follow ends there");
 }
 
 /// The press cancels a cast that movement interrupts at once (`0x51512a` → `0x6e4940`, sent at

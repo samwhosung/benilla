@@ -23,6 +23,9 @@ pub(crate) struct CommittedSheath {
     /// The state the driver's last pass left, so a change made between its passes, such as a
     /// script call's, still meets its leave-ranged edge.
     pub(super) driven: Option<u8>,
+    /// The draw/stow ceremony a toggle committed inside its call owes the driver, `(from, to)`
+    /// ([`Self::toggle_now`]).
+    pub(super) owed_ceremony: Option<(u8, u8)>,
 }
 
 impl CommittedSheath {
@@ -51,6 +54,34 @@ impl CommittedSheath {
         }
         self.cur = Some(state);
         true
+    }
+}
+
+impl CommittedSheath {
+    /// A toggle committed inside its call owes its ceremony, whose draw starts inside the setter
+    /// (`0x611cea` → `0x611a20` → `0x7121a0`): the toggle's arm test reads it running
+    /// (`0x5eb5a0`-`0x5eb5e2`).
+    pub(crate) fn ceremony_owed(&self) -> bool {
+        self.owed_ceremony.is_some()
+    }
+
+    /// The manual toggle's `SetSheatheState(state, 0, …)` (`0x5eb6a8` → `0x611cf0`) inside its
+    /// call: committed as [`Self::set_now`] commits, with the draw/stow ceremony (`bInstant = 0`)
+    /// owed to the driver from the state it left. Whether it changed, and so whether the active
+    /// player's `CMSG_SETSHEATHED` is owed (`0x611dbc`).
+    pub(crate) fn toggle_now(
+        &mut self,
+        state: u8,
+        fields: Option<&benilla_protocol::ObjectFields>,
+        classes: Option<&benilla_formats::ChrClasses>,
+    ) -> bool {
+        let byte = fields.and_then(|f| f.unit_sheath_state()).unwrap_or(0);
+        let from = self.cur.unwrap_or(byte);
+        let changed = self.set_now(state, fields, classes);
+        if changed {
+            self.owed_ceremony = Some((from, state));
+        }
+        changed
     }
 }
 

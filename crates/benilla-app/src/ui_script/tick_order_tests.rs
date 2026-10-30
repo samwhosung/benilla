@@ -334,42 +334,100 @@ fn left_record(world: &mut World, state: bevy::input::ButtonState) {
 }
 
 /// The cursor moves onto a button and the right button goes down in the same frame: the press is
-/// the interface's alone, and the world's mouse takes none of it, as the reference hands a
-/// mouse-down to the one frame under the cursor (`0x7662c0`, capture at `0x7663e9`). The pointer
-/// arbiter publishes the frame's hover before the world's mouse reads it.
+/// the interface's alone, and the world frame's binding, BUTTON2's TURNORACTION, takes none of it,
+/// as the reference hands a mouse-down to the one frame under the cursor (`0x7662c0`, capture at
+/// `0x7663e9`). With the button hidden the same press is the world frame's, and its binding runs.
 #[test]
 fn a_right_press_as_the_cursor_reaches_a_button_is_the_interfaces_alone() {
-    let mut c = client("");
-    assert!(runs_before(
-        &mut c.app,
-        input::dispatch_input_records,
-        super::arbitrate_pointer_over_ui
-    ));
-    assert!(runs_before(
-        &mut c.app,
-        super::arbitrate_pointer_over_ui,
-        crate::player::camera::latch_world_mouse
-    ));
+    for over_button in [true, false] {
+        let mut c = client(if over_button { "" } else { "b:Hide()" });
+        assert!(runs_before(
+            &mut c.app,
+            input::dispatch_input_records,
+            super::arbitrate_pointer_over_ui
+        ));
+        {
+            let mut script = c.app.world_mut().non_send_resource_mut::<UiScript>();
+            script.set_default_bindings(benilla_ui::script::keybind::parse_bindings_wtf(
+                "bind BUTTON2 TURNORACTION\r\n",
+            ));
+            script.load_binding_set(1);
+            script.register_bindings(
+                &benilla_ui::bindings_xml::parse(
+                    r#"<Bindings><Binding name="TURNORACTION" runOnUp="true" header="MOVEMENT">
+                    if keystate == "down" then TurnOrActionStart() else TurnOrActionStop() end
+                    </Binding></Bindings>"#,
+                )
+                .expect("well-formed"),
+            );
+        }
+        let world = c.app.world_mut();
+        // The dispatch takes the binding in.
+        world
+            .run_system_once(crate::bindings::sync_dispatch)
+            .expect("the dispatch syncs");
+        assert!(
+            !world.resource::<super::PointerOverUi>().0,
+            "the last frame's cursor was over nothing"
+        );
+        world
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Right);
+        super::feed_input_once(world);
+        world
+            .run_system_once(crate::player::camera::latch_world_mouse)
+            .expect("the world's mouse latches");
+        assert_eq!(
+            world
+                .resource::<crate::bindings::BindingsState>()
+                .pressed(crate::bindings::Input::TurnOrAction),
+            !over_button,
+            "the world's binding took the press only over the world (over the button: {over_button})"
+        );
+    }
+}
+
+/// In freelook the window posts the mouse as deltas (`0x42d31c` → `0x42d34a`, category 0xd), which
+/// walk no hover (`0x766250`): the focus the entry gave the world frame stands through the frame's
+/// key records, and the button under the resting pointer gets no `OnEnter` back. A frame shown
+/// under the pointer still re-picks it (`[root+0x1100]`, `0x765650` → `0x7660d0`).
+#[test]
+fn freelook_walks_no_hover_at_its_records_but_a_shown_frame_re_picks() {
+    let mut c = client(
+        r#"WorldFrame = CreateFrame("WorldFrame", "WorldFrame") WorldFrame:SetAllPoints()
+        b:SetScript("OnEnter", function() LOG = LOG .. "enter;" end)
+        b:SetScript("OnLeave", function() LOG = LOG .. "leave;" end)"#,
+    );
     let world = c.app.world_mut();
-    assert!(
-        !world.resource::<super::PointerOverUi>().0,
-        "the last frame's cursor was over nothing"
-    );
-    world
-        .resource_mut::<ButtonInput<MouseButton>>()
-        .press(MouseButton::Right);
     super::feed_input_once(world);
-    world
-        .run_system_once(super::arbitrate_pointer_over_ui)
-        .expect("the arbiter runs");
-    world
-        .run_system_once(crate::player::camera::latch_world_mouse)
-        .expect("the world's mouse latches");
-    assert!(
-        !world
-            .resource::<crate::player::CameraControl>()
-            .world_mouse
-            .holds_right(),
-        "the world took the button's press"
+    assert_eq!(
+        log(world),
+        "enter;",
+        "the resting pointer hovers the button"
     );
+    let run = |world: &mut World, chunk: &str| {
+        crate::script_calls::with_hosted_vm(world, |s| s.expect("a VM").run(chunk))
+            .expect("the chunk runs");
+    };
+    run(world, "MouselookStart()");
+    assert_eq!(log(world), "enter;leave;", "the entry moved the focus");
+    world.write_message(bevy::input::keyboard::KeyboardInput {
+        key_code: KeyCode::KeyW,
+        logical_key: bevy::input::keyboard::Key::Character("w".into()),
+        state: bevy::input::ButtonState::Pressed,
+        text: None,
+        repeat: false,
+        window: Entity::PLACEHOLDER,
+    });
+    super::feed_input_once(world);
+    assert_eq!(log(world), "enter;leave;", "no record walked the hover");
+    run(
+        world,
+        r#"local f = CreateFrame("Frame", "Over") f:Hide() f:SetAllPoints()
+        f:SetFrameStrata("HIGH") f:EnableMouse(true)
+        f:SetScript("OnEnter", function() LOG = LOG .. "over;" end) f:Show()"#,
+    );
+    world.non_send_resource_mut::<UiScript>().resolve();
+    super::tick_once(world);
+    assert_eq!(log(world), "enter;leave;over;", "the shown frame re-picked");
 }

@@ -263,34 +263,22 @@ fn a_box_a_key_focused_takes_the_next_key_of_the_frame() {
 }
 
 /// A press over the world whose cursor reaches the button before the frame ends: the press is the
-/// world frame's, so its binding runs and the world's mouse holds the button; one over the button
-/// whose cursor leaves it is neither's.
+/// world frame's, so its binding runs; one over the button whose cursor leaves it is neither's.
 #[test]
 fn a_press_and_its_binding_agree_when_the_cursor_crosses_a_frame_in_the_frame() {
-    let held = |app: &App| {
-        app.world()
-            .resource::<crate::player::CameraControl>()
-            .world_mouse
-            .held_left()
-    };
     let mut app = client();
     move_to(&mut app, Vec2::new(900.0, 100.0));
     app.update();
     button(&mut app, ButtonState::Pressed);
     move_to(&mut app, Vec2::new(100.0, 100.0));
     app.update();
-    assert_eq!(log(&app), "b1 down;");
-    assert!(
-        held(&app),
-        "the world's mouse took the press its binding ran on"
-    );
+    assert_eq!(log(&app), "b1 down;", "the world frame's binding ran");
 
     let mut app = client();
     button(&mut app, ButtonState::Pressed);
     move_to(&mut app, Vec2::new(900.0, 100.0));
     app.update();
-    assert_eq!(log(&app), "");
-    assert!(!held(&app), "the press was the button's");
+    assert_eq!(log(&app), "", "the press was the button's");
 }
 
 /// With `widescreen` 0 the interface is 4:3 (`0x4901e0` answers 4/3) and drawn stretched across a

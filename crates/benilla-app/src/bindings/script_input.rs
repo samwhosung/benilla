@@ -105,6 +105,12 @@ impl BindingsState {
         self.apply(input, true)
     }
 
+    /// Whether `input` is a Stop of a bit held now: the release `0x514b70` answers a change, so
+    /// its `SetCommands` runs the tick after it (`0x5151a0`).
+    pub(crate) fn releases(&self, input: BindingInput) -> bool {
+        matches!(input, BindingInput::Stop(held) if self.held.contains(&held_input(held)))
+    }
+
     fn apply(&mut self, input: BindingInput, settled: bool) -> bool {
         let edges = if settled && !self.open {
             &mut self.carry
@@ -144,8 +150,8 @@ impl BindingsState {
                 }
                 true
             }
-            // The camera's axes are its own state (`[cam+0x128]`), not `[InputControl+4]`:
-            // passed through in call order for the camera to apply.
+            // The camera's axes are its own state (`[cam+0x128]`), not `[InputControl+4]`: a call
+            // with no host lent passes through in call order for the camera to apply.
             BindingInput::ViewStart(axis) => {
                 edges.view_calls.push((axis, true));
                 false

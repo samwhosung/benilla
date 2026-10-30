@@ -270,10 +270,10 @@ impl ChatSender<'_, '_> {
         self.send_afk(out.body);
     }
 
-    /// `ClearAFK(0)` (`0x49f3d6`): with the mirror set and `autoClearAFK` on, the line (fired
-    /// inside the call, `0x5eb878`), the mirror zeroed and the empty AFK packet, ahead of the
-    /// message's own.
-    fn clear_afk(&mut self, script: &mut UiScript) {
+    /// `ClearAFK(0)` (`0x5eb830`, from a send at `0x49f3d6` or a movement call's tick at
+    /// `0x514e23`): with the mirror set and `autoClearAFK` on, the line (fired inside the call,
+    /// `0x5eb878`), the mirror zeroed and the empty AFK packet, ahead of the message's own.
+    pub(crate) fn clear_afk(&mut self, script: &mut UiScript) {
         let strings = |key: &str| super::super::combat::global_string(script, key);
         let Some(line) = away::auto_clear_line(self.afk_mirror(), auto_clear_afk(script), &strings)
         else {

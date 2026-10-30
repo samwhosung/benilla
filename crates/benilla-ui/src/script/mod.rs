@@ -345,8 +345,8 @@ pub use guild_read::{GuildAnswer, GuildRead, OwnGuild, UnitGuildRead};
 pub use held::{BagGuidQuery, BagHead, BagItemsQuery, BagQuery, BagSlotQuery, HasKeyQuery};
 pub use host::{CallHost, CallTail, Deferring, LiveReader};
 pub use input_verbs::{
-    BindingInput, ClickCall, ClickMode, ClickPress, FiredInput, HeldInput, LookCall, PostureCall,
-    ViewAxis,
+    BindingInput, ClickCall, ClickMode, ClickPress, FiredInput, HeldInput, LookCall,
+    MouselookingQuery, PostureCall, ViewAxis,
 };
 pub use item_calls::ItemCall;
 pub use item_read::{ItemInfoFields, ItemKey, ItemRead, ItemRoll};
@@ -418,6 +418,7 @@ pub use model::{
     FontProbe, MacroIconSource, TextureProbe, TextureSizeFn, TextureSizeProbe, WorldLocFn,
     WorldLocProjector,
 };
+pub use mouseover::FreelookQuery;
 pub use party::{
     PartyMemberInfo, PartyRequest, PartyState, RaidMemberInfo, ReadyCheckState, SavedInstanceInfo,
 };
@@ -425,6 +426,7 @@ pub use pet::{
     PetActionView, PetBarFlags, PetBarFlagsView, PetBookNow, PetCall, PetMenuNow, PetSlot,
     PetSlots, PetStats, PetStatsNow, PET_DISMISS_WORD,
 };
+pub use pointer::PointerTarget;
 pub use pvp::{
     decorated_name, pvp_name_global_keys, HonorNow, HonorState, InspectHonorData, InspectHonorNow,
     InspectHonorSlot, PvpCall, RankTitle,

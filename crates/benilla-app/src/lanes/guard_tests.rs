@@ -1391,6 +1391,12 @@ const AT_THEIR_OWN_PLACE: &[(&str, &str)] = &[
          `0x6164a9`), and their input tick stops an auto-move there (`0x60e33d` → `0x60e347`)",
     ),
     (
+        "::player::press::press_tick",
+        "the window deactivate runs the input tick outside every call (`0x514490` → \
+         `0x5144b5`), its direction and pitch bits cleared (`0x5144a3`), whose pitch stop ends \
+         the auto-move there (`0x60ddda` → `0x60e990`)",
+    ),
+    (
         "::ui_chat::channels::end_session_channels_on_disconnect",
         "a dead socket ends the channel session, and no packet follows it",
     ),

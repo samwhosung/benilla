@@ -16,8 +16,13 @@ use crate::order;
 use crate::widget::{ButtonState, FrameHandle};
 
 use super::clip::{hit_clip, hit_rect};
+use super::model::StoredMouseEvent;
 use super::tick::verb;
 use super::{button, cursor, editbox, event, protected, Model, UiScript};
+
+/// The name a button-up gives a button outside the five, as a move's stored event carries
+/// (`0x76c0e5`: `s_unknownText`, `0x838044`).
+const UNKNOWN_BUTTON: &str = "UNKNOWN";
 
 /// The double-click interval, 300 ms, a constant in the Button mouse-up dispatcher `0x7792d0`
 /// (`0x77937b cmp ecx, 0x12c` on the `0x42c010` millisecond clock). It is not the OS double-click
@@ -87,6 +92,27 @@ fn is_world_handle(model: &Model, h: FrameHandle) -> bool {
         .arena
         .frame(h)
         .is_some_and(|f| f.kind == crate::widget::FrameKind::WorldFrame)
+}
+
+/// The `WorldFrame`, the one the game frame keeps (`[0xb4b2bc]`), if made.
+fn world_frame(model: &Model) -> Option<FrameHandle> {
+    model
+        .arena
+        .iter_frames()
+        .find(|(_, f)| f.kind == crate::widget::FrameKind::WorldFrame)
+        .map(|(h, _)| h)
+}
+
+/// Where a mouse button event went ([`UiScript::mouse_button_to`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PointerTarget {
+    /// A frame of the interface's took it, or a hook or a drop consumed it.
+    Ui,
+    /// The world frame's slot, whose binding runs (`0x483c40`, `0x483cb0`).
+    World,
+    /// A release that reached no frame (`0x766498`, `0x7664cd`): what its press bound, if
+    /// anything, is the caller's to end.
+    Nothing,
 }
 
 /// Whether `h` is a `Minimap`, whose probe drops its blip on a miss (`0x4eb0c0`).
@@ -180,8 +206,15 @@ impl UiScript {
         {
             let mut model = self.model_mut();
             // The walk saves the event before its move/size check (`0x76615f`), so the re-pick's
-            // position follows the cursor through a drag.
+            // position follows the cursor through a drag. A move to the stored point stores
+            // nothing (`0x766142`), so a press's button stands until the cursor moves.
             model.cursor_pos = (x, y);
+            if model.stored_event.at != (x, y) {
+                model.stored_event = StoredMouseEvent {
+                    button: None,
+                    at: (x, y),
+                };
+            }
             // A move or size in flight is pumped and the walk returns (`0x766164`–`0x7661a0`)
             // before any probe (`vtbl+0x3c`): no hit test, no drag start (`0x76b320`), no
             // EditBox, slider or colour thumb drag (`0x77a860`, `0x789ba0`, `0x78bd80`), no
@@ -273,6 +306,131 @@ impl UiScript {
         new_id
     }
 
+    /// `SetMouseFocus` (`0x764dc0`) with the `WorldFrame`, which the freelook entry calls after
+    /// the world frame's own half (`0x50fe30` → `0x493070` → `0x493085`). The hover moves to the
+    /// world frame (`0x764dd6`): the old one's leave (`vtbl+0x50`, `0x764ddf`), then the world
+    /// frame's enter (`vtbl+0x4c`, `0x764dea`). Then a press another frame holds gets a release
+    /// built from the stored mouse event (`0x764e03`-`0x764e6f`), its kind the button-up's and its
+    /// x and y zeroed (`0x764e80`-`0x764e8e`), through the frame's button-up slot (`vtbl+0x6c`,
+    /// `0x764e98`), the slot the real release calls (`0x7664a4`); and the capture goes
+    /// (`0x764e9b`), so the button's real release later reaches no frame. Nothing without a world
+    /// frame.
+    pub fn focus_world_frame(&mut self) {
+        let Some(wf) = world_frame(&self.model_ref()) else {
+            return;
+        };
+        let (leave, enter) = {
+            let mut model = self.model_mut();
+            if model.mouseover == Some(wf) {
+                (None, None)
+            } else {
+                // A frame destroyed since it took the hover gets no leave, and a disabled Button
+                // runs neither script ([`button::hover_notify_runs`]), as in the walk.
+                let old = model.mouseover.filter(|&h| model.arena.frame(h).is_some());
+                let old_id = old
+                    .and_then(|h| model.frame_to_id.get(&h).copied())
+                    .filter(|_| button::hover_notify_runs(&model, old));
+                model.mouseover = Some(wf);
+                let enter = model.frame_to_id.get(&wf).copied();
+                (old.map(|h| (h, old_id)), enter)
+            }
+        };
+        if let Some((h, script)) = leave {
+            super::mouseover::leave(&self.lua, h, script);
+        }
+        if let Some(id) = enter {
+            super::mouseover::enter(&self.lua, wf, id);
+        }
+        // The capture as the notifies left it (`0x764ded`), unless it is the world frame itself.
+        let held = {
+            let model = self.model_ref();
+            model
+                .mouse_capture
+                .filter(|&c| c != wf && model.arena.frame(c).is_some())
+        };
+        let Some(c) = held else {
+            return;
+        };
+        let now = self.now();
+        let (name, presses) = {
+            let model = self.model_ref();
+            let name = model
+                .stored_event
+                .button
+                .clone()
+                .unwrap_or_else(|| UNKNOWN_BUTTON.to_string());
+            let presses: Vec<String> = model
+                .mouse_down_on
+                .iter()
+                .filter(|(_, &p)| p == Some(c))
+                .map(|(b, _)| b.clone())
+                .collect();
+            (name, presses)
+        };
+        let btn = match self.lua.create_string(&name) {
+            Ok(s) => Value::String(s),
+            Err(e) => {
+                self.push_error(e);
+                return;
+            }
+        };
+        let (drag, id, wf_id) = {
+            let mut model = self.model_mut();
+            // A Slider's and a ColorSelect's up slots end their thumb drag ahead of the base,
+            // whatever the button (`0x789cd3`, `0x78bf95`).
+            super::slider::end_drag(&mut model);
+            super::colorselect::end_drag(&mut model);
+            // The base up (`0x76c040`) ends the frame's own gesture when the event's button is
+            // one it drags (`0x76c050`).
+            let drag = if model.drag.as_ref().is_some_and(|d| d.source == c) {
+                cursor::take_drag(&mut model, &name)
+            } else {
+                None
+            };
+            let id = model.frame_to_id.get(&c).copied();
+            (drag, id, model.frame_to_id.get(&wf).copied())
+        };
+        // A started drag fires `OnDragStop` and the hover's `OnReceiveDrag`, the world frame's now
+        // (`0x76c06e`, `0x76c081`); else the frame's `OnMouseUp` with the event's button
+        // (`0x76c0f2`).
+        let started = drag.as_ref().is_some_and(|d| d.started);
+        if let Some(release) = drag.filter(|d| d.started) {
+            self.fire_drag_stop(release.source);
+            if let Some(wid) = wf_id {
+                if let Err(e) =
+                    event::fire_widget_handler(&self.lua, wid, "OnReceiveDrag", Vec::new())
+                {
+                    self.push_error(e);
+                }
+            }
+        } else if let Some(id) = id {
+            if let Err(e) =
+                event::fire_widget_handler(&self.lua, id, "OnMouseUp", vec![btn.clone()])
+            {
+                self.push_error(e);
+            }
+        }
+        if !started {
+            // An EditBox's slot ends its selection drag after the base (`0x77b8ad`), and a
+            // Button's runs its release at the zeroed point (`0x7792e6`): no click unless its
+            // rect holds the origin, and the button back to normal.
+            editbox::drag_end(&self.lua);
+            self.release_slot(c, &name, (0.0, 0.0), now, &btn);
+        }
+        let mut model = self.model_mut();
+        model.mouse_capture = None;
+        for b in presses {
+            model.mouse_down_on.remove(&b);
+        }
+    }
+
+    /// The freelook leave's hover re-pick (`0x493090` → `0x4930a0`, `[root+0x1100] = 1`): the next
+    /// update walks the hover again at the stored cursor, so the frame under it takes the hover
+    /// back from the world frame ([`Self::focus_world_frame`]).
+    pub fn repick_hover(&mut self) {
+        self.model_mut().hover_repick = true;
+    }
+
     /// Whether `(x, y)` is inside the frame's title region. A new title region has no anchors and
     /// hits nothing until `SetPoint`/`SetAllPoints` (`CreateTitleRegion 0x773910`).
     fn title_region_hit(&self, h: crate::widget::FrameHandle, x: f32, y: f32) -> bool {
@@ -313,10 +471,25 @@ impl UiScript {
     /// `OnClick` follows `RegisterForClicks` ([`button::wants_click`], default `{"LeftButtonUp"}`):
     /// a press fires it for `"<Button>ButtonDown"`, a release on the pressed frame for
     /// `"<Button>ButtonUp"`. Its `down` argument is not 1.12, whose firer (`0x779540`) passes only
-    /// the button name. Returns whether the UI consumed the event.
+    /// the button name. Returns whether the UI consumed the event ([`PointerTarget::Ui`]).
     pub fn mouse_button(&mut self, x: f32, y: f32, button: &str, down: bool) -> bool {
+        self.mouse_button_to(x, y, button, down) == PointerTarget::Ui
+    }
+
+    /// [`Self::mouse_button`], answering where the event went: a frame of the interface's, the
+    /// world frame's slot, whose binding the caller runs, or nothing.
+    pub fn mouse_button_to(&mut self, x: f32, y: f32, button: &str, down: bool) -> PointerTarget {
+        // The mouse mode the event carries (`[evt+0x10]`), relative while the camera is in
+        // freelook (`0x50fe30` → `0x420540(1, 0)`); absolute with no host to ask.
+        let relative_mode = self.freelook_now().unwrap_or(false);
         if down {
-            self.model_mut().press_hooked = false;
+            let mut model = self.model_mut();
+            model.press_hooked = false;
+            // The press is stored first, ahead of the layout drag and the hook (`0x76631b`).
+            model.stored_event = StoredMouseEvent {
+                button: Some(button.to_string()),
+                at: (x, y),
+            };
         }
         // ── The layout drag, ahead of everything ─────────────────────────────────────────────────
         //
@@ -333,7 +506,7 @@ impl UiScript {
                 if let Some(h) = target {
                     crate::script::object::movable::start_layout_drag(&mut model, h, (x, y), ctrl);
                 }
-                return true;
+                return PointerTarget::Ui;
             }
         }
         let hit_id = self.hit_test(x, y);
@@ -351,47 +524,57 @@ impl UiScript {
         // it and returns before its sweep (`0x766164`), and the hover stays the frame it was when
         // the drag began.
         let mut release_lost = false;
-        let (press_target, hooked): (Option<crate::widget::FrameHandle>, bool) = if down {
-            let mut model = self.model_mut();
-            // A press for a button still held means its release never came (a focus loss); the
-            // reference's capture never loses one. That frame gets the release edge so it does not
-            // stay pushed, and with no other button down the stale capture goes too, so this
-            // press is not aimed at it.
-            if let Some(entry) = model.mouse_down_on.remove(button) {
-                release_lost = true;
-                if let Some(stale) = entry {
-                    button::edge(&mut model, stale, ButtonState::on_mouse_up);
+        let (press_target, hooked, relative): (Option<crate::widget::FrameHandle>, bool, bool) =
+            if down {
+                let mut model = self.model_mut();
+                // A press for a button still held means its release never came (a focus loss); the
+                // reference's capture never loses one. That frame gets the release edge so it does not
+                // stay pushed, and with no other button down the stale capture goes too, so this
+                // press is not aimed at it.
+                if let Some(entry) = model.mouse_down_on.remove(button) {
+                    release_lost = true;
+                    if let Some(stale) = entry {
+                        button::edge(&mut model, stale, ButtonState::on_mouse_up);
+                    }
                 }
-            }
-            if model.mouse_down_on.is_empty() {
-                model.mouse_capture = None;
-            }
-            let held = model
-                .mouse_capture
-                .filter(|&c| model.arena.frame(c).is_some());
-            let hover = if model.moving.is_some() {
-                model.mouseover.filter(|&h| model.arena.frame(h).is_some())
+                if model.mouse_down_on.is_empty() {
+                    model.mouse_capture = None;
+                }
+                let held = model
+                    .mouse_capture
+                    .filter(|&c| model.arena.frame(c).is_some());
+                let hover = if model.moving.is_some() {
+                    model.mouseover.filter(|&h| model.arena.frame(h).is_some())
+                } else {
+                    hit_id.and_then(|id| model.id_to_frame.get(&id).copied())
+                };
+                // The world input hook `0x492b50`, which the handler runs on the event record before
+                // it picks a frame, and only with no capture held (`0x76635c`-`0x766370`): a right
+                // press with a payload on the cursor or a gift wrap pending clears the cursor and is
+                // consumed.
+                let hooked = held.is_none()
+                    && button == "RightButton"
+                    && (model.cursor.is_some() || model.pending_wrap.is_some());
+                // The hook's relative leg, behind the same gate (`0x492bc1`): in freelook every press
+                // goes to the world frame's press slot (`0x492bd9`) and is consumed there, so no frame
+                // is captured, raised or pressed.
+                let relative = held.is_none() && !hooked && relative_mode;
+                (held.or(hover), hooked, relative)
             } else {
-                hit_id.and_then(|id| model.id_to_frame.get(&id).copied())
+                (None, false, false)
             };
-            // The world input hook `0x492b50`, which the handler runs on the event record before
-            // it picks a frame, and only with no capture held (`0x76635c`-`0x766370`): a right
-            // press with a payload on the cursor or a gift wrap pending clears the cursor and is
-            // consumed.
-            let hooked = held.is_none()
-                && button == "RightButton"
-                && (model.cursor.is_some() || model.pending_wrap.is_some());
-            (held.or(hover), hooked)
-        } else {
-            (None, false)
-        };
         if hooked {
             // `ClearCursor(1, 1)` at `0x492bb5`; the handler returns without a capture, a raise or
             // a press slot, so no frame sees this press and its release finds none to go to.
             self.model_mut().cursor_pos = (x, y);
             self.model_mut().press_hooked = true;
             verb(&self.lua, cursor::clear_cursor);
-            return true;
+            return PointerTarget::Ui;
+        }
+        if relative {
+            self.model_mut().cursor_pos = (x, y);
+            self.world_frame_slot(button, true);
+            return PointerTarget::World;
         }
         let press_id: Option<u32> =
             press_target.and_then(|h| self.model_ref().frame_to_id.get(&h).copied());
@@ -415,7 +598,7 @@ impl UiScript {
             if self.title_region_hit(h, x, y) {
                 self.model_mut().cursor_pos = (x, y);
                 crate::script::object::movable::start_title_move(&mut self.model_mut(), h);
-                return true;
+                return PointerTarget::Ui;
             }
         }
         // ── The release ends a title move, and that is all it does ─────────────────────────────
@@ -436,7 +619,17 @@ impl UiScript {
             let mut model = self.model_mut();
             model.moving = None;
             model.mouse_down_on.remove(button);
-            return true;
+            return PointerTarget::Ui;
+        }
+        // A release with nothing pressed is offered to the hook (`0x766485`), whose relative leg
+        // sends it to the world frame's release slot (`0x492be5`).
+        if !down && relative_mode && {
+            let model = self.model_ref();
+            !model.mouse_down_on.contains_key(button) && model.mouse_capture.is_none()
+        } {
+            self.model_mut().cursor_pos = (x, y);
+            self.world_frame_slot(button, false);
+            return PointerTarget::World;
         }
         // The frame this release goes to, read before the borrow below drains `mouse_down_on`.
         let captured_id: Option<u32> = if down {
@@ -452,7 +645,7 @@ impl UiScript {
             Ok(s) => Value::String(s),
             Err(e) => {
                 self.push_error(e);
-                return hit_id.is_some();
+                return PointerTarget::Nothing;
             }
         };
         let mut press_art: Option<crate::widget::FrameHandle> = None;
@@ -633,10 +826,43 @@ impl UiScript {
         if let Some(h) = released {
             self.release_slot(h, button, (x, y), now, &btn);
         }
-        // A world-frame hit is not the UI consuming the event: the reference runs its
-        // `OnMouseDown` without consuming (`0x483c40`), then the `BUTTON1`/`BUTTON2` binding, the
-        // world click. Only a world drop counts.
-        hit_id.is_some_and(|id| !self.is_world_frame(id)) || world_dropped
+        // The event is the frame's it went to, the press's target (the capture, else the hover,
+        // `0x76637f`) or the release's capture (`0x76642b`), not the frame under the cursor. The
+        // world frame's slot runs its `OnMouseDown` without consuming (`0x483c40`), then the
+        // `BUTTON1`/`BUTTON2` binding; a world drop is consumed. A press with no frame at all is
+        // the world's, where `WorldFrame.xml` is not loaded; a release with none reached nothing.
+        let target = if down { press_id } else { captured_id };
+        if world_dropped || target.is_some_and(|id| !self.is_world_frame(id)) {
+            PointerTarget::Ui
+        } else if down || target.is_some() {
+            PointerTarget::World
+        } else {
+            PointerTarget::Nothing
+        }
+    }
+
+    /// The world frame's press or release slot as the hook calls it in relative mode (`0x492bd9`,
+    /// `0x492be5`): its `OnMouseDown` or `OnMouseUp` (`0x483c40`, `0x483cb0`); its binding is the
+    /// caller's ([`PointerTarget::World`]).
+    fn world_frame_slot(&mut self, button: &str, down: bool) {
+        let id = {
+            let model = self.model_ref();
+            world_frame(&model).and_then(|h| model.frame_to_id.get(&h).copied())
+        };
+        let Some(id) = id else {
+            return;
+        };
+        let btn = match self.lua.create_string(button) {
+            Ok(s) => Value::String(s),
+            Err(e) => {
+                self.push_error(e);
+                return;
+            }
+        };
+        let script = if down { "OnMouseDown" } else { "OnMouseUp" };
+        if let Err(e) = event::fire_widget_handler(&self.lua, id, script, vec![btn]) {
+            self.push_error(e);
+        }
     }
 
     /// The Button release slot `0x7792d0` past its base (`0x76c040`: `OnMouseUp`, which the caller

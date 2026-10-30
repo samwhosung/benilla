@@ -277,6 +277,21 @@ pub(crate) fn drive_mouseover_tooltip(
         let Some(script) = script else {
             return;
         };
+        // The WorldFrame picks nothing in freelook (`0x483e80` sets `[wf+0x38c]&2`), from the
+        // call that entered it (`0x483ec3`): a pick taken before that call names nobody.
+        let (hovered, hovered_go) = if script.freelook_now() == Some(true) {
+            let blank = Hovered {
+                distance: f32::MAX,
+                ..Default::default()
+            };
+            let go = HoveredObject {
+                distance: f32::MAX,
+                ..Default::default()
+            };
+            (blank, go)
+        } else {
+            (*hovered, *hovered_go)
+        };
         let (last_lines, trace) = (&mut memo.last_lines, &mut *memo.trace);
         let last_lines = last_lines.get(script);
         // The publisher's change check (`0x482090`) compares against the VM's last publish.

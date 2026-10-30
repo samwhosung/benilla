@@ -1951,17 +1951,21 @@ fn move_start_close(
     commands: &NetCommands,
     unlocks: Unlocks,
 ) -> Option<u64> {
-    use benilla_protocol::guid;
-    use benilla_protocol::messages::loot_type;
     let source = loot.source()?;
-    if loot.window.loot_type == loot_type::DISENCHANTING && !loot.window.is_empty() {
-        return None;
-    }
-    if guid::is_item(source) {
+    if move_start_keeps(loot, source) {
         return None;
     }
     debug!("ui_loot: movement started with {source:#x} open — release");
     close_with(loot, latch, Some(commands), unlocks)
+}
+
+/// What a movement start's close keeps, `dl` set: a disenchant window with rows left
+/// (`0x48f24a`) and an item's loot (`0x48f2ab`).
+pub(super) fn move_start_keeps(loot: &LootState, source: u64) -> bool {
+    use benilla_protocol::guid;
+    use benilla_protocol::messages::loot_type;
+    loot.window.loot_type == loot_type::DISENCHANTING && !loot.window.is_empty()
+        || guid::is_item(source)
 }
 
 /// The closes the drain takes: the movement start's and the precast end's at rest.

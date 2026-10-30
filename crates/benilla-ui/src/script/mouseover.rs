@@ -13,7 +13,17 @@ use mlua::Lua;
 
 use crate::widget::{FrameHandle, FrameKind};
 
+use super::live::LiveQuery;
 use super::{event, Model, UiScript};
+
+/// The question the world's pick asks before it publishes: whether the camera is in freelook,
+/// which blanks the WorldFrame's pick from the call that entered it (`0x483e80` sets
+/// `[wf+0x38c]&2`).
+pub struct FreelookQuery;
+
+impl LiveQuery for FreelookQuery {
+    type Answer = bool;
+}
 
 /// What a frame's leave notify (`vtbl+0x50`) does beyond its `OnLeave`.
 enum LeaveClass {
@@ -154,6 +164,12 @@ impl UiScript {
     /// corpse; `None` once the pick or a hover leave published the empty one.
     pub fn world_mouseover(&self) -> Option<u64> {
         self.model_ref().world_mouseover
+    }
+
+    /// Whether the camera is in freelook as of here ([`FreelookQuery`]), through the lent host;
+    /// `None` with no host to ask.
+    pub fn freelook_now(&self) -> Option<bool> {
+        super::live::ask(&self.lua, &FreelookQuery)
     }
 
     /// Publish the world pick's mouseover ([`publish`]): the caller then pushes a unit's

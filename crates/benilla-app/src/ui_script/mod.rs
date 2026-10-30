@@ -150,27 +150,9 @@ pub(crate) struct PlayerUiClickConsumed(pub(crate) bool);
 /// A press the UI consumed this frame, whatever is under the pointer: the layout drag's press
 /// returns at `0x766353`–`0x76635b`, and a right press with a payload held at the world input
 /// hook (`0x492b50`, `0x766370`), each before any frame, the world frame included, sees it, so
-/// the world latch takes no press this frame even with no UI frame hovered.
+/// the world frame's binding takes no press this frame even with no UI frame hovered.
 #[derive(Resource, Default)]
 pub(crate) struct PlayerUiPressConsumed(pub(crate) bool);
-
-/// Who this frame's button presses went to, as the records dispatched them: `(button, over_ui)`
-/// per press, `over_ui` when a frame was hovered, the interface consumed it or the dev overlay held
-/// the pointer. The world frame's binding and the world's mouse latch both read it, so they agree
-/// on who owns a press; a button no record pressed this frame is absent.
-#[derive(Resource, Default)]
-pub(crate) struct WorldPresses(pub(crate) Vec<(MouseButton, bool)>);
-
-impl WorldPresses {
-    /// Whether the frame's last press of `button` was the interface's, `None` with no press.
-    pub(crate) fn over_ui(&self, button: MouseButton) -> Option<bool> {
-        self.0
-            .iter()
-            .rev()
-            .find(|(b, _)| *b == button)
-            .map(|(_, over)| *over)
-    }
-}
 
 /// What [`extract::tick_script`] hands [`extract::paint_script`]; with `live` false (no VM or
 /// window) the paint does nothing.
@@ -477,7 +459,6 @@ impl Plugin for UiScriptPlugin {
             .init_resource::<UiKeyboardCapture>()
             .init_resource::<PlayerUiClickConsumed>()
             .init_resource::<PlayerUiPressConsumed>()
-            .init_resource::<WorldPresses>()
             .init_resource::<UiClock>()
             .init_resource::<HostClock>()
             .init_resource::<benilla_world::frame_pace::FrameStep>()

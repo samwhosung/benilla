@@ -49,6 +49,7 @@ fn sent(rx: &Receiver<ClientCommand>) -> Vec<String> {
                 ClientCommand::CancelAura { spell_id } => format!("cancel aura {spell_id}"),
                 ClientCommand::MinimapPing { x, y } => format!("ping {x} {y}"),
                 ClientCommand::StandStateChange { state } => format!("stand {state}"),
+                ClientCommand::SetSheathed { state } => format!("sheathed {state}"),
                 ClientCommand::PageTextQuery { page_id, .. } => format!("page {page_id}"),
                 _ => return None,
             })
@@ -706,6 +707,29 @@ fn sit_or_stand_sends_inside_its_call() {
     seat(&mut app, &[]);
     eval::<()>(&mut app, "SitOrStand() RandomRoll(1, 2)");
     assert_eq!(sent(&rx), ["stand 1", "roll 1"]);
+}
+
+/// `ToggleSheath()` (`0x48a070` → `0x5eb480`) runs the setter inside its call: holding a sword,
+/// stowed, it draws (`0x5eb642` → `0x611cf0`), its `CMSG_SETSHEATHED` (`0x611dbc`) ahead of the
+/// chunk's next verb. The draw's animation starts inside the setter (`0x611cea` → `0x611a20`), so
+/// a second toggle in the chunk finds it running and is refused (`0x5eb5a0`-`0x5eb5e2`). Main
+/// toggled at the frame's posture pass.
+#[test]
+fn toggle_sheath_sends_inside_its_call() {
+    let (mut app, rx) = client();
+    let me = seat(&mut app, &[]);
+    app.world_mut().entity_mut(me).insert((
+        crate::creature_anim::AnimDriver::default(),
+        AnimationPlayer::default(),
+        bevy::animation::transition::AnimationTransitions::default(),
+        crate::go_anim::owned_anims(&[89, 90]),
+        crate::creature_anim::Wielded {
+            main: Some((2, 7)),
+            ..Default::default()
+        },
+    ));
+    eval::<()>(&mut app, "ToggleSheath() RandomRoll(1, 2) ToggleSheath()");
+    assert_eq!(sent(&rx), ["sheathed 1", "roll 1"]);
 }
 
 /// `PLAYER_FARSIGHT`'s low word.

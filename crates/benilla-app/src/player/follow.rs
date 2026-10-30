@@ -31,7 +31,6 @@ use bevy::prelude::*;
 
 use crate::net::GuidIndex;
 
-use super::camera::{CameraControl, LookButton};
 use super::state::{MoveSpeed, Player};
 
 /// Follow's turn rate in rad/s, its own (`0xc4d93c`, seeded at `0x6111f9`), not the keyboard's.
@@ -146,15 +145,17 @@ fn should_move(was_moving: bool, distance: f32, speed: f32) -> bool {
 }
 
 /// `move_start` and `autorun_engaged` are key-down edges (the stop emitters and autorun's off edge,
-/// `0x60dc90`, have no guard call); `mouse_look` is a level, re-entering the guard every frame.
+/// `0x60dc90`, have no guard call); `hand_off` is the mouse's hand-off to the body, whose facing
+/// write reaches the guard (`0x5103e0` → `0x5152e0` → `0x60de30` → `0x60e990(1, 1)`) on each
+/// motion that turns the body: behind the TurnOrAction bit (`0x5145fa`), not the look.
 fn follow_cancelled(
     move_start: bool,
     autorun_engaged: bool,
     both_engaged: bool,
-    mouse_look: bool,
+    hand_off: bool,
     lost_mover: bool,
 ) -> bool {
-    move_start || autorun_engaged || both_engaged || mouse_look || lost_mover
+    move_start || autorun_engaged || both_engaged || hand_off || lost_mover
 }
 
 /// Wrap an angle into `[-π, π)`.
@@ -192,10 +193,9 @@ pub(super) struct FollowInput<'w, 's> {
     buttons: Res<'w, ButtonInput<MouseButton>>,
     /// The movement commands' press edges, wherever bound; typing in chat does not reach them.
     binds: Res<'w, crate::bindings::BindingsState>,
-    /// The mouse-look level, read a frame behind `control`, so its cancel lands a frame after the
-    /// reference's; the world's mouse buttons are current ([`super::camera::latch_world_mouse`]
-    /// runs first).
-    rig: Res<'w, CameraControl>,
+    /// The mouse's hand-off to the body this frame ([`super::LookSample`]), written by the look
+    /// session ahead of this; absent in a harness without the mouse, which hands nothing off.
+    sample: Option<Res<'w, super::LookSample>>,
     /// The mover's descriptor block, for the cancel terms that are state: health and stun.
     mover: Query<'w, 's, &'static crate::net::ObjectStore, With<crate::net::Embodied>>,
     /// The far-sight latch, the input tick's far-sight term (`0x514540`).
@@ -205,7 +205,8 @@ pub(super) struct FollowInput<'w, 's> {
 }
 
 impl FollowInput<'_, '_> {
-    /// The press edge of any of the six movement commands; turn and strafe both cancel.
+    /// The press edge of any of the six movement commands; turn and strafe both cancel. A call's
+    /// own edge ran its start's stop inside it ([`super::press::TickLegs`]).
     fn move_start(&self) -> bool {
         use crate::bindings::Input;
         [
@@ -217,7 +218,7 @@ impl FollowInput<'_, '_> {
             Input::StrafeRight,
         ]
         .iter()
-        .any(|&c| self.binds.just_pressed(c))
+        .any(|&c| self.binds.just_pressed(c) && !self.binds.settled(c))
     }
 
     /// The cancel set, the start emitters' `0x60e990` and the input tick's teardown, which end any
@@ -225,15 +226,17 @@ impl FollowInput<'_, '_> {
     pub(super) fn cancels(&self, player: &Player) -> bool {
         // The world's buttons, not the device's: the both-button run is two bindings held, and a
         // press a UI frame captured dispatches neither.
-        let both_engaged = self.rig.world_mouse.both() && self.rig.world_mouse.rose();
+        let both_engaged = super::input::both_engaged(&self.binds);
         follow_cancelled(
             self.move_start(),
             // The on edge only, as the start reaches the guard (`0x60dc60` → `0x60e990`) and the
             // stop does not (`0x60dc90`): the press toggled `autorun` first ([`super::press`]),
             // so the flag is the post-toggle value.
-            self.buttons.just_pressed(MouseButton::Forward) && player.autorun,
+            self.buttons.just_pressed(MouseButton::Forward)
+                && player.autorun
+                && !self.binds.settled(crate::bindings::Input::ToggleAutoRun),
             both_engaged,
-            self.rig.look == Some(LookButton::Right),
+            self.sample.as_deref().is_some_and(|s| s.hands_off),
             // The teardown leg, or the body handed to a server spline; the ride term is not one of
             // the reference's conjuncts (`0x5144e0`), and its reference side is untraced.
             self.input_torn_down(player.modes.rooted, self.lock.foreign_mover.is_none())

@@ -156,6 +156,8 @@ disjoint::disjoint_set! {
         click: crate::target::ClickLegs<'static, 'static>,
         /// The binding functions' input state, and `DropItemOnUnit`'s legs.
         commands: crate::player::CommandSteps<'static, 'static>,
+        look: crate::player::LookSteps<'static>,
+        sheath: crate::player::SheathToggle<'static, 'static>,
         drop_item: crate::ui_action::drop_item::DropItemLeg<'static, 'static>,
     }
 }
@@ -505,6 +507,102 @@ impl ScriptCallHost<'_, '_> {
             self.appliers.attack().stop_for_stand();
         }
         self.appliers.stand().finish();
+    }
+
+    /// `SetCommands` (`0x515090`) inside a binding call: the bit, then the cast cancel (`0x51512a`
+    /// → `0x6e4940`, `0x515193` → `0x6e9b70`), whose stop the call's reports signal, then the
+    /// tick's legs (`0x5151a0` → `0x514640`, [`crate::player::TickLegs`]): the away clear's line,
+    /// a start's `AUTOFOLLOW_END` and its loot close, each signalled in its place, the loot's
+    /// `LOOT_CLOSED` in the call's tail.
+    fn set_commands(
+        &mut self,
+        script: &mut UiScript,
+        mark: &mut crate::ui_cast::ReportMark,
+        input: benilla_ui::script::BindingInput,
+    ) -> Option<CallTail> {
+        use benilla_ui::script::BindingInput::{Fire, ViewStart, ViewStop};
+        use benilla_ui::script::FiredInput;
+        match input {
+            // The camera's axes are its own state (`[cam+0x128]`), set inside the call.
+            ViewStart(axis) | ViewStop(axis) => {
+                self.appliers
+                    .views()
+                    .move_axis(axis, matches!(input, ViewStart(_)));
+                return None;
+            }
+            // The zoom runs the camera's distance axis (`0x50fc60`, `0x50fcd0`).
+            Fire(FiredInput::CameraZoomIn(yards)) => {
+                self.appliers.views().zoom(false, yards);
+                return None;
+            }
+            Fire(FiredInput::CameraZoomOut(yards)) => {
+                self.appliers.views().zoom(true, yards);
+                return None;
+            }
+            // `ToggleSheath` (`0x48a070`) is no command bit: the player's own toggle.
+            Fire(FiredInput::ToggleSheath) => {
+                self.appliers.sheath().toggle();
+                return None;
+            }
+            _ => {}
+        }
+        // A bound mouse command's press that sets the first primary bit enters freelook before
+        // its tick (`0x514840` → `0x51491f`, then `0x5151a0`).
+        let before = self.appliers.look().bits_before(input);
+        let called = self.appliers.commands().call(input);
+        let looked = self.appliers.look().bound(input, before);
+        freelook_edges(script, looked);
+        self.run_called(script, mark, called)
+    }
+
+    /// A look-session call inside its verb ([`benilla_ui::script::ScriptCall::Look`]): the world
+    /// mouse's channel and the freelook it enters or leaves, then for `MouselookStart`/`Stop` the
+    /// `SetCommands` work its bit change runs (`0x514231`, `0x51425b`), as [`Self::set_commands`]
+    /// runs a bound one's.
+    fn look(
+        &mut self,
+        script: &mut UiScript,
+        mark: &mut crate::ui_cast::ReportMark,
+        call: benilla_ui::script::LookCall,
+    ) -> Option<CallTail> {
+        let looked = self.appliers.look().call(call);
+        freelook_edges(script, looked);
+        let benilla_ui::script::LookCall::Mouselook(on) = call else {
+            return None;
+        };
+        let called = self.appliers.commands().mouselook(on, looked.changed);
+        self.run_called(script, mark, called)
+    }
+
+    /// What a `SetCommands` call leaves its host ([`crate::player::Called`]), run in its order.
+    fn run_called(
+        &mut self,
+        script: &mut UiScript,
+        mark: &mut crate::ui_cast::ReportMark,
+        called: crate::player::Called,
+    ) -> Option<CallTail> {
+        if let Some(mover_is_player) = called.cancel {
+            self.appliers.self_cancel().cancel_for_move(mover_is_player);
+        }
+        let legs = called.legs;
+        if legs == crate::player::TickLegs::default() {
+            return None;
+        }
+        // The cancel's stop goes ahead of the tick's lines (`0x51512a` before `0x5151a0`).
+        self.signal_reports(script, mark);
+        if legs.clear_afk {
+            self.appliers.chat().clear_afk(script);
+        }
+        if legs.stop_auto_move {
+            if self.appliers.commands().following() {
+                script.fire_event("AUTOFOLLOW_END", vec![]);
+            }
+            self.appliers.commands().stop_auto_move();
+        }
+        if legs.close_loot {
+            return self.appliers.loot().close_for_move(script);
+        }
+        None
     }
 
     /// The reports the call made since `mark` signalled now, ahead of whatever it signals next:
@@ -1080,13 +1178,8 @@ impl CallHost for ScriptCallHost<'_, '_> {
             }
             ScriptCall::RecordAsk(ask) => appliers.asks().apply(ask),
             ScriptCall::WorldClick(step) => self.world_click(script, &mut at, step),
-            // `SetCommands` (`0x515090`): the bit, then the cast cancel (`0x51512a` → `0x6e4940`,
-            // `0x515193` → `0x6e9b70`), whose stop the call's reports signal as it returns.
-            ScriptCall::Input(input) => {
-                if let Some(mover_is_player) = appliers.commands().call(input) {
-                    appliers.self_cancel().cancel_for_move(mover_is_player);
-                }
-            }
+            ScriptCall::Input(input) => tail = self.set_commands(script, &mut at.mark, input),
+            ScriptCall::Look(call) => tail = self.look(script, &mut at.mark, call),
             ScriptCall::DropItemOnUnit(token) => appliers.drop_item().drop_on(script, &token),
         }
         // A profession opener the call cast toggles its window inside the cast (`0x6e4c22`,
@@ -1220,6 +1313,24 @@ pub(crate) fn hosted<R>(
     match script.as_deref_mut() {
         Some(script) => lent(script, host.as_mut(), |script| f(Some(script))),
         None => f(None),
+    }
+}
+
+/// The world frame's half of a freelook a call entered or left (`0x493070`, `0x493090`), inside
+/// the call: the entry turns every plate's mouse off, which ends a hovered plate's hover through
+/// its leave (`0x483e9a` → `0x60f830`), then publishes the empty mouseover (`0x483ec3`), the hover
+/// driver's teardown, so the next line's `"mouseover"` names nobody, then moves the mouse focus to
+/// the world frame (`0x493085` → `0x764dc0`); the leave turns the plates' mouse back on
+/// (`0x483e70`) and has the hover picked again (`0x4930a0`).
+fn freelook_edges(script: &mut UiScript, looked: crate::player::Looked) {
+    if looked.entered {
+        script.set_nameplate_mouse(false);
+        script.set_unit("mouseover", None);
+        script.publish_world_mouseover(None);
+        script.focus_world_frame();
+    } else if looked.left {
+        script.set_nameplate_mouse(true);
+        script.repick_hover();
     }
 }
 
@@ -1642,6 +1753,7 @@ mod tests {
     mod selection;
     mod sends;
     mod systems;
+    mod ticks;
     mod window_verbs;
 
     const ME: u64 = 0x10;

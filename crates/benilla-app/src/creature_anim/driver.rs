@@ -109,6 +109,17 @@ fn armed_id(
     })
 }
 
+/// The manual toggle's model tests (`0x5eb542`, `0x5eb580`) on the animation armed now
+/// (`0x5fdb50`), for a toggle made inside its call.
+pub(crate) fn toggle_model_refuses(
+    drv: &AnimDriver,
+    player: &AnimationPlayer,
+    tr: &AnimationTransitions,
+    anims: &ModelAnimations,
+) -> bool {
+    model_refuses_toggle(anims, armed_id(drv, player, tr, anims))
+}
+
 /// Whether a one-shot is live on the unit; the missile queue polls it to launch a missile whose
 /// release keyframe never fired when the cast ends (the reference's `0x5fc920` → `0x60c9b0`).
 pub(crate) fn oneshot_is_live(
@@ -739,6 +750,20 @@ pub(super) fn drive_animations(
         // The setter: a no-op when unchanged (`newState == CUR`), else commit, volunteer
         // `CMSG_SETSHEATHED` for the local player, and for the manual toggle play the ceremony,
         // per-arm masked overlays (`0x60b770`) by each item's stow family (hip 90, back 89).
+        // A toggle committed inside its call plays its ceremony from the state it left.
+        if let Some((from, to)) = committed.owed_ceremony.take() {
+            start_sheath_ceremony(
+                &mut commands,
+                entity,
+                &mut drv,
+                &mut player,
+                anims,
+                wielded,
+                from,
+                to,
+                catalog,
+            );
+        }
         if let Some(req) = pending_sheath.get(&entity) {
             let cur = committed.cur.unwrap_or(0);
             // Deviation: a mounted draw is refused at the setter, because our rider track never

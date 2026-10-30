@@ -164,6 +164,8 @@ live_reads! {
         channels: crate::ui_chat::edit::ChannelLive<'static>,
         /// The acknowledged tutorial bank `TutorialsEnabled` scans.
         tutorials: crate::tutorial::TutorialLive<'static>,
+        /// The camera's freelook, which blanks the world's pick, and the TurnOrAction bit.
+        look: crate::player::LookLive<'static>,
         /// The reader's cells and its object's name, creator and material; absent in a harness
         /// without the reader or the objects.
         item_text: Option<crate::ui_item_text::ItemTextLive<'static, 'static>>,

@@ -30,7 +30,7 @@ use bevy::input::ButtonState;
 use bevy::prelude::*;
 
 use benilla_ui::script::keybind::KeybindRequest;
-use benilla_ui::script::{KeyUp, KeyWalk, UiScript};
+use benilla_ui::script::{KeyUp, KeyWalk, PointerTarget, UiScript};
 
 use crate::client_state::InWorldGated;
 use crate::textinput::keymap::Mods;
@@ -225,6 +225,27 @@ impl BindingsState {
         self.steering()
             && (self.just_pressed(Input::TurnOrAction)
                 || self.just_pressed(Input::CameraOrSelectOrMove))
+    }
+    /// A primary bit is held (`[InputControl+4] & 3`), whichever call set it: a mouse command's,
+    /// or `MouselookStart`'s TurnOrAction bit.
+    pub(crate) fn primary_held(&self) -> bool {
+        self.pressed(Input::TurnOrAction) || self.pressed(Input::CameraOrSelectOrMove)
+    }
+    /// A call made with no host lent, applied where the engine takes it, its edge unsettled for
+    /// the frame's readers: `MouselookStart`'s bit, which the look session takes at its latch.
+    pub(crate) fn apply_unhosted(&mut self, input: benilla_ui::script::BindingInput) {
+        self.apply_script_input(vec![input]);
+    }
+    /// The release of both primary bits (`0x5144c0` → `0x514b70(-1, …)`), the session's end.
+    pub(crate) fn release_primaries(&mut self) {
+        self.held
+            .retain(|&i| !matches!(i, Input::TurnOrAction | Input::CameraOrSelectOrMove));
+    }
+    /// The next frame begins: this one's edges are spent, as the binding pass's head spends them.
+    #[cfg(test)]
+    pub(crate) fn next_frame_for_test(&mut self) {
+        self.begin_pass();
+        self.end_pass();
     }
 }
 
@@ -469,7 +490,7 @@ fn write_file(path: &Option<std::path::PathBuf>, text: &str) {
 /// consumers (the action bar's hotkey corners) repaint. The reference signals it from `SetBinding`
 /// (`0x4b805b`), which signals in place, and from the copy of a set into the live table
 /// (`0x4b649d`); reading a `Bindings.xml` (`0x4b6f70`) signals nothing.
-fn sync_dispatch(
+pub(crate) fn sync_dispatch(
     mut hosted_vm: crate::script_calls::HostedVm,
     mut dispatch: ResMut<BindingDispatch>,
 ) {
@@ -666,18 +687,18 @@ impl WorldFrameBindings<'_> {
         }
     }
 
-    /// One button record; `over_ui` is whether a frame was hovered when it came.
+    /// One button record, which the interface's walk sent to `reach`.
     pub(crate) fn button(
         &mut self,
         script: Option<&mut UiScript>,
         button: MouseButton,
         pressed: ButtonState,
         mods: Mods,
-        over_ui: bool,
+        reach: PointerTarget,
     ) {
         if let (Some(dispatch), Some(state)) = (self.dispatch.as_deref(), self.state.as_deref_mut())
         {
-            button_leg(dispatch, state, script, button, pressed, mods, over_ui);
+            button_leg(dispatch, state, script, button, pressed, mods, reach);
         }
     }
 
@@ -827,8 +848,11 @@ const BIND_BUTTONS: [MouseButton; 5] = [
     MouseButton::Back,
 ];
 
-/// A button record's binding: a press only with the cursor over the world (a frame owns its
-/// clicks), a release always.
+/// A button record's binding, the world frame's slot's (`0x483c40`, `0x483cb0`): a press whose
+/// target was the world frame runs it; a release runs the up-half of what its press latched,
+/// unless a frame of the interface's took it, and with none latched, as for a press that went to
+/// a frame before freelook released through the hook (`0x492be5`), the chord the release makes
+/// (`0x4b6aa0` → `0x4b7990(…, 0)`) when it reached the world frame.
 fn button_leg(
     dispatch: &BindingDispatch,
     state: &mut BindingLatches,
@@ -836,14 +860,17 @@ fn button_leg(
     button: MouseButton,
     pressed: ButtonState,
     mods: Mods,
-    over_ui: bool,
+    reach: PointerTarget,
 ) {
     if !BIND_BUTTONS.contains(&button) {
         return;
     }
     match pressed {
         ButtonState::Pressed => {
-            if mods.sup || over_ui || state.latched.iter().any(|(k, _)| *k == Held::Mouse(button)) {
+            if mods.sup
+                || reach == PointerTarget::Ui
+                || state.latched.iter().any(|(k, _)| *k == Held::Mouse(button))
+            {
                 return;
             }
             let chord = Chord {
@@ -856,7 +883,26 @@ fn button_leg(
                 press(state, script, command, Held::Mouse(button));
             }
         }
-        ButtonState::Released => release(state, script, Held::Mouse(button)),
+        ButtonState::Released => {
+            let latched = state.latched.iter().any(|(k, _)| *k == Held::Mouse(button));
+            if reach == PointerTarget::Ui {
+                state.latched.retain(|(k, _)| *k != Held::Mouse(button));
+            } else if latched {
+                release(state, script, Held::Mouse(button));
+            } else if reach == PointerTarget::World && !mods.sup {
+                let chord = Chord {
+                    alt: mods.alt,
+                    ctrl: mods.ctrl,
+                    shift: mods.shift,
+                    key: BindKey::Mouse(button),
+                };
+                if let (Some(command), Some(s)) = (dispatch.resolve(chord, false), script) {
+                    if let Err(e) = s.execute_binding(command, false) {
+                        warn!("bindings({command}): {e}");
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -920,8 +966,14 @@ fn dispatch_records(
                     };
                     legs.key(s.as_deref_mut(), ev, r.mods, verdict, &layout);
                 }
+                // A release reached no frame: the test leaves no capture to route it.
                 Record::Button { button, state } => {
-                    legs.button(s.as_deref_mut(), *button, *state, r.mods, hover.0.is_some());
+                    let reach = match (*state, hover.0) {
+                        (ButtonState::Released, _) => PointerTarget::Nothing,
+                        (_, Some(_)) => PointerTarget::Ui,
+                        (_, None) => PointerTarget::World,
+                    };
+                    legs.button(s.as_deref_mut(), *button, *state, r.mods, reach);
                 }
                 Record::Move => {}
                 Record::Wheel { up } => legs.wheel(s.as_deref_mut(), r.mods, *up),
@@ -2305,6 +2357,60 @@ mod tests {
         mouse(&mut app, MouseButton::Middle, ButtonState::Released);
         app.update();
         assert!(!state(&app).steering());
+    }
+
+    /// Emptied button planes end a held drag, as a window's focus loss or the cover's reset leaves
+    /// them, with no release record: the stuck-latch sweep runs MOVEANDSTEER's up-half, whose
+    /// Stops lower both mouse bits.
+    #[test]
+    fn emptied_button_planes_end_a_held_drag() {
+        let mut app = harness();
+        mouse(&mut app, MouseButton::Middle, ButtonState::Pressed);
+        app.update();
+        assert!(state(&app).steering());
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .reset_all();
+        app.update();
+        assert!(!state(&app).steering(), "the sweep ran the up-half");
+    }
+
+    /// A rebound BUTTON2 runs only its own command: the release of a right press the world frame
+    /// took lowers no TurnOrAction bit a `MouselookStart` holds, as the world frame's release slot
+    /// runs the button's binding alone (`0x483cb0` → `0x4b7990`).
+    #[test]
+    fn a_rebound_right_buttons_release_ends_no_mouselook() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut script = UiScript::new().expect("VM");
+        script.set_default_bindings(benilla_ui::script::keybind::parse_bindings_wtf(&format!(
+            "{DEFAULTS}bind BUTTON2 TOGGLEUI\r\n"
+        )));
+        script.load_binding_set(1);
+        script.register_bindings(&benilla_ui::bindings_xml::parse(CORE).expect("well-formed"));
+        let mut app = vm_harness(script);
+        app.init_resource::<crate::player::CameraControl>();
+        app.update();
+        let latch = |app: &mut App| {
+            app.world_mut()
+                .run_system_once(crate::player::camera::latch_world_mouse)
+                .expect("the latch runs");
+        };
+        app.world()
+            .non_send_resource::<UiScript>()
+            .run("MouselookStart()")
+            .expect("runs");
+        latch(&mut app);
+        assert!(state(&app).pressed(Input::TurnOrAction));
+        for pressed in [ButtonState::Pressed, ButtonState::Released] {
+            mouse(&mut app, MouseButton::Right, pressed);
+            app.update();
+            latch(&mut app);
+        }
+        assert_eq!(lua_count(&app, "UITOGGLES"), 1, "BUTTON2's own command ran");
+        assert!(
+            state(&app).pressed(Input::TurnOrAction),
+            "the MouselookStart still holds the bit"
+        );
     }
 
     /// The notches the sweep left to the world each run CAMERAZOOMIN's `CameraZoomIn(1.0)`, and

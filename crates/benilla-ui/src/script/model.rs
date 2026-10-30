@@ -89,6 +89,15 @@ pub(crate) fn node_deferred(
 
 /// The Rust-side model behind the Lua VM, in `lua.app_data`. It holds no Lua handles, each of
 /// which is a collector root.
+/// The fields of the top's stored mouse event (`[root+0x1104]`) its readers take: the button
+/// (`+0x1108`) and the point (`+0x1118`, `+0x111c`) a move is compared with (`0x766122`).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct StoredMouseEvent {
+    /// The press's button by name; `None` for a move's, which carries 0.
+    pub(crate) button: Option<String>,
+    pub(crate) at: (f32, f32),
+}
+
 #[derive(Clone)]
 pub(crate) struct Model {
     /// Which FrameScript state this VM is: it picks the event table and the frame types.
@@ -1122,6 +1131,11 @@ pub(crate) struct Model {
     pub(crate) item_locks: std::collections::HashSet<u64>,
     /// The last cursor position in UI space (logical px, y-up), behind `GetCursorPosition()`.
     pub(crate) cursor_pos: (f32, f32),
+    /// The last mouse event the top stored (`[root+0x1104]`), as the focus change's release reads
+    /// it ([`super::UiScript::focus_world_frame`]): a press stores its own at its handler's top
+    /// (`0x76631b`), a move to a new point its own (`0x76615f`), whose button is 0, and a release
+    /// or a wheel notch stores nothing.
+    pub(crate) stored_event: StoredMouseEvent,
 
     /// The minimap's process-wide statics (zoom cells, indoor byte, mask), shared by every
     /// Minimap frame of this VM.
@@ -1653,6 +1667,7 @@ impl Model {
             verb_events: None,
             item_locks: std::collections::HashSet::new(),
             cursor_pos: (0.0, 0.0),
+            stored_event: StoredMouseEvent::default(),
             minimap: crate::widget::MinimapStatics::default(),
             screenshot_asks: 0,
             realm_name: String::new(),
