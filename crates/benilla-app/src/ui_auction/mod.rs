@@ -38,7 +38,7 @@ mod net;
 mod verbs;
 
 pub(crate) use live::AuctionLive;
-pub(crate) use net::{message_answered, record_answered, sell_item_answered, HouseLane};
+pub(crate) use net::{list_record_answered, message_answered, sell_item_answered, HouseLane};
 pub(crate) use verbs::AuctionVerbs;
 
 #[cfg(test)]
@@ -87,19 +87,26 @@ pub(crate) struct AuctionListSlot {
     /// The millisecond tick the result was read at (`0x4cc865`), each row's deadline base, on
     /// `GetTime`'s clock as `GetAuctionItemTimeLeft` reads it: the result's handler stamps it.
     arrived_ms: Option<u32>,
-    /// The page's sort tail is owed until every one of these item entries is answered: the
-    /// reference's pending-lookups counter is not yet back at zero (`0xb72644`, `0xb72648`,
-    /// `0xb7264c`), so the list holds its event. The hello leaves it (`0x4cd570` writes no
-    /// counter); the world-enter reset zeroes it (`0x4cc2c3`-`0x4cc2cd`).
-    awaiting: Option<Vec<u32>>,
+    /// The pending-lookups counter (`0xb72644`, `0xb72648`, `0xb7264c`): one per row whose
+    /// lookup missed, counted down by each callback, the page's sort tail owed while it is not
+    /// 0. The hello leaves it (`0x4cd570` writes no counter); the world-enter reset zeroes it
+    /// (`0x4cc2c3`-`0x4cc2cd`) and leaves the callbacks registered.
+    pending: u32,
+    /// The items of the rows a new result replaced while the counter was not 0, whose callbacks
+    /// its handler cancels (`0x4cc812`-`0x4cc854`) ([`AuctionOpen::land_page`]).
+    cancel: Vec<u32>,
 }
 
 impl AuctionListSlot {
-    /// Whether the page waits on `entry` and, with it answered, on nothing more.
-    fn awaits_only_answered(&self, entry: u32, items: &Items) -> bool {
-        self.awaiting.as_ref().is_some_and(|items_of| {
-            items_of.contains(&entry) && items_of.iter().all(|&e| items.template_answered(e))
-        })
+    /// The list's callback for one of its rows' records, a record or a refusal (`0x4cca10`,
+    /// `0x4ccc60`, `0x4cceb0`): the counter down, and the tail owed when it reaches 0 or already
+    /// stood there. Whether the tail runs.
+    fn record_answered(&mut self) -> bool {
+        if self.pending == 0 {
+            return true;
+        }
+        self.pending -= 1;
+        self.pending == 0
     }
 }
 
@@ -312,11 +319,14 @@ impl AuctionOpen {
     pub(crate) fn set_list(&mut self, which: usize, entries: Vec<AuctionListEntry>, total: u32) {
         self.next_page = self.next_page.wrapping_add(1);
         let slot = &mut self.lists[which];
+        if slot.pending != 0 {
+            slot.pending = 0;
+            slot.cancel = slot.entries.iter().map(|e| e.item_entry).collect();
+        }
         slot.entries = entries;
         slot.total = total.max(slot.entries.len() as u32);
         slot.page = self.next_page;
         slot.arrived_ms = None;
-        slot.awaiting = Some(slot.entries.iter().map(|e| e.item_entry).collect());
     }
 
     /// A line the handler shows, in its order ([`HouseEffect::Line`]).
@@ -339,7 +349,7 @@ impl AuctionOpen {
             total: slot.total,
             sort: self.sorts.0[list],
             page: slot.page,
-            pending: slot.awaiting.is_some(),
+            pending: slot.pending != 0,
             ..Default::default()
         }
     }
@@ -487,7 +497,7 @@ impl AuctionOpen {
         self.clear();
         self.empty_lists();
         for slot in &mut self.lists {
-            slot.awaiting = None;
+            slot.pending = 0;
         }
         self.query_gate = None;
     }
@@ -792,26 +802,41 @@ impl AuctionOpen {
             rows,
             sort: self.sorts.0[list],
             page: slot.page,
-            pending: slot.awaiting.is_some(),
+            pending: slot.pending != 0,
             ..Default::default()
         }
     }
 
-    /// A list result's own step in its handler (`0x4cc7f0`, `0x4cca30`, `0x4ccc80`): the page
-    /// stamped with the tick, and its tail run now when every item is already known, as the
-    /// handler's own count reaching 0 runs it (`0x4cc9e8`-`0x4cc9f1`); else it waits for the
-    /// last record (`0x4cca10`). Whether the tail ran.
-    pub(crate) fn land_page(&mut self, list: usize, tick: u32, items: &Items) -> bool {
+    /// A list result's own step in its handler (`0x4cc7f0`, `0x4cca30`, `0x4ccc80`): the
+    /// replaced page's callbacks cancelled (`0x4cc847`), the page stamped with the tick
+    /// (`0x4cc865`), each row's item looked up with the list's callback, dedupe 0, a miss
+    /// counted (`0x4cc9bf`-`0x4cc9c8`, `0x4ccbff`, `0x4cce4f`), and its tail run now when nothing
+    /// missed (`0x4cc9e8`-`0x4cc9f1`); else the last callback runs it. Whether the tail ran.
+    pub(crate) fn land_page(
+        &mut self,
+        list: usize,
+        tick: u32,
+        items: &Items,
+        ask: Ask<'_>,
+    ) -> bool {
+        let callback = crate::items::RecordCallback::AuctionList(list);
         let slot = &mut self.lists[list];
-        slot.arrived_ms.get_or_insert(tick);
-        let known = slot
-            .awaiting
-            .as_ref()
-            .is_some_and(|items_of| items_of.iter().all(|&e| items.template_answered(e)));
-        if known {
-            slot.awaiting = None;
+        for entry in std::mem::take(&mut slot.cancel) {
+            items.cancel_wait(entry, callback);
         }
-        known
+        slot.arrived_ms.get_or_insert(tick);
+        for row in &slot.entries {
+            if items.template(row.item_entry, 0, ask).is_none() {
+                slot.pending += 1;
+                items.wait(row.item_entry, callback);
+            }
+        }
+        slot.pending == 0
+    }
+
+    /// `list`'s callback on one of its rows' records ([`AuctionListSlot::record_answered`]).
+    pub(crate) fn list_record_answered(&mut self, list: usize) -> bool {
+        self.lists[list].record_answered()
     }
 }
 
@@ -981,18 +1006,19 @@ mod tests {
     /// leaves "Searching" only on it (`Blizzard_AuctionUI.lua:187`), even for an identical page.
     #[test]
     fn an_identical_list_result_still_owes_its_events() {
+        let items = Items::default();
         let mut open = AuctionOpen::default();
         open.open(0x1234, 1);
 
         open.set_list(LIST, Vec::new(), 0);
-        assert!(open.lists[LIST].awaiting.is_some(), "the first empty page");
-
-        // The tail runs and clears it.
-        open.lists[LIST].awaiting = None;
+        assert!(
+            open.land_page(LIST, 0, &items, Ask::Read),
+            "the first empty page"
+        );
 
         open.set_list(LIST, Vec::new(), 0);
         assert!(
-            open.lists[LIST].awaiting.is_some(),
+            open.land_page(LIST, 0, &items, Ask::Read),
             "an identical page owes the event too — this is the whole bug"
         );
     }
@@ -1001,24 +1027,91 @@ mod tests {
     /// (`Blizzard_AuctionUI.lua:817`).
     #[test]
     fn a_result_owes_only_its_own_lists_event() {
+        let items = Items::default();
         let mut open = AuctionOpen::default();
         open.open(0x1234, 1);
-        let owed = |open: &AuctionOpen| open.lists.each_ref().map(|l| l.awaiting.is_some());
+        let owed = |open: &AuctionOpen| open.lists.each_ref().map(|l| l.pending != 0);
 
+        for (list, want, why) in [
+            (
+                LIST,
+                [true, false, false],
+                "a browse result is not news about the player's bids or listings",
+            ),
+            (OWNER, [false, false, true], "the owner page"),
+            (BIDDER, [false, true, false], "the bidder page"),
+        ] {
+            open.set_list(list, vec![entry(ME, 0)], 1);
+            assert!(
+                !open.land_page(list, 0, &items, Ask::Read),
+                "its item is out"
+            );
+            assert_eq!(owed(&open), want, "{why}");
+            assert!(open.list_record_answered(list), "its one callback sorts it");
+        }
+    }
+
+    /// A new result cancels the replaced page's callbacks while its counter is not 0
+    /// (`0x4cc812`-`0x4cc854`); the world-enter reset zeroes the counter and cancels nothing
+    /// (`0x4cc2c3`), so a callback left from before it sorts the list (`0x4cca17` → `0x4cca21`).
+    #[test]
+    fn a_new_result_cancels_its_lists_waits_and_the_reset_leaves_them() {
+        let items = Items::default();
+        let waits =
+            |items: &Items| items.waiting(2589, crate::items::RecordCallback::AuctionList(LIST));
+        let mut open = AuctionOpen::default();
+        open.open(0x1234, 1);
+
+        open.set_list(LIST, vec![entry(ME, 0)], 1);
+        assert!(!open.land_page(LIST, 0, &items, Ask::Read));
+        assert!(
+            waits(&items),
+            "the row's lookup missed with the list's callback"
+        );
         open.set_list(LIST, Vec::new(), 0);
-        assert_eq!(
-            owed(&open),
-            [true, false, false],
-            "a browse result is not news about the player's bids or listings"
+        assert!(
+            open.land_page(LIST, 0, &items, Ask::Read),
+            "the empty page sorts at once"
+        );
+        assert!(
+            !waits(&items),
+            "and the replaced row's callback is cancelled"
         );
 
-        open.lists[LIST].awaiting = None;
-        open.set_list(OWNER, Vec::new(), 0);
-        assert_eq!(owed(&open), [false, false, true]);
+        open.set_list(LIST, vec![entry(ME, 0)], 1);
+        assert!(!open.land_page(LIST, 0, &items, Ask::Read));
+        open.reset_world_state();
+        assert!(waits(&items), "the reset cancels nothing");
+        assert!(
+            open.list_record_answered(LIST),
+            "the callback, its counter at 0, sorts the list"
+        );
+    }
 
-        open.lists[OWNER].awaiting = None;
-        open.set_list(BIDDER, Vec::new(), 0);
-        assert_eq!(owed(&open), [false, true, false]);
+    /// A row whose item the cache refused is looked up with the list's callback, which asks it
+    /// again at once (`0x556aa0`), so the page counts it and waits on that answer (`0x4cc9c8`)
+    /// rather than sorting in its handler.
+    #[test]
+    fn a_row_whose_item_was_refused_asks_again_and_waits() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let commands = NetCommands(tx);
+        let mut items = Items::default();
+        let _ = items.template(2589, 0, Ask::Event(&commands));
+        items.insert_template(2589, None);
+        assert!(items.template_answered_unknown(2589), "refused");
+        rx.try_iter().for_each(drop);
+        let mut open = AuctionOpen::default();
+        open.open(0x1234, 1);
+        open.set_list(LIST, vec![entry(ME, 0)], 1);
+        assert!(
+            !open.land_page(LIST, 0, &items, Ask::Event(&commands)),
+            "the refused row's item is out again"
+        );
+        assert!(
+            rx.try_iter()
+                .any(|c| matches!(c, ClientCommand::ItemQuery { entry: 2589, .. })),
+            "and asked again"
+        );
     }
 
     const ME: u64 = 0x77;
@@ -1324,7 +1417,6 @@ mod tests {
             open.open(0x1234, 1);
             open.set_list(OWNER, vec![entry(ME, BIDDER_GUID)], 1);
             open.lists[OWNER].arrived_ms = Some(0);
-            open.lists[OWNER].awaiting = None;
         }
         let mut script = app
             .world_mut()

@@ -430,3 +430,94 @@ fn a_bind_on_equip_replay_asks_at_its_answers_place() {
     );
     assert!(equips_and_duels(&sent).is_empty(), "nothing sent");
 }
+
+/// A try-on of an item the cache lacks keeps `0x504ba0` on the record (`0x504579`, dedupe 0);
+/// the answer tries it on again inside its handler (`0x504bae` → `0x504540`), whose refusal of a
+/// non-equippable item shows `ERR_NOT_EQUIPPABLE` (`0x504b2d`) at the packet's place, between
+/// the falls of the packets around it.
+#[test]
+fn a_try_on_refused_at_its_records_answer_shows_at_the_answers_place() {
+    const BOX: u32 = 5_555;
+    let mut app = client();
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(
+            r#"
+            ERR_NOT_EQUIPPABLE = "Not equippable"
+            local pane = CreateFrame("Frame", "DressUpFrame", UIParent)
+            CreateFrame("DressUpModel", "DressUpModel", pane)
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("UI_ERROR_MESSAGE")
+            f:SetScript("OnEvent", function() table.insert(Seen, event .. ":" .. arg1) end)
+            "#,
+        )
+        .unwrap();
+    hosted(&mut app, &format!("DressUpModel:TryOn({BOX})"));
+    let mut t = crate::items::test_template("Box");
+    t.inventory_type = 0;
+    let answer = SessionEvent::ItemTemplate {
+        entry: BOX,
+        info: Some(Box::new(t)),
+    };
+    assert_eq!(
+        frame(&mut app, vec![fall(5), answer, fall(6)]),
+        [FELL, "UI_ERROR_MESSAGE:Not equippable", FELL]
+    );
+}
+
+/// A crafting line whose item the cache lacks waits with the combat log's callback `0x6294b0`
+/// (`0x55ba30`, dedupe 0), ahead of a leaderboard read's `0x4e0830` on the same record; the answer
+/// runs them in that order (`0x55bf12`-`0x55bf39`), so the line is written ahead of the quest
+/// log's update.
+#[test]
+fn a_combat_lines_callback_runs_at_its_place_in_the_answers_list() {
+    use crate::ui_quest_log::fixture::{quest, seat};
+    use benilla_protocol::messages::{ExecuteLog, SpellLogExecute};
+    const PELT: u32 = 900;
+    let mut app = client();
+    {
+        let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
+        let mut pelts = quest(50, "Pelts", 1);
+        pelts.record.objectives[0] = benilla_ui::script::QuestObjectiveView {
+            item_id: PELT,
+            item_count: 5,
+            ..Default::default()
+        };
+        seat(&mut s, &[pelts]);
+        s.run(
+            r#"
+            TRADESKILL_LOG_FIRSTPERSON = "You create %s."
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("QUEST_LOG_UPDATE")
+            f:RegisterEvent("CHAT_MSG_SPELL_TRADESKILLS")
+            f:SetScript("OnEvent", function()
+                table.insert(Seen, event .. (arg1 and (":" .. arg1) or ""))
+            end)
+            "#,
+        )
+        .unwrap();
+    }
+    let craft = SessionEvent::SpellLogExecute(SpellLogExecute {
+        caster: ME,
+        spell_id: 1,
+        effects: vec![(24, vec![ExecuteLog::CreateItem { item_entry: PELT }])],
+    });
+    let slot = benilla_protocol::field::FIELD_PLAYER_QUEST_LOG_1_1;
+    frame(&mut app, vec![values(ME, &[(slot, 50)]), craft]);
+    crate::script_calls::with_hosted_vm(app.world_mut(), |s| {
+        let s = s.expect("a VM");
+        s.run("GetQuestLogLeaderBoard(1, 2) Seen = {}")
+            .expect("the chunk runs");
+    });
+    let answer = SessionEvent::ItemTemplate {
+        entry: PELT,
+        info: Some(Box::new(crate::items::test_template("Wolf Pelt"))),
+    };
+    assert_eq!(
+        frame(&mut app, vec![answer]),
+        [
+            "CHAT_MSG_SPELL_TRADESKILLS:You create Wolf Pelt.",
+            "QUEST_LOG_UPDATE"
+        ]
+    );
+}

@@ -3,8 +3,9 @@
 //! call, and composes the booth's look each frame ([`DressUpPreview`]): the player's own gear with
 //! each substitution in its [`equip_slot`], the held triple through [`held_lanes`]. A try-on whose
 //! template ([`Items::template`]) is cached at the call lands there, or refuses there; one that is
-//! not lands when the record arrives. There is no fit check: the reference previews whatever it
-//! is handed (`DressUpFrame.lua:2-16`).
+//! not lands, or refuses, inside the record's answer, at its callback's place in the entry's list
+//! ([`try_on_answered`]). There is no fit check: the reference previews whatever it is handed
+//! (`DressUpFrame.lua:2-16`).
 
 use benilla_protocol::CharEnumItem;
 use benilla_ui::script::{DressUpIntent, UiScript};
@@ -120,7 +121,7 @@ pub(crate) struct DressUpRoom {
     /// ones left ([`held_lanes`]).
     held: Vec<CharEnumItem>,
     /// Try-ons whose record the cache did not hold at the call, each with the callback `0x504ba0`
-    /// registered (`0x504579`), read again every frame until the record lands.
+    /// waiting in the item cache (`0x504579`), whose answer lands it ([`Self::answered`]).
     pending: Vec<u32>,
 }
 
@@ -143,13 +144,17 @@ impl DressUpRoom {
                 self.worn = Default::default();
                 self.held.clear();
             }
-            // The lookup with the callback (`0x504579`): a cached record goes on inside the call
-            // (`0x5045dd`-`0x5045ee`), a missing one waits for `0x504ba0`.
+            // The lookup with the callback (`0x504579`, dedupe 0): a cached record goes on inside
+            // the call (`0x5045dd`-`0x5045ee`), a missing one keeps `0x504ba0` in the cache's
+            // list, one per call.
             DressUpIntent::TryOn(item) => {
                 self.open = true;
                 match items.template(item, 0, Ask::Event(commands)) {
                     Some(t) => return self.land(t),
-                    None => self.pending.push(item),
+                    None => {
+                        items.wait(item, crate::items::RecordCallback::TryOn);
+                        self.pending.push(item);
+                    }
                 }
             }
         }
@@ -167,34 +172,45 @@ impl DressUpRoom {
         self.pending.clear();
     }
 
-    /// The records that landed for the try-ons still waiting, whose callbacks (`0x504ba0`) ran as
-    /// each arrived, ahead of the verbs called since; then those verbs in call order. Returns the
-    /// `ERR_NOT_EQUIPPABLE` count to show.
+    /// The verbs in call order. Returns the `ERR_NOT_EQUIPPABLE` count to show.
     fn step(
         &mut self,
         intents: impl IntoIterator<Item = DressUpIntent>,
         items: &Items,
         commands: &NetCommands,
     ) -> u32 {
-        let mut refused = self.resolve_pending(items);
+        let mut refused = 0;
         for intent in intents {
             refused += self.apply(intent, items, commands);
         }
         refused
     }
 
-    /// The try-ons whose record has landed, in try-on order; an id the server never answers stays
-    /// pending, and its slot shows the player's own gear. Returns the refusal count, as
-    /// [`Self::land`].
-    fn resolve_pending(&mut self, items: &Items) -> u32 {
-        let mut refused = 0;
-        for item in std::mem::take(&mut self.pending) {
-            match items.template(item, 0, Ask::Read) {
-                Some(t) => refused += self.land(t),
-                None => self.pending.push(item),
-            }
+    /// The callback `0x504ba0` on a found record of `entry`: `TryOn` again (`0x504bae` →
+    /// `0x504540`), which finds the record now and goes on, or refuses, whether or not the room
+    /// was emptied since the call that waited; one try-on of `entry` waits no more. Returns the
+    /// refusal count, as [`Self::land`].
+    fn answered(&mut self, entry: u32, items: &Items) -> u32 {
+        if let Some(i) = self.pending.iter().position(|&e| e == entry) {
+            self.pending.remove(i);
         }
-        refused
+        self.open = true;
+        items
+            .template(entry, 0, Ask::Read)
+            .map_or(0, |t| self.land(t))
+    }
+
+    /// Every try-on whose record is cached now, in try-on order, as each answer's callback lands
+    /// it ([`Self::answered`]): a test's stand-in for the answers.
+    #[cfg(test)]
+    fn resolve_pending(&mut self, items: &Items) -> u32 {
+        let landed: Vec<u32> = self
+            .pending
+            .iter()
+            .copied()
+            .filter(|&e| items.template(e, 0, Ask::Read).is_some())
+            .collect();
+        landed.into_iter().map(|e| self.answered(e, items)).sum()
     }
 
     /// `0x504540` with the record in hand, by its inventory type. Returns 1 when it is not
@@ -264,8 +280,7 @@ pub(crate) struct DressUpSteps<'w> {
 impl DressUpSteps<'_> {
     /// One verb inside its call: a try-on looks its record up in the cache as it stands at the
     /// call (`0x504579`), and a cached one goes on, or refuses, before the verb returns
-    /// (`0x5045dd`-`0x5045ee`, `0x504b2d`). The callbacks of the records that landed since the
-    /// last verb run first, as each ran at its arrival.
+    /// (`0x5045dd`-`0x5045ee`, `0x504b2d`).
     pub(crate) fn apply(&mut self, script: &mut UiScript, intent: DressUpIntent) {
         let (Some(room), Some(items), Some(commands)) = (
             self.room.as_deref_mut(),
@@ -281,18 +296,48 @@ impl DressUpSteps<'_> {
         show_refusals(script, &mut self.sink, refused);
     }
 
-    /// The frame's turn: the room emptied when no pane is shown, then the records that landed for
-    /// the try-ons still waiting, each refusal shown from its callback (`0x504ba0`).
+    /// The frame's turn: the room emptied when no pane is shown.
     fn frame(&mut self, script: &mut UiScript) {
-        let (Some(room), Some(items)) = (self.room.as_deref_mut(), self.items.as_deref()) else {
+        let Some(room) = self.room.as_deref_mut() else {
             return;
         };
         if !pane_shown(script) {
             room.close();
         }
-        let refused = room.resolve_pending(items);
+    }
+
+    /// The callback `0x504ba0` on a found record of `entry`, inside its answer: `TryOn` again on
+    /// a shown pane (`0x504596`), whose refusal shows there (`0x504b2d`).
+    fn answered(&mut self, script: &mut UiScript, entry: u32) {
+        let (Some(room), Some(items)) = (self.room.as_deref_mut(), self.items.as_deref()) else {
+            return;
+        };
+        if !pane_shown(script) {
+            return;
+        }
+        let refused = room.answered(entry, items);
         show_refusals(script, &mut self.sink, refused);
     }
+}
+
+/// The try-on callback `0x504ba0` on a found record of `entry`, at its place in the entry's list
+/// ([`crate::net::objects`]): the try-on again (`0x504bae` → `0x504540`), whose refusal's
+/// `UI_ERROR_MESSAGE` is parked at the packet's place among the frame's events
+/// ([`crate::field_callbacks::Parked`]). A refusal runs nothing (`0x504ba8`).
+pub(crate) fn try_on_answered(world: &mut World, entry: u32) {
+    fn run(In(entry): In<u32>, mut vm: crate::script_calls::VmWith<DressUpSteps<'static>>) {
+        vm.turn(|script, mut steps| {
+            if let Some(script) = script {
+                steps.answered(script, entry);
+            }
+        });
+    }
+    let mut parked = crate::field_callbacks::Parked::new(world);
+    parked.leg(world, |world| {
+        if let Err(err) = world.run_system_cached_with(run, entry) {
+            debug!("ui_dressup: the try-on callback did not run: {err}");
+        }
+    });
 }
 
 pub(crate) struct DressUpUiPlugin;
@@ -805,6 +850,7 @@ mod tests {
             &cmds,
         );
         items.insert_template(2000, Some(worn("Shiny Chest", 7000, 5)));
+        room.answered(2000, &items);
         room.step([DressUpIntent::Undress], &items, &cmds);
         assert_eq!(
             look_dw(&store, &room, &items, true).equipment[4].display_id,
@@ -835,7 +881,7 @@ mod tests {
             "the player's own chest until the record comes"
         );
         items.insert_template(2000, Some(worn("Shiny Chest", 7000, 5)));
-        room.step([], &items, &cmds);
+        room.answered(2000, &items);
         assert_eq!(
             look_dw(&store, &room, &items, true).equipment[4].display_id,
             7000,

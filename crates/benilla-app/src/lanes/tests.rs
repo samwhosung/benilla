@@ -433,6 +433,13 @@ fn each_answer_handler_queues_a_release_behind_a_line_that_reads_it() {
         // Each answer finds the cache without it, so its lookup's callback runs.
         world.insert_resource(crate::names::NameCache::default());
         bevy::ecs::system::RunSystemOnce::run_system_once_with(&mut *world, line, p1()).unwrap();
+        // A crafting line's first fill misses its item and leaves the log's callback
+        // (`0x55ba30`), which this harness, with no VM, never fills.
+        if let SessionEvent::ItemTemplate { entry, .. } = &answer {
+            world
+                .resource::<crate::items::Items>()
+                .wait(*entry, crate::items::RecordCallback::CombatLog);
+        }
         crate::net::handlers::dispatch(world, vec![answer]);
         let kinds = world.resource::<crate::ui_chat::ChatLog>().pending_kinds();
         assert_eq!(kinds.last(), Some(&"release"), "{kinds:?}");

@@ -450,7 +450,8 @@ impl ChatLog {
     /// A record a held line may read landed in the packet being handled. The lines waiting on it
     /// show here, in the packets' order, as the caches run the callbacks waiting on a record: the
     /// name cache's (`0x55f426`-`0x55f452`), whose chat callback shows the lines (`0x49ccc0`), and
-    /// the item cache's, whose combat-log callback writes them (`0x6294b0`). Queued only when a
+    /// the item cache's, whose combat-log callback writes them (`0x6294b0`), at its place in the
+    /// answer's list. Queued only when a
     /// line could be waiting: one held, or one queued ahead of the answer that reads it.
     pub(crate) fn answer_landed(&self, answer: Answer) {
         let mut q = self.q();
@@ -2111,8 +2112,11 @@ fn fire_one(
                 // asked again only on its first drain; a line waits on an item alone, and as
                 // long as the cache takes to answer: the reference's list has no timer or
                 // count, and only the answer or the session's end removes an entry
-                // (`0x6293a0`, `0x6294cc`, `0x629a90`).
-                let ask = Ask::at(line.tries == 0, commands);
+                // (`0x6293a0`, `0x6294cc`, `0x629a90`). The item's lookup that misses leaves the
+                // log's callback in the answer's list, one per line (`0x628f83`, `0x629650`,
+                // `0x6297a0`, `0x6298e1`, dedupe 0).
+                let first = line.tries == 0;
+                let ask = Ask::at(first, commands);
                 let sources = super::combat::NameSources {
                     names,
                     gameobjects,
@@ -2133,7 +2137,12 @@ fn fire_one(
                         None if items.template_answered_unknown(entry) => {
                             super::combat::ItemName::Unknown
                         }
-                        None => super::combat::ItemName::Waiting,
+                        None => {
+                            if first {
+                                items.wait(entry, crate::items::RecordCallback::CombatLog);
+                            }
+                            super::combat::ItemName::Waiting
+                        }
                     },
                 );
                 match ready {

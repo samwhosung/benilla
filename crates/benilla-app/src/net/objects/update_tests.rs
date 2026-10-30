@@ -448,9 +448,12 @@ fn an_item_answer_runs_a_waiting_auction_pages_tail_in_its_handler() {
         bidder_guid: 0,
         current_bid: 0,
     };
-    world
-        .resource_mut::<crate::ui_auction::AuctionOpen>()
-        .set_list(benilla_ui::script::LIST, vec![row], 1);
+    world.resource_scope(|world, mut auction: Mut<crate::ui_auction::AuctionOpen>| {
+        auction.set_list(benilla_ui::script::LIST, vec![row], 1);
+        let items = world.resource::<crate::items::Items>();
+        let ask = crate::query_cache::Ask::Read;
+        assert!(!auction.land_page(benilla_ui::script::LIST, 0, items, ask));
+    });
     super::super::handlers::dispatch(
         world,
         vec![SessionEvent::ItemTemplate {

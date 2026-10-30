@@ -106,8 +106,6 @@ pub(crate) struct Scene<'w, 's> {
     self_moves: MessageWriter<'w, super::SelfMoveMessage>,
     hard_landings: MessageWriter<'w, crate::creature_anim::HardLanding>,
     names: Res<'w, NameCache>,
-    // The combat lines held for an item's name, shown where its answer lands.
-    chat: Option<Res<'w, crate::ui_chat::ChatLog>>,
     items: ResMut<'w, Items>,
     go_templates: ResMut<'w, GameObjectTemplates>,
     death_net: ResMut<'w, crate::death::DeathNet>,
@@ -243,9 +241,8 @@ fn on_item_answer(In(ev): In<SessionEvent>, world: &mut World) {
         for callback in callbacks {
             run_callback(world, entry, callback, true);
         }
-        run_answer_step(world, run_answer_tail, entry);
     } else {
-        walk_refusal(world, entry, callbacks, true);
+        walk_refusal(world, entry, callbacks);
     }
 }
 
@@ -266,15 +263,9 @@ pub(crate) fn answer_item(
     );
 }
 
-/// A refusal's walk of `list` for `entry`, and with `tail` the callbacks run after the list; when
-/// a listener of what it signalled may add to it, the walk goes on behind those signals
-/// ([`continue_refusal_walk`]).
-fn walk_refusal(
-    world: &mut World,
-    entry: u32,
-    list: Vec<crate::items::RecordCallback>,
-    tail: bool,
-) {
+/// A refusal's walk of `list` for `entry`; when a listener of what it signalled may add to it, the
+/// walk goes on behind those signals ([`continue_refusal_walk`]).
+fn walk_refusal(world: &mut World, entry: u32, list: Vec<crate::items::RecordCallback>) {
     let Some(items) = world.get_resource::<Items>() else {
         return;
     };
@@ -282,9 +273,6 @@ fn walk_refusal(
     let from = items.walk_began();
     while let Some(callback) = world.resource::<Items>().next_walk_step() {
         run_callback(world, entry, callback, false);
-    }
-    if tail {
-        run_answer_step(world, run_answer_tail, entry);
     }
     if let (true, Some(from)) = (world.resource::<Items>().end_refusal_walk(), from) {
         crate::field_callbacks::walk_on(world, entry, from);
@@ -299,7 +287,7 @@ pub(crate) fn continue_refusal_walk(world: &mut World, entry: u32, from: crate::
     };
     let list = items.take_walk_tail(entry, from);
     if !list.is_empty() {
-        walk_refusal(world, entry, list, false);
+        walk_refusal(world, entry, list);
     }
 }
 
@@ -344,6 +332,16 @@ fn run_callback(
                     crate::ui_tradeskill::record_answered(world, callback);
                 }
             }
+            // The try-on again, for a found record only (`0x504ba8`).
+            Cb::TryOn if answered => crate::ui_dressup::try_on_answered(world, entry),
+            Cb::TryOn => {}
+            // The combat log's, for a record and a refusal alike (`0x6294b0`): its held lines
+            // written, or a refused item's dropped (`0x6294fd`-`0x629504`), on the chat lane here.
+            Cb::CombatLog => {
+                if let Some(chat) = world.get_resource::<crate::ui_chat::ChatLog>() {
+                    chat.answer_landed(crate::ui_chat::Answer::Item(entry));
+                }
+            }
             _ => run_answer_step(world, run_record_callback, (entry, callback, answered)),
         }
     }
@@ -367,8 +365,9 @@ fn run_answer_step<T: 'static, M>(
 /// (`0x4c2ac0`) and pushes (`0x491ee0`), the trade getters' (`0x4c0340`), the ammo getters'
 /// (`0x4c84f0`), the vendor rows' (`0x4fada0`, `0x4fb570`), the trainer rows' (`0x4d9140`,
 /// `0x4d9db0`), the questgiver rows' (`0x5018c0`), the turn-in's reward lines' (`0x5dc7b0`), the
-/// mail rows' and notices' (`0x4af0a0`, `0x4ad010`), the mail attachment's (`0x4ae710`) and the
-/// auction notices' lines (`0x4cd190`). The equip callbacks are the VM's
+/// mail rows' and notices' (`0x4af0a0`, `0x4ad010`), the mail attachment's (`0x4ae710`), the
+/// auction notices' lines (`0x4cd190`) and the auction lists' (`0x4cca10`, `0x4ccc60`,
+/// `0x4cceb0`). The equip callbacks are the VM's
 /// ([`crate::ui_bind_confirm::replay_at_answer`]).
 fn run_record_callback(
     In((entry, callback, answered)): In<(u32, crate::items::RecordCallback, bool)>,
@@ -451,7 +450,9 @@ fn run_record_callback(
         | Cb::Tooltip
         | Cb::TradeSkill
         | Cb::TradeSkillBuild
-        | Cb::Craft => {}
+        | Cb::Craft
+        | Cb::TryOn
+        | Cb::CombatLog => {}
         // The vendor's run for a record and a refusal alike (`0x4fb0f0`, `0x4fb570`).
         Cb::Merchant => sc.merchant.row_answered(),
         Cb::Buyback => sc.merchant.buyback_answered(),
@@ -502,6 +503,12 @@ fn run_record_callback(
             }
         }
         Cb::AuctionSellItem => {}
+        // A list's, for a record and a refusal alike (`0x4cca10`, `0x4ccc60`, `0x4cceb0`).
+        Cb::AuctionList(list) => {
+            if let (Some(auction), Some(house)) = (sc.auction.as_mut(), sc.house.as_mut()) {
+                crate::ui_auction::list_record_answered(auction, house, list);
+            }
+        }
         // A roll's or its line's, for a record and a refusal alike: the start's opens the roll
         // (`0x61b460` → `0x61b430`), a line's goes on to its name or is shown (`0x61c4b0`,
         // `0x61bd50`, `0x61b7d0`).
@@ -513,20 +520,6 @@ fn run_record_callback(
             &sc.net,
             sc.self_guid.0,
         ),
-    }
-}
-
-/// The answer's callbacks registered outside the lookups' list, run after it.
-fn run_answer_tail(In(entry): In<u32>, mut sc: Scene) {
-    // The combat log's callback for its held lines (`0x6294b0`), which writes each one
-    // whose item the cache now holds.
-    if let Some(chat) = &sc.chat {
-        chat.answer_landed(crate::ui_chat::Answer::Item(entry));
-    }
-    // The auction lists' callbacks (`0x4cc9bf`, `0x4ccbff`, `0x4cce4f`), a record or a
-    // refusal: a page that now waits on nothing runs its tail.
-    if let (Some(auction), Some(house)) = (sc.auction.as_mut(), sc.house.as_mut()) {
-        crate::ui_auction::record_answered(auction, house, &sc.items, entry);
     }
 }
 

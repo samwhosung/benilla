@@ -94,20 +94,22 @@ impl House {
         self.app.insert_non_send_resource(script);
     }
 
-    /// The item's record answered, with what its answer's handler runs for the house: each page
-    /// that waited on it and now waits on nothing runs its tail (`0x4cca10`), then the drain.
+    /// The item's record answered, with what its answer's handler runs for the house: each
+    /// list's callback that waited on it, in the order they asked (`0x4cca10`), then the drain.
     fn item(&mut self, entry: u32, name: &str, level: u32, quality: u32) {
         let mut t = crate::items::test_template(name);
         t.required_level = level;
         t.quality = quality;
         let world = self.app.world_mut();
-        world
-            .resource_mut::<Items>()
-            .insert_template(entry, Some(t));
+        let mut items = world.resource_mut::<Items>();
+        items.insert_template(entry, Some(t));
+        let callbacks = items.take_callbacks(entry);
         world.resource_scope(|world, mut auction: Mut<super::AuctionOpen>| {
-            world.resource_scope(|world, mut lane: Mut<super::HouseLane>| {
-                super::record_answered(&mut auction, &mut lane, world.resource::<Items>(), entry);
-            });
+            lists_answered(
+                &mut auction,
+                &mut world.resource_mut::<super::HouseLane>(),
+                callbacks,
+            );
         });
         super::net::fire_house_lane(world);
     }
@@ -1125,7 +1127,20 @@ fn item_answers(
 ) {
     if let SessionEvent::ItemTemplate { entry, info } = ev {
         items.insert_template(entry, info.map(|b| *b));
-        super::record_answered(&mut auction, &mut lane, &items, entry);
+        lists_answered(&mut auction, &mut lane, items.take_callbacks(entry));
+    }
+}
+
+/// The lists' callbacks among an answer's, in the order they asked.
+fn lists_answered(
+    auction: &mut super::AuctionOpen,
+    lane: &mut super::HouseLane,
+    callbacks: Vec<crate::items::RecordCallback>,
+) {
+    for callback in callbacks {
+        if let crate::items::RecordCallback::AuctionList(list) = callback {
+            super::list_record_answered(auction, lane, list);
+        }
     }
 }
 

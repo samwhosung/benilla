@@ -307,9 +307,9 @@ fn patch_step(h: &House, list: usize, auction_id: u32) -> Option<HouseStep> {
     })
 }
 
-/// A list result's page as its handler writes it, the tail run there when every item is known
-/// ([`AuctionOpen::land_page`]), each item asked with the list's callback (`0x4cc9bf`,
-/// `0x4ccbff`, `0x4cce4f`), readied onto the house lane, stamped with the tick it is read at
+/// A list result's page as its handler writes it, each item looked up with the list's callback
+/// (`0x4cc9bf`, `0x4ccbff`, `0x4cce4f`) and the tail run there when none missed
+/// ([`AuctionOpen::land_page`]), readied onto the house lane, stamped with the tick it is read at
 /// (`0x4cc865`): the VM's clock, or with none the host's copy of it.
 fn land_page(vm: &mut HouseVm, list: usize) {
     vm.turn(|script, mut h| {
@@ -320,7 +320,11 @@ fn land_page(vm: &mut HouseVm, list: usize) {
             return;
         };
         let tick = script.map_or(h.wire.view().now, |s| s.auction_tick_ms());
-        let tail = h.auction.land_page(list, tick, items);
+        let ask = match h.wire.commands.as_deref() {
+            Some(commands) => crate::query_cache::Ask::Event(commands),
+            None => crate::query_cache::Ask::Read,
+        };
+        let tail = h.auction.land_page(list, tick, items, ask);
         let reads = super::ListReads {
             self_guid: h.self_q.iter().next().map(|g| g.0),
             items,
@@ -331,11 +335,9 @@ fn land_page(vm: &mut HouseVm, list: usize) {
                 enchants: h.enchants.as_deref(),
             },
         };
-        let ask = match h.wire.commands.as_deref() {
-            Some(commands) => crate::query_cache::Ask::Event(commands),
-            None => crate::query_cache::Ask::Read,
-        };
-        let state = h.auction.list_state(list, tick, &reads, ask);
+        let state = h
+            .auction
+            .list_state(list, tick, &reads, crate::query_cache::Ask::Read);
         let sorts = h.auction.sorts.0;
         h.lane.push(HouseStep::Page {
             list,
@@ -684,21 +686,12 @@ fn end_session_house(mut lane: ResMut<HouseLane>) {
     lane.clear();
 }
 
-/// An item record answered in the packet being handled, a record or a refusal: each list whose
-/// page waited on it and now waits on nothing runs its sort tail here, as the pending counter's
-/// last decrement runs it inside the record's callback (`0x4cc9e8`, `0x4cca10`), whatever the
-/// session; browse, bidder, then owner.
-pub(crate) fn record_answered(
-    auction: &mut AuctionOpen,
-    lane: &mut HouseLane,
-    items: &Items,
-    entry: u32,
-) {
-    for list in [LIST, BIDDER, OWNER] {
-        if auction.lists[list].awaits_only_answered(entry, items) {
-            auction.lists[list].awaiting = None;
-            lane.push(HouseStep::Tail(list));
-        }
+/// A list's callback on one of its rows' records, run in the answer's list, a record or a
+/// refusal alike (`0x4cca10`, `0x4ccc60`, `0x4cceb0`): its counter down, and the sort tail at 0
+/// (`0x4cca21`, `0x4ccc71`, `0x4ccec1`), whatever the session.
+pub(crate) fn list_record_answered(auction: &mut AuctionOpen, lane: &mut HouseLane, list: usize) {
+    if auction.list_record_answered(list) {
+        lane.push(HouseStep::Tail(list));
     }
 }
 

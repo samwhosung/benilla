@@ -580,3 +580,28 @@ fn a_sell_item_whose_object_is_gone_asks_no_record() {
     refuse(&mut c);
     assert_eq!(asks(&mut c), 0, "a gone object asks nothing");
 }
+
+/// A page that waits on silk's record keeps the list's callback (`0x4cc9bf`, dedupe 0) ahead of
+/// a later sold notice's (`0x4ccf6e`); the answer runs them in that order (`0x55bf12`-`0x55bf39`),
+/// so the page's sort and update (`0x4cca10` → `0x4cd8b0`) fire ahead of the notice's line.
+#[test]
+fn a_pages_callback_runs_ahead_of_a_later_notices_in_the_answers_list() {
+    let mut c = client();
+    let sold = SessionEvent::AuctionOwnerNotification(AuctionOwnerNotification {
+        auction_id: 9,
+        bid: 500,
+        out_bid: 0,
+        bidder_guid: 0,
+        item_entry: SILK,
+        random_property_id: 0,
+    });
+    c.frame(vec![vec![hello()], vec![page()], vec![sold], vec![silk()]]);
+    assert_eq!(
+        c.seen(),
+        [
+            "AUCTION_HOUSE_SHOW:nil",
+            "AUCTION_ITEM_LIST_UPDATE:nil",
+            "CHAT_MSG_SYSTEM:A buyer has been found for your auction of Silk Cloth.",
+        ]
+    );
+}

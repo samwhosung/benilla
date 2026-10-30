@@ -44,15 +44,7 @@ pub(super) enum Row {
 /// What still fires in the frame's system order rather than the packets', with what it is. A
 /// queue's row stays while any feed takes that queue; each goes when its producer moves onto a
 /// lane, and a row whose queue, feed or system is gone fails as stale.
-pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[(
-    Row::HostHeld,
-    "::items::Items",
-    "the record answers' callbacks still run off the frame's records rather than in the \
-         answer's list (`ItemCacheReceive` `0x55bdb0`, `0x55bf12`-`0x55bf39`): the \
-         dress-up's (`0x504ba0`) and the equipment display's (`0x5ed880`); and the combat log's \
-         (`0x6294b0`) and the auction lists' (`0x4cca10`, `0x4ccc60`, `0x4cceb0`), which \
-         `run_answer_tail` runs after the answer's list rather than in it",
-)];
+pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[];
 
 /// The host-held queues a handler fills that no feed fires off, each named quiet beside why: the
 /// check finds a queue the handlers and the host both hold, but not whether a feed fires off it
@@ -78,6 +70,14 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // Read through the host by the set block, and quiet: a member's answer rebuilds the tooltip
     // waiting on it through the build's own wait, read as the tick runs.
     "::item_names::ItemNames",
+    // Moved here from `NOT_YET_ON_A_LANE`, so neither list grew: the item records, read through
+    // the host by the getters at their calls (`0x55ba30`), and quiet. Every callback a lookup
+    // leaves runs in its answer's list in the order registered (`0x55bdb0`, `0x55bf12`-`0x55bf39`),
+    // the dress-up's (`0x504ba0`), the combat log's (`0x6294b0`) and the auction lists'
+    // (`0x4cca10`, `0x4ccc60`, `0x4cceb0`) among them; the equipment display's (`0x5ed880`) dresses
+    // the model and signals nothing, a draw; and the item-record feed's quest log signal
+    // (`0x4e0830`) falls due only for a record pushed outside every packet.
+    "::items::Items",
     // Moved here from `NOT_YET_ON_A_LANE`, so neither list grew: read, and quiet. A member's ping
     // stores the point at its packet and signals on the notice lane (`0x4ee330`), our own
     // `PingLocation` holds it in the host in its call, and only a new VM's seed reads it.
@@ -452,9 +452,8 @@ pub(super) const WRITES_NO_VIEW: &[(&str, &str)] = &[
     ("::ui_dialog_verbs::drain_meeting_stone_joins", "the meeting stone's use, at its click"),
     ("::ui_dialog_verbs::poll_area_spirit_healer", "the healer scan every frame (`0x4818ca` → \
         `0x4923b0`), signalling in place"),
-    ("::ui_dressup::compose_dressup", "the booth's frame: the try-on callbacks (`0x504ba0`) the \
-        record answers owe, which `NOT_YET_ON_A_LANE`'s `Items` row counts, then the pane's look, \
-        a draw"),
+    ("::ui_dressup::compose_dressup", "the booth's frame: the room emptied with no pane shown, \
+        then the pane's look, a draw"),
     ("::ui_items::feed::feed_item_stats", "the item records that land or go outside every \
         packet, a cache file's at the character's pick ahead of the world entry's load and another \
         realm's forget, carried into the VM's copy, and the reads `GetItemInfo` and the link verbs \
