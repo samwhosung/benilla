@@ -1180,20 +1180,8 @@ fn a_unit_with_no_maximum_health_draws_an_empty_tooltip_bar() {
 /// tooltip's behind them, and the handler reads the bar's old value.
 #[test]
 fn a_units_tooltip_and_bridge_run_in_the_order_they_were_linked() {
-    let mut s = script();
-    s.set_screen_size(800.0, 600.0);
+    let mut s = health_tooltip();
     s.set_unit("mouseover", Some(wolf()));
-    s.run(
-        r#"UIParent = CreateFrame("Frame", "UIParent"); UIParent:SetAllPoints()
-        local tt = CreateFrame("GameTooltip", "GameTooltip", nil, "TestTooltipTemplate")
-        tt:Hide()
-        tt:SetScript("OnTooltipSetDefaultAnchor", function()
-            GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
-        end)
-        local bar = CreateFrame("StatusBar", "GameTooltipStatusBar", tt)
-        bar:SetWidth(100); bar:SetHeight(8)"#,
-    )
-    .unwrap();
     let guid = wolf().guid;
     let read = |s: &mut UiScript, health: u32| -> f64 {
         let watch = HealthWatch {
@@ -1221,6 +1209,50 @@ fn a_units_tooltip_and_bridge_run_in_the_order_they_were_linked() {
         read(&mut s, 10),
         30.0,
         "targeted, then built: the build's own seed"
+    );
+    assert!(s.take_errors().is_empty());
+}
+
+/// A `GameTooltip` with its `GameTooltipStatusBar`, seated by its default anchor as the stock XML
+/// seats it, over an 800 by 600 screen.
+fn health_tooltip() -> UiScript {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"UIParent = CreateFrame("Frame", "UIParent"); UIParent:SetAllPoints()
+        local tt = CreateFrame("GameTooltip", "GameTooltip", nil, "TestTooltipTemplate")
+        tt:Hide()
+        tt:SetScript("OnTooltipSetDefaultAnchor", function()
+            GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+        end)
+        local bar = CreateFrame("StatusBar", "GameTooltipStatusBar", tt)
+        bar:SetWidth(100); bar:SetHeight(8)"#,
+    )
+    .unwrap();
+    s
+}
+
+/// A build over a unit the object manager does not hold, a party member out of sight that its
+/// record shows, links no watcher: the registration looks the object up and links nothing without
+/// it (`0x467e70` at `0x467e86`, `0x467e8f`). Its health moving leaves the bar as the build left
+/// it.
+#[test]
+fn a_tooltip_on_a_unit_not_held_links_no_health_watcher() {
+    let mut s = health_tooltip();
+    let absent = UnitState {
+        has_object: false,
+        ..wolf()
+    };
+    s.set_unit("target", Some(absent));
+    s.run(r#"GameTooltip:SetOwner(UIParent, "ANCHOR_NONE") GameTooltip:SetUnit("target")"#)
+        .unwrap();
+    let built: f64 = s.eval("return GameTooltipStatusBar:GetValue()").unwrap();
+    s.tooltip_unit_health(wolf().guid, 10, 50);
+    assert_eq!(
+        s.eval::<f64>("return GameTooltipStatusBar:GetValue()")
+            .unwrap(),
+        built,
+        "no watcher on a unit not held"
     );
     assert!(s.take_errors().is_empty());
 }

@@ -268,7 +268,7 @@ fn render_subject(lua: &Lua, this: &Table, subject: Subject<'_>) -> mlua::Result
         super::visibility::set_shown(lua, h, false);
         return Ok(false);
     };
-    set_subject(lua, h, Some(u.guid));
+    set_subject(lua, h, u.guid, u.has_object);
     if let Some(bar) = seed_bar(lua, h, &u) {
         super::visibility::set_shown(lua, bar, true);
     }
@@ -401,20 +401,20 @@ fn keyed_line(lua: &Lua, this: &Table, key: &str, color: [f32; 4]) -> mlua::Resu
     }
 }
 
-/// Remember (or drop) the guid of the unit the tooltip shows, the health watcher's key.
-/// A build that shows a unit links the tooltip's watcher on it at the list's tail, when the tooltip
-/// has a status bar (`0x52a07f`-`0x52a0a8`).
-fn set_subject(lua: &Lua, h: FrameHandle, guid: Option<u64>) {
+/// Remember the guid of the unit the tooltip shows, the health watcher's key (`0x52a070`). A build
+/// that shows a unit links the tooltip's watcher on it at the list's tail when the tooltip has a
+/// status bar (`0x52a07f`-`0x52a0a8`) and the object manager holds the unit: the registration
+/// looks the object up and links nothing without it (`0x467e70` at `0x467e86`, `0x467e8f`), as
+/// for a party member its record alone shows.
+fn set_subject(lua: &Lua, h: FrameHandle, guid: u64, held: bool) {
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     if let Some(f) = model.arena.frame_mut(h) {
         if let KindState::Tooltip(t) = &mut f.kind_state {
-            t.unit_guid = guid;
+            t.unit_guid = Some(guid);
         }
     }
-    if guid.is_some() && super::tooltip::status_bar(&model, h).is_some() {
+    if held && super::tooltip::status_bar(&model, h).is_some() {
         model.unit_watches.link_tooltip(h);
-    } else {
-        model.unit_watches.unlink_tooltip(h);
     }
 }
 
