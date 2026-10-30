@@ -150,7 +150,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### lanes
 
-- The reference has no such cap. A signal raised inside a listener runs nested in its call, bounded by `luaD_call`'s C-stack count of 200 (`0x6f65ae`), whose error ends the innermost listener alone, or by the stack of the thread that runs the loop, which the image's stack reserve of 0x100000 bounds, whichever comes first: a chain through the chat line function `0x49a870` takes an 8 KB frame each (`0x49a873`, `0x1f0c` bytes). ([`src/lanes.rs:27`](../crates/benilla-app/src/lanes.rs#L27))
+- The reference has no such cap. A signal raised inside a listener runs nested in its call, bounded by `luaD_call`'s C-stack count of 200 (`0x6f65ae`), whose error ends the innermost listener alone, or by the stack of the thread that runs the loop, which the image's stack reserve of 0x100000 bounds, whichever comes first: a chain through the chat line function `0x49a870` takes an 8 KB frame each (`0x49a873`, `0x1f0c` bytes). ([`src/lanes.rs:28`](../crates/benilla-app/src/lanes.rs#L28))
 
 #### loading_screen
 
@@ -315,7 +315,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### ui_chat
 
-- Not run on benilla's same-character reconnect, which the reference lacks (it returns to the login screen), so the window keeps its scrollback there. ([`src/ui_chat.rs:258`](../crates/benilla-app/src/ui_chat.rs#L258))
+- Not run on benilla's same-character reconnect, which the reference lacks (it returns to the login screen), so the window keeps its scrollback there. ([`src/ui_chat.rs:263`](../crates/benilla-app/src/ui_chat.rs#L263))
 - A missing global prints nothing, where the reference prints an empty line (`0x703c02`), because benilla's other `DisplayError` routes do the same. ([`src/ui_chat/broadcast.rs:167`](../crates/benilla-app/src/ui_chat/broadcast.rs#L167))
 - In a capital with a blank city word the walk composes `"Trade - "` (it tests the row pointer, not the string, `0x49a2e4`-`0x49a2ed`); we decline, because a wrong channel name is joined silently and for good. ([`src/ui_chat/channels.rs:141`](../crates/benilla-app/src/ui_chat/channels.rs#L141))
 - The reference holds every line that waits on its `$`-macro subject's name in the name cache's callback list (`0x49daea` → `0x55f080`) until the name answers, with no bound; here at most `MAX_HELD_SUBJECT_LINES` wait, the oldest dropped past that, as a subject no player owns never answers. ([`src/ui_chat/feed.rs:391`](../crates/benilla-app/src/ui_chat/feed.rs#L391))
@@ -369,7 +369,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### ui_item_text
 
-- For a reader the latch already holds, the reference's open again re-registers it (`0x4e349a` → `0x4930d0` → `0x49310a` → `0x493310` → `0x49338e` `0x4e32e0(0, 0)`), which resets the reader and signals `ITEM_TEXT_CLOSED` (`0x4e339d`); the `ITEM_TEXT_BEGIN` after it never shows the frame again, and the show finds the cell cleared, so `ITEM_TEXT_READY` never fires (`0x4e35de`). ([`src/ui_item_text.rs:452`](../crates/benilla-app/src/ui_item_text.rs#L452))
+- For a reader the latch already holds, the reference's open again re-registers it (`0x4e349a` → `0x4930d0` → `0x49310a` → `0x493310` → `0x49338e` `0x4e32e0(0, 0)`), which resets the reader and signals `ITEM_TEXT_CLOSED` (`0x4e339d`); the `ITEM_TEXT_BEGIN` after it never shows the frame again, and the show finds the cell cleared, so `ITEM_TEXT_READY` never fires (`0x4e35de`). ([`src/ui_item_text.rs:458`](../crates/benilla-app/src/ui_item_text.rs#L458))
 
 #### ui_layout
 
