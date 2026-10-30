@@ -219,8 +219,9 @@ enum ArmWord {
     Own,
     /// The cursor a listener's attempt raised (`0x6e50ab`), over that attempt's record.
     Cursor { spell_id: u32, commit: CastCommit },
-    /// None: a listener's attempt refilled the record and left the word empty, by its bind
-    /// (`0x6e6096`) or its tail's refusal (`0x6e5057`, `0x6e5098`).
+    /// None: a listener's attempt refilled the record and left the word empty: its own word was
+    /// 0 (`0x6e525e`), its bind emptied it (`0x6e60c1`), or its tail's refusal did (`0x6e5057`,
+    /// `0x6e5098`).
     Cleared,
 }
 
