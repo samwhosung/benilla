@@ -584,10 +584,11 @@ pub(crate) enum RecordCallback {
     /// A dressing-room try-on of an item not cached (`0x504579` with `TryOnItemCached 0x504ba0`),
     /// one per call: for a found record it tries the item on again (`0x504bae` → `0x504540`).
     TryOn,
-    /// A combat-log line that names an item not cached (`0x628f83`, `0x629650`, `0x6297a0`,
-    /// `0x6298e1` with `OnCombatLogItemRecord 0x6294b0`), one per line: it writes a waiting line
-    /// again, a found record's, and drops it for a refusal (`0x6294fd`-`0x629504`).
-    CombatLog,
+    /// A combat-log line that names an item not cached, by its formatter's kind (`0x628f83`,
+    /// `0x629650`, `0x6297a0`, `0x6298e1` with `OnCombatLogItemRecord 0x6294b0`), one per line: it
+    /// frees the last waiting entry of its kind and item (`0x6295b0`) and writes that line, a
+    /// found record's, or writes nothing for a refusal (`0x6294fd`-`0x629504`).
+    CombatLog(crate::ui_chat::combat::ItemLog),
     /// An auction list result's row whose item was not cached, by the list (`0x4cc9bf` with
     /// `0x4cca10`, `0x4ccbff` with `0x4ccc60`, `0x4cce4f` with `0x4cceb0`), one per row: each
     /// counts the page's wait down, a record or a refusal, and the last sorts and signals it.

@@ -302,10 +302,10 @@ fn crafted(_: In<SessionEvent>, log: Res<crate::ui_chat::ChatLog>) {
         (ME, combat::UnitClass::Me),
         (ME, combat::UnitClass::Me),
         combat::Fills::default(),
-        combat::Named::Item(LINEN),
+        combat::Named::Item(LINEN, combat::ItemLog::TradeSkill),
     )
     .unwrap();
-    log.push_combat(line);
+    log.push_combat_waiting(line, combat::ItemLog::TradeSkill, LINEN);
 }
 
 /// The item cache's answer as the item handler lands it: the record, then the combat log's
@@ -317,7 +317,7 @@ fn linen_answers(
 ) {
     if let SessionEvent::ItemTemplate { entry, info } = ev {
         items.insert_template(entry, info.map(|b| *b));
-        log.answer_landed(crate::ui_chat::Answer::Item(entry));
+        log.item_callback(crate::ui_chat::combat::ItemLog::TradeSkill, entry);
     }
 }
 

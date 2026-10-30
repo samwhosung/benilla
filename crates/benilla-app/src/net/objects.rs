@@ -335,11 +335,12 @@ fn run_callback(
             // The try-on again, for a found record only (`0x504ba8`).
             Cb::TryOn if answered => crate::ui_dressup::try_on_answered(world, entry),
             Cb::TryOn => {}
-            // The combat log's, for a record and a refusal alike (`0x6294b0`): its held lines
-            // written, or a refused item's dropped (`0x6294fd`-`0x629504`), on the chat lane here.
-            Cb::CombatLog => {
+            // The combat log's, for a record and a refusal alike (`0x6294b0`): the last waiting
+            // line of its kind and item freed, and written or, refused, dropped
+            // (`0x6294fd`-`0x629504`), on the chat lane here.
+            Cb::CombatLog(kind) => {
                 if let Some(chat) = world.get_resource::<crate::ui_chat::ChatLog>() {
-                    chat.answer_landed(crate::ui_chat::Answer::Item(entry));
+                    chat.item_callback(kind, entry);
                 }
             }
             _ => run_answer_step(world, run_record_callback, (entry, callback, answered)),
@@ -452,7 +453,7 @@ fn run_record_callback(
         | Cb::TradeSkillBuild
         | Cb::Craft
         | Cb::TryOn
-        | Cb::CombatLog => {}
+        | Cb::CombatLog(_) => {}
         // The vendor's run for a record and a refusal alike (`0x4fb0f0`, `0x4fb570`).
         Cb::Merchant => sc.merchant.row_answered(),
         Cb::Buyback => sc.merchant.buyback_answered(),

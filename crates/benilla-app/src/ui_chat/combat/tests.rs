@@ -754,7 +754,7 @@ fn a_unit_name_never_holds_a_line_and_an_item_name_does() {
     assert_eq!(pet.fills.named, "Unknown");
 
     let mut made = PendingCombat {
-        named: Named::Item(2589),
+        named: Named::Item(2589, ItemLog::TradeSkill),
         ..line.clone()
     };
     assert_eq!(

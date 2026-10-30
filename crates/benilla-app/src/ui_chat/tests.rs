@@ -3796,6 +3796,7 @@ fn a_combat_word_follows_its_line_and_only_a_written_one() {
         },
         named: Named::Ready,
         tries: 0,
+        wait: None,
         word: Some(word),
     };
     let seen = |s: &benilla_ui::script::UiScript| s.eval::<Vec<String>>("return Seen").unwrap();

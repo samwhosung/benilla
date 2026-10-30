@@ -93,6 +93,7 @@ fn queue_one(
             fills,
             named: Named::Ready,
             tries: 0,
+            wait: None,
             word,
         },
     );
@@ -454,6 +455,7 @@ fn pet_loyalty_lines(
                 fills: Fills::default(),
                 named: Named::Ready,
                 tries: 0,
+                wait: None,
                 word: None,
             },
         );

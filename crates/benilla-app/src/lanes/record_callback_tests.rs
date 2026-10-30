@@ -568,3 +568,68 @@ fn a_combat_line_waits_for_an_answer_later_in_its_span() {
         ]
     );
 }
+
+/// Two crafting lines of one kind naming one uncached item, a leaderboard read of it between
+/// them: each line keeps its entry in the wait list (`0x6293a0`, the lowest free slot
+/// `0x6293f0`) and its own callback. The answer runs the callbacks oldest first, and each writes
+/// one line, the last waiting entry of its kind and item (`0x6295b0` scans from the back): the
+/// newer line at the first callback, the quest log's between, the older at the last.
+#[test]
+fn two_waiting_lines_of_one_item_are_written_newest_first_one_per_callback() {
+    use crate::ui_quest_log::fixture::{quest, seat};
+    use benilla_protocol::messages::{ExecuteLog, SpellLogExecute};
+    const PELT: u32 = 900;
+    /// [`client`]'s wolf.
+    const WOLF: u64 = 0xF130_0000_0044_0001;
+    let mut app = client();
+    {
+        let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
+        let mut pelts = quest(50, "Pelts", 1);
+        pelts.record.objectives[0] = benilla_ui::script::QuestObjectiveView {
+            item_id: PELT,
+            item_count: 5,
+            ..Default::default()
+        };
+        seat(&mut s, &[pelts]);
+        s.run(
+            r#"
+            TRADESKILL_LOG_FIRSTPERSON = "You create %s."
+            TRADESKILL_LOG_THIRDPERSON = "%s creates %s."
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("QUEST_LOG_UPDATE")
+            f:RegisterEvent("CHAT_MSG_SPELL_TRADESKILLS")
+            f:SetScript("OnEvent", function()
+                table.insert(Seen, arg1 and event .. ":" .. arg1 or event)
+            end)
+            "#,
+        )
+        .unwrap();
+    }
+    let slot = benilla_protocol::field::FIELD_PLAYER_QUEST_LOG_1_1;
+    frame(&mut app, vec![values(ME, &[(slot, 50)])]);
+    let craft = |caster| {
+        SessionEvent::SpellLogExecute(SpellLogExecute {
+            caster,
+            spell_id: 1,
+            effects: vec![(24, vec![ExecuteLog::CreateItem { item_entry: PELT }])],
+        })
+    };
+    frame(&mut app, vec![craft(ME)]);
+    hosted(&mut app, "GetQuestLogLeaderBoard(1, 2)");
+    frame(&mut app, vec![craft(WOLF)]);
+    hosted(&mut app, "Seen = {}");
+    let answer = SessionEvent::ItemTemplate {
+        entry: PELT,
+        info: Some(Box::new(crate::items::test_template("Wolf Pelt"))),
+    };
+    assert_eq!(
+        frame(&mut app, vec![fall(5), answer, fall(6)]),
+        [
+            FELL,
+            "CHAT_MSG_SPELL_TRADESKILLS:Unknown Being creates Wolf Pelt.",
+            "QUEST_LOG_UPDATE",
+            "CHAT_MSG_SPELL_TRADESKILLS:You create Wolf Pelt.",
+            FELL
+        ]
+    );
+}

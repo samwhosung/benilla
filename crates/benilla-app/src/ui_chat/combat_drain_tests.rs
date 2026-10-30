@@ -3,7 +3,7 @@
 
 use benilla_protocol::field::FIELD_OBJECT_ENTRY;
 
-use super::combat::{self, Fills, Named, UnitClass};
+use super::combat::{self, Fills, ItemLog, Named, UnitClass};
 use super::feed::{xp_gain_line, RestState};
 use super::notice_tests::Feed;
 use super::ChatEventKind as K;
@@ -44,12 +44,12 @@ fn a_line_waiting_on_an_item_name_waits_until_the_cache_answers() {
         (ME, UnitClass::Me),
         (ME, UnitClass::Me),
         Fills::default(),
-        Named::Item(LINEN),
+        Named::Item(LINEN, ItemLog::TradeSkill),
     )
     .unwrap();
     feed.world
         .resource_mut::<super::ChatLog>()
-        .push_combat(line);
+        .push_combat_waiting(line, ItemLog::TradeSkill, LINEN);
     for _ in 0..300 {
         feed.drain();
     }
@@ -57,6 +57,11 @@ fn a_line_waiting_on_an_item_name_waits_until_the_cache_answers() {
     feed.world
         .resource_mut::<crate::items::Items>()
         .insert_template(LINEN, Some(crate::items::test_template("Linen Cloth")));
+    feed.drain();
+    assert!(seen(&feed).is_empty(), "a record alone frees no entry");
+    feed.world
+        .resource::<super::ChatLog>()
+        .item_callback(ItemLog::TradeSkill, LINEN);
     feed.drain();
     assert_eq!(seen(&feed), ["You create Linen Cloth."]);
     feed.drain();
@@ -79,16 +84,19 @@ fn a_line_whose_item_the_server_refuses_is_dropped() {
         (ME, UnitClass::Me),
         (ME, UnitClass::Me),
         Fills::default(),
-        Named::Item(UNKNOWN),
+        Named::Item(UNKNOWN, ItemLog::TradeSkill),
     )
     .unwrap();
     feed.world
         .resource_mut::<super::ChatLog>()
-        .push_combat(line);
+        .push_combat_waiting(line, ItemLog::TradeSkill, UNKNOWN);
     feed.drain();
     feed.world
         .resource_mut::<crate::items::Items>()
         .insert_template(UNKNOWN, None);
+    feed.world
+        .resource::<super::ChatLog>()
+        .item_callback(ItemLog::TradeSkill, UNKNOWN);
     for _ in 0..3 {
         feed.drain();
     }

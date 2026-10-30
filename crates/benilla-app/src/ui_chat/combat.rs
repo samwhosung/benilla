@@ -990,6 +990,9 @@ pub(crate) struct PendingCombat {
     pub named: Named,
     /// The drains that found the line waiting; the first asks for its names, the rest only read.
     pub tries: u16,
+    /// The line's entry in the log's wait list while its item is out, which only its record's
+    /// callback frees ([`crate::ui_chat::ChatLog::push_combat_waiting`]).
+    pub wait: Option<u64>,
     /// The `COMBAT_TEXT_UPDATE` the formatter raises once the line is written, and only then: a
     /// missing template, range or spell writes neither.
     pub word: Option<LineWord>,
@@ -1103,7 +1106,7 @@ impl PendingCombat {
                 self.fills.named = name(guid);
                 Filled::Ready
             }
-            Named::Item(entry) => match item(entry) {
+            Named::Item(entry, _) => match item(entry) {
                 ItemName::Named(text) => {
                     self.fills.named = text;
                     Filled::Ready
@@ -1141,10 +1144,25 @@ pub(crate) enum ItemName {
 pub(crate) enum Named {
     /// The text is already in [`Fills::named`], or the family has no `Named` slot.
     Ready,
-    /// An item entry, through the ask-once item cache.
-    Item(u32),
+    /// An item entry, through the ask-once item cache, by one of the log's four item formatters.
+    Item(u32, ItemLog),
     /// A unit or object guid, through the name cache.
     Unit(u64),
+}
+
+/// The combat log's four formatters that name an item, each the kind its line's wait entry holds
+/// (`0x6293a0`, `0x629730`, `0x629870`, `0x629a30`) and its record callback is passed
+/// (`0x628f6c`, `0x629789`, `0x629639`, `0x6298ca`), which the callback replays by (`0x62959c`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ItemLog {
+    /// `LogItemEnchantment 0x628f40`, kind 1.
+    Enchantment,
+    /// `LogFeedPet 0x629760`, kind 2.
+    FeedPet,
+    /// `LogTradeSkillItem 0x629610`, kind 3.
+    TradeSkill,
+    /// `LogDurabilityItem 0x6298a0`, kind 4.
+    Durability,
 }
 
 /// Build a queued line from an already-classified pair; `None` when neither endpoint resolves.
@@ -1170,6 +1188,7 @@ pub(crate) fn queue(
         fills,
         named,
         tries: 0,
+        wait: None,
         word: None,
     })
 }

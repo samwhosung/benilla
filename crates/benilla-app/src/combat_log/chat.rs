@@ -444,7 +444,7 @@ pub(super) fn enchantment_log(
             (s.owner, owner),
             (s.owner, owner),
             fills,
-            combat::Named::Item(s.item_entry),
+            combat::Named::Item(s.item_entry, combat::ItemLog::Enchantment),
             to_me(owner, LineWord::with("ENCHANTMENT_REMOVED", name)),
         );
         return;
@@ -466,7 +466,7 @@ pub(super) fn enchantment_log(
         (s.caster, caster),
         (s.owner, owner),
         fills,
-        combat::Named::Item(s.item_entry),
+        combat::Named::Item(s.item_entry, combat::ItemLog::Enchantment),
         to_me(owner, LineWord::with("ENCHANTMENT_ADDED", name)),
     );
 }
@@ -577,7 +577,7 @@ pub(super) fn spell_log_execute(
                     (s.caster, caster),
                     (s.caster, caster),
                     Fills::default(),
-                    combat::Named::Item(item_entry),
+                    combat::Named::Item(item_entry, combat::ItemLog::TradeSkill),
                 ),
                 // Effect 101 FEED_PET: CREATE_ITEM's shape, a different sentence.
                 E::FeedPet { item_entry } => queue_named(
@@ -589,7 +589,7 @@ pub(super) fn spell_log_execute(
                     (s.caster, caster),
                     (s.caster, caster),
                     Fills::default(),
-                    combat::Named::Item(item_entry),
+                    combat::Named::Item(item_entry, combat::ItemLog::FeedPet),
                 ),
                 // Effect 68 INTERRUPT_CAST: the sentence names the interrupted spell, off the row,
                 // not the packet's own, and so does the `INTERRUPT` word when the interrupted unit
@@ -658,7 +658,7 @@ pub(super) fn spell_log_execute(
                         (s.caster, caster),
                         (target, victim),
                         spell_fill(),
-                        combat::Named::Item(entry),
+                        combat::Named::Item(entry, combat::ItemLog::Durability),
                     );
                 }
                 // Effect 102 DISMISS_PET, in the guid-only tail: split on the caster being you, at
@@ -1001,6 +1001,7 @@ pub(crate) fn faction_standing_change(
         },
         named: combat::Named::Ready,
         tries: 0,
+        wait: None,
         word: Some(LineWord::text_number("FACTION", name, delta)),
     });
 }
@@ -1105,16 +1106,18 @@ fn queue_reported(
         return false;
     };
     line.word = word;
-    // The item looked up at the packet with the log's callback, dedupe 0 (`0x628f83`,
-    // `0x629650`, `0x6297a0`, `0x6298e1`): a miss asks and leaves `0x6294b0` in the answer's
-    // list, one per line, and the line waits for it.
-    if let (combat::Named::Item(entry), Some(items)) = (named, ctx.items) {
+    // The item looked up at the packet with the log's callback, dedupe 0, its kind the data
+    // (`0x628f83`, `0x629650`, `0x6297a0`, `0x6298e1`): a miss asks, leaves `0x6294b0` in the
+    // answer's list, one per line, and keeps the line in the wait list (`0x6293a0`).
+    if let (combat::Named::Item(entry, kind), Some(items)) = (named, ctx.items) {
         let ask = ctx.net.map_or(
             crate::query_cache::Ask::Read,
             crate::query_cache::Ask::Event,
         );
         if items.template(entry, 0, ask).is_none() {
-            items.wait(entry, crate::items::RecordCallback::CombatLog);
+            items.wait(entry, crate::items::RecordCallback::CombatLog(kind));
+            log.push_combat_waiting(line, kind, entry);
+            return true;
         }
     }
     log.push_combat(line);

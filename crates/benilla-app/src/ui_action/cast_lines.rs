@@ -206,6 +206,7 @@ impl CastFailLines<'_, '_> {
             },
             named: crate::ui_chat::combat::Named::Ready,
             tries: 0,
+            wait: None,
             // `0x62c360` raises no `COMBAT_TEXT_UPDATE`: it writes its line (`0x62c5b3`) and
             // returns.
             word: None,
