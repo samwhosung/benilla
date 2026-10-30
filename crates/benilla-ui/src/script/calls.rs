@@ -132,6 +132,13 @@ pub enum ScriptCall {
     DoEmote(super::EmoteRequest),
     /// `UninviteByName(name)` (`0x48a610`): `CMSG_GROUP_UNINVITE` (`0x75`), sent at `0x48a669`.
     Uninvite(String),
+    /// `LoggingChat(flag)` and `LoggingCombat(flag)` (`0x49fe50`) called with an argument, the VM's
+    /// flag already set: with it on and no log open the host opens the log (`0x49fea2`) and a
+    /// failed open clears the flag (`0x49feab`); with it off the host closes the file.
+    Logging {
+        /// `LoggingCombat`, else `LoggingChat`.
+        combat: bool,
+    },
     /// `SendAddonMessage(prefix, message, type)` (`0x49f920`) past its checks: the send at
     /// `0x49faff`.
     AddonMessage(super::AddonSend),

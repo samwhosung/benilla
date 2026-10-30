@@ -337,7 +337,8 @@ fn queued_verbs_read_their_flags_through_get_bool_or_default() {
 /// nil clears; a bare call is the getter.
 #[test]
 fn logging_flags_read_get_bool_or_default_with_default_one() {
-    let s = script();
+    let mut s = script();
+    s.keep_calls();
     for name in ["LoggingChat", "LoggingCombat"] {
         for (arg, want) in cases(true) {
             s.run(&format!("{name}({})", if want { "false" } else { "true" }))

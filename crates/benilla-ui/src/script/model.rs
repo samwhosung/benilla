@@ -492,10 +492,9 @@ pub(crate) struct Model {
     pub(crate) guild_recruitment_plan: super::channel::RecruitmentPlan,
     /// Lua changed the recruitment mode: the chat cache's dirty signal.
     pub(crate) guild_recruitment_changed: bool,
-    /// `LoggingChat` and `LoggingCombat`'s flags, and their change cue.
+    /// `LoggingChat` and `LoggingCombat`'s flags.
     pub(crate) logging_chat: bool,
     pub(crate) logging_combat: bool,
-    pub(crate) logging_changed: bool,
     /// A user-placed frame moved or resized, or `SetUserPlaced` ran: the layout cache's save cue.
     pub(crate) user_placed_changed: bool,
     /// The default chat language; `None` is no player, so `GetDefaultLanguage()` returns nothing.
@@ -1163,6 +1162,23 @@ pub(crate) struct Model {
 }
 
 impl Model {
+    /// The `LoggingChat` (`combat` false) or `LoggingCombat` flag.
+    pub(crate) fn logging(&self, combat: bool) -> bool {
+        if combat {
+            self.logging_combat
+        } else {
+            self.logging_chat
+        }
+    }
+
+    pub(crate) fn set_logging(&mut self, combat: bool, on: bool) {
+        if combat {
+            self.logging_combat = on;
+        } else {
+            self.logging_chat = on;
+        }
+    }
+
     /// The profession windows open (`[0xbde040]`, `[0xbdcfb8]`): the trade skill's line and the
     /// craft's type while each window is open, which a close zeroes (`0x4fc870`, `0x4f5fe0`).
     pub(crate) fn open_professions(&self) -> super::OpenProfessions {
@@ -1463,7 +1479,6 @@ impl Model {
             guild_recruitment_changed: false,
             logging_chat: false,
             logging_combat: false,
-            logging_changed: false,
             user_placed_changed: false,
             default_language: None,
             glue: Default::default(),

@@ -519,6 +519,9 @@ pub(super) const READ_ONLY_TO_HANDLERS: &[&str] = &[
     // `AreaPOI.dbc`, the landmark rows the gossip marker's re-select of the map reads
     // (`0x6dac93` → `0x4a67a0`, its walk at `0x4a6819`).
     "::area_poi::AreaPoiRes",
+    // The chat log files: the logging verbs open and close them through `&self` inside their
+    // call (`0x49fea2`), a file no handler reads back; the chat tee only appends to them.
+    "::ui_chat::logging::ChatLogFiles",
     // The language word pools, which a page's show rewrites it by (`0x4e3856`), loaded once at
     // startup; the show reads the character's skill live (`0x4e3837` → `GetIndexedSpellSkill`).
     "::ui_chat::language::ChatLanguages",

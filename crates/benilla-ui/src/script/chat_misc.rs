@@ -55,12 +55,12 @@ impl super::UiScript {
     /// `(chat, combat)`, as `LoggingChat` and `LoggingCombat` last set them.
     pub fn logging_flags(&self) -> (bool, bool) {
         let model = self.model_mut();
-        (model.logging_chat, model.logging_combat)
+        (model.logging(false), model.logging(true))
     }
 
-    /// Whether a logging flag moved since the last drain: the app's cue to open or close its logs.
-    pub fn take_logging_changes(&mut self) -> bool {
-        std::mem::take(&mut self.model_mut().logging_changed)
+    /// Set a logging flag from the host: a failed log open clears it (`0x49feab`).
+    pub fn set_logging(&mut self, combat: bool, on: bool) {
+        self.model_mut().set_logging(combat, on);
     }
 }
 
@@ -152,33 +152,28 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    for (name, chat) in [("LoggingChat", true), ("LoggingCombat", false)] {
+    for (name, combat) in [("LoggingChat", false), ("LoggingCombat", true)] {
         g.set(
             name,
             lua.create_function(move |lua, args: MultiValue| {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
                 // With an argument (`lua_gettop > 0`, `0x49fe57`) the flag is set from
-                // `GetBoolOrDefault` (`0x49fe69`, default 1), so an explicit nil clears it. Both
-                // paths then answer the flag as it stands, 1 or nil, one value (`0x49feb2`-`0x49fee1`):
-                // the reference re-reads it after the log-open attempt, which can clear it
-                // (`0x49feab`); the app owns that attempt here.
+                // `GetBoolOrDefault` (`0x49fe69`, default 1), so an explicit nil clears it. A flag
+                // now on with no log open opens the log inside the call (`0x49fe79`-`0x49fea2`),
+                // and a failed open clears the flag (`0x49feab`); the host does that
+                // ([`super::ScriptCall::Logging`]). Both paths then answer the flag as it stands,
+                // 1 or nil, one value (`0x49feb2`-`0x49fee1`).
                 if let Some(on) = args.front().map(|v| bool_or_default(Some(v), true)) {
-                    let slot = if chat {
-                        &mut model.logging_chat
-                    } else {
-                        &mut model.logging_combat
-                    };
-                    if *slot != on {
-                        *slot = on;
-                        model.logging_changed = true;
-                    }
+                    lua.app_data_mut::<Model>()
+                        .expect("model app_data")
+                        .set_logging(combat, on);
+                    super::calls::submit(lua, super::ScriptCall::Logging { combat })?;
                 }
-                let now = if chat {
-                    model.logging_chat
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                Ok(if model.logging(combat) {
+                    Value::Integer(1)
                 } else {
-                    model.logging_combat
-                };
-                Ok(if now { Value::Integer(1) } else { Value::Nil })
+                    Value::Nil
+                })
             })?,
         )?;
     }
@@ -327,6 +322,7 @@ mod tests {
     #[test]
     fn the_logging_flags_read_as_one_or_nil_and_set_from_any_truthy_arg() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         assert!(s.eval::<bool>("return LoggingChat() == nil").unwrap());
         assert!(s.eval::<bool>("return LoggingCombat() == nil").unwrap());
         assert_eq!(
@@ -336,15 +332,9 @@ mod tests {
         );
         assert_eq!(s.eval::<i64>("return LoggingChat()").unwrap(), 1);
         assert_eq!(s.logging_flags(), (true, false));
-        assert!(s.take_logging_changes());
         s.run("LoggingCombat(1) LoggingChat(false)").unwrap();
         assert_eq!(s.logging_flags(), (false, true));
-        assert!(s.take_logging_changes());
         s.run("LoggingCombat(true)").unwrap();
-        assert!(
-            !s.take_logging_changes(),
-            "a write that moves nothing cues nothing"
-        );
         // The setter answers the flag it leaves: 1 or nil, one value either way.
         assert_eq!(s.eval::<i64>("return LoggingChat(true)").unwrap(), 1);
         assert_eq!(s.arity("LoggingChat(nil)").unwrap(), 1);

@@ -91,7 +91,9 @@ pub(crate) fn feed_chat_once(world: &mut World) {
 #[cfg(test)]
 pub(crate) fn insert_drain_reads(world: &mut World) {
     world.init_resource::<ChatLog>();
-    world.insert_resource(frames::ChatWindows::default());
+    let logs = logging::ChatLogFiles::default();
+    world.insert_resource(logs.clone());
+    world.insert_resource(frames::ChatWindows::with_logs(logs));
     world.insert_resource(edit::ChannelState::default());
     world.init_resource::<crate::names::NameCache>();
     world.insert_resource(crate::chat_bubble::BubbleQueue::default());
@@ -138,11 +140,13 @@ impl Plugin for UiChatPlugin {
             crate::ui_script::SweepLeg::ChatLatch,
             feed::latch_on_leave_world,
         );
-        app.init_resource::<ChatLog>()
+        let logs = logging::ChatLogFiles::default();
+        app.insert_resource(logs.clone())
+            .insert_resource(frames::ChatWindows::with_logs(logs))
+            .init_resource::<ChatLog>()
             .init_resource::<away::AfkMirror>()
             .init_resource::<away::AfkMirrorMemo>()
             .init_resource::<idle::LastInput>()
-            .init_resource::<frames::ChatWindows>()
             .init_resource::<edit::ChannelState>()
             .init_resource::<channels::ZoneChannelWalk>()
             .init_resource::<recruitment::GuildRecruitmentCascade>()
@@ -229,7 +233,6 @@ impl Plugin for UiChatPlugin {
                     .in_set(crate::ui_script::SessionEnd::Clears),
             );
         settings::plugin(app);
-        logging::plugin(app);
     }
 }
 
@@ -262,8 +265,18 @@ pub(crate) fn add_chat_lane(app: &mut App) {
 ///
 /// Deviation: not run on benilla's same-character reconnect, which the reference lacks (it
 /// returns to the login screen), so the window keeps its scrollback there.
-fn end_session_chat(mut hosted_vm: crate::script_calls::HostedVm, log: Res<ChatLog>) {
-    hosted_vm.run(|script| {
+fn end_session_chat(
+    mut hosted_vm: crate::script_calls::HostedVm,
+    log: Res<ChatLog>,
+    logs: Res<logging::ChatLogFiles>,
+) {
+    // The chat teardown (`0x498700`) closes the log files and clears both flags.
+    logs.close_all();
+    hosted_vm.run(|mut script| {
+        if let Some(script) = script.as_deref_mut() {
+            script.set_logging(false, false);
+            script.set_logging(true, false);
+        }
         end_chat_session(script, &log);
     })
 }

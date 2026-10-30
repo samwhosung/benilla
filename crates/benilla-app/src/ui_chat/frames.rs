@@ -15,8 +15,18 @@ pub(crate) struct ChatWindows {
     /// The frame's `this.defaultLanguage`, the faction tongue `GetDefaultLanguage()` answers;
     /// empty until the player and `Languages.dbc` are loaded.
     pub default_language: String,
-    /// The `LoggingChat`/`LoggingCombat` files, teed in [`route`].
+    /// The `LoggingChat`/`LoggingCombat` files, teed in [`route`]; the resource of the same files.
     pub logs: super::logging::ChatLogFiles,
+}
+
+impl ChatWindows {
+    /// The windows teeing to `logs`, the files the verbs' host opens.
+    pub(crate) fn with_logs(logs: super::logging::ChatLogFiles) -> Self {
+        Self {
+            logs,
+            ..Self::default()
+        }
+    }
 }
 
 /// The catalog lines a verb showed in chat itself, such as `GetQuestTimers`' failure line: their
@@ -24,7 +34,7 @@ pub(crate) struct ChatWindows {
 /// row's sound are what is left.
 pub(crate) fn tee_shown_lines(
     mut hosted_vm: crate::script_calls::HostedVm,
-    mut windows: ResMut<ChatWindows>,
+    windows: Res<ChatWindows>,
     sounds: Res<crate::sound::MessageSounds>,
 ) {
     hosted_vm.run(|script| {

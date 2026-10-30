@@ -31,6 +31,9 @@ pub(crate) struct ChatSender<'w, 's> {
     /// The channel slots the channel verbs read and the join's allocator writes; a world with no
     /// chat has none.
     channels: Option<ResMut<'w, super::super::edit::ChannelState>>,
+    /// The `LoggingChat`/`LoggingCombat` files the verbs open inside their calls (`0x49fea2`); a
+    /// world with no chat has none.
+    logs: Option<Res<'w, super::super::logging::ChatLogFiles>>,
     /// The tutorial banks `AcknowledgeTutorial(0x16)` writes inside the call (`0x49f5fc`).
     tutorials: Option<Res<'w, crate::tutorial::Tutorials>>,
     /// The profanity masker the drunk transform asks (`0x508891`), and its `profanityFilter` gate.
@@ -104,6 +107,21 @@ impl ChatSender<'_, '_> {
     /// `UninviteByName`'s `CMSG_GROUP_UNINVITE` (`0x48a669`).
     pub(crate) fn uninvite(&self, name: String) {
         let _ = self.commands.0.send(ClientCommand::GroupUninvite { name });
+    }
+
+    /// `LoggingChat(flag)` / `LoggingCombat(flag)` past the flag's write (`0x49fe69`): a flag now on
+    /// with no log open opens it (`0x49fe79`-`0x49fea2`), and a failed open clears the flag
+    /// (`0x49feab`) before the verb answers. A flag turned off closes the file.
+    pub(crate) fn logging(&self, script: &mut UiScript, combat: bool) {
+        let (chat, comb) = script.logging_flags();
+        let on = if combat { comb } else { chat };
+        let kept = match self.logs.as_deref() {
+            Some(logs) => logs.apply(combat, on),
+            None => false,
+        };
+        if on && !kept {
+            script.set_logging(combat, false);
+        }
     }
 
     /// `SendAddonMessage`'s send (`0x49faff`). The binding has applied the reference's rules
@@ -419,6 +437,7 @@ pub(crate) fn chat_world(script: UiScript) -> (World, crossbeam_channel::Receive
     let (tx, rx) = crossbeam_channel::unbounded();
     world.insert_resource(NetCommands(tx));
     world.init_resource::<super::super::feed::ChatLog>();
+    world.init_resource::<super::super::logging::ChatLogFiles>();
     world.init_resource::<crate::sound::MessageSounds>();
     world.init_resource::<crate::ui_action::UiErrorKeys>();
     world.init_resource::<AfkMirror>();
@@ -452,6 +471,7 @@ pub(crate) fn run_chat(world: &mut World, lua: &str) -> benilla_ui::mlua::Result
                 }
             }
             benilla_ui::script::ScriptCall::Uninvite(name) => sender.uninvite(name),
+            benilla_ui::script::ScriptCall::Logging { combat } => sender.logging(script, combat),
             benilla_ui::script::ScriptCall::RequestTimePlayed => sender.request_time_played(),
             benilla_ui::script::ScriptCall::AddonMessage(send) => sender.addon_message(send),
             other => panic!("not a chat call: {other:?}"),

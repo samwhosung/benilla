@@ -1082,6 +1082,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
                 emote_in_order!(appliers, appliers.emote().do_emote(script, request));
             }
             ScriptCall::Uninvite(name) => appliers.chat().uninvite(name),
+            ScriptCall::Logging { combat } => appliers.chat().logging(script, combat),
             ScriptCall::RequestTimePlayed => appliers.chat().request_time_played(),
             ScriptCall::OpeningCinematic => appliers.chat().opening_cinematic(),
             ScriptCall::AddonMessage(send) => appliers.chat().addon_message(send),
