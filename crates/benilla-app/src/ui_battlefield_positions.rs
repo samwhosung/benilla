@@ -16,7 +16,7 @@ use benilla_assets::coords::bevy_to_wow;
 use benilla_protocol::messages::{BattlefieldPosition, BattlefieldPositions as PositionsPacket};
 
 use crate::names::NameCache;
-use crate::net::{GuidIndex, NetCommands, NetEntity};
+use crate::net::{GuidIndex, NetCommands};
 use crate::query_cache::Ask;
 
 /// `RequestBattlefieldPositions` (`0x4aa5c0`) sends at most once per 5000 ms (stamp
@@ -93,16 +93,17 @@ impl BattlefieldPositions {
     }
 }
 
-/// The getter's position source (`0x4abf90`): a streamed object's live position, else the
-/// packet's, as wow `(x, y)`.
+/// The getter's position source (`0x4abf90`): a streamed player's position as the call finds it
+/// (`0x4ac07b`, its position virtual at `0x4ac08c`), composed through its parents as it stands,
+/// not the transform propagated a frame behind; else the packet's, as wow `(x, y)`.
 pub(crate) fn live_or_packet(
     p: &BattlefieldPosition,
     guids: Option<&GuidIndex>,
-    unit_pos: &Query<&GlobalTransform, With<NetEntity>>,
+    transforms: &bevy::transform::helper::TransformHelper,
 ) -> (f32, f32) {
     match guids
         .and_then(|g| g.0.get(&p.guid))
-        .and_then(|e| unit_pos.get(*e).ok())
+        .and_then(|&e| transforms.compute_global_transform(e).ok())
     {
         Some(tf) => {
             let w = bevy_to_wow(tf.translation());

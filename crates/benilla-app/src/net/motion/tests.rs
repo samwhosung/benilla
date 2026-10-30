@@ -832,11 +832,13 @@ fn facing_lerp_turns_the_short_way_and_lands_at_fire_time() {
     assert_eq!(held, 1.0, "dead-zone: negligible turn skipped");
 }
 
-/// The frame loop as [`crate::net`] chains it, arrival before drain on one clock; returns the
-/// applied order by `fall_time` and the final flags.
+/// The frame loop as [`crate::net`] chains it: each arrival due by the clock the last frame's
+/// drain stamped, then this frame's drain; returns the applied order by `fall_time` and the final
+/// flags.
 fn replay_frames(script: &[(u32, f64, u32)]) -> (Vec<u32>, u32) {
     use super::relay::{PendingMove, RelayMove};
     let mut rm = motion(MOVING, 0.0);
+    let mut tick = None;
     let mut applied = Vec::new();
     let apply = |rm: &mut RemoteMotion, mv: &RelayMove, applied: &mut Vec<u32>| {
         rm.flags = mv.flags; // the one part of `apply_move` the ordering needs
@@ -857,7 +859,7 @@ fn replay_frames(script: &[(u32, f64, u32)]) -> (Vec<u32>, u32) {
         };
         let (live, empty) = (rm.flags, rm.pending.is_empty());
         let fire_ms = rm.relay.schedule(wire_ms, now, live, empty);
-        if rm.fires_at_arrival(fire_ms, now) {
+        if rm.fires_at_arrival(fire_ms, tick) {
             apply(&mut rm, &mv, &mut applied);
         } else {
             rm.pending.push_back(PendingMove { fire_ms, mv });
@@ -866,6 +868,7 @@ fn replay_frames(script: &[(u32, f64, u32)]) -> (Vec<u32>, u32) {
             let ev = rm.pending.pop_front().expect("front checked");
             apply(&mut rm, &ev.mv, &mut applied);
         }
+        tick = Some(now);
     }
     (applied, rm.flags)
 }
@@ -875,11 +878,11 @@ fn a_due_arrival_never_jumps_the_queue() {
     // A 60 Hz burst builds a one-deep queue, then the Stop lands at 96 ms with its fire-time (64)
     // already past while the FORWARD packet 3 is still queued.
     let script: [(u32, f64, u32); 5] = [
-        (1000, 0.0, MOVING),  // 0: seeds, fires at arrival
+        (1000, 0.0, MOVING),  // 0: seeds, fire 0, for the frame's drain
         (1016, 0.0, MOVING),  // 1: fire 16, queued
         (1032, 16.0, MOVING), // 2: fire 32, queued; the drain releases 1
         (1048, 32.0, MOVING), // 3: fire 48, queued; the drain releases 2
-        (1064, 96.0, 0),      // 4: the Stop, fire 64, due; 3 still queued
+        (1064, 96.0, 0),      // 4: the Stop, fire 64, past this arrival; 3 still queued
     ];
     let (order, flags) = replay_frames(&script);
     assert_eq!(

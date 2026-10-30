@@ -55,8 +55,8 @@ use motion::{
 // `pub(crate)`: `creature_anim` reads the shuffle latch it produces, and a test runs both.
 pub(crate) use motion::drive_display_facing;
 pub(crate) use motion::{
-    grounded_y, jump_seed, CreatureSwimming, FacingStep, RemoteMotion, Spline, SplineStopped,
-    UnitMoveModes,
+    grounded_y, jump_seed, CreatureSwimming, FacingStep, MoveTick, RelaySeed, RemoteMotion, Spline,
+    SplineStopped, UnitMoveModes,
 };
 
 /// The net subsystem: spawns the background IO threads and drives the per-frame event drain.
@@ -133,6 +133,7 @@ impl Plugin for NetPlugin {
             .add_message::<CharacterLoginFailedMessage>()
             .add_message::<EnteredWorldMessage>()
             .init_resource::<MoverClaim>()
+            .init_resource::<MoveTick>()
             .add_message::<CinematicTriggeredMessage>()
             .add_message::<ServerSaidMessage>()
             .add_message::<LoggedOutMessage>()

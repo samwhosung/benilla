@@ -455,7 +455,11 @@ fn unit_living_block_surfaces_the_swim_it_is_already_in() {
             assert_eq!(*orientation, 2.0);
             assert_eq!(
                 mover,
-                &Some(benilla_protocol::MoverState { flags, pitch: -0.4 }),
+                &Some(benilla_protocol::MoverState {
+                    flags,
+                    pitch: -0.4,
+                    time: 0
+                }),
                 "the live flags word and its swim-pitch tail both reach the app"
             );
             assert_eq!(
@@ -480,7 +484,7 @@ fn a_dry_living_block_has_no_pitch_tail_and_reads_level() {
     body.push(0x20); // LIVING
     let flags: u32 = 0x1; // FORWARD, walking on dry land
     body.extend_from_slice(&flags.to_le_bytes());
-    body.extend_from_slice(&0u32.to_le_bytes()); // timestamp
+    body.extend_from_slice(&123_456u32.to_le_bytes()); // timestamp
     for v in [10.0f32, 20.0, 30.0, 0.5] {
         body.extend_from_slice(&v.to_le_bytes()); // pos + orientation
     }
@@ -495,8 +499,12 @@ fn a_dry_living_block_has_no_pitch_tail_and_reads_level() {
         [SessionEvent::ObjectCreate { mover, speeds, .. }, SessionEvent::ObjectUpdateEnd] => {
             assert_eq!(
                 mover,
-                &Some(benilla_protocol::MoverState { flags, pitch: 0.0 }),
-                "no tail on the wire reads as a level pitch, not a misparse"
+                &Some(benilla_protocol::MoverState {
+                    flags,
+                    pitch: 0.0,
+                    time: 123_456
+                }),
+                "no tail on the wire reads as a level pitch, and the stamp as the server wrote it"
             );
             assert_eq!(
                 speeds.map(|s| s.walk),

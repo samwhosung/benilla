@@ -56,9 +56,10 @@ const BUSY_MASK: u32 = 0x20ff;
 
 /// A remote unit's replay chain, one per mover: two movers on different paths carry different
 /// buffers.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(crate) struct RelayChain {
-    /// `CMovement+0x40` bit 31, set with the first seed (`0x618c54`-`0x618c6a`).
+    /// `CMovement+0x40` bit 31, set with the seed (`0x618c54`-`0x618c6a`), which a create clears
+    /// with the whole word (`0x61936e`) and re-seeds.
     seeded: bool,
     /// `+0xa8`: the previous packet's fire-time.
     last_fire_ms: f64,
@@ -73,10 +74,41 @@ pub(crate) struct RelayChain {
     base_ms: f64,
 }
 
+/// The constructor's ring (`0x616fa0`, `0x617026`-`0x617044`): the first half −50, the second
+/// +50, and a base of 50, so an unfilled slot reads as no lateness at that base.
+impl Default for RelayChain {
+    fn default() -> Self {
+        let mut ring = [50.0; LATENESS_WINDOW];
+        ring[..LATENESS_WINDOW / 2].fill(-50.0);
+        Self {
+            seeded: false,
+            last_fire_ms: 0.0,
+            last_wire_ms: 0,
+            ring,
+            ring_idx: 0,
+            base_ms: 50.0,
+        }
+    }
+}
+
 impl RelayChain {
+    /// A create's forced apply of its status (`0x619320` → `0x618c30`, the force pushed at
+    /// `0x619414`): the create clears the whole flags word first (`0x61936e`), so the chain
+    /// re-seeds from the create's stamp and clock (`@0x618c54`-`0x618c6a`, the clock read at
+    /// `0x619329`), and the forced arm stores the clock as the fire-time (`@0x618d67`), unclamped
+    /// and not re-based. The ring takes the apply's lateness, none (`0x618cd1`). The ring and its
+    /// base are the mover's own, kept across a re-create.
+    pub(crate) fn seed_at_create(&mut self, wire_ms: u32, now_ms: f64) {
+        self.seeded = true;
+        self.last_wire_ms = wire_ms;
+        self.last_fire_ms = now_ms;
+        self.record_lateness(0.0);
+    }
+
     /// The move's fire-time (`0x618c30`); `flags` and `queue_empty` are the mover's state before
-    /// it applies (`[esi+0x40]`, `[esi+0x150]`). The fire is stored at `@0x618dcc`; one at or
-    /// before `now_ms` is due now (`@0x618dd2`).
+    /// it applies (`[esi+0x40]`, `[esi+0x150]`), the create's for its first relay. The fire is
+    /// stored at `@0x618dcc`; one at or before the movement clock the last tick stamped is due at
+    /// arrival (`@0x618dd2`, [`super::remote::MoveTick`]).
     pub(crate) fn schedule(
         &mut self,
         wire_ms: u32,
@@ -84,7 +116,8 @@ impl RelayChain {
         flags: u32,
         queue_empty: bool,
     ) -> f64 {
-        // The first packet fires at arrival (`@0x618c54`).
+        // An unseeded chain, a mover whose create carried no status, seeds at this packet: its
+        // fire-time is its arrival (`@0x618c54`).
         if !self.seeded {
             self.seeded = true;
             self.last_wire_ms = wire_ms;
@@ -125,7 +158,7 @@ impl RelayChain {
     }
 
     /// Stores `base + lateness` and returns the max of all 32 slots, the new one included
-    /// (`0x618b50`); an unfilled slot is zero, as in a fresh `CMovement`.
+    /// (`0x618b50`).
     fn record_lateness(&mut self, lateness_ms: f64) -> f64 {
         self.ring[self.ring_idx] = self.base_ms + lateness_ms;
         self.ring_idx = (self.ring_idx + 1) % LATENESS_WINDOW;

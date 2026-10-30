@@ -445,9 +445,12 @@ mod tests {
             },
         )]));
         world.insert_resource(spells);
-        world.spawn((crate::net::SelfPlayer, GlobalTransform::default()));
+        world.spawn((crate::net::SelfPlayer, Transform::default()));
         let ally = world
-            .spawn(GlobalTransform::from_translation(Vec3::new(40.0, 0.0, 0.0)))
+            .spawn((
+                Transform::from_translation(Vec3::new(40.0, 0.0, 0.0)),
+                GlobalTransform::from_translation(Vec3::new(40.0, 0.0, 0.0)),
+            ))
             .id();
         world.resource_mut::<super::super::SpellTargeting>().enter(
             HEAL,
@@ -475,9 +478,10 @@ mod tests {
             "the cursor stays armed"
         );
 
-        world
-            .entity_mut(ally)
-            .insert(GlobalTransform::from_translation(Vec3::new(10.0, 0.0, 0.0)));
+        world.entity_mut(ally).insert((
+            Transform::from_translation(Vec3::new(10.0, 0.0, 0.0)),
+            GlobalTransform::from_translation(Vec3::new(10.0, 0.0, 0.0)),
+        ));
         click(&mut world, id);
         assert!(matches!(
             rx.try_recv(),
@@ -513,11 +517,12 @@ mod tests {
             world.insert_resource(fx::factions());
             world.spawn((
                 crate::net::SelfPlayer,
-                GlobalTransform::default(),
+                Transform::default(),
                 fx::caster(1.5),
             ));
             let body = world
                 .spawn((
+                    Transform::from_translation(Vec3::new(distance, 0.0, 0.0)),
                     GlobalTransform::from_translation(Vec3::new(distance, 0.0, 0.0)),
                     corpse,
                 ))

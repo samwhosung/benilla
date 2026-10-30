@@ -232,9 +232,9 @@ pub(crate) fn dispatch(world: &mut World, events: Vec<SessionEvent>) {
 /// Whether `ev` is the last event its packet decodes to (`benilla_protocol::decode`): an update
 /// packet's blocks run until its [`SessionEvent::ObjectUpdateEnd`], as its handler writes every
 /// block before its notify pass (`0x46520e`, `0x465222`, `0x465277`), a `MSG_MOVE_SET_*_SPEED`
-/// decodes to its pose, the one [`benilla_protocol::messages::RelayVerb::Pose`] move, then its
+/// decodes to its pose, the [`benilla_protocol::messages::RelayVerb::Speed`] move, then its
 /// speed, and a saved store's answer sends its bytes ahead of its record
-/// ([`crate::net::io::inbound`]).
+/// ([`crate::net::io::inbound`]). Every other relayed move is its packet whole.
 pub(crate) fn ends_its_packet(ev: &SessionEvent) -> bool {
     !matches!(
         ev,
@@ -247,7 +247,7 @@ pub(crate) fn ends_its_packet(ev: &SessionEvent) -> bool {
             | SessionEvent::ObjectMove { .. }
             | SessionEvent::ObjectNotify { .. }
             | SessionEvent::UnitMove {
-                verb: benilla_protocol::messages::RelayVerb::Pose,
+                verb: benilla_protocol::messages::RelayVerb::Speed,
                 ..
             }
     )
@@ -494,8 +494,9 @@ mod tests {
     }
 
     /// Each packet's last event alone ends it: an update packet's blocks run to its
-    /// `ObjectUpdateEnd`, and a speed change's pose to its speed (`benilla_protocol::decode`), so
-    /// the dispatch fires the lanes between packets, never between one packet's events.
+    /// `ObjectUpdateEnd`, a speed change's pose to its speed (`benilla_protocol::decode`), and a
+    /// plain relay is its one pose, so the dispatch fires the lanes between packets, never between
+    /// one packet's events.
     #[test]
     fn only_a_packets_last_event_ends_it() {
         use benilla_protocol::messages::{opcode, parse_server};
@@ -511,9 +512,17 @@ mod tests {
         let mut speed = hex("012a");
         speed.extend([0; 28]);
         speed.extend(7.0f32.to_le_bytes());
+        // Two plain relays, one event each: a stop, and a swim start, whose flags carry a pitch.
+        let mut stop = hex("012a");
+        stop.extend([0; 28]);
+        let mut swim = hex("012a");
+        swim.extend(0x0020_0001u32.to_le_bytes());
+        swim.extend([0; 28]);
         for (op, body) in [
             (opcode::SMSG_UPDATE_OBJECT, update),
             (opcode::MSG_MOVE_SET_RUN_SPEED, speed),
+            (opcode::MSG_MOVE_STOP, stop),
+            (opcode::MSG_MOVE_START_SWIM, swim),
             (opcode::SMSG_LOGOUT_COMPLETE, Vec::new()),
         ] {
             let events = benilla_protocol::decode(parse_server(op, &body).unwrap());

@@ -188,6 +188,47 @@ fn each_handlers_events_fire_whole_in_the_packets_order() {
     );
 }
 
+/// A handler that notes its own turn among what the spy heard.
+fn notes_its_turn(_: In<SessionEvent>, world: &mut World) {
+    world
+        .non_send_resource_mut::<benilla_ui::script::UiScript>()
+        .run("table.insert(Heard, 'the next handler')")
+        .unwrap();
+}
+
+/// A plain relay is its packet whole: `MSG_MOVE_STOP` and `MSG_MOVE_START_SWIM` take the relays'
+/// one handler (`0x603bb0` → `0x601580`), which runs whole before the next packet's
+/// (`0x537ae5`), so what it raises fires before the next packet's handler runs. Today's relay
+/// handler raises nothing on a lane (a remote's landing and our own move are messages the frame
+/// reads later), so a test handler on the relay's kind stands in for a raise.
+#[test]
+fn a_plain_relays_events_fire_before_the_next_packets_handler() {
+    use benilla_protocol::messages::{opcode, parse_server};
+    let mut app = client(|app| {
+        app.net_handler(SessionEventKind::UnitMove, regen)
+            .net_handler(SessionEventKind::LoggedOut, notes_its_turn);
+    });
+    // In the world, where the dispatch fires each packet's lanes at its end.
+    app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
+    // The packed guid, the flags, then the pose: a swimmer's carries a pitch.
+    for (op, flags, rest) in [
+        (opcode::MSG_MOVE_STOP, 0u32, 24),
+        (opcode::MSG_MOVE_START_SWIM, 0x0020_0001, 28),
+    ] {
+        let mut body = vec![0x01, 0x2a];
+        body.extend(flags.to_le_bytes());
+        body.extend(vec![0; rest]);
+        let mut packets = benilla_protocol::decode(parse_server(op, &body).unwrap());
+        assert_eq!(packets.len(), 1, "{op:#06x}: one pose");
+        packets.push(p1());
+        assert_eq!(
+            frame(&mut app, packets),
+            ["PLAYER_REGEN_DISABLED", "the next handler"],
+            "{op:#06x}"
+        );
+    }
+}
+
 /// A line held for its sender's name shows inside the name's answer (`0x49ccc0` → `0x49a870`,
 /// `0x49cfc1`): after what the packets ahead of the answer raised, and before what the packets
 /// behind it raise.

@@ -368,8 +368,9 @@ pub(super) const BUILT_OUTSIDE_THE_PACKETS_IN_THE_REFERENCE: &[(&str, &[&str], &
     ("::player::camera::focus_on_look_edges", &["player::camera::CameraControl"],
         "the mouse half of the freelook edges the frame's mouse made, which the input pass runs \
          ahead of its tick (`0x51491f` → `0x493070`, `0x493090`); a call's edge runs it inside"),
-    ("::spell::targeting::feed_targeting_to_input", &["items::Items", "names::NameCache",
-        "net::GuidIndex", "net::ObjectStore", "net::UnitSpeeds", "net::motion::modes::UnitMoveModes",
+    ("::spell::targeting::feed_targeting_to_input", &["Transform", "items::Items",
+        "names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::UnitSpeeds",
+        "net::motion::modes::UnitMoveModes",
         "net::motion::remote::RemoteMotion", "net::reputations::Reputations",
         "spell::group_relation::GroupRoster", "spell::mods::SpellModifiers",
         "spell::targeting::SpellTargeting", "target::Selection", "ui_party::GroupState",
@@ -552,6 +553,19 @@ pub(super) const READ_ONLY_TO_HANDLERS: &[&str] = &[
     // The connection's state, which the death getters' body test reads through the host; the
     // socket's handlers write it through their own `ResMut`.
     "::net::NetStatus",
+    // The movement clock a relayed move is due by at its arrival (`@0x618dd2`), which only the
+    // movement tick stamps, after the packets (`0x616846`).
+    "::net::motion::remote::MoveTick",
+    // What a due arrival's catch-up resolves its mover against (`0x618bb0` → `0x616cb0` →
+    // `0x634040`): the collision world's trees and scale, our controller's capsule and the traces
+    // it skips, the terrain's residency gate (`0x634154`) and the liquid index a water-walker's
+    // plane is read from (`0x63162e`).
+    "avian3d::collider_tree::ColliderTrees",
+    "avian3d::dynamics::solver::plugin::PhysicsLengthUnit",
+    "::player::state::PlayerCapsule",
+    "benilla_world::collision::MoverTraceExclusions",
+    "benilla_world::liquid::spatial::WaterIndex",
+    "benilla_world::terrain_stream::residency::TerrainResidency",
     // The login pick, which names the character the account-data sections belong to.
     "::glue_session::roster::Roster",
     // `0xb4e314`, which the party snapshot reads; only the zone feed commits it.

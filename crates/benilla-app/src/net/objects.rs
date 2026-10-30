@@ -18,13 +18,14 @@ use benilla_world::model_fade::DespawnFade;
 use benilla_world::vis_chain::VisChainOnly;
 
 use super::motion::{
-    create_spline, gameobject_rotation, monster_move_spline, pose_transform, resolve_facing,
-    set_raw_facing, smoothed, trace_create_spline, trace_move_snap, wire_yaw, write_pose,
-    SplineStopped, ROOT_APPLY_WIPE,
+    catch_up, create_spline, gameobject_rotation, monster_move_spline, pose_transform,
+    resolve_facing, set_raw_facing, smoothed, trace_create_spline, trace_move_snap, wire_yaw,
+    write_pose, MoverWorld, SplineStopped, ROOT_APPLY_WIPE,
 };
 use super::{
     ActiveMover, FieldChanged, Guid, GuidIndex, NetCommands, NetEntity, NetHandlerApp, ObjectStore,
-    RemoteMotion, SelfGuid, SelfPlayer, SpeedChangeMessage, Spline, UnitMoveModes, UnitSpeeds,
+    RelaySeed, RemoteMotion, SelfGuid, SelfPlayer, SpeedChangeMessage, Spline, UnitMoveModes,
+    UnitSpeeds,
 };
 
 mod arrival;
@@ -76,11 +77,15 @@ pub(crate) struct Scene<'w, 's> {
     index: ResMut<'w, GuidIndex>,
     self_guid: Res<'w, SelfGuid>,
     real: Res<'w, Time<Real>>,
+    /// The movement clock a relayed move is due by at its arrival (`@0x618dd2`).
+    move_tick: Option<Res<'w, super::MoveTick>>,
     transforms: Query<'w, 's, &'static mut Transform>,
     movers: Query<'w, 's, (), With<ActiveMover>>,
     stores: Query<'w, 's, &'static mut ObjectStore>,
     countdowns: Query<'w, 's, &'static mut crate::items::Countdowns>,
     remote: Query<'w, 's, &'static mut RemoteMotion>,
+    /// What a create left on a unit's mover before its first relay.
+    seeds: Query<'w, 's, &'static mut RelaySeed>,
     modes: Query<'w, 's, &'static mut UnitMoveModes>,
     xp_awarded: Query<'w, 's, (), With<crate::ui_chat::combat::watch::XpAwarded>>,
     client_controlled: Query<'w, 's, (), With<super::ClientControlled>>,
@@ -602,18 +607,20 @@ fn replay_enchant_times(
 /// (`0x603b40` → `0x61ab90`, `[CMovement+0xac] += lag`); an unknown guid is dropped, as there.
 fn on_move_time_skipped(In(ev): In<SessionEvent>, mut sc: Scene) {
     if let SessionEvent::MoveTimeSkipped { guid, lag_ms } = ev {
-        if let Some(mut m) = sc
-            .index
-            .0
-            .get(&guid)
-            .and_then(|&e| sc.remote.get_mut(e).ok())
-        {
+        let Some(&e) = sc.index.0.get(&guid) else {
+            return;
+        };
+        if let Ok(mut m) = sc.remote.get_mut(e) {
             m.relay.skip_time(lag_ms);
+        } else if let Ok(mut seed) = sc.seeds.get_mut(e) {
+            seed.chain.skip_time(lag_ms);
         }
     }
 }
 
-fn on_unit_move(In(ev): In<SessionEvent>, mut sc: Scene) {
+/// A relayed `MSG_MOVE_*` ([`unit_move`]); `world`, absent in an app with no world, is what a due
+/// arrival's catch-up resolves against.
+fn on_unit_move(In(ev): In<SessionEvent>, mut sc: Scene, world: Option<MoverWorld>) {
     if let SessionEvent::UnitMove {
         guid,
         position,
@@ -628,6 +635,7 @@ fn on_unit_move(In(ev): In<SessionEvent>, mut sc: Scene) {
     } = ev
     {
         let now_ms = sc.real.elapsed_secs_f64() * 1000.0;
+        let tick = sc.move_tick.as_deref().and_then(|t| t.0);
         unit_move(
             guid,
             crate::net::motion::RelayMove {
@@ -642,11 +650,17 @@ fn on_unit_move(In(ev): In<SessionEvent>, mut sc: Scene) {
                 verb,
             },
             now_ms,
+            tick,
             &mut sc.commands,
             &sc.index,
             &sc.self_guid,
             &mut sc.remote,
+            &sc.seeds,
             &mut sc.transforms,
+            &sc.stores,
+            &sc.speeds,
+            &sc.modes,
+            world.as_ref(),
             &mut sc.hard_landings,
             &mut sc.self_moves,
         );
@@ -901,6 +915,16 @@ fn object_create(
             local_pos: [t.pos.x, t.pos.y, t.pos.z],
             local_orientation: t.orientation,
         });
+    // Aboard a held transport the unit stands where its tail puts it on the deck, from this
+    // block on: the create's apply re-seats it deck-local as a relayed move's does (`0x619320` →
+    // `0x618c30`, `0x618e07`).
+    let seat = rider
+        .as_ref()
+        .and_then(|_| aboard(transport.as_ref(), &sc.index, &sc.transforms, &sc.stores));
+    let (position, placement) = match seat {
+        Some((world, yaw)) => (bevy_to_wow(world), Quat::from_rotation_y(yaw)),
+        None => (position, placement),
+    };
     if matches!(kind, EntityKind::GameObject) {
         // Where and how big, under `RUST_LOG=benilla_app::net::objects=debug`.
         debug!(
@@ -916,12 +940,43 @@ fn object_create(
     // `WOW_CREATE_SPLINE=off` run still records what the wire offered.
     trace_create_spline(guid, spline.as_ref());
     let walk = spline.and_then(create_spline);
+    // A unit's status applies forced (`0x619320` → `0x618c30`), re-seeding the mover's replay
+    // chain from the block's stamp and the clock; a held unit's ring is its own, kept.
+    let seed = matches!(kind, EntityKind::Unit | EntityKind::Player)
+        .then_some(mover)
+        .flatten()
+        .filter(|_| sc.self_guid.0 != Some(guid))
+        .map(|m| {
+            let held = match &landing {
+                Landing::Live(e) => sc
+                    .remote
+                    .get(*e)
+                    .map(|rm| rm.relay.clone())
+                    .or_else(|_| sc.seeds.get(*e).map(|s| s.chain.clone()))
+                    .ok(),
+                Landing::New { .. } => None,
+            };
+            let mut chain = held.unwrap_or_default();
+            chain.seed_at_create(m.time, sc.real.elapsed_secs_f64() * 1000.0);
+            RelaySeed {
+                chain,
+                flags: crate::creature_anim::move_flags::merge_server_authored(0, m.flags),
+            }
+        });
     let commands = &mut sc.commands;
     match landing {
         Landing::Live(e) => {
             // A re-create is a fresh snapshot: refresh identity and a unit's pose, drop any
-            // extrapolation.
+            // extrapolation; the mover's chain goes on in the seed.
             commands.entity(e).insert(net).remove::<RemoteMotion>();
+            match seed {
+                Some(seed) => {
+                    commands.entity(e).insert(seed);
+                }
+                None => {
+                    commands.entity(e).remove::<RelaySeed>();
+                }
+            }
             // The set is replaced whole; a `SMSG_FORCE_*_SPEED_CHANGE` in the same tick lands on
             // top, since this insert applies before the next packet's handler
             // (`apply::seam_tests`).
@@ -1004,6 +1059,9 @@ fn object_create(
             if let Some(s) = walk {
                 entity.insert(s);
             }
+            if let Some(seed) = seed {
+                entity.insert(seed);
+            }
             // Our own player is the active one from its write: the reference finds it by its guid
             // (`0x468550`), here by the tag, given in the same commands as the entity.
             if sc.self_guid.0 == Some(guid) {
@@ -1040,18 +1098,105 @@ pub(super) fn object_move(
     }
 }
 
+/// `GAMEOBJECT_FLAGS`' transport bit, which `0x630a80` tests (`shr 3; and 1`).
+const GO_FLAG_TRANSPORT: u32 = 0x8;
+
+/// Where a status aboard a held transport puts its mover, `None` off one: the apply re-seats the
+/// mover deck-local inside the handler when the status's transport resolves (`0x7c6900`, through
+/// `0x618b30` at `0x618e07`), and a unit's position reads that through the deck as it stands
+/// ([`crate::transport::on_deck`]); an unresolved transport leaves the world pose (`0x7c692b`).
+/// It resolves to a held game object whose `GAMEOBJECT_FLAGS` has the transport bit, bit 3, and
+/// nothing more (`0x630a80`): a deck created earlier in the frame, which the tick has not armed
+/// yet, takes its rider where its create stands it.
+fn aboard(
+    transport: Option<&benilla_protocol::TransportPose>,
+    index: &GuidIndex,
+    transforms: &Query<&mut Transform>,
+    stores: &Query<&mut ObjectStore>,
+) -> Option<(Vec3, f32)> {
+    let t = transport?;
+    let deck = index.0.get(&t.guid).copied()?;
+    let fields = &stores.get(deck).ok()?.0;
+    let is_deck = fields.object_type() == Some(benilla_protocol::messages::ObjectType::GameObject)
+        && fields.gameobject_flags() & GO_FLAG_TRANSPORT != 0;
+    if !is_deck {
+        return None;
+    }
+    let deck = transforms.get(deck).ok()?;
+    Some(crate::transport::on_deck(
+        deck,
+        [t.pos.x, t.pos.y, t.pos.z],
+        t.orientation,
+    ))
+}
+
+/// What a due arrival's catch-up steps its mover with ([`crate::net::motion::catch_up`]): the ms
+/// the movement clock is past the move's fire-time, the unit's speeds and granted modes, and the
+/// world.
+struct Lateness<'a, 'w, 's> {
+    late_ms: f64,
+    speeds: MoveSpeeds,
+    granted: u32,
+    world: Option<&'a MoverWorld<'w, 's>>,
+}
+
+/// A due relayed move's pose on its unit, inside the handler: the apply writes the mover's
+/// position at the packet (`0x7c6420` at `0x618dfc`), the late start's catch-up steps it on by
+/// its lateness (`0x618bb0` at `0x618e5d`), and a unit's position reads the result at the call
+/// (`0x5f1f10`), so a listener later in the frame reads the unit where this packet put it. Aboard,
+/// the composed pose, as [`crate::transport::compose_riders`] carries it; the display facing and
+/// the frame's dead-reckoning stay frame time ([`crate::net::extrapolate_remote_units`]).
+fn seat_arrival(
+    e: Entity,
+    mv: &crate::net::motion::RelayMove,
+    rm: &mut RemoteMotion,
+    late: Lateness,
+    index: &GuidIndex,
+    transforms: &mut Query<&mut Transform>,
+    stores: &Query<&mut ObjectStore>,
+) {
+    let deck = aboard(mv.transport.as_ref(), index, transforms, stores);
+    let Ok(mut t) = transforms.get_mut(e) else {
+        return;
+    };
+    match deck {
+        Some((world, yaw)) => {
+            t.translation = world;
+            t.rotation = Quat::from_rotation_y(yaw);
+            rm.wow_pos = bevy_to_wow(world);
+            rm.orientation = yaw;
+        }
+        None => {
+            let modes = rm.flags | late.granted;
+            let riding = mv.transport.is_some();
+            catch_up(e, rm, late.late_ms, late.speeds, modes, riding, late.world);
+            let at = benilla_assets::coords::wow_to_bevy(rm.wow_pos);
+            if t.translation != at {
+                t.translation = at;
+            }
+        }
+    }
+}
+
 /// A relayed `MSG_MOVE_*`. The reference schedules a remote's apply (`0x618c30`): the mover's
-/// replay chain gives the packet a fire-time, a due move applies now and a later one queues for
-/// `drain_pending_moves`, with dead-reckoning in between. `WOW_REMOTE_SNAP=1` applies at arrival.
+/// replay chain gives the packet a fire-time, a move due by the movement clock the last tick
+/// stamped (`tick`, `@0x618dd2`) applies now and any other queues for `drain_pending_moves`, this
+/// frame's tick, with dead-reckoning in between. `WOW_REMOTE_SNAP=1` applies at arrival.
 fn unit_move(
     guid: u64,
     mv: crate::net::motion::RelayMove,
     now_ms: f64,
+    tick: Option<f64>,
     commands: &mut Commands,
     index: &GuidIndex,
     self_guid: &SelfGuid,
     remote_motion: &mut Query<&mut RemoteMotion>,
+    seeds: &Query<&mut RelaySeed>,
     transforms: &mut Query<&mut Transform>,
+    stores: &Query<&mut ObjectStore>,
+    speeds: &Query<&mut UnitSpeeds>,
+    modes: &Query<&mut UnitMoveModes>,
+    world: Option<&MoverWorld>,
     landings: &mut MessageWriter<crate::creature_anim::HardLanding>,
     self_moves: &mut MessageWriter<crate::net::SelfMoveMessage>,
 ) {
@@ -1091,6 +1236,16 @@ fn unit_move(
         );
         return;
     };
+    // What a due arrival's catch-up steps with: the ms the clock is past the fire-time, none
+    // before the first tick.
+    let late = |fire_ms: f64| Lateness {
+        late_ms: tick.map_or(0.0, |t| t - fire_ms),
+        speeds: speeds
+            .get(e)
+            .map_or_else(|_| MoveSpeeds::default(), |u| u.0),
+        granted: modes.get(e).map_or(0, |m| m.0),
+        world,
+    };
     {
         // The server's pose supersedes a stale spline.
         commands.entity(e).remove::<Spline>();
@@ -1099,7 +1254,7 @@ fn unit_move(
             // packet off the live `[esi+0x40]`/`[esi+0x150]`.
             let (flags, queue_empty) = (rm.flags, rm.pending.is_empty());
             let fire_ms = rm.relay.schedule(mv.wire_ms, now_ms, flags, queue_empty);
-            let at_arrival = arrival_snap() || rm.fires_at_arrival(fire_ms, now_ms);
+            let at_arrival = arrival_snap() || rm.fires_at_arrival(fire_ms, tick);
             trace_relay(
                 guid,
                 &mv,
@@ -1114,39 +1269,72 @@ fn unit_move(
             );
             if at_arrival {
                 apply_move(e, &mv, &mut rm, now_ms, commands, landings);
+                seat_arrival(e, &mv, &mut rm, late(fire_ms), index, transforms, stores);
             } else {
                 // Fire-times are monotone per unit, so the queue stays ordered.
                 rm.pending.push_back(PendingMove { fire_ms, mv });
             }
         } else {
-            // The first move seeds the chain and applies at arrival; the insert is deferred, so
-            // the extrapolator sees it next frame.
+            // The first move builds the unit's motion where it stands, on what its create left:
+            // the chain and the flags word its schedule reads as the mover's ([`RelaySeed`]). A
+            // unit whose create carried no status seeds the chain here, its fire-time the arrival
+            // (`@0x618c54`), past the movement clock, so it waits for this frame's tick like any
+            // idle mover's, unless the lever applies it at once, its facing shown then.
+            let seed = seeds.get(e).ok().cloned();
+            let created = seed.is_some();
+            let (relay, flags) = seed.map_or_else(
+                || (crate::net::motion::RelayChain::default(), 0),
+                |s| (s.chain, s.flags),
+            );
+            let (wow_pos, orientation) =
+                transforms
+                    .get(e)
+                    .map_or((mv.position, mv.orientation), |t| {
+                        (
+                            bevy_to_wow(t.translation),
+                            t.rotation.to_euler(EulerRot::YXZ).0,
+                        )
+                    });
             let mut rm = RemoteMotion {
-                wow_pos: mv.position,
-                orientation: mv.orientation,
-                flags: 0,
+                wow_pos,
+                orientation,
+                flags,
                 pitch: 0.0,
                 speed: 0.0,
                 vertical_velocity: 0.0,
                 jump_xy_vel: [0.0; 2],
                 fall_start: None,
                 pending: std::collections::VecDeque::new(),
-                relay: Default::default(),
+                relay,
                 last_apply_ms: now_ms,
-                last_apply_pos: mv.position,
+                last_apply_pos: wow_pos,
             };
-            let fire_ms = rm.relay.schedule(mv.wire_ms, now_ms, 0, true);
-            debug_assert_eq!(fire_ms, now_ms, "a seeding packet fires at arrival");
-            trace_relay(guid, &mv, &rm.relay, now_ms, 0, RelayOutcome::Seed);
-            apply_move(e, &mv, &mut rm, now_ms, commands, landings);
-            write_pose(
-                commands,
-                transforms,
-                e,
-                mv.position,
-                wire_yaw(mv.orientation),
+            let fire_ms = rm.relay.schedule(mv.wire_ms, now_ms, flags, true);
+            debug_assert!(
+                created || fire_ms == now_ms,
+                "a seeding packet's fire-time is its arrival"
             );
-            commands.entity(e).insert(rm);
+            if arrival_snap() || rm.fires_at_arrival(fire_ms, tick) {
+                let outcome = if created {
+                    RelayOutcome::Now
+                } else {
+                    RelayOutcome::Seed
+                };
+                trace_relay(guid, &mv, &rm.relay, now_ms, 0, outcome);
+                apply_move(e, &mv, &mut rm, now_ms, commands, landings);
+                write_pose(
+                    commands,
+                    transforms,
+                    e,
+                    mv.position,
+                    wire_yaw(mv.orientation),
+                );
+                seat_arrival(e, &mv, &mut rm, late(fire_ms), index, transforms, stores);
+            } else {
+                trace_relay(guid, &mv, &rm.relay, now_ms, 0, RelayOutcome::Queued);
+                rm.pending.push_back(PendingMove { fire_ms, mv });
+            }
+            commands.entity(e).insert(rm).remove::<RelaySeed>();
         }
     }
 }

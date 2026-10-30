@@ -79,10 +79,10 @@ pub(crate) struct BindChecks<'w, 's> {
     /// no group.
     roster: Option<Res<'w, super::group_relation::GroupRoster>>,
     names: Option<Res<'w, crate::names::NameCache>>,
-    /// The range leg's positions: the pose the hover picks against, as last frame propagated it,
-    /// so the VM feed, the cursor and both binds read one pose. Never the camera's, which
-    /// `publish_camera_pose` rewrites mid-frame.
-    poses: Query<'w, 's, &'static GlobalTransform, Without<benilla_world::view::WorldCamera>>,
+    /// The range leg's positions: the caster and the unit where each stands as of the call,
+    /// composed through its parents on demand, as `0x6e6460` reads both at the call (`0x6e6784`,
+    /// `0x6e6794`), so a bind inside a packet measures what that packet left.
+    transforms: bevy::transform::helper::TransformHelper<'w, 's>,
     spells: Option<Res<'w, crate::ui_action::Spells>>,
     spell_mods: Res<'w, super::SpellModifiers>,
     /// The caster, a unit and the caster's auto-attack target (`[caster+0xc48]`, which
@@ -208,17 +208,17 @@ impl BindChecks<'_, '_> {
             _ => self.player_caster(self.range_units.caster()),
         };
         super::cast_target::RangeInputs {
-            self_pos: me
-                .and_then(|(e, _)| self.poses.get(e).ok())
-                .map(GlobalTransform::translation),
-            target_pos: self
-                .poses
-                .get(entity)
-                .ok()
-                .map(GlobalTransform::translation),
+            self_pos: me.and_then(|(e, _)| self.position(e)),
+            target_pos: self.position(entity),
             caster,
             target: None,
         }
+    }
+
+    /// `entity`'s position as of the call.
+    fn position(&self, entity: Entity) -> Option<Vec3> {
+        let global = self.transforms.compute_global_transform(entity).ok()?;
+        Some(global.translation())
     }
 
     /// The active player as `GetMinMaxRange` reads it, its ranged-slot item included.
@@ -879,11 +879,12 @@ mod tests {
             ]))
         };
         let me = world
-            .spawn((SelfPlayer, Guid(ME), GlobalTransform::default(), live()))
+            .spawn((SelfPlayer, Guid(ME), Transform::default(), live()))
             .id();
         let ally = world
             .spawn((
                 Guid(ALLY),
+                Transform::from_translation(Vec3::new(distance, 0.0, 0.0)),
                 GlobalTransform::from_translation(Vec3::new(distance, 0.0, 0.0)),
                 live(),
             ))
@@ -1165,7 +1166,7 @@ mod tests {
             world.entity_mut(me).insert(unit(0x19, ALLY));
             world.entity_mut(ally).insert(unit(0x09, 0));
             let pet = world
-                .spawn((Guid(PET), GlobalTransform::default(), unit(0x09, ALLY)))
+                .spawn((Guid(PET), Transform::default(), unit(0x09, ALLY)))
                 .id();
             let mut bar = crate::ui_pet::PetBar::default();
             bar.spells.pet_guid = PET;
@@ -1584,7 +1585,7 @@ mod tests {
                 }
                 if let Some(owner) = &owner {
                     let owner = world
-                        .spawn((Guid(OWNER), GlobalTransform::default(), owner.clone()))
+                        .spawn((Guid(OWNER), Transform::default(), owner.clone()))
                         .id();
                     world
                         .resource_mut::<crate::net::GuidIndex>()
@@ -1748,9 +1749,10 @@ mod tests {
         world
             .run_system_cached(feed_targeting_to_input)
             .expect("the feed runs");
+        // As a packet's handler moves it: its `Transform`, with no propagation since.
         world
             .entity_mut(ally)
-            .insert(GlobalTransform::from_translation(Vec3::new(40.0, 0.0, 0.0)));
+            .insert(Transform::from_translation(Vec3::new(40.0, 0.0, 0.0)));
         let read = r#"return SpellCanTargetUnit("target") == 1"#;
         let copy = world
             .non_send_resource::<UiScript>()

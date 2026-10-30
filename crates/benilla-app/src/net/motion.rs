@@ -21,11 +21,13 @@ pub(crate) use facing::FacingStep;
 pub(in crate::net) use facing::{resolve_facing, set_raw_facing, smoothed};
 pub(crate) use modes::UnitMoveModes;
 pub(in crate::net) use modes::ROOT_APPLY_WIPE;
-pub(crate) use relay::{PendingMove, RelayMove};
+pub(crate) use relay::{PendingMove, RelayChain, RelayMove};
 pub(crate) use remote::jump_seed;
-pub(crate) use remote::RemoteMotion;
-pub(in crate::net) use remote::{apply_move, arrival_snap, trace_relay, RelayOutcome};
+pub(in crate::net) use remote::{
+    apply_move, arrival_snap, catch_up, trace_relay, MoverWorld, RelayOutcome,
+};
 pub(super) use remote::{drain_pending_moves, extrapolate_remote_units};
+pub(crate) use remote::{MoveTick, RelaySeed, RemoteMotion};
 pub(crate) use spline::grounded_y;
 pub(super) use spline::{
     create_spline, ground_clamp_creatures, mark_swimming_creatures, monster_move_spline,

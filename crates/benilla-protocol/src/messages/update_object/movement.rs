@@ -84,6 +84,10 @@ pub struct MoverState {
     pub flags: u32,
     /// Swim pitch in radians, +up; on the wire only with `MOVEFLAG_SWIMMING`, else `0.0`.
     pub pitch: f32,
+    /// The status's stamp, on the server's ms clock (`MovementInfo::stime`, `Object.cpp:194`):
+    /// the unit's last move's arrival there, or a second past the create when it has sent none
+    /// (`Object.cpp:517-521`). The create seeds its mover's replay chain with it (`0x618c5e`).
+    pub time: u32,
 }
 
 /// The decoded fields of a movement block; the rest is read and discarded to stay aligned.
@@ -116,7 +120,7 @@ impl MovementBlock {
 
         if update_flag & UPDATE_FLAG_LIVING != 0 {
             let flags = read_u32_le(r)?;
-            let _timestamp = read_u32_le(r)?;
+            let time = read_u32_le(r)?;
             let living_position = Vector3d::read(r)?;
             let living_orientation = read_f32_le(r)?;
             position = Some((living_position, living_orientation));
@@ -134,7 +138,7 @@ impl MovementBlock {
             } else {
                 0.0
             };
-            mover = Some(MoverState { flags, pitch });
+            mover = Some(MoverState { flags, pitch, time });
             let _fall_time = read_f32_le(r)?;
             if flags & MOVEMENT_FLAG_JUMPING != 0 {
                 for _ in 0..4 {

@@ -67,6 +67,30 @@ impl AreaUnderfoot<'_> {
     }
 }
 
+/// A streamed unit's liquid at a point, asked of the world: the narrow read for a caller that
+/// holds the whole of [`WorldPoint`] nowhere, such as a relayed move's handler stepping its mover.
+/// Read-only; it answers as [`WorldPoint::liquid_at`] does for [`Subject::Unit`].
+#[derive(SystemParam)]
+pub struct UnitLiquid<'w, 's> {
+    liquids: Query<'w, 's, &'static WaterChunkInfo>,
+    index: Res<'w, crate::liquid::WaterIndex>,
+    placements: RoomPlacements<'w, 's>,
+    unit_rooms: Query<'w, 's, &'static UnitWmoRoom>,
+}
+
+impl UnitLiquid<'_, '_> {
+    /// The liquid `unit` finds at `wow` (WoW space): its own room's, as [`unit_claim`] picks it.
+    pub fn liquid_at(&self, unit: Entity, wow: [f32; 3]) -> Option<LiquidHit> {
+        let over = self
+            .index
+            .over(wow[0], wow[1])
+            .iter()
+            .filter_map(|&e| self.liquids.get(e).ok());
+        let claim = unit_claim(self.unit_rooms.get(unit).ok(), &self.placements);
+        liquid_at(over, wow, claim)
+    }
+}
+
 /// The world, asked about a point; read-only, so it never conflicts with a caller's parameters.
 #[derive(SystemParam)]
 pub struct WorldPoint<'w, 's> {

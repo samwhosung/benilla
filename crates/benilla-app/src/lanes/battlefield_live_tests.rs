@@ -17,7 +17,7 @@ use benilla_ui::script::UiScript;
 use bevy::prelude::*;
 use crossbeam_channel::{Receiver, Sender};
 
-use super::unit_view_tests::{created, wire_packets};
+use super::unit_view_tests::{created, placed, wire_packets};
 use crate::net::ClientCommand;
 
 const ME: u64 = 0x7;
@@ -344,4 +344,76 @@ fn a_name_answer_runs_the_callbacks_at_its_packet() {
     );
     c.frame(vec![vec![named(TEAMMATE, "Mate")]]);
     assert_eq!(c.seen(), Vec::<String>::new(), "the callbacks are spent");
+}
+
+/// A zone of 1000 yards a side from the origin, so a point `(x, y)` reads `(1 - y/1000, 1 - x/1000)`.
+const RECT: benilla_world::map_proj::ZoneRect = benilla_world::map_proj::ZoneRect {
+    left: 1000.0,
+    right: 0.0,
+    top: 1000.0,
+    bottom: 0.0,
+};
+
+/// A teammate in view, placed anew by one packet's create, reads there in a later packet's
+/// listener: `GetBattlefieldPosition` takes a held player's position at the call (`0x4ac07b`, its
+/// position virtual at `0x4ac08c`), which the create's apply wrote at once, forced (`0x619414`),
+/// not the pose the frame before left.
+#[test]
+fn a_listener_reads_the_battlefield_position_an_earlier_packet_moved() {
+    let mut c = client();
+    // The battleground's map as one zone, which the listener selects (`SetMapZoom(1, 1)`).
+    c.app
+        .insert_resource(crate::ui_world_map::WorldMapUiData::one_zone_for_test(
+            WSG, 3277, RECT,
+        ));
+    {
+        let mut script = c.app.world_mut().non_send_resource_mut::<UiScript>();
+        script.set_world_map_catalog(vec![benilla_ui::script::WorldMapContinentView {
+            name: "Warsong Gulch".into(),
+            map_file: "WarsongGulch".into(),
+            zones: vec![benilla_ui::script::WorldMapZoneView {
+                name: "Warsong Gulch".into(),
+                area_id: 3277,
+                map_file: "WarsongGulch".into(),
+                loc_rect: (RECT.left, RECT.right, RECT.top, RECT.bottom),
+                overlays: Vec::new(),
+            }],
+            ..Default::default()
+        }]);
+        script
+            .run(
+                r#"
+                Maps = {}
+                local f = CreateFrame("Frame")
+                f:RegisterEvent("CHAT_MSG_MONSTER_SAY")
+                f:SetScript("OnEvent", function()
+                    SetMapZoom(1, 1)
+                    local x, y = GetBattlefieldPosition(1)
+                    table.insert(Maps, string.format("%.3f,%.3f", x, y))
+                end)
+                "#,
+            )
+            .unwrap();
+    }
+    let teammate_at = |at: [f32; 3]| {
+        placed(
+            created(TEAMMATE, EntityKind::Player, &[(BYTES_0, HUMAN_WARRIOR)]),
+            at,
+            0.0,
+            None,
+        )
+    };
+    c.frame(vec![
+        vec![status(0, 3)],
+        vec![teammate_at([500.0, 600.0, 0.0])],
+        vec![positions(&[TEAMMATE])],
+    ]);
+    c.frame(vec![]);
+    c.seen();
+    c.frame(vec![
+        vec![teammate_at([700.0, 800.0, 0.0])],
+        vec![boar_says("here")],
+    ]);
+    let seen: Vec<String> = c.eval(false, "return Maps");
+    assert_eq!(seen, ["0.200,0.300"]);
 }

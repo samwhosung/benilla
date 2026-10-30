@@ -53,13 +53,7 @@ use crate::game_plugins::schedule_tests::{census, type_names_available, SyncPoin
 /// filters out and may add with its commands, which access does not show; `exclusive` a system
 /// whose access Bevy does not report.
 #[rustfmt::skip]
-const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
-    ("::net::motion::remote::extrapolate_remote_units", &["Commands net::motion::spline::Spline",
-        "Transform", "net::motion::remote::RemoteMotion"],
-        "the arrival snap `0x7c6420` (`0x618dfc`) is written inside the packet"),
-    ("::transport::compose_riders", &["Transform", "net::motion::remote::RemoteMotion"],
-        "the arrival snap `0x7c6420` (`0x618dfc`) is written inside the packet"),
-];
+const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[];
 
 /// The systems between the dispatch and the drain that write what the host's live reads read,
 /// as [`BETWEEN_THE_DISPATCH_AND_THE_DRAIN`]'s, but where the reference too runs them after the
@@ -75,11 +69,29 @@ const AFTER_THE_PACKETS_IN_THE_REFERENCE: &[(&str, &[&str], &str)] = &[
     ("::net::motion::spline::ground_clamp_creatures", &["Transform"],
         "settles the creatures on the ground; unit movement is \
          frame time, which the reference runs after the packets (`0x420d63` after `0x420d55`)"),
+    ("::net::motion::remote::extrapolate_remote_units", &["Commands net::motion::spline::Spline",
+        "Transform", "net::motion::remote::RemoteMotion"],
+        "dead-reckons the remote players between their packets in the movement tick (event 5's \
+         `0x616800` → `0x615b10`), frame time, which the reference runs after the packets \
+         (`0x420d63` after `0x420d55`); a due packet seats its unit in the handler \
+         (`0x7c6420` at `0x618dfc`)"),
+    ("::transport::compose_riders", &["Transform", "net::motion::remote::RemoteMotion"],
+        "carries the riders with their decks, which move in the movement tick (event 5's \
+         `0x616800` → `0x630970`), frame time, which the reference runs after the packets \
+         (`0x420d63` after `0x420d55`): a rider's position reads through its deck at the call \
+         (`0x5f1f10` → `0x7c4930`); a packet seats its rider in the handler (`0x618b30` → \
+         `0x7c6900`, at `0x618e07`)"),
     ("::net::motion::remote::drain_pending_moves", &["Commands net::motion::spline::Spline",
-        "net::motion::remote::RemoteMotion"],
+        "net::motion::remote::MoveTick", "net::motion::remote::RemoteMotion"],
         "fires the relayed moves queued past their arrival in the movement tick (event 5's \
-         `0x616800` → `0x615b10` → `0x616620` → `0x615c30`), frame time, which the reference \
-         runs after the packets (`0x420d63` after `0x420d55`)"),
+         `0x616800` → `0x615b10` → `0x616620` → `0x615c30`), then stamps the clock the next \
+         frame's arrivals are due by (`0x616846`), frame time, which the reference runs after \
+         the packets (`0x420d63` after `0x420d55`)"),
+    ("::Collider>", &["ColliderTrees"],
+        "refits the collision world's trees to the colliders frame time moved, the decks among \
+         them, which the reference moves in the movement tick (event 5's `0x616800` → \
+         `0x630970`), after the packets (`0x420d63` after `0x420d55`): a due arrival's catch-up \
+         resolves against the world as that tick left it (`0x618bb0` → `0x634040`)"),
     ("::net::game_time::tick_game_time", &["net::game_time::ServerTime"],
         "steps the game clock by the frame time, the category 5 handler `0x401ec0` → `0x6c5d50` \
          → `0x6435a0`, which the reference runs after the packets (`0x420d63` after \

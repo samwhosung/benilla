@@ -899,6 +899,7 @@ mod tests {
             ));
             let unit = world
                 .spawn((
+                    Transform::from_translation(Vec3::new(distance, 0.0, 0.0)),
                     GlobalTransform::from_translation(Vec3::new(distance, 0.0, 0.0)),
                     live(),
                 ))
@@ -1004,6 +1005,7 @@ mod tests {
             let unit = world
                 .spawn((
                     speeds,
+                    Transform::from_translation(Vec3::new(distance, 0.0, 0.0)),
                     GlobalTransform::from_translation(Vec3::new(distance, 0.0, 0.0)),
                     live(),
                 ))
@@ -1072,6 +1074,7 @@ mod tests {
             ));
             let body = world
                 .spawn((
+                    Transform::from_translation(Vec3::new(distance, 0.0, 0.0)),
                     GlobalTransform::from_translation(Vec3::new(distance, 0.0, 0.0)),
                     corpse,
                 ))

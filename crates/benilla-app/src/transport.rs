@@ -631,9 +631,26 @@ pub(crate) struct TransportRider {
     pub(crate) local_orientation: f32,
 }
 
-/// Compose each observed rider's world pose through its transport's this-frame pose, after
-/// [`tick_transports`], and refresh [`RemoteMotion`]'s WoW pose to match. A rider whose transport
-/// is not streamed keeps its last world pose; the server despawns the pair together.
+/// A rider's world position and facing through its deck's pose as it stands: a unit's position
+/// is its deck-local one through the transport's matrix, read at the call (`0x5f1f10` →
+/// `0x7c4930`, the matrix `0x630ac0`), and its facing the deck-local one plus the deck's yaw.
+pub(crate) fn on_deck(
+    deck: &Transform,
+    local_pos: [f32; 3],
+    local_orientation: f32,
+) -> (Vec3, f32) {
+    let local = benilla_assets::coords::wow_to_bevy(local_pos);
+    (
+        deck.translation + deck.rotation * local,
+        local_orientation + deck.rotation.to_euler(EulerRot::YXZ).0,
+    )
+}
+
+/// Carry each observed rider with its transport's this-frame pose, after [`tick_transports`], and
+/// refresh [`RemoteMotion`]'s WoW pose to match: the deck moves in frame time, and a rider's
+/// position follows it at every read ([`on_deck`]); its packet seats it inside the handler. A
+/// rider whose transport is not streamed keeps its last world pose; the server despawns the pair
+/// together.
 #[allow(clippy::type_complexity)] // one Bevy system's full input set
 fn compose_riders(
     guid_index: Res<crate::net::GuidIndex>,
@@ -655,9 +672,7 @@ fn compose_riders(
         let Ok(boat) = boats.get(boat_entity) else {
             continue;
         };
-        let local = benilla_assets::coords::wow_to_bevy(rider.local_pos);
-        let world = boat.translation + boat.rotation * local;
-        let yaw = rider.local_orientation + boat.rotation.to_euler(EulerRot::YXZ).0;
+        let (world, yaw) = on_deck(boat, rider.local_pos, rider.local_orientation);
         transform.translation = world;
         transform.rotation = Quat::from_rotation_y(yaw);
         if let Some(mut rm) = motion {

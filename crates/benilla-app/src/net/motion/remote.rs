@@ -42,6 +42,16 @@ pub(crate) struct RemoteMotion {
     pub(crate) last_apply_pos: [f32; 3],
 }
 
+/// What a unit's create leaves on its mover for the relays to come, until its first relay builds
+/// its [`RemoteMotion`]: the replay chain the create's forced apply seeded
+/// ([`RelayChain::seed_at_create`]) and the flags word it wrote (`new & 0x75a07dff` over a cleared
+/// word, `0x61936e`, `0x618de7`), which the first relay's schedule reads as the mover's.
+#[derive(Component, Clone)]
+pub(crate) struct RelaySeed {
+    pub(crate) chain: RelayChain,
+    pub(crate) flags: u32,
+}
+
 /// A relayed pose's height in both frames its packet carries: the world's, and the deck's while
 /// aboard (`ON_TRANSPORT`'s tail).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -78,7 +88,8 @@ pub(in crate::net) enum RelayOutcome {
     /// Due, with an empty queue.
     Now,
     Queued,
-    /// The unit's first packet, placed at once.
+    /// The first packet on a chain no create seeded, placed at once (only under
+    /// `WOW_REMOTE_SNAP=1`: that packet's fire-time is its arrival, past the movement clock).
     Seed,
     /// A server-authored pose for our own mover, handed to the controller as a
     /// [`crate::net::SelfMoveMessage`] at arrival. Deviation: the reference paces a self move
@@ -120,6 +131,7 @@ pub(in crate::net) fn trace_relay(
         benilla_protocol::RelayVerb::Teleport => "tp",
         benilla_protocol::RelayVerb::Root(_) => "rt",
         benilla_protocol::RelayVerb::Pose => "tr",
+        benilla_protocol::RelayVerb::Speed => "sp",
     };
     benilla_assets::trace::line(
         "rly",
@@ -327,14 +339,23 @@ pub(in crate::net) fn apply_move(
     rm.last_apply_pos = ev.position;
 }
 
-/// Fires every due queued move (the drain `0x615c30`); runs before [`extrapolate_remote_units`].
-/// Real time: the reference's clock is the OS wall clock (`0x42c010`), and Bevy's virtual clock
-/// clamps each delta to 250 ms, so a throttled window would fall behind the schedule.
+/// The movement clock a relayed move is due by at its arrival: the time the movement tick last
+/// stamped (`[mgr+0x128]`, written at `0x616846` after the tick's drain), which a frame's packets
+/// read as the frame before left it, the tick running after them (`0x420d63` after `0x420d55`).
+/// `None` before the first tick, when no arrival is due.
+#[derive(Resource, Default)]
+pub(crate) struct MoveTick(pub(crate) Option<f64>);
+
+/// Fires every due queued move (the drain `0x615c30`), then stamps the movement clock
+/// ([`MoveTick`]); runs before [`extrapolate_remote_units`]. Real time: the reference's clock is
+/// the OS wall clock (`0x42c010`), and Bevy's virtual clock clamps each delta to 250 ms, so a
+/// throttled window would fall behind the schedule.
 #[allow(clippy::type_complexity)]
 pub(in crate::net) fn drain_pending_moves(
     time: Res<Time<Real>>,
     mut commands: Commands,
     mut landings: MessageWriter<crate::creature_anim::HardLanding>,
+    mut tick: ResMut<MoveTick>,
     mut q: Query<(Entity, &mut RemoteMotion), (Without<Spline>, Without<ActiveMover>)>,
 ) {
     let now_ms = time.elapsed_secs_f64() * 1000.0;
@@ -344,22 +365,158 @@ pub(in crate::net) fn drain_pending_moves(
             apply_move(e, &ev.mv, &mut rm, now_ms, &mut commands, &mut landings);
         }
     }
+    tick.0 = Some(now_ms);
+}
+
+/// What a remote mover's step meets in the world: our own controller's sweep and capsule, as the
+/// reference drives every mover through one controller, and the liquid a water-walker stands on,
+/// which is queried, not swept.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(in crate::net) struct MoverWorld<'w, 's> {
+    world: benilla_world::collision::WorldCollision<'w, 's>,
+    liquid: benilla_world::world_point::UnitLiquid<'w, 's>,
+    capsule: Res<'w, crate::player::PlayerCapsule>,
+}
+
+/// One dead-reckoned step of a remote mover ([`reckon`]).
+pub(in crate::net) struct Reckoned {
+    pub(in crate::net) pos: [f32; 3],
+    pub(in crate::net) orientation: f32,
+    pub(in crate::net) vertical_velocity: f32,
+    pub(in crate::net) speed: f32,
+    /// The horizontal travel the world took away.
+    pub(in crate::net) held: f32,
+}
+
+/// `rm`'s step over `dt` from where it stands: its flags' advance ([`RemoteMotion::advance`]), then
+/// the world's say, grounded the swept capsule and step election, airborne the walls alone, since
+/// the arc owns its Z. The reference steps the tick and the late start's catch-up alike through
+/// `0x7c5360` and `0x616cb0` → `0x634040`. A flag-still mover is not resolved: `CMovement::Update`'s
+/// substep loop (`0x616e20`) and the per-mover tick (`0x6166f5`) both bail on `0x20ff`, which also
+/// keeps a standing mover from sinking where a WMO floor collider has not attached yet. A swimmer
+/// (the wire Z is its depth) and a rider (a deck-local pose) are not resolved either; with no
+/// `world`, nothing is. `modes` is the whole flags word, granted modes included.
+pub(in crate::net) fn reckon(
+    e: Entity,
+    rm: &RemoteMotion,
+    speeds: MoveSpeeds,
+    modes: u32,
+    riding: bool,
+    dt: std::time::Duration,
+    world: Option<&MoverWorld>,
+) -> Reckoned {
+    let dt_s = dt.as_secs_f32();
+    let (mut pos, orientation, vertical_velocity, speed) = rm.advance(speeds, dt_s);
+    let mut held = 0.0f32;
+    let airborne = rm.flags & move_flags::FALLING != 0;
+    let afloat = rm.flags & move_flags::SWIMMING != 0;
+    let integrating = rm.flags & move_flags::INTEGRATED != 0 || idle_gate_disabled();
+    let resolver = world.filter(|_| integrating && !afloat && !riding && !flat_extrapolation());
+    if let Some(MoverWorld {
+        world,
+        liquid,
+        capsule,
+    }) = resolver
+    {
+        let half_h = Vec3::Y * (crate::player::CAPSULE_HEIGHT * 0.5);
+        let from = wow_to_bevy(rm.wow_pos) + half_h;
+        // Grounded this is horizontal; airborne it carries the arc's vertical.
+        let vel = if dt_s > 1.0e-6 {
+            (wow_to_bevy(pos) + half_h - from) / dt_s
+        } else {
+            Vec3::ZERO
+        };
+        let resolved_center = if airborne {
+            crate::player::mover::airborne_step(world, &capsule.0, from, vel, dt)
+        } else {
+            // The mover's granted modes: `HOVER` raises it a yard (`0x636e81`), and
+            // `WATER_WALKING` makes the liquid plane floor (`0x63162e`) unless swimming
+            // (`0x631617`). The local mover's aim-pitch gate has no meaning here. No steep-support
+            // bit is carried between packets; the next packet's Z corrects that.
+            let water = (modes & move_flags::WATER_WALKING != 0
+                && modes & move_flags::SWIMMING == 0)
+                .then(|| {
+                    liquid
+                        .liquid_at(e, pos)
+                        .map(|hit| wow_to_bevy(pos).y + (hit.surface_z - pos[2]))
+                })
+                .flatten();
+            let g = crate::player::mover::grounded_step(
+                world,
+                &capsule.0,
+                from,
+                vel,
+                dt,
+                crate::player::mover::Support {
+                    // `0x5fa550` is true for an uncharmed player, so the step height is 1.0.
+                    rise: crate::player::STEP_UP_HEIGHT,
+                    offset: if modes & move_flags::HOVER != 0 {
+                        crate::player::HOVER_HEIGHT
+                    } else {
+                        0.0
+                    },
+                    water,
+                    steep: false,
+                },
+            );
+            // No floor found: a remote has no fall election, so keep the packet's height and
+            // take only the horizontal.
+            match g.unsupported {
+                Some(_) => Vec3::new(g.center.x, from.y, g.center.z),
+                None => g.center,
+            }
+        };
+        let resolved = bevy_to_wow(resolved_center - half_h);
+        held = (pos[0] - resolved[0]).hypot(pos[1] - resolved[1]);
+        pos = resolved;
+    }
+    Reckoned {
+        pos,
+        orientation,
+        vertical_velocity,
+        speed,
+        held,
+    }
+}
+
+/// The late start's catch-up (`0x618bb0`, called at `0x618e5d` with the fire-time and the movement
+/// clock less it): a move due at its arrival steps its mover on by the ms the clock is past the
+/// fire-time, so the mover stands where it would have, had the move applied on time; the tick
+/// then steps it on from there. Only a direction bit adds the lateness to the step's elapsed time
+/// (`0x618bdb` → `0x618be0`), so a mover falling without one steps 0 ms (`0x7c5360` returns at
+/// once for 0). The lateness is at most 500 ms: a due fire-time is at or before the clock, and
+/// its skew at least −500 (`@0x618d49`). A rider's deck-local pose is not dead-reckoned
+/// ([`crate::transport::compose_riders`]), so it is not caught up either. Returns whether it
+/// stepped.
+pub(in crate::net) fn catch_up(
+    e: Entity,
+    rm: &mut RemoteMotion,
+    late_ms: f64,
+    speeds: MoveSpeeds,
+    modes: u32,
+    riding: bool,
+    world: Option<&MoverWorld>,
+) -> bool {
+    if late_ms <= 0.0 || rm.flags & move_flags::ANY_MOVE == 0 || riding {
+        return false;
+    }
+    let late = std::time::Duration::from_secs_f64(late_ms / 1000.0);
+    let step = reckon(e, rm, speeds, modes, false, late, world);
+    rm.wow_pos = step.pos;
+    rm.orientation = step.orientation;
+    rm.vertical_velocity = step.vertical_velocity;
+    rm.speed = step.speed;
+    true
 }
 
 /// Dead-reckons every remote mover each frame from its flags, then resolves the step against the
-/// world with our own controller's capsule and step election, as the reference drives every mover
-/// through one controller. A mover with no [`move_flags::INTEGRATED`] bit is not integrated, as in
-/// the reference. The wire has no blocked bit: a mover held by a wall is held by ours. Real time,
-/// the clock the fire-times are on.
+/// world ([`reckon`]). The wire has no blocked bit: a mover held by a wall is held by ours. Real
+/// time, the clock the fire-times are on.
 #[allow(clippy::type_complexity)]
 pub(in crate::net) fn extrapolate_remote_units(
     time: Res<Time<Real>>,
     mut commands: Commands,
-    // The local controller's own sweep and capsule.
-    world: benilla_world::collision::WorldCollision,
-    // Liquid is queried, not swept, so a water-walker's plane is handed to the step.
-    points: benilla_world::world_point::WorldPoint,
-    capsule: Res<crate::player::PlayerCapsule>,
+    world: MoverWorld,
     // The runaway watch's last reported silent second per mover.
     mut warned: Local<bevy::platform::collections::HashMap<Entity, u32>>,
     // When each mover last wrote a `rem` line.
@@ -400,74 +557,16 @@ pub(in crate::net) fn extrapolate_remote_units(
         }
         let s = speeds.map_or_else(MoveSpeeds::default, |u| u.0);
         let prev = rm.wow_pos;
-        let (mut pos, mut orientation, vertical_velocity, speed) = rm.advance(s, dt);
-        // Horizontal travel the world took away, measured before the reconcile lerp.
-        let mut held = 0.0f32;
-        // The step meets the world: grounded, the swept capsule and step election; airborne, walls
-        // only, since the arc owns its Z. A swimmer (the wire Z is its depth) and a transport rider
-        // (a transport-local pose) are not resolved.
-        let airborne = rm.flags & move_flags::FALLING != 0;
-        let afloat = rm.flags & move_flags::SWIMMING != 0;
-        // A flag-still mover is not integrated: `CMovement::Update`'s substep loop (`0x616e20`)
-        // and the per-mover tick (`0x6166f5`) both bail on `0x20ff`, so its pose is the last
-        // packet's. This also keeps a standing mover from sinking where a WMO floor collider has
-        // not attached yet. `modes` is the whole flags word and feeds `Support`; the gate reads
-        // only the pose's bits.
+        // `modes` is the whole flags word and feeds the step's support; its gate reads only the
+        // pose's bits.
         let modes = rm.flags | granted.map_or(0, |m| m.0);
-        let integrating = rm.flags & move_flags::INTEGRATED != 0 || idle_gate_disabled();
-        if integrating && !afloat && !riding && !flat_extrapolation() {
-            let half_h = Vec3::Y * (crate::player::CAPSULE_HEIGHT * 0.5);
-            let from = wow_to_bevy(rm.wow_pos) + half_h;
-            // Grounded this is horizontal; airborne it carries the arc's vertical.
-            let vel = if dt > 1.0e-6 {
-                (wow_to_bevy(pos) + half_h - from) / dt
-            } else {
-                Vec3::ZERO
-            };
-            let resolved_center = if airborne {
-                crate::player::mover::airborne_step(&world, &capsule.0, from, vel, time.delta())
-            } else {
-                // The mover's granted modes: `HOVER` raises it a yard (`0x636e81`), and
-                // `WATER_WALKING` makes the liquid plane floor (`0x63162e`) unless swimming
-                // (`0x631617`). The local mover's aim-pitch gate has no meaning here. No
-                // steep-support bit is carried between packets; the next packet's Z corrects that.
-                let water = (modes & move_flags::WATER_WALKING != 0
-                    && modes & move_flags::SWIMMING == 0)
-                    .then(|| {
-                        points
-                            .liquid_at(benilla_world::world_point::Subject::Unit(e), pos)
-                            .map(|hit| wow_to_bevy(pos).y + (hit.surface_z - pos[2]))
-                    })
-                    .flatten();
-                let g = crate::player::mover::grounded_step(
-                    &world,
-                    &capsule.0,
-                    from,
-                    vel,
-                    time.delta(),
-                    crate::player::mover::Support {
-                        // `0x5fa550` is true for an uncharmed player, so the step height is 1.0.
-                        rise: crate::player::STEP_UP_HEIGHT,
-                        offset: if modes & move_flags::HOVER != 0 {
-                            crate::player::HOVER_HEIGHT
-                        } else {
-                            0.0
-                        },
-                        water,
-                        steep: false,
-                    },
-                );
-                // No floor found: a remote has no fall election, so keep the packet's height and
-                // take only the horizontal.
-                match g.unsupported {
-                    Some(_) => Vec3::new(g.center.x, from.y, g.center.z),
-                    None => g.center,
-                }
-            };
-            let resolved = bevy_to_wow(resolved_center - half_h);
-            held = (pos[0] - resolved[0]).hypot(pos[1] - resolved[1]);
-            pos = resolved;
-        }
+        let Reckoned {
+            mut pos,
+            mut orientation,
+            vertical_velocity,
+            speed,
+            held,
+        } = reckon(e, &rm, s, modes, riding, time.delta(), Some(&world));
         // The pre-fire reconcile toward the queued head, facing (armed by `0x619030`) and position
         // (`0x619090`); a teleport arms neither (`@0x61904b`, `@0x6190bb`).
         if let Some(ev) = rm.pending.front() {
@@ -591,12 +690,15 @@ pub(in crate::net) fn fall_arc_step(
 }
 
 impl RemoteMotion {
-    /// Whether a scheduled move applies at arrival: due and the queue empty. The empty-queue term
-    /// matters because the drain runs after us; applied first, a Stop would be overwritten by an
-    /// older queued move. The reference's due test (`@0x618dd2`) reads the manager's clock cell
-    /// stamped once per update (`0x616800`), where a due arrival never meets a non-empty queue.
-    pub(crate) fn fires_at_arrival(&self, fire_ms: f64, now_ms: f64) -> bool {
-        self.pending.is_empty() && fire_ms <= now_ms
+    /// Whether a scheduled move applies at arrival: due by the movement clock the last tick
+    /// stamped ([`MoveTick`]), and the queue empty. The due test (`@0x618dd2`) reads that clock,
+    /// so a move whose fire-time is past it waits for this frame's tick (`0x618dde`, queued by
+    /// `0x618f20` → `0x6176a0`): an idle mover's always is, its re-base raising the fire to at or
+    /// past the arrival (`0x618cfc`-`0x618d41`), and only a late moving one's can be due. Under
+    /// that clock a due arrival never meets a non-empty queue; the empty-queue term keeps a Stop
+    /// from being overwritten by an older queued move all the same.
+    pub(crate) fn fires_at_arrival(&self, fire_ms: f64, tick: Option<f64>) -> bool {
+        self.pending.is_empty() && tick.is_some_and(|t| fire_ms <= t)
     }
 
     /// One frame of dead-reckoning: `(position, facing, vertical speed, horizontal speed)`.

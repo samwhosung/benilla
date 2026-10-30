@@ -596,7 +596,7 @@ mod tests {
             .spawn((
                 crate::net::SelfPlayer,
                 Guid(1),
-                GlobalTransform::default(),
+                Transform::default(),
                 unit(&[(TYPE, PLAYER_TYPE), (TEMPLATE, 1), (FLAGS, 0x8)]),
             ))
             .id();
@@ -605,9 +605,7 @@ mod tests {
     }
 
     fn spawn(world: &mut World, guid: u64, store: ObjectStore) -> Entity {
-        let entity = world
-            .spawn((Guid(guid), GlobalTransform::default(), store))
-            .id();
+        let entity = world.spawn((Guid(guid), Transform::default(), store)).id();
         world.resource_mut::<GuidIndex>().0.insert(guid, entity);
         entity
     }

@@ -19,7 +19,7 @@ use benilla_ui::script::{
 
 use super::{list_view, slot_view, Battlefield};
 use crate::names::NameCache;
-use crate::net::{GuidIndex, NetEntity, SelfGuid};
+use crate::net::{GuidIndex, SelfGuid};
 use crate::ui_battlefield_positions::{flag_token, live_or_packet, BattlefieldPositions};
 use crate::ui_battlefield_score::{BattlefieldScoreboard, BoardView};
 use crate::ui_dialog_verbs::BattlefieldQueue;
@@ -43,7 +43,8 @@ pub(crate) struct BattlefieldLive<'w, 's> {
     guids: Option<Res<'w, GuidIndex>>,
     objects: crate::net::Objects<'w, 's>,
     stores: crate::ui_unit::views::ViewStores<'w, 's>,
-    unit_pos: Query<'w, 's, &'static GlobalTransform, With<NetEntity>>,
+    /// Each unit's position as of here, composed through its parents on demand.
+    transforms: bevy::transform::helper::TransformHelper<'w, 's>,
 }
 
 impl BattlefieldLive<'_, '_> {
@@ -104,7 +105,7 @@ impl BattlefieldLive<'_, '_> {
         let Some(p) = index.and_then(|i| self.teammates().nth(i)) else {
             return Some(None);
         };
-        let at = live_or_packet(p, self.guids.as_deref(), &self.unit_pos);
+        let at = live_or_packet(p, self.guids.as_deref(), &self.transforms);
         let name = self
             .names
             .as_deref()
@@ -120,7 +121,7 @@ impl BattlefieldLive<'_, '_> {
     fn flag(&self, q: &BattlefieldFlagQuery) -> Option<Option<BattlefieldFlagView>> {
         let positions = self.positions.as_deref()?;
         Some(positions.carrier().filter(|c| c.guid != 0).map(|c| {
-            let at = live_or_packet(c, self.guids.as_deref(), &self.unit_pos);
+            let at = live_or_packet(c, self.guids.as_deref(), &self.transforms);
             BattlefieldFlagView {
                 uv: self.project(q.selection, at),
                 token: flag_token(self.side()).map(str::to_string),

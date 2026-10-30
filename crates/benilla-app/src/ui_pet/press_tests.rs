@@ -699,9 +699,10 @@ fn the_cursor_binds_a_unit_casters_spell_against_that_unit() {
         );
         let world = rig.app.world_mut();
         let pet = world.resource::<GuidIndex>().0[&PET];
-        world
-            .entity_mut(pet)
-            .insert(GlobalTransform::from_translation(pet_at));
+        world.entity_mut(pet).insert((
+            Transform::from_translation(pet_at),
+            GlobalTransform::from_translation(pet_at),
+        ));
         world.resource_mut::<Spells>().ranges = benilla_formats::SpellRangeCatalog::from_rows(
             [(
                 NEAR,

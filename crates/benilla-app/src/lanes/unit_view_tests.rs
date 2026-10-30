@@ -59,6 +59,58 @@ pub(super) fn wire_packets(packets: Vec<Vec<SessionEvent>>) -> Vec<SessionEvent>
         .collect()
 }
 
+/// A `MSG_MOVE_HEARTBEAT` from `guid` at the world's `at`, moving by `flags`, aboard `deck` at
+/// its deck-local point when one is named.
+pub(super) fn heartbeat(
+    guid: u64,
+    at: [f32; 3],
+    flags: u32,
+    deck: Option<(u64, [f32; 3])>,
+) -> SessionEvent {
+    SessionEvent::UnitMove {
+        guid,
+        position: at,
+        orientation: 0.0,
+        flags: flags | deck.map_or(0, |_| crate::creature_anim::move_flags::ON_TRANSPORT),
+        pitch: 0.0,
+        time: 0,
+        verb: benilla_protocol::RelayVerb::Heartbeat,
+        fall_time: 0,
+        jump: None,
+        transport: deck.map(|(guid, [x, y, z])| benilla_protocol::TransportPose {
+            guid,
+            pos: benilla_protocol::wire::Vector3d { x, y, z },
+            orientation: 0.0,
+        }),
+    }
+}
+
+/// `create` placed at the world's `at` and facing `facing`, aboard `deck` at its deck-local point
+/// when one is named.
+pub(super) fn placed(
+    mut create: SessionEvent,
+    at: [f32; 3],
+    facing: f32,
+    deck: Option<(u64, [f32; 3])>,
+) -> SessionEvent {
+    if let SessionEvent::ObjectCreate {
+        position,
+        orientation,
+        transport,
+        ..
+    } = &mut create
+    {
+        *position = at;
+        *orientation = facing;
+        *transport = deck.map(|(guid, [x, y, z])| benilla_protocol::TransportPose {
+            guid,
+            pos: benilla_protocol::wire::Vector3d { x, y, z },
+            orientation: 0.0,
+        });
+    }
+    create
+}
+
 /// A create block of `kind` whose fields are `pairs`, as the wire's whole descriptor, with the
 /// `OBJECT_FIELD_TYPE` every create carries (object, unit and, for a player, player bits) unless
 /// `pairs` sets its own: the resolver's hop and the getters' lookups test it (typemask 8,

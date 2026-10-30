@@ -174,9 +174,10 @@ impl SplineMode {
     }
 }
 
-/// What a relayed move's opcode means beyond its pose. The 23 `[packed guid][MovementInfo]` relays
-/// share one reference handler (`0x603bb0`, `0x601580`), and for most the opcode adds nothing the
-/// flags word does not say. The variants beyond `Pose` name the opcodes a receiver tells apart.
+/// What a relayed move's opcode means beyond its pose. The reference binds 30
+/// `[packed guid][MovementInfo]` relays to one handler (`0x603bb0`, its cases in `0x601580`), the
+/// 28 parsed here among them, and for most the opcode adds nothing the flags word does not say.
+/// The variants beyond `Pose` name the opcodes a receiver tells apart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RelayVerb {
     /// Every other relay (start, stop, strafe, jump, turn, swim, land, facing, modes, knockback).
@@ -193,6 +194,10 @@ pub enum RelayVerb {
     /// decides. The client then runs `SetRoot` (`0x7c7340`, also wiping motion) or `ClearRoot`
     /// (`0x7c7370`) unconditionally; vmangos's flags already agree (`MovementHandler.cpp:1064`).
     Root(bool),
+    /// `MSG_MOVE_SET_*_SPEED`'s pose, a plain one: the speed relays' own handler reads the status,
+    /// then the new speed (`0x6010e0`, `0x60112e`, `0x601140`), which decodes as the event after
+    /// this one, so the packet goes on past the pose. It is none of the 30 relays.
+    Speed,
 }
 
 impl RelayVerb {

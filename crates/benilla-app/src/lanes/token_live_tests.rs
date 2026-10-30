@@ -13,7 +13,7 @@ use benilla_ui::script::UiScript;
 use bevy::prelude::*;
 use crossbeam_channel::{Receiver, Sender};
 
-use super::unit_view_tests::{created, targets, values, wire_packets};
+use super::unit_view_tests::{created, heartbeat, placed, targets, values, wire_packets};
 use crate::net::ClientCommand;
 
 const ME: u64 = 0x7;
@@ -723,6 +723,314 @@ fn a_member_destroyed_later_in_the_frame_reads_its_objects_map_position() {
     ]);
     let seen: Vec<String> = c.eval(false, "return Maps");
     assert_eq!(seen, ["0.5,0.6"]);
+}
+
+/// A transport whose deck stands at (3000, 4000) turned a quarter left, so a deck-local +x runs
+/// along world +y; it has no clock, so no tick moves it.
+const BOAT: u64 = 0xF120_0000_0050_0007;
+/// `OBJECT_FIELD_TYPE` of a game object (object and game object bits), and `GAMEOBJECT_FLAGS`
+/// with the transport bit, bit 3, which `0x630a80` tests.
+const TYPE_GAMEOBJECT: u32 = 0x21;
+const GAMEOBJECT_FLAGS: u16 = 9;
+const GO_TRANSPORT: u32 = 0x8;
+const FORWARD: u32 = crate::creature_anim::move_flags::FORWARD;
+
+/// A deck's descriptor: a game object flagged a transport.
+fn deck_fields() -> [(u16, u32); 2] {
+    [
+        (OBJECT_TYPE, TYPE_GAMEOBJECT),
+        (GAMEOBJECT_FLAGS, GO_TRANSPORT),
+    ]
+}
+
+/// [`BOAT`] in the world, held under its guid, armed as the transport tick leaves a deck.
+fn moor(c: &mut Client) {
+    let world = c.app.world_mut();
+    let boat = world
+        .spawn((
+            crate::net::Guid(BOAT),
+            crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&deck_fields())),
+            crate::transport::Transport::parked_for_test(),
+            Transform::from_translation(benilla_assets::coords::wow_to_bevy([3000.0, 4000.0, 0.0]))
+                .with_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2)),
+        ))
+        .id();
+    world
+        .resource_mut::<crate::net::GuidIndex>()
+        .0
+        .insert(BOAT, boat);
+}
+
+/// [`MATE`]'s create block at the world's `at`, aboard `deck` when one is named.
+fn mate_created(at: [f32; 3], deck: Option<(u64, [f32; 3])>) -> SessionEvent {
+    let mut mate = unit(60, &summons(MATE_PET));
+    mate.extend(targets(ME));
+    mate.push((OBJECT_TYPE, TYPE_PLAYER));
+    placed(created(MATE, EntityKind::Player, &mate), at, 0.0, deck)
+}
+
+/// The client with `party1` created at (500, 600) and its first relayed move there, by `flags`,
+/// applied by the frame's tick, on a clock that steps 16 ms a frame; the spy cleared. Two frames
+/// on, a move whose wire stamp has not advanced arrives 32 ms late.
+fn seated(flags: u32) -> Client {
+    let mut c = client();
+    c.app
+        .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            std::time::Duration::from_millis(16),
+        ));
+    map_spy(&mut c, "party1");
+    moor(&mut c);
+    c.frame(vec![
+        vec![mate_created([500.0, 600.0, 0.0], None)],
+        vec![heartbeat(MATE, [500.0, 600.0, 0.0], flags, None)],
+    ]);
+    c.frame(vec![]);
+    c.eval::<()>(false, "Maps = {}");
+    c
+}
+
+/// A late mover's packet seats it inside its handler, where a later packet's listener reads it:
+/// due by the movement clock at its arrival (`@0x618dd2`), the apply writes the mover's position
+/// there (`0x7c6420` at `0x618dfc`), and `0x4a7870` reads the object's position at the call
+/// (`0x4a78c1` → `0x5f1f10`).
+#[test]
+fn a_listener_reads_a_late_mover_where_its_packet_put_it() {
+    let mut c = seated(FORWARD);
+    c.frame(vec![
+        vec![heartbeat(MATE, [700.0, 800.0, 0.0], FORWARD, None)],
+        vec![member_at(MATE, 20, ELWYNN, (100, 200))],
+    ]);
+    let seen: Vec<String> = c.eval(false, "return Maps");
+    assert_eq!(seen, ["0.7,0.8"]);
+}
+
+/// A spy noting `token`'s map position to a ten-thousandth, a tenth of a yard on [`map_spy`]'s
+/// projection, in `Fine` at each of its `UNIT_HEALTH`s.
+fn fine_map_spy(c: &mut Client, token: &str) {
+    c.eval::<()>(
+        true,
+        &format!(
+            r#"Fine = {{}}
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("UNIT_HEALTH")
+            f:SetScript("OnEvent", function()
+                if arg1 == "{token}" then
+                    local x, y = GetPlayerMapPosition(arg1)
+                    table.insert(Fine, string.format("%.4f,%.4f", x, y))
+                end
+            end)"#
+        ),
+    );
+}
+
+/// A late mover's packet seats it stepped on by its lateness, where a later packet's listener
+/// reads it: the late start's catch-up (`0x618bb0` at `0x618e5d`) runs the mover on from the
+/// packet's point for the ms the movement clock is past the fire-time, at most 500, since a due
+/// fire-time's skew is at least −500 (`@0x618d49`). Forty frames after its last fire, a move whose
+/// stamp has not advanced fires 500 ms before its arrival, 484 before the clock: 3.388 yd at a run
+/// speed of 7, along its facing, +x.
+#[test]
+fn a_listener_reads_a_late_mover_stepped_on_by_its_lateness() {
+    let mut c = seated(FORWARD);
+    let mate = c.app.world().resource::<crate::net::GuidIndex>().0[&MATE];
+    c.app
+        .world_mut()
+        .entity_mut(mate)
+        .insert(crate::net::UnitSpeeds(benilla_protocol::MoveSpeeds {
+            run: 7.0,
+            ..Default::default()
+        }));
+    fine_map_spy(&mut c, "party1");
+    for _ in 0..40 {
+        c.frame(vec![]);
+    }
+    c.frame(vec![
+        vec![heartbeat(MATE, [700.0, 800.0, 0.0], FORWARD, None)],
+        vec![member_at(MATE, 20, ELWYNN, (100, 200))],
+    ]);
+    let seen: Vec<String> = c.eval(false, "return Fine");
+    assert_eq!(seen, ["0.7034,0.8000"]);
+}
+
+/// A standing member's packet waits for the frame's tick, so a later packet's listener reads the
+/// member where it stood: the re-base puts the fire-time at or past the arrival
+/// (`0x618cfc`-`0x618d41`), past the movement clock (`@0x618dd2`, `0x618dde`), and the move is
+/// queued (`0x618f20` → `0x6176a0`).
+#[test]
+fn a_listener_reads_a_standing_member_where_it_stood() {
+    let mut c = seated(0);
+    c.frame(vec![
+        vec![heartbeat(MATE, [700.0, 800.0, 0.0], 0, None)],
+        vec![member_at(MATE, 20, ELWYNN, (100, 200))],
+    ]);
+    let seen: Vec<String> = c.eval(false, "return Maps");
+    assert_eq!(seen, ["0.5,0.6"]);
+}
+
+/// A late mover a packet seats on a deck reads, in a later packet's listener, its deck-local
+/// point through the deck as it stands, not the packet's world position: the apply re-seats the
+/// mover deck-local (`0x618b30` → `0x7c6900`, at `0x618e07`), and its position reads through the
+/// transport's matrix at the call (`0x5f1f10` → `0x7c4930`). A second late move re-seats it.
+#[test]
+fn a_listener_reads_a_late_rider_where_its_packet_seated_it_on_the_deck() {
+    let mut c = seated(FORWARD);
+    c.frame(vec![
+        vec![heartbeat(
+            MATE,
+            [100.0, 200.0, 0.0],
+            FORWARD,
+            Some((BOAT, [500.0, 0.0, 0.0])),
+        )],
+        vec![member_at(MATE, 20, ELWYNN, (100, 200))],
+        vec![heartbeat(
+            MATE,
+            [100.0, 200.0, 0.0],
+            FORWARD,
+            Some((BOAT, [500.0, 100.0, 0.0])),
+        )],
+        vec![member_at(MATE, 10, ELWYNN, (100, 200))],
+    ]);
+    let seen: Vec<String> = c.eval(false, "return Maps");
+    assert_eq!(seen, ["3.0,4.5", "2.9,4.5"]);
+}
+
+/// A standing member's packet onto a deck waits for the frame's tick, as any idle mover's does,
+/// so a later packet's listener reads the member where it stood.
+#[test]
+fn a_listener_reads_a_standing_rider_where_it_stood() {
+    let mut c = seated(0);
+    c.frame(vec![
+        vec![heartbeat(
+            MATE,
+            [100.0, 200.0, 0.0],
+            0,
+            Some((BOAT, [500.0, 0.0, 0.0])),
+        )],
+        vec![member_at(MATE, 20, ELWYNN, (100, 200))],
+    ]);
+    let seen: Vec<String> = c.eval(false, "return Maps");
+    assert_eq!(seen, ["0.5,0.6"]);
+}
+
+/// `create` with its living block's mover state: moving by `flags`, its stamp `stamp` on the
+/// server's clock.
+fn living(mut create: SessionEvent, flags: u32, stamp: u32) -> SessionEvent {
+    if let SessionEvent::ObjectCreate { mover, .. } = &mut create {
+        *mover = Some(benilla_protocol::MoverState {
+            flags,
+            pitch: 0.0,
+            time: stamp,
+        });
+    }
+    create
+}
+
+/// The client with [`MATE`] created at (500, 600), moving by `flags` and stamped 0, on a clock
+/// that steps 16 ms a frame, and two frames on, a move stamped 0 at (700, 800), moving forward,
+/// read by a listener after it: its create seeded the replay chain with the block's stamp and the
+/// clock (`0x619320` → `0x618c30`, `@0x618c54`-`0x618c6a`, the word cleared first at `0x61936e`),
+/// so the move's skew is its stamp's step, none, less its arrival's, 32 ms (`@0x618ccf`).
+fn first_move_after(flags: u32) -> Vec<String> {
+    let mut c = client();
+    c.app
+        .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            std::time::Duration::from_millis(16),
+        ));
+    map_spy(&mut c, "party1");
+    c.frame(vec![vec![living(
+        mate_created([500.0, 600.0, 0.0], None),
+        flags,
+        0,
+    )]]);
+    c.frame(vec![]);
+    c.frame(vec![
+        vec![heartbeat(MATE, [700.0, 800.0, 0.0], FORWARD, None)],
+        vec![member_at(MATE, 20, ELWYNN, (100, 200))],
+    ]);
+    c.eval(false, "return Maps")
+}
+
+/// A member's first move after a create that showed it moving is due at arrival, and seats in its
+/// handler where a later packet's listener reads it: a moving mover is not re-based
+/// (`@0x618ce4`), so the move fires 32 ms before its arrival, at the create's clock, before the
+/// movement clock the frame between stamped (`@0x618dd2`).
+#[test]
+fn a_listener_reads_a_created_movers_first_move_where_it_put_it() {
+    assert_eq!(first_move_after(FORWARD), ["0.7,0.8"]);
+}
+
+/// The same move after a create that showed the member standing waits for the frame's tick: the
+/// schedule reads the mover's flags before the move applies, the create's, and a standing mover
+/// with nothing queued re-bases by the ring's worst lateness, this move's 32 ms (`0x618cfc`-
+/// `0x618d41`), to fire at its arrival, past the movement clock (`0x618dde`).
+#[test]
+fn a_listener_reads_a_created_stander_where_it_stood_until_its_first_move_fires() {
+    assert_eq!(first_move_after(0), ["0.5,0.6"]);
+}
+
+/// A member's first move, aboard, in its create's frame waits for the frame's tick: the create
+/// seeded the chain with its own stamp and clock (`0x619320` → `0x618c30`), so a move whose stamp
+/// and arrival have not moved past them fires at its arrival (`@0x618ccf`), past the movement
+/// clock (`@0x618dd2`), and a later packet's listener reads the member where its create stood.
+#[test]
+fn a_listener_reads_a_member_whose_first_move_lands_aboard_where_it_stood() {
+    let mut c = client();
+    map_spy(&mut c, "party1");
+    moor(&mut c);
+    c.frame(vec![
+        vec![living(mate_created([500.0, 600.0, 0.0], None), 0, 0)],
+        vec![heartbeat(
+            MATE,
+            [100.0, 200.0, 0.0],
+            FORWARD,
+            Some((BOAT, [500.0, 0.0, 0.0])),
+        )],
+        vec![member_at(MATE, 20, ELWYNN, (100, 200))],
+    ]);
+    let seen: Vec<String> = c.eval(false, "return Maps");
+    assert_eq!(seen, ["0.5,0.6"]);
+}
+
+/// A member whose create block seats it on a deck reads its deck-local point through the deck in
+/// a later packet's listener: the create applies at once, forced (`0x619320` → `0x618c30` at
+/// `0x61941f`, its force pushed at `0x619414`), and re-seats the mover as a relayed move's
+/// apply does (`0x618e07`).
+#[test]
+fn a_listener_reads_a_member_created_aboard_through_the_deck() {
+    let mut c = seated(0);
+    c.frame(vec![
+        vec![mate_created(
+            [100.0, 200.0, 0.0],
+            Some((BOAT, [500.0, 100.0, 0.0])),
+        )],
+        vec![member_at(MATE, 20, ELWYNN, (100, 200))],
+    ]);
+    let seen: Vec<String> = c.eval(false, "return Maps");
+    assert_eq!(seen, ["2.9,4.5"]);
+}
+
+/// A member created aboard a deck whose own create came earlier in the same frame reads through
+/// that deck: `0x630a80` takes any held game object whose flags have the transport bit, armed by
+/// the tick or not, and the deck stands where its create put it until its tick moves it.
+#[test]
+fn a_listener_reads_a_member_created_aboard_a_deck_created_that_frame() {
+    let mut c = client();
+    map_spy(&mut c, "party1");
+    c.frame(vec![
+        vec![placed(
+            created(BOAT, EntityKind::GameObject, &deck_fields()),
+            [3000.0, 4000.0, 0.0],
+            std::f32::consts::FRAC_PI_2,
+            None,
+        )],
+        vec![mate_created(
+            [100.0, 200.0, 0.0],
+            Some((BOAT, [500.0, 100.0, 0.0])),
+        )],
+        vec![member_at(MATE, 20, ELWYNN, (100, 200))],
+    ]);
+    let seen: Vec<String> = c.eval(false, "return Maps");
+    assert_eq!(seen, ["2.9,4.5"]);
 }
 
 /// The resolver's per-call cost with the host lent and off the snapshots: 10k calls of a getter

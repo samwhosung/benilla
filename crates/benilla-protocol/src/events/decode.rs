@@ -988,8 +988,9 @@ pub fn decode(packet: ServerPacket) -> Vec<SessionEvent> {
                 flags,
                 pitch,
                 time,
-                // The opcode's meaning is the speed, carried by its own event: the pose is plain.
-                verb: crate::messages::RelayVerb::Pose,
+                // The opcode's meaning is the speed, carried by its own event: the pose is plain,
+                // and its packet goes on to the speed.
+                verb: crate::messages::RelayVerb::Speed,
                 fall_time,
                 jump,
                 transport,
