@@ -44,23 +44,15 @@ pub(super) enum Row {
 /// What still fires in the frame's system order rather than the packets', with what it is. A
 /// queue's row stays while any feed takes that queue; each goes when its producer moves onto a
 /// lane, and a row whose queue, feed or system is gone fails as stale.
-pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
-    (
-        Row::HostHeld,
-        "::account_data::AccountData",
-        "the account-data sections a download replaced, whose readers (the binding sets, the \
-         macros, the layout) run again off it; the chat setup's fires on its lane",
-    ),
-    (
-        Row::HostHeld,
-        "::items::Items",
-        "the record answers' callbacks still run off the frame's records rather than in the \
+pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[(
+    Row::HostHeld,
+    "::items::Items",
+    "the record answers' callbacks still run off the frame's records rather than in the \
          answer's list (`ItemCacheReceive` `0x55bdb0`, `0x55bf12`-`0x55bf39`): the \
          dress-up's (`0x504ba0`) and the equipment display's (`0x5ed880`); and the combat log's \
          (`0x6294b0`) and the auction lists' (`0x4cca10`, `0x4ccc60`, `0x4cceb0`), which \
          `run_answer_tail` runs after the answer's list rather than in it",
-    ),
-];
+)];
 
 /// The host-held queues a handler fills that no feed fires off, each named quiet beside why: the
 /// check finds a queue the handlers and the host both hold, but not whether a feed fires off it
@@ -68,6 +60,11 @@ pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
 /// off is a [`Row::HostHeld`] row instead. A new one fails until it is read, and an entry whose
 /// queue the handlers or the host no longer hold fails as stale.
 pub(super) const HOST_HELD_UNREAD: &[&str] = &[
+    // Moved here from `NOT_YET_ON_A_LANE`, so neither list grew: the account-data sections, which
+    // the logout verb flushes inside its call (`0x5ab049` → `0x5afd30`), and quiet: each section's
+    // reader runs on its own lane at the settling's stamp, inside the packet that settled it
+    // (`0x5afaca`, `0x5afd19`), the bindings', the layout's, the macros' and the chat setup's.
+    "::account_data::AccountData",
     // Quiet: StartAttack reads the stop word in its call (`0x5eccda`), the attack stop's handler
     // clears it (`0x624e6b`), and no feed reads it.
     "::creature_anim::AttackStopInFlight",
@@ -326,13 +323,6 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
 /// a row whose feed or inputs moved fails until it matches.
 #[rustfmt::skip]
 pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
-    // The account-data readers (#2448): each reruns off the sections a download stored through
-    // `&self`, read as the frame left them, where the reference runs each inside the settle that
-    // its section's digest or download handler makes (`0x5afaca`, `0x5afd19`): the bindings
-    // (`0x4b6240`), the layout (`0x490380`) and the macros (`0x4f0600`).
-    ("::bindings::reread_arrived_bindings", &["account_data::AccountData"]),
-    ("::ui_layout::load_layout", &["account_data::AccountData"]),
-    ("::ui_macro::load_macros", &["account_data::AccountData", "ui_action::ActionSlots"]),
     // The locks of the objects that went, forgotten as the frame left the index.
     ("::ui_items::locks::forget_gone_item_locks", &["net::GuidIndex"]),
     ("::ui_items::feed::feed_item_stats", &["items::Items", "net::HomeBind", "net::ObjectStore",
@@ -986,6 +976,7 @@ fn the_frames_drain_runs_after_the_feeds_and_before_the_tick() {
             "auction house",
             "bank",
             "battlefield",
+            "binding arrivals",
             "cast reports",
             "cast views",
             "charter",
@@ -1001,9 +992,11 @@ fn the_frames_drain_runs_after_the_feeds_and_before_the_tick() {
             "item text",
             "item watchers",
             "landmarks",
+            "layout arrivals",
             "list rebuilds",
             "loot",
             "loot rolls",
+            "macro arrivals",
             "mail",
             "merchant",
             "owed selects",

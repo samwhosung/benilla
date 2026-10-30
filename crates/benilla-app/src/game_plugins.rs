@@ -1668,9 +1668,8 @@ pub(crate) mod schedule_tests {
     }
 
     /// The consumer markers: a VM holder that does one of these to host state has spent
-    /// something this frame that nothing can re-spend. A feed posts its events
-    /// (`script_calls::Fires::post`) to fire once its pushes are in.
-    const CONSUMES: &[&str] = &["fire_event(", "fires.post(", "mem::take(", ".drain("];
+    /// something this frame that nothing can re-spend.
+    const CONSUMES: &[&str] = &["fire_event(", "mem::take(", ".drain("];
 
     /// Why an ungated one-shot consumer holding the VM loses nothing in the one-frame window
     /// where the wire is in world and the glue VM is still live.
@@ -1680,8 +1679,6 @@ pub(crate) mod schedule_tests {
         FilledByVm,
         /// Consumed in the window or not, the state is re-asked or re-derived once the UI is up.
         SelfHealing,
-        /// The publication is driven by a `VmMemo` diff, so a new VM re-derives and re-fires it.
-        MemoLatched,
         /// Documented at the line as intentional.
         Deliberate,
     }
@@ -1689,8 +1686,6 @@ pub(crate) mod schedule_tests {
     /// Every one-shot VM consumer not gated on `ingame_ui_up` (read off the schedule) and not a
     /// memo-diffed `fire_event`, keyed `(path under src/, fn)`, with the reason it is safe.
     const EXEMPT: &[(&str, &str, Because, &str)] = &[
-        ("bindings.rs", "sync_dispatch", Because::MemoLatched,
-         "`seen_generation` is a `VmMemo`: a new VM reads `None` and rebuilds, and its seed's load owes the UPDATE_BINDINGS"),
         ("capture/probe_bg.rs", "bg_probe", Because::SelfHealing,
          "the battleground probe: dev-only (`WOW_PROBE_BG`, `cfg(feature = \"dev\")`) so it is not in a player build at all, and its `mem::take` is of its OWN pending-events string, not a queue anything else fills. Its one real VM dependency is the Lua event tap, which self-heals: `EVENT_DRAIN` returns a `<tap-gone>` sentinel when the tap's globals are missing — the case this window causes, since a tap installed in the glue VM is discarded when `mint_entry_vm` builds the interface — and the probe re-installs on the next frame"),
         ("capture/fixtures.rs", "open_character_fixture", Because::Deliberate,
@@ -1725,8 +1720,6 @@ pub(crate) mod schedule_tests {
          "a lane's firing, run only by the drain, which runs only with the interface up (`ingame_ui_up`): the lane holds what the packets queue until a drain fires it, so the login's message of the day, which lands ahead of the interface, fires into the VM that comes up"),
         ("ui_loot/mod.rs", "drain_loot", Because::Deliberate,
          "its takes of `LootMoveStart` and `LootCloseAtRest` close on the engine's side and publish nothing to the VM, whose `LOOT_CLOSED` is the loot lane's; the at-rest sweep signals only on a disenchant window, which the interface's own cast opens"),
-        ("ui_macro/mod.rs", "load_macros", Because::MemoLatched,
-         "`MacroFiles.identity` is a `VmMemo`, so a new session re-reads the files and re-fires UPDATE_MACROS; also `InWorldGated`"),
         ("ui_panes.rs", "feed_character_panes", Because::FilledByVm,
          "the answers answer the VM's own build requests and arms on panes it listed; a frameless VM lists none, and an answer for another VM's rows is dropped"),
         ("ui_script/glue_mgr.rs", "drive_glue_mgr", Because::Deliberate,

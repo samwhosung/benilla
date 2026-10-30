@@ -40,6 +40,9 @@ pub(crate) struct LayoutFile {
     /// The `(realm, character)` of [`Self::path`], keyed on the VM: a fresh VM needs a restore
     /// even for the same character.
     identity: VmMemo<Option<(String, String)>>,
+    /// The `(realm, character)` this VM's reader registered for while its section was pending,
+    /// read once the section settles ([`fire_arrived_layout`]).
+    held: VmMemo<Option<(String, String)>>,
     /// Whether this VM has unsaved drags. Keyed on the VM, as a flag that outlived its VM would
     /// write a fresh tree, with nothing placed, over the player's file.
     dirty: VmMemo<bool>,
@@ -201,54 +204,60 @@ fn parse_anchor_form(text: &str) -> Vec<AnchorLayout> {
     out
 }
 
-/// Seat the saved geometry into the VM, once per character per VM. It runs after the UI tree is
-/// built and the load-time `UIParent_ManageFramePositions()` pass has run, which skips
-/// user-placed frames on every later pass (`UIParent.lua:1692`).
-pub(crate) fn load_layout(
-    mut hosted_vm: crate::script_calls::HostedVm,
-    roster: Res<crate::glue_session::roster::Roster>,
-    mut file: ResMut<LayoutFile>,
-    data: Option<Res<crate::account_data::AccountData>>,
-) {
-    hosted_vm.run(|script| {
-        let Some(script) = script else { return };
-        let Some(id) = crate::ui_macro::identity(&roster) else {
+/// The reader's registration (`0x5afe50` at `0x4900c2`), which the interface load makes once per
+/// VM after `VARIABLES_LOADED` (`0x4900b2` → `0x4913b0`), so the tree is built and the load-time
+/// `UIParent_ManageFramePositions()` pass has run, which skips user-placed frames on every later
+/// pass (`UIParent.lua:1692`): the file is seated now on a settled section (a `/reload`), else
+/// once the section settles ([`fire_arrived_layout`]), for the character seated here. Held, it
+/// reads nothing and nothing is written over the file ([`save_layout`]).
+pub(crate) fn register_layout_reader(world: &mut World, script: &mut UiScript) {
+    let Some(id) = world
+        .get_resource::<crate::glue_session::roster::Roster>()
+        .and_then(crate::ui_macro::identity)
+    else {
+        return;
+    };
+    if !world.contains_resource::<LayoutFile>() {
+        return;
+    }
+    let held = world
+        .get_resource::<crate::account_data::AccountData>()
+        .is_some_and(|data| !data.register(crate::account_data::LAYOUT));
+    if held {
+        *world.resource_mut::<LayoutFile>().held.get(script) = Some(id);
+        return;
+    }
+    read_layout(world, script, id);
+}
+
+/// `LayoutCacheRead` (`0x490380`): the character's file seated into the VM's frames, with the host
+/// lent, at the reader's registration or its section's settling.
+fn read_layout(world: &mut World, script: &mut UiScript, id: (String, String)) {
+    let path = {
+        let Some(mut file) = world.get_resource_mut::<LayoutFile>() else {
             return;
         };
-        // The reader (`0x490380`) registers once per VM through `0x5afe50` (`0x4900c2`): it reads
-        // now on a settled section, else when the section settles, and at every later settling.
-        let owed = data
-            .as_deref()
-            .is_some_and(|data| data.take_owed(crate::account_data::LAYOUT));
-        let first = file.identity.get(script).as_ref() != Some(&id);
-        if !owed && !first {
-            return; // read into the live VM, and nothing settled since
-        }
-        // Held, it reads nothing and nothing is written over the file ([`save_layout`]).
-        let held = data
-            .as_deref()
-            .is_some_and(|data| !data.register(crate::account_data::LAYOUT));
-        if held {
-            return;
-        }
         file.path = crate::local_state::layout_character_path(&id.0, &id.1);
         *file.identity.get(script) = Some(id);
-        // A fresh VM has nothing placed and owes no write.
+        // Nothing placed since the read, so no write owed.
         *file.dirty.get(script) = false;
         file.last_change = None;
-
-        let Some(path) = file.path.clone() else {
-            return; // hermetic capture or no state folder: session-only
-        };
-        let text = match std::fs::read_to_string(&path) {
-            Ok(t) => t,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
-            Err(e) => {
-                warn!("layout: cannot read {}: {e}", path.display());
-                return;
-            }
-        };
-        let (count, anchor_form) = match parse(&text) {
+        file.path.clone()
+    };
+    let Some(path) = path else {
+        return; // hermetic capture or no state folder: session-only
+    };
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+        Err(e) => {
+            warn!("layout: cannot read {}: {e}", path.display());
+            return;
+        }
+    };
+    let layout = parse(&text);
+    let (count, anchor_form) =
+        crate::script_calls::lent_by_world(world, script, |script| match layout {
             Layout::Rect(frames) => {
                 let n = frames.len();
                 script.restore_user_placed_layouts(frames);
@@ -259,21 +268,69 @@ pub(crate) fn load_layout(
                 script.restore_anchor_layouts(frames);
                 (n, true)
             }
-        };
-        if count == 0 {
-            return;
-        }
-        info!("layout: {count} frames restored from {}", path.display());
-        // Drain the dirty bit the restore set, so the first save does not rewrite what was just
-        // read.
-        script.take_user_placed_change();
-        if anchor_form {
-            // The anchor form is read once: the autosave rewrites it in the rect form once the
-            // restored windows have settled.
+        });
+    if count == 0 {
+        return;
+    }
+    info!("layout: {count} frames restored from {}", path.display());
+    // Drain the dirty bit the restore set, so the first save does not rewrite what was just read.
+    script.take_user_placed_change();
+    if anchor_form {
+        // The anchor form is read once: the autosave rewrites it in the rect form once the
+        // restored windows have settled.
+        if let Some(mut file) = world.get_resource_mut::<LayoutFile>() {
             *file.dirty.get(script) = true;
             file.last_change = Some(std::time::Instant::now());
         }
-    })
+    }
+}
+
+/// The layout section's settling, the head of its lane: the reader runs where the handler that
+/// settled it ran (`0x5afaca` in the digests' check, `0x5afd19` in a download), in the packets'
+/// order with the other lanes' events.
+fn peek_arrived_layout(world: &World) -> Option<crate::lanes::Stamp> {
+    world
+        .get_resource::<crate::account_data::AccountData>()?
+        .owed_at(crate::account_data::LAYOUT)
+}
+
+/// The settled section seated into the VM its reader registered with, as the firing of the
+/// settling's stamp, and again at every later settling.
+fn fire_arrived_layout(In(until): In<crate::lanes::Until>, world: &mut World) {
+    let Some(at) = peek_arrived_layout(world).filter(|at| until.admits(*at)) else {
+        return;
+    };
+    // No VM: the settling waits for one.
+    let Some(mut script) = world.remove_non_send_resource::<UiScript>() else {
+        return;
+    };
+    world
+        .resource::<crate::account_data::AccountData>()
+        .take_owed(crate::account_data::LAYOUT);
+    // The character this VM read for, or registered for while held: none, and the VM never
+    // registered.
+    let id = world.get_resource_mut::<LayoutFile>().and_then(|mut file| {
+        let held = file.held.get(&script).take();
+        file.identity.get(&script).clone().or(held)
+    });
+    if let Some(id) = id {
+        crate::lanes::firing(at, || read_layout(world, &mut script, id));
+    }
+    world.insert_non_send_resource(script);
+}
+
+/// What the layout lane's firing touches beside the call host and its own lane: the file's state.
+fn arrived_layout_reads(world: &mut World) -> bevy::ecs::query::FilteredAccessSet {
+    fn read(_: Option<ResMut<LayoutFile>>) {}
+    crate::lanes::system_access(world, read)
+}
+
+/// Every layout settling fired alone, for a test that drives the lane without the others.
+#[cfg(test)]
+pub(crate) fn reread_arrived_layout(world: &mut World) {
+    world
+        .run_system_cached_with(fire_arrived_layout, crate::lanes::Until::all())
+        .expect("the layout lane fires");
 }
 
 /// Drain the engine's user-placed-frame-moved bit into the dirty flag.
@@ -335,25 +392,30 @@ pub(crate) fn save_now(script: &UiScript, identity: Option<&(String, String)>) {
     }
 }
 
-/// The layout cache's restore, watch and autosave; the plugin owns no session edge, as every
-/// orderly write is [`save_now`]'s.
+/// The layout cache's settled reads, watch and autosave; the plugin owns no session edge, as the
+/// first read is the interface load's ([`register_layout_reader`]) and every orderly write is
+/// [`save_now`]'s.
 pub(crate) struct UiLayoutPlugin;
 
 impl Plugin for UiLayoutPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<LayoutFile>().add_systems(
-            Update,
-            (
-                // In the feed phase, so the tick sees the restore the frame it lands.
-                load_layout.in_set(crate::ui_script::UiFeed),
-                // After the drag pump in the tick; load precedes watch through the phases, so the
-                // watcher never reads the restore's own move.
+        use crate::lanes::LaneApp;
+        app.init_resource::<LayoutFile>()
+            .add_systems(
+                Update,
+                // After the drag pump in the tick, which follows the lanes, so the watcher never
+                // reads a restore's own move.
                 (watch_layout, save_layout)
                     .chain()
-                    .in_set(crate::ui_script::UiDrain),
+                    .in_set(crate::ui_script::UiDrain)
+                    .in_set(crate::client_state::InWorldGated),
             )
-                .in_set(crate::client_state::InWorldGated),
-        );
+            .add_exclusive_lane(
+                "layout arrivals",
+                peek_arrived_layout,
+                fire_arrived_layout,
+                arrived_layout_reads,
+            );
     }
 }
 

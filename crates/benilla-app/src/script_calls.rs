@@ -10,8 +10,8 @@
 //! script comes in by: the mouse and key feed, the bindings pass, an `OnUpdate`, the handlers of
 //! the events a feed fires, a chunk. A system that holds the host's own state alongside the VM runs
 //! as an engine turn ([`VmWith`]): a call its Lua makes waits, as one made while the host applies a
-//! call does, and applies before the system ends; a feed's events fire after its turn, with the
-//! host lent ([`VmWith::feed`]). Every host runs in one order, the VM pass ([`crate::vm_pass`]). An
+//! call does, and applies before the system ends. Every host runs in one order, the VM pass
+//! ([`crate::vm_pass`]). An
 //! addon's or a macro's cast passes the gate's tag 2 (`0x494a92`) only inside an input event; the
 //! client's own code passes it outside any (`0x494a5a` → `0x494b11`).
 
@@ -372,6 +372,38 @@ impl ScriptCallHost<'_, '_> {
         if let Some(states) = self.appliers.action_states().as_mut() {
             states.arrival_slots(script, &loaded);
         }
+    }
+
+    /// Placements an engine writer makes outside any call on this login's bar, once our player's
+    /// arrival has loaded it ([`crate::ui_action::ActionSlots::loaded`]): `writes` picks the
+    /// 1-based `(id, word)` pairs off the bar as it stands, and each goes out as a placement's does
+    /// ([`crate::ui_action::ActionBarSteps::set`]), `CMSG_SET_ACTION_BUTTON` sent and the slot
+    /// stored, into the VM's copy with its usable pair ([`Self::engine_slot_written`]), with
+    /// nothing signalled. The ids written, in order; `None` while the bar is not loaded.
+    pub(crate) fn engine_bar_writes(
+        &mut self,
+        script: &mut UiScript,
+        writes: impl FnOnce(&[benilla_protocol::messages::ActionButton]) -> Vec<(u32, u32)>,
+    ) -> Option<Vec<u32>> {
+        let bar = self.appliers.action_bar();
+        if !bar.loaded() {
+            return None;
+        }
+        let buttons: Vec<_> = bar.buttons().copied().collect();
+        let mut writes = writes(&buttons);
+        writes.sort_unstable();
+        for &(id, word) in &writes {
+            let mut bar = self.appliers.action_bar();
+            bar.set(id, word);
+            let slot = bar.button(id).map(|b| benilla_ui::script::ActionSlot {
+                kind: b.kind,
+                action: b.action,
+                ..Default::default()
+            });
+            script.set_action(id, slot);
+            self.engine_slot_written(script, id);
+        }
+        Some(writes.into_iter().map(|(id, _)| id).collect())
     }
 
     /// `0x4e6d20(entry)`, a recount's one count of its entry (`0x4e5c75`); `None` in a harness
@@ -1394,29 +1426,6 @@ impl<P: SystemParam + 'static> VmWith<'_, '_, P> {
         }
         r
     }
-
-    /// A feed: `f` pushes what it read of `P` into the VM as an engine turn ([`Self::turn`]) and
-    /// leaves its events in `fires`, which are signalled in order once it returns, with the host
-    /// lent, so the calls their handlers make apply inside the verb. For a feed whose events end
-    /// its pass, so its handlers read every push it made.
-    #[track_caller]
-    pub(crate) fn feed(
-        &mut self,
-        f: impl FnOnce(Option<&mut UiScript>, SystemParamItem<'_, '_, P>, &mut Fires),
-    ) {
-        let mut fires = Fires::default();
-        self.turn(|script, p| f(script, p, &mut fires));
-        if fires.0.is_empty() {
-            return;
-        }
-        self.run(|script| {
-            if let Some(script) = script {
-                for (event, args) in fires.0 {
-                    script.fire_event(&event, args);
-                }
-            }
-        });
-    }
 }
 
 impl<P: SystemParam + 'static> VmWith<'_, '_, P> {
@@ -1563,17 +1572,6 @@ impl<'w, 's, P: SystemParam + 'static> VmWith<'w, 's, P> {
         &mut disjoint::Pair<'w, 's, P, Option<ScriptCallHost<'w, 's>>>,
     ) {
         (self.script.as_deref_mut(), &mut self.set)
-    }
-}
-
-/// The events a feed's engine turn leaves for [`VmWith::feed`] to signal once it has pushed.
-#[derive(Default)]
-pub(crate) struct Fires(Vec<(String, Vec<benilla_ui::script::ScriptValue>)>);
-
-impl Fires {
-    /// Signal `event` with `args` once the turn's pushes are in, after the ones posted before it.
-    pub(crate) fn post(&mut self, event: &str, args: Vec<benilla_ui::script::ScriptValue>) {
-        self.0.push((event.to_string(), args));
     }
 }
 

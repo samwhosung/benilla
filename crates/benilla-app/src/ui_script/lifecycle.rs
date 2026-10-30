@@ -601,13 +601,13 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
         .get_resource::<crate::cvars::Cvars>()
         .is_none_or(crate::cvars::Cvars::addon_version_check);
     // Per-VM `Update` claims the load itself reads, seeded now: the zone-channel catalog (empty,
-    // `General` would be filed and joined as a custom channel), the binding table (stock
-    // `ActionButton_OnLoad` paints the hotkeys) and the language table a file-scope
+    // `General` would be filed and joined as a custom channel), the default bindings the stored
+    // sets are diffs against, and the language table a file-scope
     // `SendChatMessage` names its tongue from. The default language is never seeded: it is the
     // held player's (`0x49fce9`), and a login's load runs before the player's create can arrive
     // (the login-verify handler is registered after it, `0x401789`), so the load reads none.
     crate::ui_chat::seed_zone_channel_catalog(world, &mut script);
-    crate::bindings::seed_bindings_for_vm(world, &mut script);
+    crate::bindings::seed_bindings_for_vm(&mut script);
     // The engine globals a previous VM folded out: the quest log's fold mask, with the records its
     // cache holds, and the tradeskill repeat.
     crate::ui_quest_log::seed_quest_log(world, &mut script);
@@ -672,6 +672,13 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
                 crate::vplates::seat_legacy_settings(script, &legacy_plates)
             });
         });
+        // The account-data readers register after `VARIABLES_LOADED`, in `CGGameUI::Initialize`'s
+        // order: the layout's (`0x4900c2`), the bindings' (`0x4900c7` → `0x4b62b0`), the macros'
+        // (`0x4900d1` → `0x4f0a70`), then the chat setup's below (`0x4900d6`). Each reads now on a
+        // settled section, a `/reload`'s, else once it settles.
+        crate::ui_layout::register_layout_reader(world, script);
+        crate::bindings::register_binding_readers(world, script);
+        crate::ui_macro::register_macro_readers(world, script);
         // The chat cache restores after `VARIABLES_LOADED` and before any chat is routed: its
         // `UPDATE_CHAT_WINDOWS` registers each chat frame for its `CHAT_MSG_*` events
         // (`ChatFrame.lua:1261-1273`).

@@ -86,6 +86,9 @@ pub(crate) struct ActionSlots {
     /// Whether the staged words are this login's and wait for our player's arrival to load them:
     /// set by `SMSG_ACTION_BUTTONS`, cleared by the load and by the game entry.
     unloaded: bool,
+    /// Whether this login's bar holds what the arrival loaded: set by the load, cleared by the
+    /// game entry, which empties the bar.
+    loaded: bool,
 }
 
 impl ActionSlots {
@@ -109,6 +112,7 @@ impl ActionSlots {
     /// held. The 1-based ids stored, in slot order.
     pub(crate) fn load_staged(&mut self, knows: impl Fn(u32) -> bool) -> Vec<u32> {
         self.unloaded = false;
+        self.loaded = true;
         let mut staged: Vec<ActionButton> = self.staged.values().copied().collect();
         staged.sort_by_key(|b| b.slot);
         let mut loaded = Vec::new();
@@ -128,6 +132,13 @@ impl ActionSlots {
     fn game_entry(&mut self) {
         self.buttons.clear();
         self.unloaded = false;
+        self.loaded = false;
+    }
+
+    /// Whether our player's arrival has loaded this login's bar ([`Self::load_staged`]) since the
+    /// game entry emptied it.
+    pub(crate) fn loaded(&self) -> bool {
+        self.loaded
     }
 }
 

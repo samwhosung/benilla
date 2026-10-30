@@ -644,6 +644,8 @@ fn fire_through(world: &mut World, frame: bool) {
 }
 
 #[cfg(test)]
+mod account_data_live_tests;
+#[cfg(test)]
 mod action_live_tests;
 #[cfg(test)]
 mod alert_live_tests;

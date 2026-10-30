@@ -111,11 +111,10 @@ pub(super) struct Scan {
 }
 
 /// The files that drain a queue of events: their relay carries what the queue's sites pushed,
-/// and those are sites of their own. The host queue's are the `pending_events` pushes; a feed's
-/// are the calls of `Fires::post`, a firing function by its signature; the call host's are the
-/// fires an engine step made while the host was out, each held inside the firing function it
-/// came through (`fire_event_into`); the dialogs' lane's are the calls of `DialogLane::event`, a
-/// firing function by its signature.
+/// and those are sites of their own. The host queue's are the `pending_events` pushes; the call
+/// host's are the fires an engine step made while the host was out, each held inside the firing
+/// function it came through (`fire_event_into`); the dialogs' lane's are the calls of
+/// `DialogLane::event`, a firing function by its signature.
 const DRAINS: &[&str] = &[
     "crates/benilla-ui/src/script/tick.rs",
     "crates/benilla-app/src/ui_dialog_verbs/lane.rs",
@@ -1204,7 +1203,6 @@ fn the_firing_functions_are_found_by_their_signature() {
         "queue_event",
         "raise",
         "fire_global",
-        "post",
     ] {
         assert!(
             s.firing.contains(name),

@@ -150,11 +150,11 @@ pub(crate) struct KeybindState {
     /// Bumped by every change to the live table or the commands: the app's signal to re-derive
     /// dispatch. It says nothing of `UPDATE_BINDINGS`.
     generation: u64,
-    /// A host-side load of a set into the live table (the seed at the VM's birth) is owed its
-    /// `UPDATE_BINDINGS`, which the reference signals at the copy into set 3 (`0x4b649d`). The Lua
-    /// verbs signal in place (`SetBinding` `0x4b805b`, `LoadBindings`) and leave the debt, a
-    /// separate signal; a registration (`0x4b6f70`) signals nothing, so it moves
-    /// [`Self::generation`] alone.
+    /// A host-side load of a set into the live table (the binding reader's set choice) is owed its
+    /// `UPDATE_BINDINGS`, which the reference signals at the copy into set 3 (`0x4b649d`) and the
+    /// host pays there. The Lua verbs signal in place (`SetBinding` `0x4b805b`, `LoadBindings`)
+    /// and leave the debt, a separate signal; a registration (`0x4b6f70`) signals nothing, so it
+    /// moves [`Self::generation`] alone.
     signal_owed: bool,
     requests: Vec<KeybindRequest>,
 }

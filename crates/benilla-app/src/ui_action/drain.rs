@@ -577,6 +577,12 @@ impl ActionBarSteps<'_> {
         }
     }
 
+    /// Whether our player's arrival has loaded this login's bar ([`ActionSlots::loaded`]); never
+    /// in a harness without the store.
+    pub(crate) fn loaded(&self) -> bool {
+        self.slots.as_deref().is_some_and(ActionSlots::loaded)
+    }
+
     /// Our player's arrival's load of the staged words ([`ActionSlots::load_staged`]); nothing in
     /// a harness without the store.
     pub(crate) fn load_staged(&mut self, knows: impl Fn(u32) -> bool) -> Vec<u32> {

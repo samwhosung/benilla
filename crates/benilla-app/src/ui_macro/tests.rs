@@ -341,7 +341,7 @@ fn rebind_app(script: UiScript) -> bevy::prelude::App {
 }
 
 /// The load's derivation of every record (`0x4f0a55` into `0x4f0ca0`), as the macro reader runs
-/// it after the table is read ([`super::load_macros`]).
+/// it after the table is read ([`super::read_macro_scope`]).
 fn load(app: &mut bevy::prelude::App) {
     app.world_mut()
         .non_send_resource_mut::<UiScript>()
@@ -552,141 +552,6 @@ fn a_save_writes_the_sorted_table_and_a_load_sorts_it_again() {
     );
     let loaded = MacroState::from_scopes(super::store::parse(&text, false), Vec::new());
     assert_eq!(loaded.get(1).unwrap().name, "b");
-    std::fs::remove_dir_all(&tmp).ok();
-}
-
-/// A character file of the builds that numbered by position, with buttons placed under those
-/// numbers, moves once: its macros take their ids in the file, their buttons the words of those
-/// ids, each sent as a placement is, and a load after it moves nothing, because a word from 19 to 36
-/// is then an account macro's.
-#[test]
-fn a_position_numbered_character_bar_moves_to_macro_ids_once() {
-    use crate::ui_action::PlayerActions;
-    use benilla_protocol::messages::ActionButton;
-    use bevy::prelude::*;
-
-    let _l = ENV_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let tmp = std::env::temp_dir().join(format!("benilla-macros-move-{}", std::process::id()));
-    std::fs::remove_dir_all(&tmp).ok();
-    let _c = EnvGuard::unset("WOW_CAPTURE");
-    let _h = EnvGuard::set("BENILLA_HOME", tmp.to_str().unwrap());
-    let character = crate::local_state::macros_character_path("Realm", "Probeone").unwrap();
-
-    // Written in the order they were made, ids 2, 1, 3: the old build read them back by id, so
-    // Alpha (1) sat first, Bravo (2) second and Charlie (3) third, buttons 19, 20 and 21.
-    crate::local_state::write_atomic(
-        &character,
-        "MACRO 2 \"Bravo\" Ability_Ambush\n/say b\nEND\n\
-         MACRO 1 \"Alpha\" Ability_Ambush\n/say a\nEND\n\
-         MACRO 3 \"Charlie\" Ability_Ambush\n/say c\nEND\n",
-    )
-    .unwrap();
-    // `(wire slot, word)`: three character macros, one past the last (cleared), a spell, an
-    // account macro, and a word past 36.
-    let placed = [
-        (0u8, 0x4000_0013u32),
-        (1, 0x4000_0015),
-        (2, 0x4000_0014),
-        (3, 0x4000_0016),
-        (4, 133),
-        (5, 0x4000_0001),
-        (6, 0x4000_0025),
-    ];
-    let mut slots = crate::ui_action::ActionSlots::default();
-    for (slot, word) in placed {
-        slots.buttons.insert(
-            slot,
-            ActionButton {
-                slot,
-                action: word & 0x00ff_ffff,
-                kind: (word >> 24) as u8,
-            },
-        );
-    }
-    let (tx, rx) = crossbeam_channel::unbounded();
-    let mut app = App::new();
-    app.insert_resource(PlayerActions::default())
-        .insert_resource(slots)
-        .insert_resource(crate::net::NetCommands(tx))
-        .insert_resource(crate::glue_session::roster::Roster::with_pending_pick(
-            vec![crate::glue_session::roster::test_character(7, "Probeone")],
-            7,
-        ))
-        .init_resource::<super::MacroFiles>()
-        .insert_non_send_resource(UiScript::new().unwrap())
-        .add_systems(Update, super::load_macros);
-    let sent = |rx: &crossbeam_channel::Receiver<crate::net::ClientCommand>| {
-        rx.try_iter()
-            .map(|c| match c {
-                crate::net::ClientCommand::SetActionButton { button, packed } => (button, packed),
-                other => panic!("unexpected {other:?}"),
-            })
-            .collect::<Vec<_>>()
-    };
-
-    app.update();
-    assert_eq!(
-        sent(&rx),
-        [(0, 0x4100_0001), (1, 0x4100_0003), (2, 0x4100_0002), (3, 0)],
-        "Alpha, Charlie and Bravo by their ids, the button past the last macro cleared, each once"
-    );
-    let word = |app: &App, slot: u8| {
-        let b = app
-            .world()
-            .resource::<crate::ui_action::ActionSlots>()
-            .buttons
-            .get(&slot)?;
-        Some((u32::from(b.kind) << 24) | b.action)
-    };
-    let held: Vec<Option<u32>> = (0..7).map(|slot| word(&app, slot)).collect();
-    assert_eq!(
-        held,
-        [
-            Some(0x4100_0001),
-            Some(0x4100_0003),
-            Some(0x4100_0002),
-            None,
-            Some(133),
-            Some(0x4000_0001),
-            Some(0x4000_0025)
-        ],
-        "the local store follows; the spell, the account macro and the word past 36 stay"
-    );
-    let file = std::fs::read_to_string(&character).unwrap();
-    assert!(
-        file.starts_with("MACRO 16777217 \"Alpha\""),
-        "the file is renumbered, in name order: {file}"
-    );
-    let state = app.world().non_send_resource::<UiScript>().macros();
-    assert_eq!(state.by_id(0x100_0003).unwrap().name, "Charlie");
-
-    // The next session: a fresh VM loads the renumbered file. A button at 0x40000013 is now the
-    // account macro of that id, and nothing moves it.
-    app.world_mut()
-        .resource_mut::<crate::ui_action::ActionSlots>()
-        .buttons
-        .insert(
-            9,
-            ActionButton {
-                slot: 9,
-                action: 19,
-                kind: 0x40,
-            },
-        );
-    app.insert_non_send_resource(UiScript::new().unwrap());
-    app.update();
-    assert!(sent(&rx).is_empty(), "nothing is sent again");
-    assert_eq!(word(&app, 9), Some(0x4000_0013));
-    assert_eq!(
-        app.world()
-            .non_send_resource::<UiScript>()
-            .macros()
-            .count(true),
-        3,
-        "and the renumbered file loaded"
-    );
     std::fs::remove_dir_all(&tmp).ok();
 }
 
@@ -904,9 +769,17 @@ fn an_edit_derives_against_the_book_at_its_call() {
     assert_eq!(bound_of(&app, 1), BoundSpell::Spell(205));
 }
 
-/// The macro load's harness over a state folder of its own: the loader and the saver, with the
-/// account-data state they talk to, every section settled.
-fn file_app(script: UiScript) -> bevy::prelude::App {
+/// `script` loaded into `app` as the interface load registers the readers
+/// ([`super::register_macro_readers`]), each scope read at once on a settled section.
+fn load_into(app: &mut bevy::prelude::App, mut script: UiScript) {
+    super::register_macro_readers(app.world_mut(), &mut script);
+    app.insert_non_send_resource(script);
+}
+
+/// The macro load's harness over a state folder of its own, its VM loaded: the settled sections'
+/// reader and the saver, with the account-data state they talk to, every section settled unless
+/// `held`, which pends them all ahead of the load.
+fn file_app_with(script: UiScript, held: bool) -> bevy::prelude::App {
     use bevy::prelude::*;
     let (tx, _rx) = crossbeam_channel::unbounded();
     let mut app = App::new();
@@ -919,12 +792,22 @@ fn file_app(script: UiScript) -> bevy::prelude::App {
         ))
         .init_resource::<super::MacroFiles>()
         .init_resource::<crate::account_data::AccountData>()
-        .insert_non_send_resource(script)
-        .add_systems(Update, (super::load_macros, super::save_dirty_macros));
-    app.world()
-        .resource::<crate::account_data::AccountData>()
-        .settle_for_test(Some(("Realm".into(), "Probeone".into())));
+        .add_systems(
+            Update,
+            (super::reread_arrived_macros, super::save_dirty_macros).chain(),
+        );
+    let data = app.world().resource::<crate::account_data::AccountData>();
+    data.settle_for_test(Some(("Realm".into(), "Probeone".into())));
+    if held {
+        data.pend_for_test();
+    }
+    load_into(&mut app, script);
     app
+}
+
+/// [`file_app_with`], every section settled.
+fn file_app(script: UiScript) -> bevy::prelude::App {
+    file_app_with(script, false)
 }
 
 fn macro_names(app: &bevy::prelude::App) -> Vec<String> {
@@ -973,8 +856,9 @@ fn a_macro_section_from_the_server_is_read_again() {
 }
 
 /// The reader rebuilds the order, which signals `UPDATE_MACROS` (`0x4f0a50` → `0x4f0d30`), then
-/// derives every record (`0x4f0a55` → `0x4f0ca0`): a listener of the load's `UPDATE_MACROS` finds
-/// the loaded `/cast` unbound, and the record is bound once the reader returns.
+/// derives every record (`0x4f0a55` → `0x4f0ca0`), once per scope: a listener of the account
+/// scope's `UPDATE_MACROS` finds the loaded `/cast` unbound, the character scope's finds it bound
+/// by the account scope's derivation, and the record is bound once the reader returns.
 #[test]
 fn the_macro_reader_derives_after_its_update_macros() {
     let _l = ENV_LOCK
@@ -1022,8 +906,8 @@ fn the_macro_reader_derives_after_its_update_macros() {
     let script = app.world().non_send_resource::<UiScript>();
     assert_eq!(
         script.eval::<Vec<String>>("return SEEN").unwrap(),
-        ["nil"],
-        "the listener ran ahead of the derivation"
+        ["nil", "1"],
+        "each scope's listener ran ahead of its derivation"
     );
     assert_eq!(
         script
@@ -1055,10 +939,7 @@ fn the_macro_reader_reads_each_scope_as_its_section_settles() {
     crate::local_state::write_atomic(&character, "MACRO 16777217 \"Alt\" X\nEND\n").unwrap();
     let mut script = UiScript::new().unwrap();
     script.set_macro_icons(vec!["Interface\\Icons\\Ability_Ambush".into()]);
-    let mut app = file_app(script);
-    app.world()
-        .resource::<crate::account_data::AccountData>()
-        .pend_for_test();
+    let mut app = file_app_with(script, true);
     app.update();
     assert!(macro_names(&app).is_empty(), "pending: the reader is held");
     app.world()

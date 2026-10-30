@@ -64,11 +64,6 @@ pub(crate) const RAISES_AT_THEIR_OWN_PLACE: &[Allow] = &[
         why: "AT_THEIR_OWN_PLACE: the login and character screens' answers",
     },
     Allow {
-        frame: "bindings::sync_dispatch",
-        why: "NOT_YET_ON_A_LANE: `::account_data::AccountData`, whose binding sets' read owes the \
-              `UPDATE_BINDINGS` the copy into the live table signals (`0x4b649d`)",
-    },
-    Allow {
         frame: "capture::fixtures::seed_ui_fixture",
         why: "QUEUED_FOR_THE_TICK: a capture's fixture",
     },

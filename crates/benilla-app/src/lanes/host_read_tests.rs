@@ -40,8 +40,8 @@ use crate::game_plugins::schedule_tests::{census, type_names_available, SyncPoin
 
 /// The most rows [`super::guard_tests::READS_FRAME_FINAL`] may hold, and the most inputs across
 /// them: each only falls, so lower it when a row or an input goes.
-const FRAME_FINAL_FEEDS: usize = 12;
-const FRAME_FINAL_INPUTS: usize = 36;
+const FRAME_FINAL_FEEDS: usize = 9;
+const FRAME_FINAL_INPUTS: usize = 32;
 
 /// The systems that may run after the dispatch (`apply_net_updates`) and run ahead of the drain
 /// (`fire_in_order`), by a suffix of the system's name, with what each writes of the state a
@@ -59,10 +59,6 @@ const FRAME_FINAL_INPUTS: usize = 36;
 /// whose access Bevy does not report.
 #[rustfmt::skip]
 const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
-    ("::bindings::reread_arrived_bindings", &["account_data::AccountData"],
-        "takes the binding sections a download owes it through `&self` and rereads them after \
-         the dispatch, where the reference runs the reader (`ReadBindingCache` `0x4b6240`) inside \
-         the settle its section's digest or download handler makes (`0x5afaca`, `0x5afd19`)"),
     ("::net::motion::remote::extrapolate_remote_units", &["Commands net::motion::spline::Spline",
         "Transform", "net::motion::remote::RemoteMotion"],
         "the arrival snap `0x7c6420` (`0x618dfc`) is written inside the packet"),
@@ -71,15 +67,6 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
     ("::ui_item_text::apply_reads", &["ui_item_text::ItemTextOpen"],
         "a click's or a bag use's read, queued in its input or its call, which the reference \
          opens inside them (`0x5f58c0`, `0x4e32e0`), ahead of the packets (`0x420d23`)"),
-    ("::ui_layout::load_layout", &["account_data::AccountData"],
-        "takes the layout section a download owes it through `&self` and reads it after the \
-         dispatch, where the reference runs the reader (`LayoutCacheRead` `0x490380`) inside the \
-         settle (`0x5afaca`, `0x5afd19`)"),
-    ("::ui_macro::load_macros", &["account_data::AccountData", "ui_action::ActionSlots"],
-        "the macro reader (`LoadMacroFiles` `0x4f0600`), run as its sections settle, takes the \
-         sections a download owes it through `&self`, and moves a character's buttons off \
-         benilla's older numbering through the bar verbs, a move with no reference fact; the \
-         reference runs the reader inside the account-data settle (`0x5afaca`, `0x5afd19`)"),
 ];
 
 /// The systems between the dispatch and the drain that write what the host's live reads read,

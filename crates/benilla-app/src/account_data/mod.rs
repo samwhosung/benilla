@@ -21,7 +21,9 @@
 //!   (`0x4900c2`), the bindings (`0x4b62ef`, `0x4b6300`), the macros (`0x4f0a7c`, `0x4f0a8d`) and
 //!   the chat setup (`0x498a2c`). It runs at once on a settled section, else it is held and runs
 //!   once the section settles, at the check (`0x5afaca`) or the download (`0x5afd19`), and again at
-//!   every later settling ([`AccountData::register`], [`AccountData::take_owed`]). A server that
+//!   every later settling ([`AccountData::register`], [`AccountData::take_owed`]). A settled
+//!   reader runs on its own lane at its settling's stamp ([`AccountData::owed_at`]), so inside the
+//!   packet that settled it, ahead of the next packet's events. A server that
 //!   sends no digests leaves every section pending and its reader unrun. A held reader's section
 //!   is written by none of benilla's saves, as `0x5afed0` writes no pending section (`0x5afee0`).
 
