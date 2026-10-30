@@ -273,23 +273,8 @@ impl Tutorials {
             .collect()
     }
 
-    /// The selections the lane holds, taken.
-    #[cfg(test)]
-    pub(crate) fn take_selects(&self) -> Vec<(Entity, u64)> {
-        let mut state = self.lock();
-        let mut out = Vec::new();
-        state.lane.retain(|(_, ask)| match ask {
-            TutorialAsk::Selected { entity, guid } => {
-                out.push((*entity, *guid));
-                false
-            }
-            _ => true,
-        });
-        out
-    }
-
     /// The published ids the lane's asks fire, each applied in its order but for the selections,
-    /// which stay ([`Self::take_selects`]).
+    /// which stay for the lane's firing.
     #[cfg(test)]
     pub(crate) fn take_fired(&self) -> Vec<u32> {
         let mut state = self.lock();
@@ -325,10 +310,13 @@ pub(crate) struct TutorialState {
 impl TutorialState {
     /// Queue `ask` on the lane, stamped now, behind everything stamped before it.
     fn push(&mut self, ask: TutorialAsk) {
-        // A trigger a call queued fires at its host's next point ([`TutorialSteps::fire_since`]):
-        // the census counts a send made before then.
+        // A trigger or a selection's ladder a call queued fires at its host's next point
+        // ([`TutorialSteps::fire_since`]): the census counts a send made before then.
         #[cfg(test)]
-        if matches!(ask, TutorialAsk::Trigger { .. } | TutorialAsk::Fire { .. }) {
+        if matches!(
+            ask,
+            TutorialAsk::Trigger { .. } | TutorialAsk::Fire { .. } | TutorialAsk::Selected { .. }
+        ) {
             benilla_ui::script::census::queued();
         }
         let stamp = crate::lanes::stamp();
@@ -340,20 +328,13 @@ impl TutorialState {
         self.lane.front().map(|(s, _)| *s)
     }
 
-    /// The asks stamped since `mark` up to the first selection's, taken in order: a call's own,
-    /// for its host to apply at its point. A selection's ladder needs the world's reads, and it and
-    /// everything behind it stay for the lane.
+    /// The asks stamped since `mark`, taken in order: a call's own, for its host to apply at its
+    /// point.
     fn take_since(&mut self, mark: crate::lanes::Mark) -> Vec<TutorialAsk> {
         let Some(from) = self.lane.iter().position(|(s, _)| s.since(mark)) else {
             return Vec::new();
         };
-        let to = self
-            .lane
-            .iter()
-            .skip(from)
-            .position(|(_, ask)| matches!(ask, TutorialAsk::Selected { .. }))
-            .map_or(self.lane.len(), |n| from + n);
-        self.lane.drain(from..to).map(|(_, ask)| ask).collect()
+        self.lane.drain(from..).map(|(_, ask)| ask).collect()
     }
 
     /// The head, taken if `until` admits it.
@@ -729,26 +710,39 @@ fn watch_self(
 /// and sends before the verb returns, and `TutorialsEnabled` (`0x4b5960`) reads the write on the
 /// verb's next line ([`TutorialLive`]).
 #[derive(bevy::ecs::system::SystemParam)]
-pub(crate) struct TutorialSteps<'w> {
+pub(crate) struct TutorialSteps<'w, 's> {
     /// Absent in a harness with no tutorial state, which drops the calls.
     tutorials: Option<Res<'w, Tutorials>>,
     commands: Res<'w, NetCommands>,
     /// Absent in a harness without the sounds, whose triggers fire with no cue.
     sounds: Option<Res<'w, crate::sound::MessageSounds>>,
+    /// What a selection's ladder reads where its call applies it.
+    reads: SelectReads<'w, 's>,
 }
 
-impl TutorialSteps<'_> {
+impl TutorialSteps<'_, '_> {
     /// The tutorial asks a call's engine half queued since `mark` ([`Tutorials::trigger_now`]),
     /// applied at its signal point: a `TriggerTutorial(id, 0)` (`0x4b5390`) runs its fire-once
     /// test, then the cue and `TUTORIAL_TRIGGER` where the call reached, as the reference fires
-    /// it inside its verb.
+    /// it inside its verb; a selection's ladder (`0x493789`-`0x49383c`) is judged there too, ahead
+    /// of its send (`0x49388d`).
     pub(crate) fn fire_since(&mut self, script: &mut UiScript, mark: crate::lanes::Mark) {
         let Some(tutorials) = self.tutorials.as_deref() else {
             return;
         };
         let asks = tutorials.lock().take_since(mark);
         for ask in asks {
-            let published = tutorials.lock().apply(ask, Instant::now(), &self.commands);
+            let now = Instant::now();
+            let published = match ask {
+                TutorialAsk::Selected { entity, guid } => {
+                    let facts = self.reads.facts(entity, guid);
+                    let mut state = tutorials.lock();
+                    facts
+                        .and_then(|f| select_tutorial(f, state.has_fired(id::PLAYERS)))
+                        .and_then(|id| state.trigger(id, 0, now))
+                }
+                ask => tutorials.lock().apply(ask, now, &self.commands),
+            };
             if let (Some(published), Some(sounds)) = (published, self.sounds.as_deref()) {
                 fire_published(script, sounds, published);
             } else if let Some(published) = published {

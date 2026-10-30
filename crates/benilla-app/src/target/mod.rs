@@ -92,6 +92,7 @@ pub(crate) use relations::{
 pub(crate) use scan::{fire_owed_selects_lane, take_owed_deselects, LastEnemy};
 pub(crate) use scan::{
     Acquire, AttackNearestRequest, AttackPick, CreatureTypes, Owed, OwedSelect, OwedSelects,
+    OwedWire,
 };
 // The typemask `TargetByName`'s candidate feed shares.
 pub(crate) use by_name::{assistable_alive, Candidacy, NameSearch, PlayerLookup};

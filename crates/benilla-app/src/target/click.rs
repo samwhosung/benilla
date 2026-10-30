@@ -287,7 +287,7 @@ fn select_past_cursor(
             }
             scan::Owed {
                 send: deselect_owing(&mut c.selection, &mut c.seam),
-                swing: None,
+                ..Default::default()
             }
         }
     };
@@ -2164,7 +2164,10 @@ pub(crate) fn deselect_on_ui_shutdown(
     selection.guid?;
     let before = Standing::of(&selection, &seam);
     let send = deselect_owing(&mut selection, &mut seam);
-    Some(before.owing(scan::Owed { send, swing: None }))
+    Some(before.owing(scan::Owed {
+        send,
+        ..Default::default()
+    }))
 }
 
 /// The shutdown deselect's signals, in place: its teardown's reports, `PET_BAR_UPDATE` and

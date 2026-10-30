@@ -545,40 +545,82 @@ impl OwedSend {
     /// `0x493701`), over whatever a listener selected, the lit unit's tutorial ladder
     /// (`0x493789`-`0x49383c`, [`crate::tutorial::select_tutorial`]), and the send.
     pub(crate) fn pay(
-        mut self,
+        self,
         selection: &mut Selection,
         seam: &mut crate::creature_anim::AttackSeam,
     ) {
+        self.store(selection, seam).send(seam);
+    }
+
+    /// [`Self::pay`] up to its send: the ladder queued, and the send it owes past the ladder's
+    /// listeners (`0x49388d`).
+    pub(crate) fn store(
+        mut self,
+        selection: &mut Selection,
+        seam: &mut crate::creature_anim::AttackSeam,
+    ) -> OwedWire {
         if let Some(stop) = self.take_stop() {
             seam.stop_send(stop);
             seam.stop_save();
         }
         self.run_pet_leg(seam);
-        let guid = match self.to {
+        match self.to {
             OwedTo::Select { entity, guid } => {
                 selection.target = entity;
                 selection.guid = Some(guid);
                 selection.lit = entity;
-                if let (Some(entity), Some(tutorials)) = (entity, seam.slots.tutorials()) {
-                    tutorials.selected(entity, guid);
-                }
-                guid
+                let ladder = match (entity, seam.slots.tutorials()) {
+                    (Some(entity), Some(tutorials)) => {
+                        tutorials.selected(entity, guid);
+                        true
+                    }
+                    _ => false,
+                };
+                OwedWire { guid, ladder }
             }
             // The clear's send reads the selection as it stands (`0x493a49`-`0x493a4f`): a
             // listener's pick, or none.
-            OwedTo::Deselect => selection.guid.unwrap_or(0),
-        };
-        let _ = seam.net.0.send(ClientCommand::SetSelection { guid });
+            OwedTo::Deselect => OwedWire {
+                guid: selection.guid.unwrap_or(0),
+                ladder: false,
+            },
+        }
+    }
+}
+
+/// `SetSelection`'s `CMSG_SET_SELECTION` (`0x493857`-`0x49388d`), owed past its tutorial
+/// ladder's `TUTORIAL_TRIGGER` (`0x4937be`-`0x49383c`), whose listeners run first.
+#[must_use]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct OwedWire {
+    guid: u64,
+    ladder: bool,
+}
+
+impl OwedWire {
+    /// Whether the store queued its unit's ladder, whose listeners run before the send.
+    pub(crate) fn ladder(self) -> bool {
+        self.ladder
+    }
+
+    /// The send.
+    pub(crate) fn send(self, seam: &crate::creature_anim::AttackSeam) {
+        let _ = seam
+            .net
+            .0
+            .send(ClientCommand::SetSelection { guid: self.guid });
     }
 }
 
 /// What a [`commit_owing`] owes after its signals, for a caller that runs their listeners in place
-/// first: the release's rest after its stop's report and its `PET_BAR_UPDATE`, then the re-swing
-/// after `PLAYER_TARGET_CHANGED`.
+/// first: the release's rest after its stop's report and its `PET_BAR_UPDATE`, or with no release
+/// to signal the send after the ladder's `TUTORIAL_TRIGGER`, then the re-swing after
+/// `PLAYER_TARGET_CHANGED`.
 #[must_use]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Owed {
     pub(crate) send: Option<OwedSend>,
+    pub(crate) wire: Option<OwedWire>,
     pub(crate) swing: Option<OwedSwing>,
 }
 
@@ -592,6 +634,9 @@ impl Owed {
     ) {
         if let Some(send) = self.send {
             send.pay(selection, seam);
+        }
+        if let Some(wire) = self.wire {
+            wire.send(seam);
         }
         if let Some(swing) = self.swing {
             // Nothing ran since the commit, so the selection is the guid it stored.
@@ -699,13 +744,22 @@ pub(super) fn commit_owing(
     } else {
         None
     };
-    if send.is_some() {
+    // With no release to signal, the store and the ladder run now and the send waits for the
+    // ladder's listeners.
+    let wire = if send.is_some() {
         selection.target = None;
         selection.guid = None;
         selection.lit = None;
+        None
     } else {
-        OwedSend::now(to).pay(selection, seam);
-    }
+        let wire = OwedSend::now(to).store(selection, seam);
+        if wire.ladder() {
+            Some(wire)
+        } else {
+            wire.send(seam);
+            None
+        }
+    };
     // The latch `[ebp-1]` was read before the store (`0x4936ac`); the rest of the test reads the
     // selection after the signal (`0x4938ae`).
     // `CanAttack` refuses the player itself (`0x4936a3`), whatever the writer knows of the rest.
@@ -725,7 +779,7 @@ pub(super) fn commit_owing(
             changed: true,
             swung,
         },
-        Owed { send, swing },
+        Owed { send, wire, swing },
     )
 }
 
@@ -1295,7 +1349,10 @@ pub(super) fn owed_select(
             }
             let before = super::click::Standing::of(&c.selection, &c.seam);
             let send = super::click::clear_owing(&mut c.selection, &mut c.seam);
-            Some(before.owing(Owed { send, swing: None }))
+            Some(before.owing(Owed {
+                send,
+                ..Default::default()
+            }))
         }
     };
     if let Some(select) = select {

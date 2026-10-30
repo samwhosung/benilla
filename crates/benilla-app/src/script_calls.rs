@@ -78,7 +78,7 @@ disjoint::disjoint_set! {
         /// The session's: the logout and the reload, the tutorial banks, and the interaction
         /// latch the NPC windows' close cores release.
         session: crate::ui_logout::SessionSteps<'static>,
-        tutorial: crate::tutorial::TutorialSteps<'static>,
+        tutorial: crate::tutorial::TutorialSteps<'static, 'static>,
         latch: crate::ui_session::LatchSteps<'static>,
         /// The bank and the profession windows.
         bank: crate::ui_bank::BankSteps<'static, 'static>,
@@ -835,7 +835,11 @@ impl ScriptCallHost<'_, '_> {
                 // The store over a listener's pick (`0x4936e2`), or for a clear the send of the
                 // listener's pick, and either signals after (`0x49389c`, `0x493a73`), so the
                 // mark stays the selection the call found.
-                self.appliers.select().pay_send(send);
+                let wire = self.appliers.select().store_send(send);
+                self.send_past_ladder(script, at, wire);
+            }
+            if let Some(wire) = owed.take_wire() {
+                self.send_past_ladder(script, at, wire);
             }
             let signalled = self.signal_selection(script, at);
             if !signalled && !owed.owes_swings() {
@@ -850,6 +854,27 @@ impl ScriptCallHost<'_, '_> {
             }
             owed = self.appliers.select().pay(owed);
         }
+    }
+
+    /// A select's send (`0x49388d`) past its tutorial ladder's `TUTORIAL_TRIGGER`
+    /// (`0x4937be`-`0x49383c`), whose listeners run first, ahead of its own change's signals; a
+    /// selection one makes signals itself, nested, and a `PetStopAttack` one makes signals its bar
+    /// there.
+    fn send_past_ladder(
+        &mut self,
+        script: &mut UiScript,
+        at: &mut Signalled,
+        wire: crate::target::OwedWire,
+    ) {
+        if wire.ladder() {
+            let latched = self.appliers.pet().attack_latched();
+            self.point(script, &mut at.mark);
+            let now = self.appliers.pet().attack_latched();
+            if now != latched {
+                at.latched = now;
+            }
+        }
+        self.appliers.select().send_wire(wire);
     }
 
     /// After a point: what its listeners selected they signalled themselves.

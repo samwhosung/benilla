@@ -141,10 +141,15 @@ impl ScriptSelect<'_, '_> {
         })
     }
 
-    /// The rest of a call's teardown its signals held back, now that their listeners have run
-    /// ([`SelectCommit::pay_send`]).
-    pub(crate) fn pay_send(&mut self, send: super::scan::OwedSend) {
-        self.commit.pay_send(send);
+    /// The rest of a call's teardown its signals held back, now that their listeners have run, up
+    /// to the send its ladder's listeners hold back ([`SelectCommit::store_send`]).
+    pub(crate) fn store_send(&mut self, send: super::scan::OwedSend) -> super::scan::OwedWire {
+        self.commit.store_send(send)
+    }
+
+    /// A select's send, now that its ladder's listeners have run ([`SelectCommit::send_wire`]).
+    pub(crate) fn send_wire(&self, wire: super::scan::OwedWire) {
+        self.commit.send_wire(wire);
     }
 
     /// The teardown's pet leg, if it waits behind its stop, now that the stop's listeners have

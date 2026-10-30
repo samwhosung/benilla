@@ -572,6 +572,55 @@ fn a_sits_dead_loot_source_deselect_signals_ahead_of_its_attack_stop() {
     );
 }
 
+/// `SetSelection`'s tutorial ladder (`0x4937be`-`0x49383c`) signals ahead of its send
+/// (`0x49388d`): Combat Mode for an attackable unit, its `TUTORIAL_TRIGGER` listener's packet
+/// before `CMSG_SET_SELECTION`, with nothing selected before and past a swing's teardown, whose
+/// stop triggers Drink first (`0x5ecb54`).
+#[test]
+fn a_selections_ladder_listener_sends_ahead_of_its_send() {
+    for swinging in [false, true] {
+        let mut f = frame(swinging);
+        if swinging {
+            swinging_at_old(&mut f);
+        } else {
+            as_creature(f.app.world_mut(), NEW);
+        }
+        f.app
+            .world()
+            .resource::<crate::tutorial::Tutorials>()
+            .lock()
+            .apply_flags(&[0u8; 32]);
+        run(
+            &mut f,
+            r#"local r = CreateFrame("Frame")
+            r:RegisterEvent("TUTORIAL_TRIGGER")
+            r:SetScript("OnEvent", function() RandomRoll(1, 2) end)"#,
+        );
+        f.rx.try_iter().for_each(drop);
+        run(&mut f, r#"TargetUnit("party1")"#);
+        let wire: Vec<String> =
+            f.rx.try_iter()
+                .filter_map(|c| match c {
+                    ClientCommand::AttackStop => Some("AttackStop".to_string()),
+                    ClientCommand::SetSelection { guid } => Some(format!("SetSelection {guid:#x}")),
+                    ClientCommand::RandomRoll { .. } => Some("RandomRoll".to_string()),
+                    _ => None,
+                })
+                .collect();
+        let expected: &[&str] = if swinging {
+            &[
+                "RandomRoll",
+                "AttackStop",
+                "RandomRoll",
+                "SetSelection 0x22",
+            ]
+        } else {
+            &["RandomRoll", "SetSelection 0x22"]
+        };
+        assert_eq!(wire, expected, "swinging: {swinging}");
+    }
+}
+
 /// The keys of the refusals a handler queued for the action feed's lines.
 fn error_keys(f: &Frame) -> Vec<String> {
     f.app

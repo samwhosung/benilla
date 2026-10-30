@@ -622,6 +622,7 @@ enum OwedSwing {
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct SelectDebt {
     send: Option<scan::OwedSend>,
+    wire: Option<scan::OwedWire>,
     stop: Option<crate::creature_anim::StopTail>,
     swings: Vec<OwedSwing>,
 }
@@ -630,6 +631,7 @@ impl From<scan::Owed> for SelectDebt {
     fn from(owed: scan::Owed) -> Self {
         Self {
             send: owed.send,
+            wire: owed.wire,
             stop: None,
             swings: owed.swing.map(OwedSwing::Again).into_iter().collect(),
         }
@@ -640,6 +642,12 @@ impl SelectDebt {
     /// The send owed after the teardown's signal.
     pub(crate) fn take_send(&mut self) -> Option<scan::OwedSend> {
         self.send.take()
+    }
+
+    /// The send of a select with no release to signal, owed after its ladder's
+    /// `TUTORIAL_TRIGGER` (`0x4937be`-`0x49383c`, `0x49388d`).
+    pub(crate) fn take_wire(&mut self) -> Option<scan::OwedWire> {
+        self.wire.take()
     }
 
     /// A refused StartAttack's stop past its head (`0x5ecc48`), owed after its tutorials'
@@ -669,6 +677,9 @@ impl SelectDebt {
     ) {
         if let Some(send) = self.send {
             send.pay(selection, seam);
+        }
+        if let Some(wire) = self.wire {
+            wire.send(seam);
         }
         if let Some(stop) = self.stop {
             seam.stop_send(stop);
@@ -737,6 +748,14 @@ impl SelectCommit<'_, '_> {
         if let Some(send) = owed.send {
             self.owe_send(send);
         }
+        if let Some(wire) = owed.wire {
+            if self.owing.on {
+                debug_assert!(self.owing.debt.wire.is_none(), "one selection per verb");
+                self.owing.debt.wire = Some(wire);
+            } else {
+                wire.send(&self.seam);
+            }
+        }
         if let Some(swing) = owed.swing {
             self.owe(OwedSwing::Again(swing));
         }
@@ -779,6 +798,17 @@ impl SelectCommit<'_, '_> {
         send.pay(&mut self.selection, &mut self.seam);
     }
 
+    /// [`Self::pay_send`] up to its send, which waits for the ladder's listeners
+    /// ([`scan::OwedSend::store`]).
+    pub(crate) fn store_send(&mut self, send: scan::OwedSend) -> scan::OwedWire {
+        send.store(&mut self.selection, &mut self.seam)
+    }
+
+    /// A select's send past its ladder's listeners ([`scan::OwedWire::send`]).
+    pub(crate) fn send_wire(&self, wire: scan::OwedWire) {
+        wire.send(&self.seam);
+    }
+
     /// The teardown's pet leg, if it waits behind its stop
     /// ([`scan::OwedSend::run_pet_leg`]): whether it called a unit off.
     pub(crate) fn run_pet_leg(&mut self, send: &mut scan::OwedSend) -> bool {
@@ -805,6 +835,9 @@ impl SelectCommit<'_, '_> {
         if let Some(send) = debt.send {
             self.pay_send(send);
         }
+        if let Some(wire) = debt.wire {
+            self.send_wire(wire);
+        }
         if let Some(stop) = debt.stop {
             self.stop_send(stop);
             self.stop_save();
@@ -813,7 +846,11 @@ impl SelectCommit<'_, '_> {
         while let Some(swing) = swings.pop_front() {
             let before = self.selection.guid;
             let mut owed = self.owing(|commit| commit.pay_one(swing));
-            if owed.send.is_some() || owed.stop.is_some() || self.selection.guid != before {
+            if owed.send.is_some()
+                || owed.wire.is_some()
+                || owed.stop.is_some()
+                || self.selection.guid != before
+            {
                 owed.swings.extend(swings);
                 return owed;
             }

@@ -229,7 +229,10 @@ impl Died<'_, '_> {
     fn deselect(&mut self) -> crate::script_calls::EngineSelect {
         let before = super::click::Standing::of(&self.selection, &self.seam);
         let send = super::click::deselect_owing(&mut self.selection, &mut self.seam);
-        before.owing(super::scan::Owed { send, swing: None })
+        before.owing(super::scan::Owed {
+            send,
+            ..Default::default()
+        })
     }
 
     /// What a deselect owes, paid with nothing to listen first.

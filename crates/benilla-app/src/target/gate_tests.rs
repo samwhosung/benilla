@@ -704,8 +704,8 @@ fn a_right_press_with_a_payload_is_consumed_before_the_world_sees_it() {
 
 /// Talking to an NPC in reach whose dialog status is 1, unavailable, triggers Unavailable Quest
 /// Givers (`0x5f0268`-`0x5f0278`) inside the click, ahead of its service ladder; another status
-/// triggers nothing. The click's select lit the NPC, which the selection's tutorial ladder then
-/// judges (`0x493789`).
+/// triggers nothing. The click's select lit the NPC, whose tutorial ladder (`0x493789`) has
+/// nothing for it.
 #[test]
 fn talking_to_an_npc_with_status_one_triggers_unavailable_quest_givers() {
     for (status, fired) in [(1, vec![0x2b]), (5, vec![])] {
@@ -741,7 +741,10 @@ fn talking_to_an_npc_with_status_one_triggers_unavailable_quest_givers() {
             .eval("return FIRED")
             .expect("the record reads");
         assert_eq!(heard, fired, "status {status}");
-        let tutorials = f.app.world().resource::<crate::tutorial::Tutorials>();
-        assert_eq!(tutorials.take_selects(), [(npc, NPC)], "the select it made");
+        assert_eq!(
+            f.app.world().resource::<crate::target::Selection>().guid,
+            Some(NPC),
+            "the select it made"
+        );
     }
 }
