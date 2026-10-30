@@ -678,6 +678,29 @@ fn on_monster_move(In(ev): In<SessionEvent>, mut sc: Scene) {
     } = ev
     {
         let rooted = modes_of(guid, &sc.index, &sc.modes).rooted();
+        // The start flushes the mover's queue, firing every queued move at once, and stops it
+        // (`0x6187a0` → `0x6185f0(0, 0)`, `0x61aa70`; a stop through `0x618750`), whether or not
+        // the root then refuses the path (`0x6187c2`). Nothing of it writes the replay chain (bit
+        // 31, `+0xa8`, `+0xac`, the ring), so the relays after the path time on from it.
+        if let Some(e) = sc.index.0.get(&guid).copied() {
+            if let Ok(mut rm) = sc.remote.get_mut(e) {
+                let now_ms = sc.real.elapsed_secs_f64() * 1000.0;
+                for queued in std::mem::take(&mut rm.pending) {
+                    crate::net::motion::apply_move(
+                        e,
+                        &queued.mv,
+                        &mut rm,
+                        now_ms,
+                        &mut sc.commands,
+                        &mut sc.hard_landings,
+                    );
+                }
+                rm.flags &= !PATH_START_STOP;
+                rm.vertical_velocity = 0.0;
+                rm.jump_xy_vel = [0.0; 2];
+                rm.fall_start = None;
+            }
+        }
         let smooth =
             sc.index.0.get(&guid).is_some_and(|&e| {
                 smoothed(sc.nets.get(e).ok().map(|n| n.kind), sc.movers.contains(e))
@@ -699,6 +722,7 @@ fn on_monster_move(In(ev): In<SessionEvent>, mut sc: Scene) {
             &sc.index,
             &mut sc.transforms,
             &mut sc.riders,
+            &mut sc.remote,
         );
         // A path started on the active mover runs its input tick (`0x6187a0` → `0x602053`), whose
         // precondition the server's spline fails (`0x5144e0`): the teardown leg stops the auto-move
@@ -1384,6 +1408,7 @@ fn monster_move(
     index: &GuidIndex,
     transforms: &mut Query<&mut Transform>,
     riders: &mut Query<&mut crate::transport::TransportRider>,
+    remote: &mut Query<&mut RemoteMotion>,
 ) {
     if let Some(&e) = index.0.get(&guid) {
         // The desync readout: the gap between where we draw the unit and where its path begins.
@@ -1486,6 +1511,10 @@ fn monster_move(
                 } else if let Ok(mut t) = transforms.get_mut(e) {
                     t.rotation = Quat::from_rotation_y(orientation);
                 }
+                // The mover's own facing, which its dead-reckoning shows.
+                if let Ok(mut rm) = remote.get_mut(e) {
+                    rm.orientation = orientation;
+                }
             }
         }
         // Every spline move un-nocks and ends the precast here. The handler `0x6018f0` (opcodes
@@ -1504,9 +1533,8 @@ fn monster_move(
         if rooted {
             return;
         }
-        // The spline supersedes the relay stream: a splined player (charge, taxi) would otherwise
-        // keep stale flags that outrank the spline in the anim selector.
-        commands.entity(e).remove::<RemoteMotion>();
+        // The path rides on the mover state, which it outranks while it lives (the anim
+        // selector's `unify`) and stops where it ends.
         match spline {
             Some(spline) => {
                 commands.entity(e).insert(spline).remove::<SplineStopped>();
@@ -1521,6 +1549,12 @@ fn monster_move(
         }
     }
 }
+
+/// The bits a monster move's start clears on its mover (`0x6187a0` → `0x61aa70`): the fall
+/// (`0x7c6290`), the deferred starts and stops and `0x4000000` (`and 0xfbe07fff`), the turn
+/// (`0x7c6dd0`), the pitch (`0x7c6e30`), the strafe (`0x7c6ce0`), the move (`0x7c6c00`), and
+/// `0x6000` (`and 0xffff9fff`); swimming, walking and the root stay.
+const PATH_START_STOP: u32 = 0x041F_E0FF;
 
 /// This unit's granted modes; no component means all bits clear.
 fn modes_of(guid: u64, index: &GuidIndex, modes: &Query<&mut UnitMoveModes>) -> UnitMoveModes {
@@ -3260,7 +3294,8 @@ mod tests {
                     move |mut commands: Commands,
                           index: Res<GuidIndex>,
                           mut transforms: Query<&mut Transform>,
-                          mut riders: Query<&mut crate::transport::TransportRider>| {
+                          mut riders: Query<&mut crate::transport::TransportRider>,
+                          mut remote: Query<&mut RemoteMotion>| {
                         monster_move(
                             MOB,
                             None,
@@ -3278,6 +3313,7 @@ mod tests {
                             &index,
                             &mut transforms,
                             &mut riders,
+                            &mut remote,
                         );
                     },
                 )
@@ -3342,7 +3378,8 @@ mod tests {
                     move |mut commands: Commands,
                           index: Res<GuidIndex>,
                           mut transforms: Query<&mut Transform>,
-                          mut riders: Query<&mut crate::transport::TransportRider>| {
+                          mut riders: Query<&mut crate::transport::TransportRider>,
+                          mut remote: Query<&mut RemoteMotion>| {
                         monster_move(
                             MOB,
                             None,
@@ -3360,6 +3397,7 @@ mod tests {
                             &index,
                             &mut transforms,
                             &mut riders,
+                            &mut remote,
                         );
                     },
                 )
@@ -3413,7 +3451,8 @@ mod tests {
                 move |mut commands: Commands,
                       index: Res<GuidIndex>,
                       mut transforms: Query<&mut Transform>,
-                      mut riders: Query<&mut crate::transport::TransportRider>| {
+                      mut riders: Query<&mut crate::transport::TransportRider>,
+                      mut remote: Query<&mut RemoteMotion>| {
                     monster_move(
                         MOB,
                         Some(BOAT),
@@ -3431,6 +3470,7 @@ mod tests {
                         &index,
                         &mut transforms,
                         &mut riders,
+                        &mut remote,
                     );
                 },
             )
@@ -3465,7 +3505,8 @@ mod tests {
                 move |mut commands: Commands,
                       index: Res<GuidIndex>,
                       mut transforms: Query<&mut Transform>,
-                      mut riders: Query<&mut crate::transport::TransportRider>| {
+                      mut riders: Query<&mut crate::transport::TransportRider>,
+                      mut remote: Query<&mut RemoteMotion>| {
                     monster_move(
                         MOB,
                         None,
@@ -3483,6 +3524,7 @@ mod tests {
                         &index,
                         &mut transforms,
                         &mut riders,
+                        &mut remote,
                     );
                 },
             )
@@ -3509,7 +3551,8 @@ mod tests {
                 move |mut commands: Commands,
                       index: Res<GuidIndex>,
                       mut transforms: Query<&mut Transform>,
-                      mut riders: Query<&mut crate::transport::TransportRider>| {
+                      mut riders: Query<&mut crate::transport::TransportRider>,
+                      mut remote: Query<&mut RemoteMotion>| {
                     monster_move(
                         MOB,
                         None,
@@ -3527,6 +3570,7 @@ mod tests {
                         &index,
                         &mut transforms,
                         &mut riders,
+                        &mut remote,
                     );
                 },
             )

@@ -888,6 +888,38 @@ fn a_listener_reads_a_move_fired_mid_frame_stepped_on_from_its_fire_time() {
     assert_eq!(seen, ["0.7003,0.8000"]);
 }
 
+/// A monster move keeps its mover's replay chain: the start flushes the queue and stops the
+/// mover (`0x6187a0` → `0x6185f0`, `0x61aa70`), and nothing of it writes bit 31, `+0xa8`, `+0xac`
+/// or the ring. So a move stamped 100 ms further past the mover's last than its arrival is, the
+/// next frame, still times against that last move: standing now, the mover re-bases by the
+/// ring's worst lateness, which this move does not raise, and fires 100 ms past its arrival
+/// (`0x618cfc`-`0x618d41`), so the frame's tick leaves it queued and a later packet's listener
+/// reads the member near where it stood.
+#[test]
+fn a_listener_reads_a_member_whose_move_after_a_monster_move_times_on_its_chain() {
+    let mut c = seated(FORWARD);
+    c.frame(vec![vec![SessionEvent::MonsterMove {
+        guid: MATE,
+        transport: None,
+        start: [500.0, 600.0, 0.0],
+        spline_id: 1,
+        path: Vec::new(),
+        facing: benilla_protocol::MonsterMoveFacing::None,
+        stop: true,
+        duration_ms: 0,
+        flying: false,
+        run_mode: true,
+    }]]);
+    // Its last move fired 48 ms before this one arrives.
+    c.frame(vec![vec![stamped(
+        heartbeat(MATE, [700.0, 800.0, 0.0], FORWARD, None),
+        148,
+    )]]);
+    c.frame(vec![vec![member_at(MATE, 20, ELWYNN, (100, 200))]]);
+    let seen: Vec<String> = c.eval(false, "return Maps");
+    assert_eq!(seen, ["0.5,0.6"]);
+}
+
 /// A standing member's packet waits for the frame's tick, so a later packet's listener reads the
 /// member where it stood: the re-base puts the fire-time at or past the arrival
 /// (`0x618cfc`-`0x618d41`), past the movement clock (`@0x618dd2`, `0x618dde`), and the move is
