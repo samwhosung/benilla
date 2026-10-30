@@ -530,6 +530,7 @@ fn a_go_with_no_caster_unit_plays_its_instant_impacts() {
         target_mask: 0x2,
         ammo_display_id: None,
         seq: 1,
+        at: None,
     });
     app.update();
     let wounds: Vec<Entity> = app
@@ -539,6 +540,101 @@ fn a_go_with_no_caster_unit_plays_its_instant_impacts() {
         .map(|w| w.entity)
         .collect();
     assert_eq!(wounds, [target]);
+}
+
+/// A GO's impact kits carry the GO packet's place, not the frame's last cast edge's: a display
+/// rebuild between the two (`0x60abe0`) ends the impact the wire put before it and spares the
+/// cast after it, with or without a caster unit.
+#[test]
+fn a_gos_impact_kits_carry_the_gos_own_place() {
+    const BOLT: u32 = 5143;
+    const BOLT_VISUAL: u32 = 140;
+    const IMPACT_KIT: u32 = 301;
+    const IMPACT_SOUND: u32 = 3001;
+    let mut app = app();
+    app.insert_resource(SpellVisuals(SpellVisualCatalog::from_tables(
+        HashMap::from([
+            (
+                BOLT_VISUAL,
+                VisualStages {
+                    impact: IMPACT_KIT,
+                    ..Default::default()
+                },
+            ),
+            (
+                VISUAL,
+                VisualStages {
+                    precast: PRECAST_KIT,
+                    ..Default::default()
+                },
+            ),
+        ]),
+        HashMap::from([
+            (
+                IMPACT_KIT,
+                VisualKit {
+                    sound: Some(IMPACT_SOUND),
+                    ..Default::default()
+                },
+            ),
+            (PRECAST_KIT, VisualKit::default()),
+        ]),
+    )));
+    app.insert_resource(crate::ui_action::Spells {
+        catalog: SpellCatalog::from_displays(HashMap::from([
+            (
+                BOLT,
+                SpellDisplay {
+                    visual: BOLT_VISUAL,
+                    ..Default::default()
+                },
+            ),
+            (
+                SPELL,
+                SpellDisplay {
+                    visual: VISUAL,
+                    ..Default::default()
+                },
+            ),
+        ])),
+        ..crate::ui_action::Spells::empty_for_tests()
+    });
+    let target = app.world_mut().spawn_empty().id();
+    let later_caster = app.world_mut().spawn_empty().id();
+    let go = crate::lanes::stamp();
+    let later = crate::lanes::stamp();
+    app.world_mut().write_message(SpellGoTargets {
+        caster: None,
+        spell_id: BOLT,
+        hits: vec![target],
+        misses: Vec::new(),
+        source: None,
+        dest: None,
+        target_mask: 0x2,
+        ammo_display_id: None,
+        seq: 1,
+        at: Some(go),
+    });
+    app.world_mut().write_message(CastEvent {
+        at: Some(later),
+        ..cast_event(later_caster, SPELL, CastEventKind::Start)
+    });
+    app.update();
+    let impacts: Vec<_> = app
+        .world_mut()
+        .resource_mut::<Messages<SpellKitSound>>()
+        .drain()
+        .filter_map(|ev| match ev {
+            SpellKitSound::Play {
+                entity,
+                kit_sound: IMPACT_SOUND,
+                at,
+                ..
+            } => Some((entity, at)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(impacts, [(target, Some(go))]);
 }
 
 /// The ranged weapon-visual merge (`0x60d450`): a spell with `Attributes & 0x2` fills every zero
@@ -898,6 +994,7 @@ fn a_harmful_go_wounds_each_hit_once_and_a_missile_arrival_always() {
             target_mask: 0x2,
             ammo_display_id: None,
             seq: 1,
+            at: None,
         });
         app.update();
         assert_eq!(wounds(&mut app), expected, "instant GO of spell {spell_id}");
@@ -1041,6 +1138,7 @@ fn missile_spawn_defers_iff_the_cast_kit_animates() {
             target_mask: 0x2,
             ammo_display_id: None,
             seq: 1,
+            at: None,
         });
     }
     app.update();
@@ -1127,6 +1225,7 @@ fn a_targetless_dest_go_spawns_a_ground_missile_whose_arrival_sounds_at_the_poin
         target_mask: 0x40,
         ammo_display_id: None,
         seq: 1,
+        at: None,
     });
     app.update();
     let spawns: Vec<_> = app
@@ -1952,6 +2051,7 @@ fn a_state_kits_anim_is_a_recompute_and_never_a_second_play() {
         target_mask: 0x2,
         ammo_display_id: None,
         seq: 1,
+        at: None,
     });
     app.update();
 
@@ -2655,6 +2755,7 @@ fn launcher_go(
         target_mask,
         ammo_display_id: None,
         seq: 1,
+        at: None,
     }
 }
 
@@ -2795,6 +2896,7 @@ fn a_travelling_spell_without_a_missile_or_ammo_flies_nothing() {
             target_mask: 0x2,
             ammo_display_id,
             seq: 1,
+            at: None,
         });
         app.update();
         let spawns = app

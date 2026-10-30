@@ -892,6 +892,9 @@ pub(crate) struct SpellGoTargets {
     pub(crate) ammo_display_id: Option<u32>,
     /// `PlaySeq` stamp, the GO's `CastEvent`'s.
     pub(crate) seq: u64,
+    /// The GO packet's place, its `CastEvent`'s, which its impact kits carry; `None` for a GO the
+    /// frame raised, after every packet.
+    pub(crate) at: Option<crate::lanes::Stamp>,
 }
 
 /// The sheath policy: requests, ceremony overlays, the `AnimationData.dbc` table.

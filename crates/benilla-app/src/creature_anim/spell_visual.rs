@@ -1086,6 +1086,8 @@ pub(super) fn route_cast_visuals(
     // Speed 0 plays every impact now (`0x6e8bf0`), with or without a caster unit (`0x6e816b`);
     // Speed > 0 flies the launcher's missiles from a caster unit ([`launcher_shots`]).
     for go in go_targets.read() {
+        // The GO's own place, not the frame's last cast edge's.
+        out.at = go.at;
         let Some(display) = spells.catalog.get(go.spell_id) else {
             continue;
         };

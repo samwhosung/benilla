@@ -1700,6 +1700,8 @@ fn spell_go(
         })
         .collect();
 
+    // The GO's place among the packets, one for every leg it plays: the cast kit, the impacts.
+    let at = crate::lanes::stamp();
     // The caster slot is the second guid looked up as a unit (`0x6e7f8b`, mask 8): a game object's
     // cast writes it 0, so it finds none and skips every leg that needs one.
     let unit = index
@@ -1722,6 +1724,7 @@ fn spell_go(
                 target_mask: mask,
                 ammo_display_id,
                 seq,
+                at: Some(at),
             });
         }
         return deferred;
@@ -1749,7 +1752,7 @@ fn spell_go(
         spell_id,
         kind: CastEventKind::Go,
         seq,
-        at: Some(crate::lanes::stamp()),
+        at: Some(at),
     });
     // A pure point cast (ground AoE, empty lists) rides the same message: the point is a target.
     let source = source.map(benilla_assets::coords::wow_to_bevy);
@@ -1765,6 +1768,7 @@ fn spell_go(
             target_mask: mask,
             ammo_display_id,
             seq,
+            at: Some(at),
         });
     }
     deferred
