@@ -414,32 +414,49 @@ fn a_monster_line_with_no_macro_fires_at_its_packet() {
 }
 
 /// The handlers the answers come by queue the release behind a line that reads them: the item
-/// handler's (`0x6294b0`) and the name handler's (`0x49ccc0`), for a monster line's subject and a
-/// player line's sender.
+/// handler's (`0x6294b0`), for a crafting line whose handler looked its item up and missed
+/// (`0x629650`), and the name handler's (`0x49ccc0`), for a monster line's subject and a player
+/// line's sender.
 #[test]
 fn each_answer_handler_queues_a_release_behind_a_line_that_reads_it() {
+    use benilla_protocol::messages::{ExecuteLog, SpellLogExecute};
     let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
     let world = app.world_mut();
+    world.resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
+    // Held as the active player, so the crafting line speaks in the first person.
+    crate::items::test_spawn_object(
+        world,
+        ME,
+        benilla_protocol::ObjectFields::from_pairs(&[(2, 0x19)]),
+    );
     let log = || crate::ui_chat::ChatLog::default();
-    for (line, answer) in [
+    let craft = SessionEvent::SpellLogExecute(SpellLogExecute {
+        caster: ME,
+        spell_id: 1,
+        effects: vec![(24, vec![ExecuteLog::CreateItem { item_entry: LINEN }])],
+    });
+    let line = |line: fn(In<SessionEvent>, Res<crate::ui_chat::ChatLog>)| {
+        move |world: &mut World| {
+            bevy::ecs::system::RunSystemOnce::run_system_once_with(world, line, p1()).unwrap();
+        }
+    };
+    /// What queues a line that reads the answer's record.
+    type Queue = Box<dyn Fn(&mut World)>;
+    let cases: [(Queue, SessionEvent); 3] = [
         (
-            crafted as fn(In<SessionEvent>, Res<crate::ui_chat::ChatLog>),
+            Box::new(move |world: &mut World| {
+                crate::net::handlers::dispatch(world, vec![craft.clone()])
+            }),
             linen_named(),
         ),
-        (monster_hails_the_stranger, stranger_named()),
-        (stranger_whispers, stranger_named()),
-    ] {
+        (Box::new(line(monster_hails_the_stranger)), stranger_named()),
+        (Box::new(line(stranger_whispers)), stranger_named()),
+    ];
+    for (queue, answer) in cases {
         world.insert_resource(log());
         // Each answer finds the cache without it, so its lookup's callback runs.
         world.insert_resource(crate::names::NameCache::default());
-        bevy::ecs::system::RunSystemOnce::run_system_once_with(&mut *world, line, p1()).unwrap();
-        // A crafting line's first fill misses its item and leaves the log's callback
-        // (`0x55ba30`), which this harness, with no VM, never fills.
-        if let SessionEvent::ItemTemplate { entry, .. } = &answer {
-            world
-                .resource::<crate::items::Items>()
-                .wait(*entry, crate::items::RecordCallback::CombatLog);
-        }
+        queue(world);
         crate::net::handlers::dispatch(world, vec![answer]);
         let kinds = world.resource::<crate::ui_chat::ChatLog>().pending_kinds();
         assert_eq!(kinds.last(), Some(&"release"), "{kinds:?}");

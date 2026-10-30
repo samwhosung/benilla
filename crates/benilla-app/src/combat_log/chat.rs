@@ -45,6 +45,8 @@ pub(crate) struct ChatCtx<'a> {
     pub items: Option<&'a crate::items::Items>,
     /// The game object cache (`0xc0e318`), which `LogOpenLock` reads for an opened object.
     pub gameobjects: Option<&'a crate::go_templates::GameObjectTemplates>,
+    /// The wire an item line's lookup asks a miss on; absent in a harness, which asks nothing.
+    pub net: Option<&'a crate::net::NetCommands>,
     /// The display ranges: the reference's `0x8629e0` table, CVar-backed.
     pub ranges: &'a combat::CombatLogRanges,
     /// `CombatLogPeriodicSpells`, for its two chat-only read sites; the whole-packet gate is in
@@ -1103,6 +1105,18 @@ fn queue_reported(
         return false;
     };
     line.word = word;
+    // The item looked up at the packet with the log's callback, dedupe 0 (`0x628f83`,
+    // `0x629650`, `0x6297a0`, `0x6298e1`): a miss asks and leaves `0x6294b0` in the answer's
+    // list, one per line, and the line waits for it.
+    if let (combat::Named::Item(entry), Some(items)) = (named, ctx.items) {
+        let ask = ctx.net.map_or(
+            crate::query_cache::Ask::Read,
+            crate::query_cache::Ask::Event,
+        );
+        if items.template(entry, 0, ask).is_none() {
+            items.wait(entry, crate::items::RecordCallback::CombatLog);
+        }
+    }
     log.push_combat(line);
     true
 }

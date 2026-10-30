@@ -521,3 +521,50 @@ fn a_combat_lines_callback_runs_at_its_place_in_the_answers_list() {
         ]
     );
 }
+
+/// A crafting line whose item the cache lacks looks it up at its packet (`0x629650`) and waits;
+/// the answer later in the same span writes it inside its callback (`0x6294b0`), between the
+/// falls around the answer, never at its own packet's place off the later record. The span's
+/// packets run while the interface is down, as a reload's do, and fire once it is up, so the
+/// line's first drain comes after the answer's handler.
+#[test]
+fn a_combat_line_waits_for_an_answer_later_in_its_span() {
+    use benilla_protocol::messages::{ExecuteLog, SpellLogExecute};
+    const PELT: u32 = 900;
+    let mut app = client();
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(
+            r#"
+            TRADESKILL_LOG_FIRSTPERSON = "You create %s."
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("CHAT_MSG_SPELL_TRADESKILLS")
+            f:SetScript("OnEvent", function() table.insert(Seen, event .. ":" .. arg1) end)
+            "#,
+        )
+        .unwrap();
+    let craft = SessionEvent::SpellLogExecute(SpellLogExecute {
+        caster: ME,
+        spell_id: 1,
+        effects: vec![(24, vec![ExecuteLog::CreateItem { item_entry: PELT }])],
+    });
+    let answer = SessionEvent::ItemTemplate {
+        entry: PELT,
+        info: Some(Box::new(crate::items::test_template("Wolf Pelt"))),
+    };
+    use crate::client_state::ClientState;
+    app.insert_resource(State::new(ClientState::CharSelect));
+    let world = app.world_mut();
+    crate::net::handlers::dispatch(world, vec![craft, fall(5), answer, fall(6)]);
+    world.insert_resource(State::new(ClientState::InWorld));
+    crate::lanes::fire_in_order(world);
+    let script = world.non_send_resource::<UiScript>();
+    assert_eq!(
+        script.eval::<Vec<String>>("return Seen").unwrap(),
+        [
+            FELL,
+            "CHAT_MSG_SPELL_TRADESKILLS:You create Wolf Pelt.",
+            FELL
+        ]
+    );
+}

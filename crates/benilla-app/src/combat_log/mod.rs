@@ -60,6 +60,8 @@ pub(crate) struct Ctx<'w> {
     ranges: Res<'w, CombatLogRanges>,
     /// `CombatLogPeriodicSpells`.
     periodic: Res<'w, LogPeriodicSpells>,
+    /// The wire an item line's lookup asks on.
+    net: Option<Res<'w, crate::net::NetCommands>>,
 }
 
 impl Ctx<'_> {
@@ -76,13 +78,15 @@ impl Ctx<'_> {
             enchants: self.enchants.as_deref().map(|e| &e.0),
             items: None,
             gameobjects: None,
+            net: self.net.as_deref(),
             ranges: &self.ranges,
             periodic: self.periodic.0,
         }
     }
 }
 
-/// The caches `LogOpenLock` reads (`0xc0e2a0`, `0xc0e318`). They stay out of [`Ctx`] because
+/// The caches `LogOpenLock` reads (`0xc0e2a0`, `0xc0e318`), the item cache also the item lines'
+/// lookups (`0x628f83`, `0x629650`, `0x6297a0`, `0x6298e1`). They stay out of [`Ctx`] because
 /// `on_missile_miss` runs in `Update` with it, and the sound systems that write the item cache run
 /// there too: a claim on a cache no line of that leg reads would only add undeclared orders.
 #[derive(SystemParam)]
@@ -395,9 +399,12 @@ fn on_dispel_failed(In(ev): In<SessionEvent>, c: Ctx, l: Sinks) {
     }
 }
 
-fn on_enchantment_log(In(ev): In<SessionEvent>, c: Ctx, l: Sinks) {
+fn on_enchantment_log(In(ev): In<SessionEvent>, c: Ctx, caches: LockCaches, l: Sinks) {
     if let SessionEvent::EnchantmentLog(e) = ev {
-        let ctx = c.ctx();
+        let ctx = chat::ChatCtx {
+            items: caches.items.as_deref(),
+            ..c.ctx()
+        };
         chat::enchantment_log(e, &ctx, &l.stores, &l.poses, &l.log);
     }
 }

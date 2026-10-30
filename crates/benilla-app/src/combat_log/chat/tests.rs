@@ -49,6 +49,7 @@ fn a_spell_with_no_record_writes_no_line() {
         enchants: None,
         items: None,
         gameobjects: None,
+        net: None,
         ranges: &ranges,
         periodic: true,
     };
@@ -329,6 +330,7 @@ mod emitters {
                 enchants: Some(&self.enchants),
                 items: Some(&self.items),
                 gameobjects: Some(&self.gameobjects),
+                net: None,
                 ranges: &ranges,
                 periodic: true,
             };

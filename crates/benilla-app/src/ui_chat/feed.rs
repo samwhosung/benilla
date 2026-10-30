@@ -2112,11 +2112,10 @@ fn fire_one(
                 // asked again only on its first drain; a line waits on an item alone, and as
                 // long as the cache takes to answer: the reference's list has no timer or
                 // count, and only the answer or the session's end removes an entry
-                // (`0x6293a0`, `0x6294cc`, `0x629a90`). The item's lookup that misses leaves the
-                // log's callback in the answer's list, one per line (`0x628f83`, `0x629650`,
-                // `0x6297a0`, `0x6298e1`, dedupe 0).
-                let first = line.tries == 0;
-                let ask = Ask::at(first, commands);
+                // (`0x6293a0`, `0x6294cc`, `0x629a90`). The item was looked up at the packet, its
+                // miss asked there with the log's callback ([`crate::combat_log`]); here it is
+                // only read.
+                let ask = Ask::at(line.tries == 0, commands);
                 let sources = super::combat::NameSources {
                     names,
                     gameobjects,
@@ -2132,17 +2131,12 @@ fn fire_one(
                             script,
                         )
                     },
-                    |entry| match items.template(entry, 0, ask).map(|t| t.name.clone()) {
+                    |entry| match items.template(entry, 0, Ask::Read).map(|t| t.name.clone()) {
                         Some(name) => super::combat::ItemName::Named(name),
                         None if items.template_answered_unknown(entry) => {
                             super::combat::ItemName::Unknown
                         }
-                        None => {
-                            if first {
-                                items.wait(entry, crate::items::RecordCallback::CombatLog);
-                            }
-                            super::combat::ItemName::Waiting
-                        }
+                        None => super::combat::ItemName::Waiting,
                     },
                 );
                 match ready {
