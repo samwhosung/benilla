@@ -250,6 +250,56 @@ pub fn field_watchers_in(
         })
 }
 
+/// `UpdateUnitTokenFlags`' read of `guid`'s flags (`0x60c520`): the active player 0x1
+/// (`0x5fa6d0`), its pet 0x2 (`0x60c59d`), else a party member 0x10 (`0x4e7f70`), else a party
+/// pet 0x20 (`0x4e7fc0`), a raid member 0x100 (`0x4baee0`) and its pet 0x200 (`0x4baf30`), and
+/// the selection 0x1000 (`0x60c642`).
+pub(crate) fn token_flags_in(
+    globals: &dyn UnitTokenGlobals,
+    objects: &dyn UnitTokenObjects,
+    guid: u64,
+) -> u32 {
+    use super::super::unit_watch::*;
+    if guid == 0 {
+        return 0;
+    }
+    let me = objects.active_player();
+    let mut flags = 0;
+    if guid == me {
+        flags |= TOKEN_PLAYER;
+    }
+    if me != 0 && objects.pet_of(me) == Some(guid) {
+        flags |= TOKEN_PET;
+    }
+    let member_in = |n: u32, member: &dyn Fn(u32) -> u64| (0..n).any(|row| member(row) == guid);
+    let pet_in = |n: u32, member: &dyn Fn(u32) -> u64, record: &dyn Fn(u32) -> u64| {
+        (0..n).any(|row| {
+            let m = member(row);
+            m != 0 && row_pet(objects, m, || record(row)) == guid
+        })
+    };
+    let party = |r| globals.party(r);
+    let party_pet = |r| globals.party_pet_record(r);
+    let raid = |r| globals.raid(r);
+    let raid_pet = |r| globals.raid_pet_record(r);
+    if flags & TOKEN_PLAYER == 0 && member_in(PARTY_ROWS, &party) {
+        flags |= TOKEN_PARTY;
+    }
+    if flags & TOKEN_PET == 0 && pet_in(PARTY_ROWS, &party, &party_pet) {
+        flags |= TOKEN_PARTY_PET;
+    }
+    if member_in(RAID_ROWS, &raid) {
+        flags |= TOKEN_RAID;
+    }
+    if pet_in(RAID_ROWS, &raid, &raid_pet) {
+        flags |= TOKEN_RAID_PET;
+    }
+    if globals.target() == guid {
+        flags |= TOKEN_TARGET;
+    }
+    flags
+}
+
 /// `f` over the objects as the lent host reads them now ([`crate::script::CallHost::read_unit_tokens`]),
 /// `None` with no host free to ask or one that reads none.
 pub(crate) fn with_live_objects<T>(

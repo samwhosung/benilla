@@ -28,6 +28,10 @@ pub enum TokenChange {
     /// `RemoveUnitTokenFlags` (`0x60c4f0`): the selection's teardown (`0x493910`), a party clear
     /// (`0x4e8561`, its pet `0x4e8530`), a raid departure (`0x4baa80`, its pet `0x4baa74`).
     Remove(u32),
+    /// `UpdateUnitTokenFlags` (`0x60c520`), the flags read again from where they come from: a
+    /// unit's create (`0x5fb880`), a charm or summon moving on the active player or a group
+    /// member (`0x5e2702`, `0x5e2743`), a member record's pet (`0x5e5720`).
+    Update,
 }
 
 /// Bit set on a unit whose tokens were found set with no writer's report, which links its watchers
@@ -97,14 +101,27 @@ impl super::UiScript {
         if guid == 0 {
             return;
         }
+        let now = matches!(change, TokenChange::Update).then(|| self.token_flags_now(guid));
         let mut model = self.model_mut();
         let watches = &mut model.unit_watches;
         let old = watches.flags.get(&guid).copied().unwrap_or(0);
         let new = match change {
             TokenChange::Add(bits) => (old & !UNREPORTED) | bits,
             TokenChange::Remove(bits) => old & !bits,
+            TokenChange::Update => now.unwrap_or(0),
         };
         watches.set_flags(guid, new);
+    }
+
+    /// The flags `0x60c520` reads of `guid` now, through the lent host, else off the snapshot.
+    fn token_flags_now(&self, guid: u64) -> u32 {
+        let model = self.model_ref();
+        let guids = &model.unit_guids;
+        let globals = super::unit::LiveGlobals::asked(self.lua(), guids);
+        super::unit::with_live_objects(self.lua(), |o| {
+            super::unit::token_flags_in(&globals, o, guid)
+        })
+        .unwrap_or_else(|| super::unit::token_flags_in(guids, guids, guid))
     }
 
     /// `guid`'s watchers as the tokens read now, for a unit no writer reported: linked at the

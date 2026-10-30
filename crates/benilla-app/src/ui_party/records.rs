@@ -93,8 +93,19 @@ pub(crate) fn record_notices(
     if mask & 0x600 != 0 {
         signal(member, id::UNIT_AURA);
     }
+    // A new pet guid has the old pet's, then the new one's token flags read again, each held
+    // as a unit (`0x5e580b`-`0x5e5846`), then `UNIT_PET`.
     if mask & 0x800 != 0 {
-        signal(member, id::UNIT_PET);
+        for pet in [old.pet_guid, new.pet_guid].into_iter().flatten() {
+            out.push(FieldNotice::TokenFlags {
+                guid: pet,
+                change: benilla_ui::script::TokenChange::Update,
+            });
+        }
+        out.push(FieldNotice::Signal {
+            guid: member,
+            id: id::UNIT_PET,
+        });
     }
     let pet = new.pet_guid.unwrap_or(0);
     if pet != 0 {
@@ -607,9 +618,18 @@ mod tests {
             pet_guid: Some(PET + 1),
             ..old.clone()
         };
+        let update = |guid| FieldNotice::TokenFlags {
+            guid,
+            change: benilla_ui::script::TokenChange::Update,
+        };
         assert_eq!(
             record_notices(MEMBER, &old, &other_pet),
-            signals(&[(MEMBER, 0)])
+            [
+                &[update(PET), update(PET + 1)][..],
+                &signals(&[(MEMBER, 0)])
+            ]
+            .concat(),
+            "the old pet's, then the new one's flags, then `UNIT_PET`"
         );
         let pet_moved = PartyMemberStatsInfo {
             pet_name: Some("Fang".into()),

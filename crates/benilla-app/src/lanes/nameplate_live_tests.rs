@@ -745,3 +745,42 @@ fn a_party_turned_raid_links_a_members_pets_watchers_behind_its_plate() {
 
 /// `UNIT_FIELD_SUMMON`, a unit's summoned pet.
 const SUMMON: u16 = 8;
+
+/// `UNIT_FIELD_CHARM`, the active player's charm.
+const CHARM: u16 = 6;
+
+/// Our charm on the boar broken and cast again inside one frame's packets: `OnCharmOrSummonChanged`
+/// reads the boar's token flags again each time (`0x5e2702`, `0x5e2743` → `0x60c520`), which
+/// unlink and then link its unit-field watchers at the tail (`0x60c679`, `0x60c65c`), behind the
+/// plate bound while the first charm held. The `UNIT_HEALTH("pet")` listener reads the packet's
+/// value on the bar.
+#[test]
+fn a_charm_cast_again_links_the_pets_watchers_behind_its_plate() {
+    let mut app = plated_client("return Bar():GetValue()");
+    let charm = |guid: u64| {
+        values(
+            ME,
+            &[(CHARM, guid as u32), (CHARM + 1, (guid >> 32) as u32)],
+        )
+    };
+    let _ = frame(&mut app, vec![charm(BOAR)]);
+    {
+        let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+        // The tokens as the frame's push leaves them for the bind, which runs with no host lent
+        // here.
+        script.set_unit_guids(&benilla_ui::script::UnitGuids {
+            player: ME,
+            pet: BOAR,
+            target: WOLF,
+            held: [(ME, 0), (WOLF, 0), (BOAR, 0)].into_iter().collect(),
+            ..Default::default()
+        });
+        crate::vplates::sync_plates_for_test(&mut script, &[]);
+        crate::vplates::sync_plates_for_test(&mut script, &[BOAR]);
+    }
+    let _ = frame(&mut app, vec![charm(0), charm(BOAR)]);
+    assert_eq!(
+        frame(&mut app, vec![values(BOAR, &health(25))]),
+        ["UNIT_HEALTH:pet:25"]
+    );
+}

@@ -454,6 +454,34 @@ pub(crate) fn pets_moved_off(
     .collect()
 }
 
+/// `OnCharmOrSummonChanged`'s two guids of each field, `CHARM` then `SUMMON`, when it runs: the
+/// copy's then the field's, each nonzero (`0x5e26e0`, `0x5e2721`), whose units it reads the token
+/// flags of again (`0x5e2702`, `0x5e2743`). Its other gates are the caller's, as for
+/// [`pets_moved_off`].
+pub(crate) fn pet_guids_moved(
+    block: &Notified,
+    kind: ObjectType,
+    fields: &ObjectFields,
+) -> Vec<u64> {
+    if kind != ObjectType::Player || block.fired(UNIT_SECTION, 0, 16).is_none() {
+        return Vec::new();
+    }
+    [
+        (UNIT_SECTION, fields.unit_charm()),
+        (UNIT_SECTION + 2, fields.unit_summon()),
+    ]
+    .into_iter()
+    .flat_map(|(lo, now)| {
+        let now = now.unwrap_or(0);
+        let copy = |index: u16, value: u32| block.edge(index).map_or(value, |(copy, _)| copy);
+        let old =
+            u64::from(copy(lo, now as u32)) | (u64::from(copy(lo + 1, (now >> 32) as u32)) << 32);
+        [old, now]
+    })
+    .filter(|&g| g != 0)
+    .collect()
+}
+
 /// The first field of the object, unit and player sections: their byte offsets in the field
 /// array, 0, 0x18 and 0x2f0 (`0x465690`), over 4.
 const OBJECT_SECTION: u16 = 0;

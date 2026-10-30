@@ -531,6 +531,10 @@ fn a_released_player_comes_back_with_its_fields_and_no_create_hook() {
     assert_eq!(
         notices(world),
         [
+            FieldNotice::TokenFlags {
+                guid: MATE,
+                change: benilla_ui::script::TokenChange::Update,
+            },
             gate,
             FieldNotice::Global { id: 376 },
             signal(345),
@@ -547,9 +551,15 @@ fn a_released_player_comes_back_with_its_fields_and_no_create_hook() {
     assert!(held(world, MATE));
     assert_eq!(
         notices(world),
-        [signal(22)],
-        "no bridge until its slot 3 (`0x5fbc44`, `0x5fbe36`), then the packet end's party \
-         record; no guild tag"
+        [
+            FieldNotice::TokenFlags {
+                guid: MATE,
+                change: benilla_ui::script::TokenChange::Update,
+            },
+            signal(22)
+        ],
+        "no bridge until its slot 3 reads its tokens again (`0x5fbc44`, `0x5fbe36`), then the \
+         packet end's party record; no guild tag"
     );
     assert_eq!(edges(world), [(MATE, STAT0, 5, 7)]);
 }
@@ -572,9 +582,13 @@ fn a_values_movement_or_near_block_brings_a_released_object_back() {
     assert!(held(world, MOB), "a values block");
     assert_eq!(field(world, MOB, ENTRY), Some(299), "the kept fields");
     assert_eq!(field(world, MOB, STAT0), Some(6));
-    assert!(
-        notices(world).is_empty(),
-        "no bridge in the packet that brings it back"
+    assert_eq!(
+        notices(world),
+        [FieldNotice::TokenFlags {
+            guid: MOB,
+            change: benilla_ui::script::TokenChange::Update,
+        }],
+        "no bridge in the packet that brings it back, only slot 3's read of its tokens"
     );
     send(world, [values(MOB, &[(STAT0, 7)])]);
     assert_eq!(

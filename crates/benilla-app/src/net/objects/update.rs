@@ -1215,6 +1215,19 @@ fn notify(sc: &mut Scene, guid: u64, block: Notified, bridged: bool) {
     // (`0x5e266b`, `0x4918e0`): an old pet the object manager holds no unit of has its selection
     // torn down (`0x5e26f7`, `0x5e2719`).
     if me == Some(guid) || sc.group.party_or_raid_member(guid) {
+        // Each of the two fields' old guid, then its new one, held as a unit has its token flags
+        // read again (`0x5e2702`, `0x5e2743`).
+        for pet in crate::field_watch::pet_guids_moved(&block, kind, fields) {
+            let held = sc
+                .index
+                .0
+                .get(&pet)
+                .and_then(|&e| sc.stores.get(e).ok())
+                .is_some_and(|s| s.is_unit());
+            if held {
+                sc.field_notices.write(token_update(pet));
+            }
+        }
         for old in crate::field_watch::pets_moved_off(&block, kind, fields) {
             let held = sc
                 .index
@@ -1471,6 +1484,7 @@ fn create_hook(
             // The unit's `PostInit` (`0x5dec09` → `0x5fb880`): its far-sight arrival, ahead of
             // its tail (`0x60c520`, `0x606fe0`, `0x607710`, `0x5ff130`, `0x612a30`).
             far_sight_arrives(sc, guid);
+            sc.field_notices.write(token_update(guid));
             sc.names.lookup_fields(guid, &fields, &sc.net);
             sc.field_notices
                 .write_batch(crate::field_watch::guild_tag(guid));
@@ -1491,7 +1505,9 @@ fn create_hook(
         Created::World(EntityKind::Unit) => {
             resolve_display_records(sc, guid, &fields);
             sc.names.lookup_fields(guid, &fields, &sc.net);
+            // `PostInit` (`0x5fb880`): the far-sight arrival, then the token flags (`0x60c520`).
             far_sight_arrives(sc, guid);
+            sc.field_notices.write(token_update(guid));
         }
         // `OnCreate` (`0x5d5420`): a far-sight focus (the bytes' low byte 2, `0x5d54a7`) that
         // the active player cast (`0x5d54b6`) is the far-sight arrival's.
@@ -1512,7 +1528,8 @@ fn create_hook(
 }
 
 /// Vtable slot 3 of an object the packet brought back: a unit's (`0x5fbe00`) rebuilds its display
-/// when its records changed while it was away (`0x5fbe28` → `0x60abe0`); a player's `PostUpdate`
+/// when its records changed while it was away (`0x5fbe28` → `0x60abe0`) and reads its token flags
+/// again, which its release dropped (`0x5fbe36`, `0x5fbc44`); a player's `PostUpdate`
 /// (`0x5dec90`) runs the unit's, then compares its party record (`0x5decb7`), with no
 /// active-player gate, as the active player is never released; a game object's (`0x5f7ed0`) asks
 /// its template when it holds none (`+0x214`, `0x558560` at `0x5f7f31`); an item's and a bag's
@@ -1526,9 +1543,13 @@ fn reactivated_end(sc: &mut Scene, guid: u64, script: Option<&UiScript>) {
         return;
     };
     match fields.created_as() {
-        Some(ObjectType::Unit) => display_changed(sc, e, guid, &fields),
+        Some(ObjectType::Unit) => {
+            display_changed(sc, e, guid, &fields);
+            sc.field_notices.write(token_update(guid));
+        }
         Some(ObjectType::Player) => {
             display_changed(sc, e, guid, &fields);
+            sc.field_notices.write(token_update(guid));
             // `0x5deca1` → `0x4e85d0` mode 1.
             sc.group.member_object(guid, true);
             compare_party_record(sc, guid, &fields, script);
@@ -1653,4 +1674,12 @@ fn compare_party_record(
     );
     let notices = crate::ui_party::record_notices(guid, &old, &live);
     sc.field_notices.write_batch(notices);
+}
+
+/// `UpdateUnitTokenFlags` (`0x60c520`) on `guid` at the notice's place.
+fn token_update(guid: u64) -> crate::field_watch::FieldNotice {
+    crate::field_watch::FieldNotice::TokenFlags {
+        guid,
+        change: benilla_ui::script::TokenChange::Update,
+    }
 }

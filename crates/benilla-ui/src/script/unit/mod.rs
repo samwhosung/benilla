@@ -859,7 +859,7 @@ pub use resolve::{
     bound_tokens_in, field_watchers_in, parse_unit_token, resolve_unit_in, tokens_in, UnitBase,
     UnitGuids, UnitTokenGlobals, UnitTokenObjects, UnitTokenParse,
 };
-pub(crate) use resolve::{token_guid, with_live_objects, LiveGlobals};
+pub(crate) use resolve::{token_flags_in, token_guid, with_live_objects, LiveGlobals};
 pub use selection_read::{ObjectNameQuery, SelectionGlobals, SelectionQuery};
 pub use state_read::{UnitHeld, UnitHeldQuery, UnitStateAnswer, UnitStateQuery};
 

@@ -1863,11 +1863,19 @@ mod tests {
         assert_eq!(
             drain(world),
             [
+                &[crate::field_watch::FieldNotice::TokenFlags {
+                    guid: ME,
+                    change: benilla_ui::script::TokenChange::Update,
+                }],
                 &crate::field_watch::guild_tag(ME)[..],
                 &[crate::field_watch::FieldNotice::RecruitmentCascade],
+                &[crate::field_watch::FieldNotice::TokenFlags {
+                    guid: MOB,
+                    change: benilla_ui::script::TokenChange::Update,
+                }],
             ]
             .concat(),
-            "a first create runs no notify pass, only a player's own `PostInit`"
+            "a first create runs no notify pass, only each unit's `PostInit`"
         );
         super::super::handlers::dispatch(
             world,
@@ -1956,12 +1964,17 @@ mod tests {
         assert_eq!(
             drain(world),
             [
+                FieldNotice::TokenFlags {
+                    guid: MATE,
+                    change: benilla_ui::script::TokenChange::Update,
+                },
                 gate,
                 FieldNotice::Global { id: 376 },
                 signal(345),
                 signal(22)
             ],
-            "the guild tag, its plate's gate first, then the maximum differs"
+            "its `PostInit`'s token flags, the guild tag, its plate's gate first, then the maximum \
+             differs"
         );
         super::super::handlers::dispatch(world, super::wire(vec![create(MATE, &mate)]));
         assert_eq!(
@@ -1977,11 +1990,16 @@ mod tests {
         assert_eq!(
             drain(world),
             [
+                &[FieldNotice::TokenFlags {
+                    guid: ME,
+                    change: benilla_ui::script::TokenChange::Update,
+                }],
                 &crate::field_watch::guild_tag(ME)[..],
                 &[FieldNotice::RecruitmentCascade],
             ]
             .concat(),
-            "our own create: the guild tag, then the recruitment cascade (`0x5dec1e`)"
+            "our own create: its token flags, the guild tag, then the recruitment cascade \
+             (`0x5dec1e`)"
         );
     }
 
