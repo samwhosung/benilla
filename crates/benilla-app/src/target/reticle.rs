@@ -88,8 +88,11 @@ pub(super) fn update_reticle(
     mut state: ResMut<ReticleState>,
 ) {
     let state = &mut *state;
+    // The ground model rides the cursor mode (`0x6e50ab`), which a send drops (`0x6e5538`).
     let (Some(spell_id), Some(point)) = (
-        targeting.spell_for(TargetingWants::Location),
+        targeting
+            .spell_for(TargetingWants::Location)
+            .filter(|_| targeting.shown()),
         occlusion.point,
     ) else {
         // Not targeting, a word that wants no location, or no world hit: nothing is drawn.

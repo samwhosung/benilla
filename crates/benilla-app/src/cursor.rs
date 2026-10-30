@@ -206,7 +206,9 @@ fn drive_displayed_cursor(
     screen: Res<crate::loading_screen::LoadingScreen>,
 ) {
     let p = hosted.p0();
-    let targeting_active = p.active();
+    // The cursor mode the cursor entry raises (`0x6e50ab`), not the word alone, which the arm's
+    // last leg leaves standing past its send (`0x6e5467`, `0x6e5547`).
+    let targeting_active = p.shown();
     hosted.p1().run(|script| {
         use crate::target::{CursorKind, WorldCursor};
         use benilla_ui::script::UiCursorMode;

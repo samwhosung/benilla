@@ -340,10 +340,16 @@ impl PickBind<'_, '_> {
     }
 }
 
-/// The targeting mode, `Some` while the flag_word is nonzero. Entered by the cast-send path
-/// ([`super::cast_target::CastWireTarget::Targeting`]), cleared by a commit or a cancel.
+/// The targeting word, `Some` while the flag_word `0xcecac0` is nonzero, and the cursor mode it
+/// may stand under. `ArmCast` writes the word (`0x6e525e`) ahead of its signal and its bind leg;
+/// the cast tail's cursor entry raises the cursor over it (`0x6e50ab`,
+/// [`super::cast_target::CastWireTarget::Targeting`]); a bind or a cancel clears it, and a send
+/// lowers the cursor alone (`0x6e5547`).
 #[derive(Resource, Default)]
 pub(crate) struct SpellTargeting(Option<Targeting>);
+
+/// A word taken out of [`SpellTargeting`] while a merge reports ([`SpellTargeting::take_word`]).
+pub(crate) struct StandingWord(Option<Targeting>);
 
 struct Targeting {
     spell_id: u32,
@@ -355,9 +361,53 @@ struct Targeting {
     /// The spell holds the in-flight slot `0xceca88`: its attempt pushed it (`0x6e5026`), which
     /// it does for no item or one with `ITEM_FLAG_PLAYERCAST` (`0x6e500b`-`0x6e501f`).
     in_slot: bool,
+    /// The cursor mode is up (`0x523d20(2)`, `0x523c20(0x16)` at `0x6e50ab`): the cast cursor and
+    /// any ground model show. The arm's own word stands without it.
+    shown: bool,
 }
 
 impl SpellTargeting {
+    /// `ArmCast`'s write of its word (`0x6e525e`) over the record as it stands, the cursor mode
+    /// untouched: a word of 0 is no targeting.
+    pub(crate) fn arm_word(
+        &mut self,
+        spell_id: u32,
+        commit: super::cast_send::CastCommit,
+        word: u16,
+    ) {
+        self.0 = (word != 0).then_some(Targeting {
+            spell_id,
+            commit,
+            word,
+            in_slot: false,
+            shown: false,
+        });
+    }
+
+    /// Whether the cursor mode is up over the word, which the cursor and the ground model show.
+    pub(crate) fn shown(&self) -> bool {
+        self.0.as_ref().is_some_and(|t| t.shown)
+    }
+
+    /// `SendCast`'s reset of the cursor mode (`0x6e5547`) and the ground model (`0x6e5538`),
+    /// which leaves the word as it stands.
+    pub(crate) fn hide(&mut self) {
+        if let Some(t) = &mut self.0 {
+            t.shown = false;
+        }
+    }
+
+    /// The word taken out, as `BindTarget` empties it ahead of its merge, for the merge's
+    /// refusal to put back ([`Self::restore_word`], `0x6e6096`).
+    pub(crate) fn take_word(&mut self) -> StandingWord {
+        StandingWord(self.0.take())
+    }
+
+    /// The word a refused merge restores (`0x6e6096`).
+    pub(crate) fn restore_word(&mut self, word: StandingWord) {
+        self.0 = word.0;
+    }
+
     /// `IsTargeting 0x6e48a0`.
     pub(crate) fn active(&self) -> bool {
         self.0.is_some()
@@ -450,6 +500,7 @@ impl SpellTargeting {
             commit,
             word,
             in_slot,
+            shown: true,
         });
     }
 
@@ -658,14 +709,17 @@ fn bind_target_unit(
 /// range." or "Target too close") and binds nothing; otherwise the emptied word commits (`SendCast
 /// 0x6e54f0`).
 ///
-/// Deviation: a range failure leaves targeting armed and working. The reference's report cancels
-/// the cast (`0x6e2218` → `0x6e4940`): its line, `SPELLCAST_FAILED` and the tradeskill disarm,
+/// Deviation: a range failure leaves targeting armed and working. For a cast in flight the
+/// reference's report cancels it (`0x6e2218` → `0x6e4940`): its line, `SPELLCAST_FAILED` and the
+/// tradeskill disarm,
 /// which benilla keeps; with the word the bind emptied it also sends `CMSG_CANCEL_CAST` for the
 /// unsent spell (`0x6e4970`) and clears the caster, then restores the pre-click word (`0x6e6096`),
 /// so every later click fails the caster test (`0x6e5b93`) and the cursor is stranded until a
 /// cancel. That is a defect: benilla's cancel finds the cursor up, so it drops the word, with its
 /// signal (`0x6e495c`), instead of sending, and the cursor is re-armed as its attempt left it,
-/// its caster and its hold on the slot included, which is what a player can use.
+/// its caster and its hold on the slot included, which is what a player can use. A record never
+/// pushed is not in flight, and its report cancels nothing: the word and the caster stand, as in
+/// the reference.
 fn merge(
     ladder: &mut crate::spell::CastLadder,
     spell_id: u32,
@@ -677,7 +731,9 @@ fn merge(
         debug!("ui_action: cast {spell_id} not bound at {bound:x?} — range ({reason:#x})");
         let word = ladder.ground.word_in_slot();
         ladder.report_local(crate::ui_action::CastFail::local(spell_id, reason));
-        if let Some((word, in_slot)) = word {
+        // A report that cancelled nothing (a record never pushed) leaves the word and the caster
+        // as the reference restores them (`0x6e6096`).
+        if let (Some((word, in_slot)), false) = (word, ladder.ground.active()) {
             ladder.core().rearm_cursor(spell_id, commit, word, in_slot);
         }
         return;
