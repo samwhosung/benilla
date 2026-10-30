@@ -63,12 +63,6 @@ impl ItemLane {
         self.0.drain(..).map(|(s, r, _)| (s, r)).collect()
     }
 
-    /// Take every notice waiting, in order, unfired.
-    #[cfg(test)]
-    pub(crate) fn drain_notices(&mut self) -> Vec<ItemNotice> {
-        self.0.drain(..).filter_map(|(_, r, _)| r.notice).collect()
-    }
-
     /// The trade halves of every run queued, in stamp order, taken so the lane does not run them
     /// again: for a trade close, which runs inside its packet ([`crate::ui_trade`]).
     pub(crate) fn take_trade_touches(&mut self) -> Vec<TradeTouch> {

@@ -1718,6 +1718,7 @@ mod tests {
             .into_created(ObjectType::Item),
         };
         let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        crate::lanes::tap_tests::tap(&mut app);
         let world = app.world_mut();
         let me = world
             .spawn((
@@ -1765,8 +1766,8 @@ mod tests {
             ]),
         );
         let notices: Vec<ItemNotice> = world
-            .resource_mut::<crate::item_lane::ItemLane>()
-            .drain_notices();
+            .resource_mut::<crate::lanes::tap_tests::Tapped>()
+            .item_notices();
         assert_eq!(
             notices,
             [
@@ -1801,6 +1802,7 @@ mod tests {
     fn an_item_answer_runs_each_waiting_trade_getters_callback_once() {
         use crate::item_watch::ItemNotice;
         let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        crate::lanes::tap_tests::tap(&mut app);
         let world = app.world_mut();
         {
             let items = world.resource::<Items>();
@@ -1817,8 +1819,8 @@ mod tests {
             super::wire(vec![answer(4306, true), answer(7777, false)]),
         );
         let notices: Vec<ItemNotice> = world
-            .resource_mut::<crate::item_lane::ItemLane>()
-            .drain_notices();
+            .resource_mut::<crate::lanes::tap_tests::Tapped>()
+            .item_notices();
         assert_eq!(
             notices,
             [
@@ -1833,15 +1835,15 @@ mod tests {
             super::wire(vec![answer(4306, true), answer(7777, true)]),
         );
         assert!(world
-            .resource_mut::<crate::item_lane::ItemLane>()
-            .drain_notices()
+            .resource_mut::<crate::lanes::tap_tests::Tapped>()
+            .item_notices()
             .is_empty());
         // The one still waiting runs on its own answer.
         super::super::handlers::dispatch(world, super::wire(vec![answer(2592, true)]));
         assert_eq!(
             world
-                .resource_mut::<crate::item_lane::ItemLane>()
-                .drain_notices(),
+                .resource_mut::<crate::lanes::tap_tests::Tapped>()
+                .item_notices(),
             [ItemNotice::TradeRecord { entry: 2592 }]
         );
     }
@@ -1881,6 +1883,7 @@ mod tests {
             [(lo, guid as u32), (lo + 1, (guid >> 32) as u32)]
         };
         let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        crate::lanes::tap_tests::tap(&mut app);
         let world = app.world_mut();
         let pairs: Vec<(u16, u32)> = seat(0, HELM).into_iter().chain(seat(23, POTIONS)).collect();
         let me = world
@@ -1915,13 +1918,12 @@ mod tests {
         );
         // Both lanes, in stamp order: the item watchers' runs carry their own signals.
         let mut stamped: Vec<(crate::lanes::Stamp, FieldNotice)> = world
-            .resource_mut::<crate::field_watch::NoticeLane>()
-            .drain_stamped()
-            .collect();
+            .resource_mut::<crate::lanes::tap_tests::Tapped>()
+            .fields_stamped();
         stamped.extend(
             world
-                .resource_mut::<crate::item_lane::ItemLane>()
-                .drain_stamped()
+                .resource_mut::<crate::lanes::tap_tests::Tapped>()
+                .items_stamped()
                 .into_iter()
                 .flat_map(|(s, r)| r.signals.into_iter().map(move |n| (s, n))),
         );
@@ -1958,6 +1960,7 @@ mod tests {
     fn an_item_answer_runs_each_waiting_ammo_getters_callback_once() {
         use crate::field_watch::FieldNotice;
         let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        crate::lanes::tap_tests::tap(&mut app);
         let world = app.world_mut();
         {
             let items = world.resource::<Items>();
@@ -1978,9 +1981,8 @@ mod tests {
             ]),
         );
         let notices: Vec<FieldNotice> = world
-            .resource_mut::<crate::field_watch::NoticeLane>()
-            .drain()
-            .collect();
+            .resource_mut::<crate::lanes::tap_tests::Tapped>()
+            .fields();
         assert_eq!(
             notices,
             [FieldNotice::Player {
@@ -2027,13 +2029,13 @@ mod tests {
             fields: ObjectFields::from_pairs(pairs),
         };
         let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        crate::lanes::tap_tests::tap(&mut app);
         let world = app.world_mut();
         world.resource_mut::<SelfGuid>().0 = Some(ME);
         let drain = |world: &mut World| -> Vec<FieldNotice> {
             world
-                .resource_mut::<crate::field_watch::NoticeLane>()
-                .drain()
-                .collect()
+                .resource_mut::<crate::lanes::tap_tests::Tapped>()
+                .fields()
         };
         super::super::handlers::dispatch(
             world,
@@ -2112,6 +2114,7 @@ mod tests {
             fields: ObjectFields::from_pairs(pairs).into_created(ObjectType::Player),
         };
         let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        crate::lanes::tap_tests::tap(&mut app);
         let world = app.world_mut();
         world.resource_mut::<SelfGuid>().0 = Some(ME);
         let record = PartyMemberStatsInfo {
@@ -2132,9 +2135,8 @@ mod tests {
             .insert(MATE, record.clone());
         let drain = |world: &mut World| -> Vec<FieldNotice> {
             world
-                .resource_mut::<crate::field_watch::NoticeLane>()
-                .drain()
-                .collect()
+                .resource_mut::<crate::lanes::tap_tests::Tapped>()
+                .fields()
         };
         let mate = [(HEALTH, 100), (MAXHEALTH, 200), (LEVEL, 60)];
         super::super::handlers::dispatch(world, super::wire(vec![create(MATE, &mate)]));
@@ -2190,6 +2192,7 @@ mod tests {
     fn watch_world(items: &[(u64, u32, bool)]) -> App {
         use benilla_protocol::messages::ObjectType;
         let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        crate::lanes::tap_tests::tap(&mut app);
         let world = app.world_mut();
         let me = world
             .spawn((
@@ -2240,8 +2243,8 @@ mod tests {
 
     fn drain_notices(world: &mut World) -> Vec<crate::item_watch::ItemNotice> {
         world
-            .resource_mut::<crate::item_lane::ItemLane>()
-            .drain_notices()
+            .resource_mut::<crate::lanes::tap_tests::Tapped>()
+            .item_notices()
     }
 
     /// Every item's first create asks for its record with the callback `0x5d8390` (`0x5d8300`),
@@ -2345,6 +2348,7 @@ mod tests {
     fn a_refused_game_object_entry_is_no_template() {
         const ENTRY: u32 = 1731;
         let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        crate::lanes::tap_tests::tap(&mut app);
         let world = app.world_mut();
         let fields = crate::go_templates::test_fields(ENTRY);
         let (tx, rx) = crossbeam_channel::unbounded();
@@ -2397,6 +2401,7 @@ mod tests {
     fn a_refused_creature_is_asked_again_when_a_new_unit_of_it_is_created() {
         const ENTRY: u32 = 1234;
         let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        crate::lanes::tap_tests::tap(&mut app);
         let (tx, rx) = crossbeam_channel::unbounded();
         app.world_mut().insert_resource(NetCommands(tx));
         let create = |guid: u64| SessionEvent::ObjectCreate {
@@ -2441,6 +2446,7 @@ mod tests {
         const OLD: u32 = 299;
         const NEW: u32 = 2_671;
         let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        crate::lanes::tap_tests::tap(&mut app);
         let (tx, rx) = crossbeam_channel::unbounded();
         app.world_mut().insert_resource(NetCommands(tx));
         let mob = (u64::from(OLD) << 24) | (u64::from(guid::HIGH_UNIT) << 48) | 1;
@@ -2528,6 +2534,7 @@ mod tests {
         const GO: u64 = 0xF110_0000_0000_0009;
         let mob = (u64::from(ENTRY) << 24) | (u64::from(guid::HIGH_UNIT) << 48) | 1;
         let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        crate::lanes::tap_tests::tap(&mut app);
         let (tx, rx) = crossbeam_channel::unbounded();
         app.world_mut().insert_resource(NetCommands(tx));
 
@@ -2554,6 +2561,7 @@ mod tests {
         const GO: u64 = 0xF110_0000_0000_0009;
         let mob = (u64::from(ENTRY) << 24) | (u64::from(guid::HIGH_UNIT) << 48) | 1;
         let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        crate::lanes::tap_tests::tap(&mut app);
         let (tx, rx) = crossbeam_channel::unbounded();
         app.world_mut().insert_resource(NetCommands(tx));
 
@@ -2627,6 +2635,7 @@ mod tests {
         let mob = (u64::from(ENTRY) << 24) | (u64::from(guid::HIGH_UNIT) << 48) | 1;
         const PLAYER: u64 = 0x0000_0000_0000_0042;
         let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        crate::lanes::tap_tests::tap(&mut app);
         let (tx, rx) = crossbeam_channel::unbounded();
         app.world_mut().insert_resource(NetCommands(tx));
         app.world_mut().insert_resource(display_tables());
@@ -2675,6 +2684,7 @@ mod tests {
         const ENTRY: u32 = 1234;
         let mob = (u64::from(ENTRY) << 24) | (u64::from(guid::HIGH_UNIT) << 48) | 1;
         let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        crate::lanes::tap_tests::tap(&mut app);
         let (tx, rx) = crossbeam_channel::unbounded();
         app.world_mut().insert_resource(NetCommands(tx));
         app.world_mut().insert_resource(display_tables());
@@ -2819,6 +2829,7 @@ mod tests {
         const SWORD: u64 = 0x4000_0000_0000_0042;
         const STONE: u64 = 0x4000_0000_0000_0043;
         let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        crate::lanes::tap_tests::tap(&mut app);
         let world = app.world_mut();
         let create = |guid| SessionEvent::ItemCreate {
             guid,
@@ -2927,6 +2938,7 @@ mod tests {
         const MACE: u64 = 0x4000_0000_0000_0044;
         const ENTRY: u32 = 117;
         let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        crate::lanes::tap_tests::tap(&mut app);
         let world = app.world_mut();
         let me = world
             .spawn((

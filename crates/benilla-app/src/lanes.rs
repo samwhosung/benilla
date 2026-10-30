@@ -760,6 +760,8 @@ mod storm_tests;
 #[cfg(test)]
 mod tabard_live_tests;
 #[cfg(test)]
+pub(crate) mod tap_tests;
+#[cfg(test)]
 mod taxi_live_tests;
 #[cfg(test)]
 mod tests;

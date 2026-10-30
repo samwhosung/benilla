@@ -6,7 +6,9 @@ const ME: u64 = 0x0000_0000_0000_0007;
 const MOB: u64 = 0xF130_0000_1234_0001;
 
 fn client() -> App {
-    crate::game_plugins::schedule_tests::headless_client_unrun()
+    let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+    crate::lanes::tap_tests::tap(&mut app);
+    app
 }
 
 /// An indexed entity for `guid`, as a create leaves it.
@@ -246,9 +248,8 @@ fn send(world: &mut World, blocks: impl IntoIterator<Item = SessionEvent>) {
 
 fn notices(world: &mut World) -> Vec<crate::field_watch::FieldNotice> {
     world
-        .resource_mut::<crate::field_watch::NoticeLane>()
-        .drain()
-        .collect()
+        .resource_mut::<crate::lanes::tap_tests::Tapped>()
+        .fields()
 }
 
 /// The field edges written, as `(guid, index, old, new)`.
@@ -344,8 +345,9 @@ fn a_blocks_edges_and_notices_are_stamped_in_field_order() {
         )],
     );
     let mut order: Vec<(crate::lanes::Stamp, String)> = world
-        .resource_mut::<crate::field_watch::NoticeLane>()
-        .drain_stamped()
+        .resource_mut::<crate::lanes::tap_tests::Tapped>()
+        .fields_stamped()
+        .into_iter()
         .map(|(at, n)| (at, format!("{n:?}")))
         .collect();
     order.extend(
@@ -430,7 +432,16 @@ fn the_coinage_watcher_trims_the_trade_offer_inside_its_packet() {
 /// has its tail stamped there.
 #[test]
 fn an_item_answer_runs_a_waiting_auction_pages_tail_in_its_handler() {
+    /// The auction house lane's tails at each packet's end, ahead of the flush that fires them.
+    #[derive(Resource, Default)]
+    struct TappedTails(Vec<usize>);
+    fn tap_tails(world: &mut World, _at: crate::lanes::Stamp) {
+        let tails = world.resource::<crate::ui_auction::HouseLane>().tails();
+        world.resource_mut::<TappedTails>().0.extend(tails);
+    }
     let mut app = client();
+    app.init_resource::<TappedTails>();
+    crate::net::handlers::add_packet_end(&mut app, tap_tails);
     let world = app.world_mut();
     let row = benilla_protocol::messages::AuctionListEntry {
         auction_id: 1,
@@ -462,7 +473,7 @@ fn an_item_answer_runs_a_waiting_auction_pages_tail_in_its_handler() {
         }],
     );
     assert_eq!(
-        world.resource::<crate::ui_auction::HouseLane>().tails(),
+        world.resource::<TappedTails>().0,
         [benilla_ui::script::LIST]
     );
 }

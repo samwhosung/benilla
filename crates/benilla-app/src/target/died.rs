@@ -285,7 +285,7 @@ mod tests {
     };
     use crate::spell::AutoRepeatActive;
     use crate::target::Selection;
-    use crate::ui_cast::{CastBarEdge, CastReport, CastReports};
+    use crate::ui_cast::{CastBarEdge, CastReport};
 
     const ME: u64 = 0x10;
     const MOB: u64 = 0xF130_0000_0000_0042;
@@ -311,6 +311,7 @@ mod tests {
     /// captured.
     fn client() -> Client {
         let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        crate::lanes::tap_tests::tap(&mut app);
         let (tx, sent) = crossbeam_channel::unbounded();
         app.insert_resource(NetCommands(tx));
         let world = app.world_mut();
@@ -469,7 +470,9 @@ mod tests {
         }
 
         fn reports(&mut self) -> Vec<CastReport> {
-            self.world().resource_mut::<CastReports>().take()
+            self.world()
+                .resource_mut::<crate::lanes::tap_tests::Tapped>()
+                .casts()
         }
 
         fn in_flight(&mut self) -> Option<u32> {

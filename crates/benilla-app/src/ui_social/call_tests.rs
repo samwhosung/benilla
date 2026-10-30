@@ -738,13 +738,23 @@ fn get_ignore_name_answers_unknown_for_no_name() {
 fn an_ignored_players_text_emote_prints_nothing() {
     let mut s = client();
     ignore_list(&mut s, vec![9]);
+    /// The chat lane's parked lines by kind at each packet's end, ahead of the flush that fires
+    /// them.
+    #[derive(Resource, Default)]
+    struct Tapped(Vec<&'static str>);
+    fn tap(world: &mut World, _at: crate::lanes::Stamp) {
+        let kinds = world.resource::<crate::ui_chat::ChatLog>().pending_kinds();
+        world.resource_mut::<Tapped>().0.extend(kinds);
+    }
+    s.app.init_resource::<Tapped>();
+    crate::net::handlers::add_packet_end(&mut s.app, tap);
     let chat = |s: &Social| {
         s.app
             .world()
-            .resource::<crate::ui_chat::ChatLog>()
-            .pending_kinds()
-            .into_iter()
-            .filter(|k| *k == "emote")
+            .resource::<Tapped>()
+            .0
+            .iter()
+            .filter(|k| **k == "emote")
             .count()
     };
     let emote = |guid| SessionEvent::TextEmote {

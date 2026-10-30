@@ -1087,9 +1087,21 @@ mod tests {
         );
     }
 
-    /// The questgiver lane's items, taking them.
+    /// The questgiver lane's items at each packet's end, ahead of the flush that fires them.
+    #[derive(Resource, Default)]
+    struct TappedGiver(Vec<QuestGiverEvent>);
+
+    fn tap_giver(world: &mut World, _at: crate::lanes::Stamp) {
+        let events = world.resource_mut::<QuestGiverLane>().take();
+        world.resource_mut::<TappedGiver>().0.extend(events);
+    }
+
+    /// The questgiver lane's items, those a packet ended on and those a call queued, taking them.
     fn lane(app: &mut App) -> Vec<QuestGiverEvent> {
-        app.world_mut().resource_mut::<QuestGiverLane>().take()
+        let mut events =
+            std::mem::take(&mut app.world_mut().get_resource_or_init::<TappedGiver>().0);
+        events.extend(app.world_mut().resource_mut::<QuestGiverLane>().take());
+        events
     }
 
     /// Each panel setter fires its event at its end, every time (`0x500ee5`, `0x50105d`,
@@ -1100,6 +1112,8 @@ mod tests {
     #[test]
     fn panel_events_queue_per_publish_and_item_updates_per_callback() {
         let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        app.init_resource::<TappedGiver>();
+        crate::net::handlers::add_packet_end(&mut app, tap_giver);
         app.insert_non_send_resource(UiScript::new().unwrap());
         hold_for_test(app.world_mut(), 0x42);
         let detail = |app: &mut App, choice| {

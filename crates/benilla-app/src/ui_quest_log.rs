@@ -963,7 +963,16 @@ mod tests {
     /// lane at that packet's place (`0x4e081a`), once; a refusal readies nothing (`0x4e080a`).
     #[test]
     fn an_awaited_object_template_signals_the_log_at_its_packet() {
+        /// The log's events at each packet's end, ahead of the flush that fires them.
+        #[derive(Resource, Default)]
+        struct TappedEvents(Vec<(crate::lanes::Stamp, QuestEvent)>);
+        fn tap_events(world: &mut World, _at: crate::lanes::Stamp) {
+            let events: Vec<_> = world.resource_mut::<QuestLog>().events.drain(..).collect();
+            world.resource_mut::<TappedEvents>().0.extend(events);
+        }
         let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        app.init_resource::<TappedEvents>();
+        crate::net::handlers::add_packet_end(&mut app, tap_events);
         let (tx, rx) = crossbeam_channel::unbounded();
         app.insert_resource(NetCommands(tx));
         let world = app.world_mut();
@@ -981,14 +990,13 @@ mod tests {
             data: [0; 24],
         };
         let readied = |world: &mut World| {
-            let events = &mut world.resource_mut::<QuestLog>().events;
-            let named = events
+            let mut events: Vec<_> = world.resource_mut::<TappedEvents>().0.drain(..).collect();
+            events.extend(world.resource_mut::<QuestLog>().events.drain(..));
+            events
                 .iter()
                 .filter(|(_, e)| matches!(e, QuestEvent::Named))
                 .map(|(s, _)| *s)
-                .collect::<Vec<_>>();
-            events.clear();
-            named
+                .collect::<Vec<_>>()
         };
         ask(world, 300);
         ask(world, 300);

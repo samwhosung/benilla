@@ -413,7 +413,20 @@ fn an_answer_keeps_at_most_fifty_rows() {
 /// plural's selector (`0x5ae0f1`-`0x5ae0fb`), never the server's total.
 #[test]
 fn the_count_line_prints_the_raw_count() {
+    /// What the social lane held at each packet's end, ahead of the flush that fires it.
+    #[derive(Resource, Default)]
+    struct Tapped(Vec<super::Heard>);
+    fn tap(world: &mut World, _at: crate::lanes::Stamp) {
+        let heard: Vec<_> = world
+            .resource::<super::SocialLane>()
+            .heard()
+            .cloned()
+            .collect();
+        world.resource_mut::<Tapped>().0.extend(heard);
+    }
     let mut w = client();
+    w.app.init_resource::<Tapped>();
+    crate::net::handlers::add_packet_end(&mut w.app, tap);
     crate::net::handlers::dispatch(
         w.app.world_mut(),
         vec![SessionEvent::WhoResults(WhoResults {
@@ -429,9 +442,8 @@ fn the_count_line_prints_the_raw_count() {
         "UNKNOWN" => Some("Unknown".to_string()),
         _ => None,
     };
-    let lane = w.app.world().resource::<super::SocialLane>();
-    let Some(super::Heard::Who { raw, wire }) = lane.heard().last() else {
-        panic!("the answer is on the social lane");
+    let Some(super::Heard::Who { raw, wire }) = w.app.world().resource::<Tapped>().0.last() else {
+        panic!("the answer is on the social lane at its packet's end");
     };
     let lines: Vec<String> = super::feed::who_lines(wire, *raw, &get)
         .iter()
