@@ -229,7 +229,7 @@ mod tests {
         let long = format!("/cast {}Fireball", "x".repeat(250));
         assert_eq!(
             cast_name(&t, &long),
-            Some((CastArm::Slash, format!("{}", "x".repeat(249))))
+            Some((CastArm::Slash, "x".repeat(249)))
         );
         // The quote opens past the cut: the call has no name, and the walk goes on.
         let late = format!("/script {pad}CastSpellByName(\"Fireball\")\n/cast Frostbolt");
