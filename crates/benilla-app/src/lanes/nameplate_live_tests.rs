@@ -557,6 +557,39 @@ fn a_packets_gate_binds_a_plate_in_the_frame_the_plates_come_on() {
     );
 }
 
+/// The frame's gate after the packets moves nothing a packet's callback already moved: the bar's
+/// value, its colour and the level stay as the callbacks left them, and no `OnValueChanged` runs
+/// again (`0x6086e0` on a kept plate takes `0x60875f`'s branch, not the bind's).
+#[test]
+fn the_frames_gate_after_the_packets_writes_no_kept_plate_again() {
+    let mut app = framed_client("return ''");
+    crate::script_calls::eval_in_vm::<()>(
+        app.world(),
+        r#"Bar():SetScript("OnValueChanged", function() table.insert(Seen, "bar:" .. arg1) end)"#,
+    );
+    let read = r#"local r, g, b = Bar():GetStatusBarColor()
+        return Bar():GetValue() .. "/" .. Byte(r) .. "," .. Byte(g) .. "," .. Byte(b) .. "/"
+            .. (Level():GetText() or "")"#;
+    let seen = frame(
+        &mut app,
+        vec![
+            values(BOAR, &[(FIELD_UNIT_LEVEL, 12)]),
+            values(BOAR, &[(FIELD_UNIT_HEALTH, 20)]),
+        ],
+    );
+    assert_eq!(
+        seen,
+        ["bar:50", "bar:20"],
+        "the bar's watcher at its packet"
+    );
+    let before: String = crate::script_calls::eval_in_vm(app.world(), read);
+    crate::vplates::drive_vplates_once(app.world_mut());
+    let after: String = crate::script_calls::eval_in_vm(app.world(), read);
+    let again: Vec<String> = crate::script_calls::eval_in_vm(app.world(), "return Seen");
+    assert_eq!(after, before);
+    assert!(again.is_empty(), "the frame fired the bar again: {again:?}");
+}
+
 /// The party's slot writers refresh a held member's plate colour (`0x607080`): the seat's once
 /// the slot holds it (`0x4e83dd`), an enemy-faction player turning friendly (`0x6062b0`), its bar
 /// blue; the clear's ahead of the slot's zeroing (`0x4e8568`, `0x4e858c`), which reads the member
