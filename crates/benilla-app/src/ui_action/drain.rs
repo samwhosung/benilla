@@ -250,58 +250,77 @@ pub(crate) struct ClickCastDrain<'w, 's> {
 impl ClickCastDrain<'_, '_> {
     /// Send every queued cast, in the order queued.
     pub(crate) fn drain(&mut self, mut script: Option<&mut UiScript>) {
-        if self.queue.0.is_empty() {
-            return;
+        while let Some(then) = self.next(script.as_deref_mut()) {
+            self.then(script.as_deref_mut(), then);
         }
+    }
+
+    /// Send the next queued cast; what its dispatcher does once the cast has run, for a caller
+    /// that resumes a cast parked at its signals first ([`crate::spell::CastPark`]). `None` with
+    /// nothing queued.
+    pub(crate) fn next(&mut self, script: Option<&mut UiScript>) -> Option<ClickCastThen> {
+        if self.queue.0.is_empty() {
+            return None;
+        }
+        let cast = self.queue.0.remove(0);
         let ctx = self.targeting.context();
-        for cast in std::mem::take(&mut self.queue.0) {
-            match cast {
-                super::ClickCast::AtObject { spell_id, go_guid } => {
-                    debug!("ui_action: gameobject opener casts {spell_id} at {go_guid:#x}");
-                    self.ladder.send_at_object(spell_id, &ctx, go_guid);
-                }
-                super::ClickCast::AtUnit {
-                    spell_id,
-                    entity,
-                    guid,
-                    auto_loot,
-                } => {
-                    debug!("ui_action: right-click casts {spell_id} at {guid:#x}");
-                    self.ladder.send(
-                        spell_id,
-                        &self.targeting.context_at(entity, guid),
-                        crate::spell::CastCommit::Spell,
-                    );
-                    // Then the store, whatever the attempt answered (`0x5f06e1`-`0x5f06ef`).
-                    if let (Some(byte), Some(script)) = (auto_loot, script.as_deref_mut()) {
-                        script.set_auto_loot(byte);
-                    }
-                }
-                // The key goes through the shared `CGItem::Use` fork, as a bag click does.
-                super::ClickCast::Key(it) => {
-                    let Some(script) = script.as_deref_mut() else {
-                        continue;
-                    };
-                    // The use's requirement gate (`0x5d8e0e`) reads the player as of here.
-                    self.requirements.seat(script);
-                    debug!(
-                        "ui_action: gameobject opener uses the key at wire {}/{} on {:?}",
-                        it.bag_index, it.slot, it.on_object
-                    );
-                    crate::ui_items::send_item_use(
-                        it,
-                        &ctx,
-                        &mut self.ladder,
-                        script,
-                        &mut self.gate,
-                        false,
-                        &self.ui_errors,
-                    );
-                }
+        match cast {
+            super::ClickCast::AtObject { spell_id, go_guid } => {
+                debug!("ui_action: gameobject opener casts {spell_id} at {go_guid:#x}");
+                self.ladder.send_at_object(spell_id, &ctx, go_guid);
             }
+            super::ClickCast::AtUnit {
+                spell_id,
+                entity,
+                guid,
+                auto_loot,
+            } => {
+                debug!("ui_action: right-click casts {spell_id} at {guid:#x}");
+                self.ladder.send(
+                    spell_id,
+                    &self.targeting.context_at(entity, guid),
+                    crate::spell::CastCommit::Spell,
+                );
+                return Some(ClickCastThen(auto_loot));
+            }
+            // The key goes through the shared `CGItem::Use` fork, as a bag click does.
+            super::ClickCast::Key(it) => {
+                let Some(script) = script else {
+                    return Some(ClickCastThen(None));
+                };
+                // The use's requirement gate (`0x5d8e0e`) reads the player as of here.
+                self.requirements.seat(script);
+                debug!(
+                    "ui_action: gameobject opener uses the key at wire {}/{} on {:?}",
+                    it.bag_index, it.slot, it.on_object
+                );
+                crate::ui_items::send_item_use(
+                    it,
+                    &ctx,
+                    &mut self.ladder,
+                    script,
+                    &mut self.gate,
+                    false,
+                    &self.ui_errors,
+                );
+            }
+        }
+        Some(ClickCastThen(None))
+    }
+
+    /// What a cast's dispatcher does past it: `InteractWithSpell`'s store, whatever the attempt
+    /// answered (`0x5f06e1`-`0x5f06ef`).
+    pub(crate) fn then(&mut self, script: Option<&mut UiScript>, then: ClickCastThen) {
+        if let (Some(byte), Some(script)) = (then.0, script) {
+            script.set_auto_loot(byte);
         }
     }
 }
+
+/// What a click cast's dispatcher owes past the cast ([`ClickCastDrain::then`]): the auto-loot
+/// byte `InteractWithSpell` stores, if it stores one.
+#[must_use]
+pub(crate) struct ClickCastThen(Option<bool>);
 
 /// What a `UseAction` press reads and writes.
 #[derive(bevy::ecs::system::SystemParam)]

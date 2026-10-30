@@ -103,6 +103,80 @@ const CLASS_ROGUE: u8 = 4;
 #[derive(Resource, Default)]
 pub(crate) struct HeldForPick(Option<HeldCast>);
 
+/// Where a call's cast waits at each signal ahead of a later send in it, `SendCast`'s entry
+/// (`0x6e54f0`) the first, for the call host to run the listeners there and resume it
+/// ([`CastLadder::take_parked`], [`CastLadder::resume_parked`]): `SignalEvent` (`0x703e50`) runs
+/// them inside the cast. With no host armed, the cast runs straight through.
+#[derive(Resource, Default)]
+pub(crate) struct CastPark {
+    armed: bool,
+    parked: Option<CastStage>,
+}
+
+/// What `SendCast 0x6e54f0` sends: the pending record (`0xceac48`) as the last attempt or cursor
+/// bind to reach it left it, its targets block built into the packet. A listener's attempt
+/// refills the record ([`crate::spell::PendingCast::fill_record`]), so the send a cast resumes
+/// past a point reads it again.
+#[derive(Clone, Debug)]
+pub(crate) struct CastSend {
+    spell_id: u32,
+    commit: CastCommit,
+    packet: ClientCommand,
+}
+
+/// What `TryCast`'s tail reads past its send (`0x6e51b5`-`0x6e51e3`): its own spell, its guid
+/// argument as the pick left it (`[ebx+0xc]`), the press's time, and whether control was lost
+/// (`[0xb4b3e4]`, which its StartAttack reads, `0x5ecbc0`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Attempt {
+    spell_id: u32,
+    attack_guid: Option<u64>,
+    now: Instant,
+    control_lost: bool,
+}
+
+/// Where a cast stands between a signal and the send after it ([`CastPark`]).
+#[derive(Clone, Debug)]
+pub(crate) enum CastStage {
+    /// At `SendCast`'s entry, past the attempt's push and arm signals (`0x6e5026`, `0x6e5333`) or
+    /// a bind's merge (`0x6e60cb`, `0x6e615d`, `0x6e6939`). The arm, the location bind and the
+    /// trade-slot bind test the word again past their signal (`0x6e5338`, `0x6e6166`,
+    /// `0x6e693e`), `rereads_word`; the object bind tested it before (`0x6e60c1`). `attempt` is
+    /// `None` for a cursor's commit, which is past `TryCast`.
+    Send {
+        rereads_word: bool,
+        attempt: Option<Attempt>,
+    },
+    /// Past the send's own signal (`0x6e589d`), `spell_id` the record's.
+    Sent { spell_id: u32, attempt: Attempt },
+    /// Past `START_AUTOREPEAT_SPELL` (`0x6e5952`): the repeat's StopAttack next (`0x6e5976`).
+    AutoShot { spell_id: u32, attempt: Attempt },
+    /// That StopAttack past its tutorials' signal (`0x5ecb17`, `0x5ecb54`): its send and its
+    /// next-swing cancel (`0x5ecb5b`, `0x6e6f68`).
+    AutoShotSend {
+        spell_id: u32,
+        stop: crate::creature_anim::StopTail,
+        attempt: Attempt,
+    },
+    /// Past the stop's next-swing cancel: its save's leg (`0x6e6ff3`).
+    AutoShotSave { spell_id: u32, attempt: Attempt },
+    /// Past the repeat's pop (`0x6e5989`), or the send's tail with nothing to signal:
+    /// `TryCast`'s attack tail (`0x6e51b5`).
+    Popped { attempt: Attempt },
+    /// A unit caster's send past its pop's signal (`0x6e58a2`-`0x6e58bd`): an attempt's attack
+    /// tail (`0x6e51b5`-`0x6e51de`), which the host runs, then its return.
+    UnitSent {
+        attempt: Option<Attempt>,
+        caster: u64,
+    },
+    /// An attempt past its attack tail: it signals as it returns (`0x6e51e3`).
+    Returned,
+    /// A cursor's commit past the send's own signal (`0x6e589d`): its pop and its GCD.
+    CursorSent { spell_id: u32, now: Instant },
+    /// A cursor's commit past its pop's signal, with nothing left.
+    Done,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct HeldCast {
     pub(crate) spell_id: u32,
@@ -182,6 +256,8 @@ pub(crate) struct CastLadder<'w, 's> {
     pub(crate) trade_skill_opens: ResMut<'w, crate::ui_tradeskill::TradeSkillOpens>,
     pub(crate) ground: ResMut<'w, super::targeting::SpellTargeting>,
     pub(crate) held_for_pick: ResMut<'w, HeldForPick>,
+    /// Absent in a world with no call host, whose casts run straight through.
+    park: Option<ResMut<'w, CastPark>>,
     /// The loot guid `[player+0x1d28]`, which the loot rungs read (`GetLootGuid 0x6126f0`) and an
     /// item open arms; one owner, so a caster surface that sets it holds no second copy. Absent
     /// in a world that never loots.
@@ -377,7 +453,6 @@ impl CastLadder<'_, '_> {
                 target: bound.block(),
             },
         };
-        let now = Instant::now();
         // The spell its attempt pushed stays in the slot through the send, as for a cast sent at
         // its attempt.
         if self.ground.in_slot() == Some(spell_id) {
@@ -395,28 +470,368 @@ impl CastLadder<'_, '_> {
         {
             self.pending.bind_target(guid);
         }
-        // The bind emptied the word, and signals before it sends (`0x6e60cb`, `0x6e615d`).
+        self.pending.set_record_send(CastSend {
+            spell_id,
+            commit,
+            packet: cmd,
+        });
+        // The bind emptied the word, and signals before it sends (`0x6e60cb`, `0x6e615d`,
+        // `0x6e6939`).
         self.ground.clear();
         self.reports.changed();
-        let _ = self.commands.0.send(cmd);
-        if let Some(caster) = commit.unit_caster() {
-            self.unit_send_tail(spell_id, caster, now);
+        let rereads_word = matches!(
+            bound,
+            TargetedBind::Dest(_) | TargetedBind::Source(_) | TargetedBind::TradeItem(_)
+        );
+        self.proceed(CastStage::Send {
+            rereads_word,
+            attempt: None,
+        });
+    }
+
+    /// Arm or disarm the park for the call about to be applied ([`CastPark`]); what it was, for
+    /// the call to put back as it returns.
+    pub(crate) fn arm_park(&mut self, armed: bool) -> bool {
+        match self.park.as_mut() {
+            Some(park) => std::mem::replace(&mut park.armed, armed),
+            None => false,
+        }
+    }
+
+    /// The cast parked at a signal, for its host to run the listeners and resume it.
+    pub(crate) fn take_parked(&mut self) -> Option<CastStage> {
+        self.park.as_mut().and_then(|p| p.parked.take())
+    }
+
+    /// Park `stage` again, taken out while its host ran a step of its own between
+    /// ([`Self::take_parked`]).
+    pub(crate) fn park(&mut self, stage: CastStage) {
+        if let Some(park) = self.park.as_mut() {
+            debug_assert!(park.parked.is_none(), "one cast parked at a time");
+            park.parked = Some(stage);
+        }
+    }
+
+    /// A parked cast past its listeners, up to its next signal or its end.
+    pub(crate) fn resume_parked(&mut self, stage: CastStage) {
+        if let Some(next) = self.run_stage(stage) {
+            self.proceed(next);
+        }
+    }
+
+    /// Park `stage` for the host when one is armed, else run the cast to its end.
+    fn proceed(&mut self, mut stage: CastStage) {
+        if let Some(park) = self.park.as_mut().filter(|p| p.armed) {
+            debug_assert!(park.parked.is_none(), "one cast parked at a time");
+            park.parked = Some(stage);
             return;
         }
-        // The send's precast and own signal (`0x6e5898`, `0x6e589d`), as the attempt's send.
+        while let Some(next) = self.run_stage(stage) {
+            stage = next;
+        }
+    }
+
+    /// The active player's descriptor as it stands, which the send's StopAttack and `TryCast`'s
+    /// attack tail read where they run.
+    fn self_store(&self) -> Option<&crate::net::ObjectStore> {
+        self.objects.store(self.active.as_ref()?.0?)
+    }
+
+    /// One stage of a cast's send, up to the next signal a later send waits behind: the stage
+    /// that follows it, `None` at the cast's end.
+    fn run_stage(&mut self, stage: CastStage) -> Option<CastStage> {
         let me = self.self_player.single().ok().map(|(e, _)| e);
-        crate::creature_anim::precast_at_send(me, spell_id, &self.edits, &self.precast_visuals);
-        self.reports.changed();
-        let auto_repeat = self
+        match stage {
+            CastStage::Send {
+                rereads_word,
+                attempt,
+            } => {
+                // A cursor a listener raised stands in the word read again (`0x6e5338`), which
+                // takes the arm's bind leg (`0x6e5359`) with that cursor's word, so this send does
+                // not go out.
+                if rereads_word && self.ground.active() {
+                    debug!("cast: a listener's cursor stands at the send; nothing sent");
+                    if attempt.is_some() {
+                        self.reports.changed();
+                    }
+                    return None;
+                }
+                // The record as the listeners left it: a listener's attempt that refilled it and
+                // never reached its own send left no targets block to send.
+                let Some(send) = self.pending.record_send().cloned() else {
+                    debug!("cast: a listener's attempt refilled the record; nothing sent");
+                    if attempt.is_some() {
+                        self.reports.changed();
+                    }
+                    return None;
+                };
+                if attempt.is_some() {
+                    self.wand_handoff(me);
+                }
+                let _ = self.commands.0.send(send.packet);
+                let now = attempt.map_or_else(Instant::now, |a| a.now);
+                if let Some(caster) = send.commit.unit_caster() {
+                    self.unit_send_tail(send.spell_id, caster, now);
+                    return Some(CastStage::UnitSent { attempt, caster });
+                }
+                // The send's precast (`0x6e5898`) and own signal (`0x6e589d`), for the active
+                // player's send. The reference signals only beside the precast it starts, so not
+                // for a spell the unit already precasts (`0x6e588f`, its `[+0xc8c]`); that test
+                // reads the unit, which the edit applies after the pass, so benilla signals every
+                // send. The visual starts at the `SMSG_SPELL_START` (#1583).
+                crate::creature_anim::precast_at_send(
+                    me,
+                    send.spell_id,
+                    &self.edits,
+                    &self.precast_visuals,
+                );
+                self.reports.changed();
+                Some(match attempt {
+                    Some(attempt) => CastStage::Sent {
+                        spell_id: send.spell_id,
+                        attempt,
+                    },
+                    None => CastStage::CursorSent {
+                        spell_id: send.spell_id,
+                        now,
+                    },
+                })
+            }
+            // A cursor's commit: the pop, then the GCD, and no more.
+            CastStage::CursorSent { spell_id, now } => {
+                let repeats = self
+                    .spells
+                    .as_ref()
+                    .and_then(|s| s.catalog.get(spell_id))
+                    .is_some_and(|d| d.auto_repeat());
+                if repeats {
+                    self.core().pop_if(spell_id);
+                }
+                if let Some(d) = self.spells.as_ref().and_then(|s| s.catalog.get(spell_id)) {
+                    self.cooldowns.start_gcd(spell_id, d, now, &self.spell_mods);
+                }
+                repeats.then_some(CastStage::Done)
+            }
+            CastStage::UnitSent { attempt, caster } => {
+                let attempt = attempt?;
+                self.owe_unit_attack(attempt, caster);
+                Some(CastStage::Returned)
+            }
+            CastStage::Returned => {
+                self.reports.changed();
+                None
+            }
+            CastStage::Done => None,
+            CastStage::Sent { spell_id, attempt } => {
+                let def = self.spells.as_ref().and_then(|s| s.catalog.get(spell_id));
+                // The GCD arms at the send (`0x6e2de0` from `0x6e58fb`), after the packet; a
+                // failed cast result clears it (`0x6e1630`).
+                if let Some(d) = def {
+                    self.cooldowns
+                        .start_gcd(spell_id, d, attempt.now, &self.spell_mods);
+                }
+                let (ranged, repeats) =
+                    def.map_or((false, false), |d| (d.ranged_attack(), d.auto_repeat()));
+                let Some(e) = me else {
+                    return self.run_stage(CastStage::Popped { attempt });
+                };
+                // The ranged stance (`0x6e5930`, `SetSheatheState(2, 1, 1)`) for a ranged or
+                // auto-repeat spell (`0x6e591c`, `0x6e5922`).
+                if ranged {
+                    self.sheath.write(crate::creature_anim::SheathRequest {
+                        entity: e,
+                        state: 2,
+                        ceremony: false,
+                    });
+                }
+                if !repeats {
+                    return self.run_stage(CastStage::Popped { attempt });
+                }
+                // The sticky armed state (`0x6e593b`, `|= 0x200`) and the autorepeat key
+                // (`0xceac30`, written at `0x6e594c`) the button's checked state reads, signalled
+                // as `START_AUTOREPEAT_SPELL` (`0x6e5952`).
+                self.edits
+                    .push(crate::creature_anim::UnitEdit::ArmAutoRepeat(e));
+                self.auto_repeat.0 = Some(spell_id);
+                self.reports.auto_repeat(true);
+                Some(CastStage::AutoShot { spell_id, attempt })
+            }
+            // StopAttack (`0x6e5976` → `0x5ecac0`), gated only on the caster being the active
+            // player (`0x6e5957`–`0x6e5972`): starting a repeat ends the melee swing and its
+            // queued strike, which the repeat's push moved into the save, so its cancel is the
+            // packet alone. This is where melee and auto-repeat are kept exclusive. It runs after
+            // the arm above, so it never cancels this repeat.
+            CastStage::AutoShot { spell_id, attempt } => {
+                let low = crate::tutorial::LowVitals::of(self.self_store());
+                let mut core = CastCore {
+                    pending: &mut self.pending,
+                    queued_melee: &mut self.queued_melee,
+                    ground: &mut self.ground,
+                    reports: &mut self.reports,
+                    net: &self.commands,
+                    tutorials: self.tutorials.as_deref(),
+                };
+                match crate::creature_anim::stop_attack_head(me, low, &self.edits, &mut core) {
+                    Some(stop) => Some(CastStage::AutoShotSend {
+                        spell_id,
+                        stop,
+                        attempt,
+                    }),
+                    None => self.pop_repeat(spell_id, attempt),
+                }
+            }
+            CastStage::AutoShotSend {
+                spell_id,
+                stop,
+                attempt,
+            } => {
+                let cancelled = crate::creature_anim::stop_attack_send(
+                    stop,
+                    &mut self.stop_word,
+                    &mut CastCore {
+                        pending: &mut self.pending,
+                        queued_melee: &mut self.queued_melee,
+                        ground: &mut self.ground,
+                        reports: &mut self.reports,
+                        net: &self.commands,
+                        tutorials: self.tutorials.as_deref(),
+                    },
+                );
+                if cancelled {
+                    return Some(CastStage::AutoShotSave { spell_id, attempt });
+                }
+                self.core().cancel_queued_save();
+                self.pop_repeat(spell_id, attempt)
+            }
+            CastStage::AutoShotSave { spell_id, attempt } => {
+                self.core().cancel_queued_save();
+                self.pop_repeat(spell_id, attempt)
+            }
+            CastStage::Popped { attempt } => {
+                self.attack_tail(attempt);
+                // The attempt signals as it returns (`0x6e51e3`).
+                self.reports.changed();
+                None
+            }
+        }
+    }
+
+    /// The in-flight slot (`0xceca88`, `0x6e5026`): every cast holds it until its result, a ranged
+    /// shot included; only an auto-repeat spell is popped after the send, last, which signals
+    /// (`0x6e597b`-`0x6e5989`).
+    fn pop_repeat(&mut self, spell_id: u32, attempt: Attempt) -> Option<CastStage> {
+        self.core().pop_if(spell_id);
+        Some(CastStage::Popped { attempt })
+    }
+
+    /// `TryCast`'s post-send tail (`6e51b5`): a spell that initiates auto-attack (on-next-swing
+    /// `0x404` or `AttributesEx & 0x200`, not the GO-deferred Ex2 bit 20) starts the swing at the
+    /// attempt's guid argument as the pick left it (`[ebx+0xc]`, `[ebx+0x10]` at `0x6e51d4`),
+    /// whatever the spell bound (`0x6131a0` → `0x5ecb70`: sheath snap and `CMSG_ATTACKSWING`).
+    fn attack_tail(&mut self, attempt: Attempt) {
+        let def = self
             .spells
             .as_ref()
-            .and_then(|s| s.catalog.get(spell_id))
-            .is_some_and(|d| d.auto_repeat());
-        if auto_repeat {
-            self.core().pop_if(spell_id);
+            .and_then(|s| s.catalog.get(attempt.spell_id));
+        let (Some(guid), true) = (
+            attempt.attack_guid,
+            def.is_some_and(|d| d.initiates_auto_attack()),
+        ) else {
+            return;
+        };
+        let Ok((e, _)) = self.self_player.single() else {
+            return;
+        };
+        // The tail's own gate (`6e51cb call 0x60ecb0; 6e51d2 jne`, the attack lock
+        // `[player+0xc48]`, our `Engaged`) skips `0x6131a0` entirely, so a strike pressed
+        // mid-swing leaves a running repeat alone. The attack path's own test at `0x5eccda`
+        // would still reach the repeat cancel `0x5ecd8c`; this route never gets there.
+        if self.edits.attacking(e) {
+            return;
         }
-        if let Some(d) = self.spells.as_ref().and_then(|s| s.catalog.get(spell_id)) {
-            self.cooldowns.start_gcd(spell_id, d, now, &self.spell_mods);
+        debug!(
+            "ui_action: cast {} initiates auto-attack at {guid:#x}",
+            attempt.spell_id
+        );
+        let gate = crate::creature_anim::StartGate::of(self.self_store(), attempt.control_lost);
+        let mut core = CastCore {
+            pending: &mut self.pending,
+            queued_melee: &mut self.queued_melee,
+            ground: &mut self.ground,
+            reports: &mut self.reports,
+            net: &self.commands,
+            tutorials: self.tutorials.as_deref(),
+        };
+        // The guid is the selection the attempt read, so StartAttack's select (`0x5eccaa`) is
+        // the setter's dedup, but for an on-self swap (`0x4b4afa`), whose select of the player is
+        // not made here. The cast it follows was sent at that unit, past its own target checks.
+        crate::creature_anim::start_attack_local(
+            e,
+            guid,
+            crate::creature_anim::StartTarget::Attackable,
+            gate,
+            &mut self.stop_word,
+            &mut self.auto_repeat,
+            &mut self.sheath,
+            &mut self.stand,
+            &self.edits,
+            self.spells.as_deref(),
+            &mut core,
+        );
+    }
+
+    /// The wand handoff ahead of the send: the running repeat is cancelled when it carries
+    /// `AttributesEx3 & 0x400000` (wand Shoot 5019), so Auto Shot survives. `CMSG_CANCEL_CAST`
+    /// naming it goes first, then the local cancel and its ack.
+    fn wand_handoff(&mut self, me: Option<Entity>) {
+        let Some(cached) = self.auto_repeat.0 else {
+            return;
+        };
+        if !self
+            .spells
+            .as_ref()
+            .and_then(|s| s.catalog.get(cached))
+            .is_some_and(|d| d.casting_cancels_autorepeat())
+        {
+            return;
+        }
+        debug!("ui_action: a new cast cancels the running wand repeat {cached}");
+        let _ = self
+            .commands
+            .0
+            .send(ClientCommand::CancelCast { spell_id: cached });
+        let mut core = CastCore {
+            pending: &mut self.pending,
+            queued_melee: &mut self.queued_melee,
+            ground: &mut self.ground,
+            reports: &mut self.reports,
+            net: &self.commands,
+            tutorials: self.tutorials.as_deref(),
+        };
+        crate::creature_anim::cancel_auto_repeat_local(
+            me,
+            &mut self.auto_repeat,
+            &self.edits,
+            &mut core,
+        );
+    }
+
+    /// TryCast's attack tail (`0x6e51b5`-`0x6e51de`) on a unit caster, which its caller applies,
+    /// at the guid argument the pick settled (`[ebx+0xc]`, `[ebx+0x10]`), bound or not.
+    fn owe_unit_attack(&mut self, attempt: Attempt, caster: u64) {
+        let engaged = self
+            .objects
+            .entity(caster)
+            .is_some_and(|e| self.edits.attacking(e));
+        let initiates = self
+            .spells
+            .as_ref()
+            .and_then(|s| s.catalog.get(attempt.spell_id))
+            .is_some_and(|d| d.initiates_auto_attack());
+        if let (Some(guid), true, false) = (attempt.attack_guid, initiates, engaged) {
+            if let Some(owed) = self.unit_attack.as_deref_mut() {
+                owed.0 = Some((caster, guid));
+            }
         }
     }
 
@@ -501,6 +916,7 @@ impl CastLadder<'_, '_> {
             debug!("cast {spell_id} refused by the protected-action gate, silently");
             return;
         }
+        let mut sent = None;
         let mut core = CastCore {
             pending: &mut self.pending,
             queued_melee: &mut self.queued_melee,
@@ -522,10 +938,7 @@ impl CastLadder<'_, '_> {
             &self.items,
             self.sub_classes.as_deref().map(|s| &s.0),
             self.loot_latch.as_deref().and_then(|l| l.0),
-            &mut self.sheath,
-            &mut self.stand,
             &self.edits,
-            &self.precast_visuals,
             &mut core,
             &mut self.cooldowns,
             &self.spell_mods,
@@ -533,19 +946,21 @@ impl CastLadder<'_, '_> {
             &mut self.auto_repeat,
             &mut self.trade_skill_opens,
             &mut self.held_for_pick,
-            &mut self.stop_word,
             UnitCaster {
                 active: self.active.as_ref().and_then(|g| g.0),
                 pet_bar: self.pet_bar.as_deref_mut(),
                 engaged: commit
                     .unit_caster()
                     .and_then(|guid| self.objects.entity(guid))
-                    // `[unit+0xc48]`, which `0x60ecb0` tests: the pick and attack tail read it.
+                    // `[unit+0xc48]`, which `0x60ecb0` tests: the pick reads it.
                     .is_some_and(|e| self.edits.attacking(e)),
-                attack: self.unit_attack.as_deref_mut(),
             },
             &self.known,
+            &mut sent,
         );
+        if let Some(stage) = sent {
+            self.proceed(stage);
+        }
     }
 }
 
@@ -650,11 +1065,11 @@ fn held(
     })
 }
 
-/// Run the ladder for one cast and commit it. The commit tail (`0x6e54f0`): the packet goes out,
-/// then the GCD, then a ranged spell arms the ranged stance (`0x6e5930`,
-/// `SetSheatheState(2,1,1)`; the echoed START re-requests it), and an auto-repeat spell sets the
-/// sticky armed state (`0x6e593b`, `|= 0x200`, the Load/Hold idle's gate), stops the attack and
-/// leaves the slot.
+/// Run the ladder for one cast up to `SendCast`'s entry (`0x6e54f0`), where it leaves the send in
+/// `sent` ([`CastStage::Send`]). The commit tail follows the packet: the GCD, then a ranged spell
+/// arms the ranged stance (`0x6e5930`, `SetSheatheState(2,1,1)`; the echoed START re-requests it),
+/// and an auto-repeat spell sets the sticky armed state (`0x6e593b`, `|= 0x200`, the Load/Hold
+/// idle's gate), stops the attack and leaves the slot.
 ///
 /// The `pending` guard is TryCast's IsCasting refusal (`6e4d97`, [`crate::spell::PendingCast`]):
 /// any press while a cast is in flight is refused locally. The spell awaiting its click is in
@@ -674,10 +1089,7 @@ fn send_spell_cast(
     items: &Items,
     sub_classes: Option<&benilla_formats::ItemSubClassCatalog>,
     loot_guid: Option<u64>,
-    sheath: &mut MessageWriter<crate::creature_anim::SheathRequest>,
-    stand: &mut MessageWriter<crate::player::StandStateRequest>,
     edits: &crate::creature_anim::UnitEdits,
-    precast_visuals: &crate::creature_anim::PrecastVisuals,
     core: &mut CastCore,
     cooldowns: &mut crate::spell::Cooldowns,
     spell_mods: &crate::spell::SpellModifiers,
@@ -685,10 +1097,10 @@ fn send_spell_cast(
     auto_repeat: &mut AutoRepeatActive,
     trade_skill_opens: &mut crate::ui_tradeskill::TradeSkillOpens,
     held_for_pick: &mut HeldForPick,
-    // Our stop in flight (`[+0xc54]`), which the send's StopAttack sets and its attack tail reads.
-    stop_word: &mut crate::creature_anim::AttackStopInFlight,
     unit: UnitCaster<'_>,
     known: &KnownReads,
+    // Where the attempt leaves its send when it reaches `SendCast`'s entry.
+    sent: &mut Option<CastStage>,
 ) {
     // A refusal through the reporter, then the attempt's `xor al,al` exit.
     macro_rules! refuse {
@@ -1152,29 +1564,15 @@ fn send_spell_cast(
         return;
     }
     // A candidate the arm bound goes through `BindTarget`'s merge, which signals before it sends
-    // (`0x6e60cb`); a word of 0 sends with no bind (`0x6e5349`).
-    if explicit_object.is_some() || item_target.is_some() || target.is_some() {
+    // (`0x6e60cb`) and tested the word before it (`0x6e60c1`); a word of 0 sends with no bind
+    // (`0x6e5349`), read again past the arm's signal (`0x6e5338`).
+    let bound = explicit_object.is_some() || item_target.is_some() || target.is_some();
+    if bound {
         core.reports.changed();
     }
-    // The wand handoff (`0x60959e`): a new cast cancels the running repeat only when it carries
-    // `AttributesEx3 & 0x400000` (wand Shoot 5019), so Auto Shot survives. `CMSG_CANCEL_CAST`
-    // naming it goes first (`0x6095b8`), then the local cancel and its ack.
-    if let Some(cached) = auto_repeat.0 {
-        if spells
-            .and_then(|s| s.catalog.get(cached))
-            .is_some_and(|d| d.casting_cancels_autorepeat())
-        {
-            debug!("ui_action: cast {spell_id} cancels the running wand repeat {cached}");
-            let _ = commands
-                .0
-                .send(ClientCommand::CancelCast { spell_id: cached });
-            let self_e = self_player.single().ok().map(|(e, _)| e);
-            crate::creature_anim::cancel_auto_repeat_local(self_e, auto_repeat, edits, core);
-        }
-    }
     // `SendCast 0x6e54f0`: one targets block, two opcodes, sent first (`0x6e5872`); everything the
-    // send does after it follows the packet.
-    let _ = commands.0.send(match commit {
+    // send does after it follows the packet ([`CastStage`]).
+    let packet = match commit {
         CastCommit::Spell => match (explicit_object, item_target) {
             // A lock opener bound by its click; `BindTarget`'s GameObject arm fills the block.
             (Some(go_guid), _) => ClientCommand::CastSpellGameObject { spell_id, go_guid },
@@ -1212,117 +1610,21 @@ fn send_spell_cast(
                 (None, None, None) => UseItemTarget::SelfImplicit,
             },
         },
+    };
+    core.pending.set_record_send(CastSend {
+        spell_id,
+        commit,
+        packet,
     });
-    if let Some(caster) = commit.unit_caster() {
-        // TryCast's attack tail (`0x6e51b5`-`0x6e51de`) on this caster, which its caller applies,
-        // at the guid argument the pick settled (`[ebx+0xc]`, `[ebx+0x10]`), bound or not.
-        let mut unit = unit;
-        if let (Some(d), Some(guid), false) = (def, ctx.selection_guid, unit.engaged) {
-            if d.initiates_auto_attack() {
-                if let Some(owed) = unit.attack.as_deref_mut() {
-                    owed.0 = Some((caster, guid));
-                }
-            }
-        }
-        unit_caster::send_tail(
-            spell_id, caster, def, objects, core, cooldowns, unit, spell_mods, now,
-        );
-        // The attempt signals as it returns (`0x6e51e3`).
-        core.reports.changed();
-        return;
-    }
-    // The send's precast (`0x6e5898`) and own signal (`0x6e589d`), for the active player's send.
-    // The reference signals only beside the precast it starts, so not for a spell the unit
-    // already precasts (`0x6e588f`, its `[+0xc8c]`); that test reads the unit, which the edit
-    // applies after the pass, so benilla signals every send. The visual starts at the
-    // `SMSG_SPELL_START` (#1583).
-    let me = self_player.single().ok().map(|(e, _)| e);
-    crate::creature_anim::precast_at_send(me, spell_id, edits, precast_visuals);
-    core.reports.changed();
-    // The GCD arms at the send (`0x6e2de0` from `0x6e58fb`), after the packet; a failed cast
-    // result clears it (`0x6e1630`).
-    if let Some(d) = def {
-        cooldowns.start_gcd(spell_id, d, now, spell_mods);
-    }
-    if let Some(d) = def {
-        if let Ok((e, _)) = self_player.single() {
-            // The ranged stance (`0x6e5930`, `SetSheatheState(2, 1, 1)`) for a ranged or
-            // auto-repeat spell (`0x6e591c`, `0x6e5922`).
-            if d.ranged_attack() {
-                sheath.write(crate::creature_anim::SheathRequest {
-                    entity: e,
-                    state: 2,
-                    ceremony: false,
-                });
-            }
-            if d.auto_repeat() {
-                // The sticky armed state (`0x6e593b`, `|= 0x200`) and the autorepeat key
-                // (`0xceac30`, written at `0x6e594c`) the button's checked state reads, signalled
-                // as `START_AUTOREPEAT_SPELL` (`0x6e5952`).
-                edits.push(crate::creature_anim::UnitEdit::ArmAutoRepeat(e));
-                auto_repeat.0 = Some(spell_id);
-                core.reports.auto_repeat(true);
-                // StopAttack (`0x6e5976` → `0x5ecac0`), gated only on the caster being the active
-                // player (`0x6e5957`–`0x6e5972`): starting a repeat ends the melee swing and its
-                // queued strike, which the repeat's push moved into the save, so its cancel is
-                // the packet alone. This is where melee and auto-repeat are kept exclusive. It
-                // runs after the arm above, so it never cancels this repeat.
-                crate::creature_anim::stop_attack_local(
-                    Some(e),
-                    crate::tutorial::LowVitals::of(ctx.rel.self_store),
-                    edits,
-                    stop_word,
-                    core,
-                );
-            }
-        }
-    }
-    // The in-flight slot (`0xceca88`, `0x6e5026`): every cast holds it until its result, a ranged
-    // shot included; only an auto-repeat spell is popped after the send, last, which signals
-    // (`0x6e597b`-`0x6e5989`).
-    if def.is_some_and(|d| d.auto_repeat()) {
-        core.pop_if(spell_id);
-    }
-    // TryCast's post-send tail (`6e51b5`): a spell that initiates auto-attack (on-next-swing
-    // `0x404` or `AttributesEx & 0x200`, not the GO-deferred Ex2 bit 20) starts the swing at the
-    // attempt's guid argument as the pick left it (`[ebx+0xc]`, `[ebx+0x10]` at `0x6e51d4`),
-    // whatever the spell bound (`0x6131a0` → `0x5ecb70`: sheath snap and `CMSG_ATTACKSWING`).
-    if let (Some(d), Some(guid)) = (def, ctx.selection_guid) {
-        if d.initiates_auto_attack() {
-            if let Ok((e, _)) = self_player.single() {
-                // The tail's own gate (`6e51cb call 0x60ecb0; 6e51d2 jne`, the attack lock
-                // `[player+0xc48]`, our `Engaged`) skips `0x6131a0` entirely, so a strike pressed
-                // mid-swing leaves a running repeat alone. The attack path's own test at
-                // `0x5eccda` would still reach the repeat cancel `0x5ecd8c`; this route never
-                // gets there.
-                if !edits.attacking(e) {
-                    debug!("ui_action: cast {spell_id} initiates auto-attack at {guid:#x}");
-                    // The guid is the selection the attempt read, so StartAttack's select
-                    // (`0x5eccaa`) is the setter's dedup, but for an on-self swap (`0x4b4afa`),
-                    // whose select of the player is not made here. The cast it follows was sent
-                    // at that unit, past its own target checks.
-                    crate::creature_anim::start_attack_local(
-                        e,
-                        guid,
-                        crate::creature_anim::StartTarget::Attackable,
-                        crate::creature_anim::StartGate::of(
-                            ctx.rel.self_store,
-                            ctx.self_control_lost,
-                        ),
-                        stop_word,
-                        auto_repeat,
-                        sheath,
-                        stand,
-                        edits,
-                        spells,
-                        core,
-                    );
-                }
-            }
-        }
-    }
-    // The attempt signals as it returns (`0x6e51e3`).
-    core.reports.changed();
+    *sent = Some(CastStage::Send {
+        rereads_word: !bound,
+        attempt: Some(Attempt {
+            spell_id,
+            attack_guid: ctx.selection_guid,
+            now,
+            control_lost: ctx.self_control_lost,
+        }),
+    });
 }
 
 #[cfg(test)]

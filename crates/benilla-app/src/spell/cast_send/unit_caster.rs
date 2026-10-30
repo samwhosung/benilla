@@ -40,10 +40,8 @@ pub(super) struct UnitCaster<'a> {
     pub(super) active: Option<u64>,
     /// The pet bar, whose history a send for our pet starts its GCD in (`0x6e58fb`).
     pub(super) pet_bar: Option<&'a mut crate::ui_pet::PetBar>,
-    /// The caster's `[unit+0xc48]` (`0x60ecb0`), which the pick (`0x6e4eeb`) and the attack tail
-    /// (`0x6e51cb`) test.
+    /// The caster's `[unit+0xc48]` (`0x60ecb0`), which the pick (`0x6e4eeb`) tests.
     pub(super) engaged: bool,
-    pub(super) attack: Option<&'a mut UnitAttackOwed>,
 }
 
 impl TargetedBind {
@@ -89,7 +87,7 @@ impl CastLadder<'_, '_> {
             .and_then(UnitAttackOwed::take)
     }
 
-    /// [`send_tail`] for a cursor's commit of a unit caster's cast.
+    /// [`send_tail`] for a unit caster's send, an attempt's or a cursor's commit.
     pub(super) fn unit_send_tail(&mut self, spell_id: u32, caster: u64, now: Instant) {
         let def = self.spells.as_ref().and_then(|s| s.catalog.get(spell_id));
         let mut core = CastCore {
@@ -100,12 +98,11 @@ impl CastLadder<'_, '_> {
             net: &self.commands,
             tutorials: self.tutorials.as_deref(),
         };
-        // A cursor's commit is past TryCast, whose attack tail it never reaches.
+        // The attack tail is the attempt's own ([`super::Attempt`]).
         let unit = UnitCaster {
             active: self.active.as_ref().and_then(|g| g.0),
             pet_bar: self.pet_bar.as_deref_mut(),
             engaged: false,
-            attack: None,
         };
         send_tail(
             spell_id,

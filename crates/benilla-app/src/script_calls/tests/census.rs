@@ -85,34 +85,29 @@ fn an_engine_deselects_strike_cancel_report_runs_ahead_of_the_bars_usable_refres
 }
 
 /// The selection, cast, attack and chat verbs send and write nothing after a handler they
-/// signalled that waits, but for the cast's one known send: the attempt's push signal
-/// (`0x6e4b13` → `0x4b3250`) still waits behind its `CMSG_CAST_SPELL` (`SendCast 0x6e54f0`),
-/// as the cast ladder signals at its call's end.
+/// signalled that waits.
 #[test]
 fn the_other_verbs_send_nothing_ahead_of_a_held_handler() {
-    for (lua, sends) in [
-        (r#"TargetUnit("party1")"#, None),
-        ("ClearTarget()", None),
-        ("TargetLastTarget()", None),
-        ("TargetNearestEnemy()", None),
-        ("AttackTarget()", None),
-        (
-            r#"TargetUnit("party1") AttackTarget() TargetUnit("player")"#,
-            None,
-        ),
-        (r#"CastSpellByName("Heal")"#, Some(("CastSpell", 1))),
-        (r#"SendChatMessage("hi", "SAY")"#, None),
-        ("RandomRoll(1, 100)", None),
+    for lua in [
+        r#"TargetUnit("party1")"#,
+        "ClearTarget()",
+        "TargetLastTarget()",
+        "TargetNearestEnemy()",
+        "AttackTarget()",
+        r#"TargetUnit("party1") AttackTarget() TargetUnit("player")"#,
+        r#"CastSpellByName("Heal")"#,
+        r#"SendChatMessage("hi", "SAY")"#,
+        "RandomRoll(1, 100)",
     ] {
         let mut f = frame(true);
         spawn_mob(&mut f, &[]);
         let _watch = listening(&mut f);
         run_pressed(&mut f, lua);
-        let expected: std::collections::BTreeMap<String, usize> = sends
-            .map(|(kind, n): (&str, usize)| (kind.to_string(), n))
-            .into_iter()
-            .collect();
-        assert_eq!(benilla_ui::script::census::take(), expected, "{lua}");
+        assert_eq!(
+            benilla_ui::script::census::take(),
+            Default::default(),
+            "{lua}"
+        );
         assert_eq!(writes_after(), Vec::<String>::new(), "{lua}");
     }
 }

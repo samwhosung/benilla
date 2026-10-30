@@ -194,9 +194,7 @@ impl ScriptCallHost<'_, '_> {
                     ClickMode::Action => self.action_click(script, at),
                 }
                 // The casts the click's dispatchers tried (`0x5f35c0`, `0x5f06dc` → `0x6e5a90`).
-                if let Some(mut casts) = self.appliers.click().casts() {
-                    casts.drain(Some(script));
-                }
+                self.click_casts(script, at);
             }
         }
     }
@@ -241,8 +239,12 @@ impl ScriptCallHost<'_, '_> {
         }
         if let Some(mut commits) = self.appliers.click().commits() {
             commits.ground();
+            self.run_casts(script, at);
+        }
+        if let Some(mut commits) = self.appliers.click().commits() {
             commits.object();
         }
+        self.run_casts(script, at);
     }
 
     /// Action 4 on the press pick: the payload leg, then for an object the INTERACT leg's select
@@ -268,11 +270,13 @@ impl ScriptCallHost<'_, '_> {
             self.settle_selection(script, at, owed);
         }
         self.appliers.cursor().bind_parked();
+        self.run_casts(script, at);
         let owed = self
             .appliers
             .click()
             .dispatch()
             .and_then(|mut dispatch| dispatch.act(script));
+        self.run_casts(script, at);
         let Some(owed) = owed else {
             return;
         };
@@ -284,6 +288,7 @@ impl ScriptCallHost<'_, '_> {
             .click()
             .dispatch()
             .and_then(|mut dispatch| dispatch.pay(Some(script), owed));
+        self.run_casts(script, at);
         // A mailbox or a text object opens inside its use (`0x5f86b0` → `0x5f6820`, `0x5f58c0`).
         self.open_used(script, at);
         if let Some(owed) = owed {
@@ -315,8 +320,25 @@ impl ScriptCallHost<'_, '_> {
             PlateAction::Select => self.plate_select(script, at, entity, click),
             PlateAction::Interact => self.plate_interact(script, at, entity, click),
         }
-        if let Some(mut casts) = self.appliers.click().casts() {
-            casts.drain(Some(script));
+        self.click_casts(script, at);
+    }
+
+    /// The casts a click's dispatchers tried (`0x5f35c0`, `0x5f06dc` → `0x6e5a90`), in the order
+    /// tried, each run to its end past its signals' listeners before its dispatcher goes on.
+    fn click_casts(&mut self, script: &mut UiScript, at: &mut Signalled) {
+        loop {
+            let then = self
+                .appliers
+                .click()
+                .casts()
+                .and_then(|mut casts| casts.next(Some(script)));
+            let Some(then) = then else {
+                return;
+            };
+            self.run_casts(script, at);
+            if let Some(mut casts) = self.appliers.click().casts() {
+                casts.then(Some(script), then);
+            }
         }
     }
 
@@ -366,6 +388,7 @@ impl ScriptCallHost<'_, '_> {
             self.settle_selection(script, at, owed);
         }
         self.appliers.cursor().bind_parked();
+        self.run_casts(script, at);
         let pick = self
             .appliers
             .click()
@@ -379,6 +402,7 @@ impl ScriptCallHost<'_, '_> {
             .click()
             .dispatch()
             .and_then(|mut dispatch| dispatch.act_on(script, &pick));
+        self.run_casts(script, at);
         let Some(owed) = owed else {
             return;
         };
@@ -390,6 +414,7 @@ impl ScriptCallHost<'_, '_> {
             .click()
             .dispatch()
             .and_then(|mut dispatch| dispatch.pay(Some(script), owed));
+        self.run_casts(script, at);
         if let Some(owed) = owed {
             self.settle_selection(script, at, owed);
         }

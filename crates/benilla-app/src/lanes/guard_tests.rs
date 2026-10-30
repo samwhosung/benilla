@@ -126,7 +126,10 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // Quiet: the cast ladder's per-call state, which the cast result's, the loot response's and the
     // go's handlers hold with the ladder and never write. A press holds the first and its call resumes it before it returns
     // (`0x6e4efb`), each call sets and puts back the second, and the pet press applies the third
-    // in its call; no feed reads them.
+    // in its call; no feed reads them. A call parks its cast in the fourth at each signal ahead
+    // of a later send and resumes it past that signal's listeners before it returns; a handler's
+    // cast finds it unarmed and runs straight through.
+    "::spell::cast_send::CastPark",
     "::spell::cast_send::HeldForPick",
     "::spell::cast_send::ScriptCastPermit",
     "::spell::cast_send::unit_caster::UnitAttackOwed",

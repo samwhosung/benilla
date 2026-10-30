@@ -720,3 +720,94 @@ fn mouselook_start_under_a_left_drag_cancels_inside_the_call() {
             .collect();
     assert_eq!(sent, [format!("cancel {HEAL}"), "chat".to_string()]);
 }
+
+/// The casts, attack stops and rolls sent, in order.
+fn cast_wire(f: &Frame) -> Vec<String> {
+    f.rx.try_iter()
+        .filter_map(|c| match c {
+            ClientCommand::CastSpell { spell_id, .. } => Some(format!("CastSpell {spell_id}")),
+            ClientCommand::AttackStop => Some("AttackStop".to_string()),
+            ClientCommand::RandomRoll { .. } => Some("RandomRoll".to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A listener of `event` that rolls the first time it hears it.
+fn roll_once_on(f: &mut Frame, event: &str) {
+    run(
+        f,
+        &format!(
+            r#"local r = CreateFrame("Frame")
+            r:RegisterEvent("{event}")
+            r:SetScript("OnEvent", function()
+                if not ROLLED then ROLLED = 1 RandomRoll(1, 2) end
+            end)"#
+        ),
+    );
+}
+
+/// The attempt's push and arm signal (`0x6e5026`, `0x6e5333`) ahead of `SendCast` (`0x6e5349`),
+/// which runs their listeners there (`0x703e50`): a `CURRENT_SPELL_CAST_CHANGED` listener's packet
+/// goes before the cast's.
+#[test]
+fn an_attempts_signal_listener_sends_ahead_of_its_cast() {
+    let mut f = frame(false);
+    with_book_spell(
+        &mut f,
+        HEAL,
+        "Heal",
+        benilla_formats::SpellDisplay::default(),
+    );
+    roll_once_on(&mut f, "CURRENT_SPELL_CAST_CHANGED");
+    f.rx.try_iter().for_each(drop);
+    run_hosted(&mut f, r#"CastSpellByName("Heal")"#);
+    assert_eq!(cast_wire(&f), ["RandomRoll", "CastSpell 2050"]);
+}
+
+/// A cursor's bind merges and signals (`0x6e60cb`) ahead of its send (`0x6e60d7`), so a
+/// `CURRENT_SPELL_CAST_CHANGED` listener's packet goes before the cast's.
+#[test]
+fn a_cursor_binds_signal_listener_sends_ahead_of_its_cast() {
+    let mut f = frame(true);
+    with_factions(&mut f, FOE, &[(FLAGS, 0x8)]);
+    with_friendly_party1(&mut f, true);
+    with_book_spell(
+        &mut f,
+        MOTW,
+        "Mark of the Wild",
+        benilla_formats::SpellDisplay {
+            implicit_target_a1: 21,
+            ..Default::default()
+        },
+    );
+    run_hosted(&mut f, r#"CastSpellByName("Mark of the Wild")"#);
+    assert!(cursor_is_up(&f));
+    roll_once_on(&mut f, "CURRENT_SPELL_CAST_CHANGED");
+    f.rx.try_iter().for_each(drop);
+    run_hosted(&mut f, r#"SpellTargetUnit("party1")"#);
+    assert_eq!(cast_wire(&f), ["RandomRoll", "CastSpell 1126"]);
+}
+
+/// A repeat's send signals `START_AUTOREPEAT_SPELL` (`0x6e5952`), whose listeners run before its
+/// StopAttack sends `CMSG_ATTACKSTOP` (`0x6e5976` → `0x5ecac0`).
+#[test]
+fn a_repeats_start_listener_sends_ahead_of_its_attack_stop() {
+    const AUTO_SHOT: u32 = 75;
+    let mut f = frame(true);
+    super::selection::swinging_at_old(&mut f);
+    with_book_spell(
+        &mut f,
+        AUTO_SHOT,
+        "Auto Shot",
+        benilla_formats::SpellDisplay {
+            targets: 0x2,
+            attributes_ex2: 0x20,
+            ..Default::default()
+        },
+    );
+    roll_once_on(&mut f, "START_AUTOREPEAT_SPELL");
+    f.rx.try_iter().for_each(drop);
+    run_hosted(&mut f, r#"CastSpellByName("Auto Shot")"#);
+    assert_eq!(cast_wire(&f), ["CastSpell 75", "RandomRoll", "AttackStop"]);
+}
