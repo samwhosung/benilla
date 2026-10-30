@@ -437,6 +437,7 @@ fn cast_event(world: &mut World, entity: Entity, spell_id: u32, kind: CastEventK
             spell_id,
             kind,
             seq,
+            at: None,
         });
     }
 }

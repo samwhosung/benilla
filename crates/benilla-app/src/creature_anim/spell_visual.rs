@@ -58,6 +58,7 @@ pub(crate) fn meeting_stone_join_fx(visuals: &SpellVisuals, entity: Entity) -> O
             effect,
             path: path.to_string(),
         }],
+        at: None,
     })
 }
 
@@ -156,6 +157,8 @@ pub(crate) enum SpellKitFx {
         /// The models' animation lifecycle ([`FxStage`]).
         stage: FxStage,
         effects: Vec<FxSlot>,
+        /// Its packet's place ([`SpellKitFx::at`]).
+        at: Option<crate::lanes::Stamp>,
     },
     /// Despawn the unit's persistent effects matching `(spell_id, class)` (`0x614150`).
     Reap {
@@ -165,7 +168,27 @@ pub(crate) enum SpellKitFx {
         /// `0x614150`'s `force`: the cast edges stop unforced, sparing the spell's state effects
         /// (kind 2), which the aura's removal and the channel's change stop forced.
         force: bool,
+        /// Its packet's place ([`SpellKitFx::at`]).
+        at: Option<crate::lanes::Stamp>,
     },
+}
+
+impl SpellKitFx {
+    /// The unit the edge plays on.
+    pub(crate) fn entity(&self) -> Entity {
+        match self {
+            Self::Begin { entity, .. } | Self::Reap { entity, .. } => *entity,
+        }
+    }
+
+    /// The place of the packet that raised the edge among what the packets queue (a field
+    /// edge's or a cast packet's [`crate::lanes::Stamp`]), by which a display rebuild in the same
+    /// frame ends it or not; `None` for an edge the frame raised, after every packet.
+    pub(crate) fn at(&self) -> Option<crate::lanes::Stamp> {
+        match self {
+            Self::Begin { at, .. } | Self::Reap { at, .. } => *at,
+        }
+    }
 }
 
 /// A kit play whose `CharProc` slots name a beam, the dispatcher's chain case (`0x60da79`), run at
@@ -519,6 +542,8 @@ struct KitOut<'a, 'w1, 'w2, 'w3, 'w4, 'w5, 'w6, 'w7, 'w8> {
     trails: &'a mut MessageWriter<'w7, crate::weapon_trail::TrailArm>,
     /// The base recompute a stage-2 kit's anim id spends itself on.
     recomputes: &'a mut MessageWriter<'w8, BaseAnimRecompute>,
+    /// The place of the packet the plays come from ([`SpellKitFx::at`]).
+    at: Option<crate::lanes::Stamp>,
 }
 
 /// One kit play's policy on the reference's `PlaySpellVisualKit` (`0x60edf0`):
@@ -615,6 +640,7 @@ fn play_kit(
             class: FxClass::Hold,
             stage: play.stage,
             effects,
+            at: out.at,
         });
     }
 }
@@ -790,6 +816,7 @@ pub(super) fn route_cast_visuals(
         shakes,
         trails,
         recomputes,
+        at: None,
     };
 
     // `holds` lags one command flush and an instant cast's START and GO drain together, so
@@ -824,6 +851,7 @@ pub(super) fn route_cast_visuals(
         if commands.get_entity(ev.entity).is_err() {
             continue;
         }
+        out.at = ev.at;
         match ev.kind {
             CastEventKind::Start => {
                 // A replacing cast reaps the prior hold's loop and persistent models first.
@@ -837,6 +865,7 @@ pub(super) fn route_cast_visuals(
                         spell_id: prior,
                         class: FxClass::Hold,
                         force: true,
+                        at: ev.at,
                     });
                 }
                 // A ranged-attribute START draws the ranged weapon (`0x6e78f3`); vmangos sends
@@ -893,6 +922,7 @@ pub(super) fn route_cast_visuals(
                             class: FxClass::Hold,
                             stage: FxStage::Relive,
                             effects,
+                            at: ev.at,
                         });
                     }
                 }
@@ -925,6 +955,7 @@ pub(super) fn route_cast_visuals(
                         spell_id: ev.spell_id,
                         class: FxClass::Hold,
                         force: false,
+                        at: ev.at,
                     });
                 }
                 // Then the running auto-repeat spell's on the same unit, `0x614150([0xceac30], 0)`
@@ -944,6 +975,7 @@ pub(super) fn route_cast_visuals(
                         spell_id: repeat,
                         class: FxClass::Hold,
                         force: false,
+                        at: ev.at,
                     });
                 }
                 // A ranged-slot GO redraws ranged before the cast kit (`0x60f34c`, gate
@@ -1027,6 +1059,7 @@ pub(super) fn route_cast_visuals(
                     spell_id: ev.spell_id,
                     class: FxClass::Hold,
                     force: false,
+                    at: ev.at,
                 });
             }
         }
@@ -1123,7 +1156,11 @@ pub(super) fn route_cast_visuals(
     }
 
     // The channel poll: `UNIT_CHANNEL_SPELL` edges drive an observed unit's channel (the self-only
-    // `MSG_CHANNEL_*` do not); a cleared field drops the hold even with no other wire trace.
+    // `MSG_CHANNEL_*` do not); a cleared field drops the hold even with no other wire trace. Its
+    // kits carry no place, falling after every packet's: the channel's watcher (field 144) runs
+    // after the display's (131) in an update, and across packets the rebuild replays the
+    // channel's kit (`0x612a30`), so either side of a rebuild leaves it on the new body once.
+    out.at = None;
     for (entity, store) in &units {
         let cur = store.0.unit_channel_spell();
         let prev = channel_cache.get(&entity).copied().unwrap_or(0);
@@ -1143,6 +1180,7 @@ pub(super) fn route_cast_visuals(
                     spell_id: prev,
                     class: FxClass::Hold,
                     force: true,
+                    at: None,
                 });
             }
             // No ranged fallback on the channel poll (`0x612a30`).
@@ -1188,6 +1226,7 @@ pub(super) fn route_cast_visuals(
                         class: FxClass::Hold,
                         stage: FxStage::State,
                         effects,
+                        at: None,
                     });
                 }
             }
@@ -1206,6 +1245,7 @@ pub(super) fn route_cast_visuals(
                 spell_id: prev,
                 class: FxClass::Hold,
                 force: true,
+                at: None,
             });
         }
     }
@@ -1249,19 +1289,19 @@ pub(crate) fn arm_aura_state_fx(
     let (Some(visuals), Some(spells)) = (visuals.as_deref(), spells.as_deref()) else {
         return; // no client data
     };
+    // Each unit's kits carry the aura watcher's place, its first edge in the span (`0x604d00`).
+    let mut aura_at: EntityHashMap<crate::lanes::Stamp> = EntityHashMap::default();
     let scan = if full_sweep {
         units.iter().collect::<Vec<_>>()
     } else {
         let mut due: EntityHashSet = arrived.iter().collect();
-        due.extend(
-            edges
-                .read()
-                .filter(|e| {
-                    e.unit_array_slot(AURA_WATCH_BASE, AURA_WATCH_SPAN)
-                        .is_some()
-                })
-                .map(|e| e.entity),
-        );
+        for e in edges.read().filter(|e| {
+            e.unit_array_slot(AURA_WATCH_BASE, AURA_WATCH_SPAN)
+                .is_some()
+        }) {
+            due.insert(e.entity);
+            aura_at.entry(e.entity).or_insert(e.at);
+        }
         due.into_iter().filter_map(|e| units.get(e).ok()).collect()
     };
     for (entity, store) in scan {
@@ -1290,6 +1330,7 @@ pub(crate) fn arm_aura_state_fx(
                     spell_id,
                     class: FxClass::AuraState,
                     force: true,
+                    at: aura_at.get(&entity).copied(),
                 });
                 procs.write(AuraProc::Reap { entity, spell_id });
                 // The forced stop takes the 0x1000 effect too (`0x614179`).
@@ -1332,6 +1373,7 @@ pub(crate) fn arm_aura_state_fx(
                     class: FxClass::AuraState,
                     stage: FxStage::State,
                     effects,
+                    at: aura_at.get(&entity).copied(),
                 });
             }
             if !nodes.is_empty() {
@@ -1395,6 +1437,7 @@ pub(super) fn arm_loot_fx(
     let Some((effect, path)) = visuals.as_ref().and_then(|v| v.0.loot_art_effect()) else {
         return; // no client data or no such row
     };
+    let mut loot_at: EntityHashMap<crate::lanes::Stamp> = EntityHashMap::default();
     let scan = if full_sweep {
         units.iter().collect::<Vec<_>>()
     } else {
@@ -1403,18 +1446,18 @@ pub(super) fn arm_loot_fx(
             FIELD_UNIT_MAXHEALTH,
         };
         let mut due: EntityHashSet = arrived.iter().collect();
-        due.extend(
-            edges
-                .read()
-                .filter(|e| {
-                    e.unit_field(FIELD_UNIT_DYNAMIC_FLAGS)
-                        || e.unit_field(FIELD_UNIT_HEALTH)
-                        || e.unit_field(FIELD_UNIT_MAXHEALTH)
-                        || (e.kind == benilla_protocol::messages::ObjectType::Corpse
-                            && e.index == FIELD_CORPSE_DYNAMIC_FLAGS)
-                })
-                .map(|e| e.entity),
-        );
+        for e in edges.read().filter(|e| {
+            e.unit_field(FIELD_UNIT_DYNAMIC_FLAGS)
+                || e.unit_field(FIELD_UNIT_HEALTH)
+                || e.unit_field(FIELD_UNIT_MAXHEALTH)
+                || (e.kind == benilla_protocol::messages::ObjectType::Corpse
+                    && e.index == FIELD_CORPSE_DYNAMIC_FLAGS)
+        }) {
+            due.insert(e.entity);
+            // The last of the fields to move, after which the unit reads dead and lootable.
+            let at = loot_at.entry(e.entity).or_insert(e.at);
+            *at = (*at).max(e.at);
+        }
         due.into_iter().filter_map(|e| units.get(e).ok()).collect()
     };
     for (entity, store, net) in scan {
@@ -1443,6 +1486,7 @@ pub(super) fn arm_loot_fx(
                     effect,
                     path: path.to_string(),
                 }],
+                at: loot_at.get(&entity).copied(),
             });
         } else if !lootable && armed.remove(&entity) {
             fx.write(SpellKitFx::Reap {
@@ -1450,6 +1494,7 @@ pub(super) fn arm_loot_fx(
                 spell_id: LOOT_FX_KEY,
                 class: FxClass::Hold,
                 force: true,
+                at: loot_at.get(&entity).copied(),
             });
         }
     }
@@ -1491,6 +1536,7 @@ pub(super) fn arm_level_up_fx(
                 effect,
                 path: path.to_string(),
             }],
+            at: Some(e.at),
         });
     }
 }
@@ -1531,6 +1577,7 @@ pub(super) fn arm_mount_poof_fx(
                 effect,
                 path: path.to_string(),
             }],
+            at: Some(e.at),
         });
     }
 }
@@ -1626,6 +1673,8 @@ pub(super) fn replay_morph_kit(
             shakes: &mut shakes,
             trails: &mut trails,
             recomputes: &mut recomputes,
+            // The replay rides the rebuild that was the frame before: after every packet.
+            at: None,
         };
         play_kit(
             swap.entity,

@@ -43,6 +43,9 @@ pub(crate) struct DisplayRebuilt {
 #[derive(Message, Clone, Copy)]
 pub(crate) struct DisplaySwapped {
     pub(crate) entity: Entity,
+    /// A unit's rebuild's place ([`DisplayRebuilt::at`]), at which `spell_fx` ends the kit starts
+    /// the wire put before it; `None` for a game object's or corpse's new id.
+    pub(crate) at: Option<crate::lanes::Stamp>,
 }
 
 /// A render-scale ease toward [`NetEntity::scale`], written absolutely each tick so a mid-ease
@@ -138,7 +141,10 @@ pub(super) fn refresh_live_display(
                     guid.0, net.kind, applied.0, live
                 );
                 net.display_id = Some(live);
-                swapped.write(DisplaySwapped { entity });
+                swapped.write(DisplaySwapped {
+                    entity,
+                    at: rebuilt.get(&entity).copied(),
+                });
                 fx.end_all(&mut commands, entity, super::spell_fx::Rebuild::Display);
                 // `attach_entity_visuals` rebuilds from scratch, fade-skipped by `Reattached`.
                 commands

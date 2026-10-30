@@ -710,6 +710,9 @@ pub(crate) struct CastEvent {
     pub(crate) kind: CastEventKind,
     /// `PlaySeq` stamp, carried to the kit's `EmoteAnim`.
     pub(crate) seq: u64,
+    /// The cast packet's place among what the packets queue ([`crate::lanes::stamp`]); `None` for
+    /// an edge the frame raised (a missile's arrival, a probe line), after every packet.
+    pub(crate) at: Option<crate::lanes::Stamp>,
 }
 
 /// Which cast edge fired.

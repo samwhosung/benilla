@@ -1364,6 +1364,7 @@ fn cast_result_rest(
                 spell_id,
                 kind: CastEventKind::Fail,
                 seq,
+                at: Some(crate::lanes::stamp()),
             });
         }
     }
@@ -1544,6 +1545,7 @@ fn spell_start(
         spell_id,
         kind: CastEventKind::Start,
         seq,
+        at: Some(crate::lanes::stamp()),
     });
 }
 
@@ -1747,6 +1749,7 @@ fn spell_go(
         spell_id,
         kind: CastEventKind::Go,
         seq,
+        at: Some(crate::lanes::stamp()),
     });
     // A pure point cast (ground AoE, empty lists) rides the same message: the point is a target.
     let source = source.map(benilla_assets::coords::wow_to_bevy);
@@ -1811,6 +1814,7 @@ fn spell_failed_other(
             spell_id,
             kind: CastEventKind::Fail,
             seq,
+            at: Some(crate::lanes::stamp()),
         });
     }
 }

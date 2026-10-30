@@ -648,11 +648,10 @@ fn publish_world_units(
     }
 }
 
-/// A display swap and a rig heal, then the frame's kit starts. The reference writes an update's
-/// fields first and runs their watchers after, in field order, so the display's rebuild (field
-/// 131, `0x604990`) ends the unit's effects before the mount (133), dynamic flags (143) and
-/// channel (144) watchers start theirs. The rebuild's end therefore runs before this frame's starts
-/// are recorded, and they land on the new body.
+/// A display swap and a rig heal, then the frame's kit starts. A swap or heal ends what the unit
+/// held before its visual goes, so none of this frame's starts spawns on the body it takes; the
+/// starts then go in wire order, and those the packets put before the rebuild end at its place
+/// ([`spell_fx::resolve_spell_fx`]).
 fn rebuild_then_start_kits() -> ScheduleConfigs<ScheduleSystem> {
     (
         (refresh_live_display, live_display::heal_rig_starved).chain(),

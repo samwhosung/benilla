@@ -446,6 +446,7 @@ fn arrival_handoff(
         spell_id,
         kind,
         seq: play_seq.next(),
+        at: None,
     };
     match missile.aim {
         Aim::Unit {

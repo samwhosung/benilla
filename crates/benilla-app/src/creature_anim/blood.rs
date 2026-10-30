@@ -130,6 +130,8 @@ pub(super) fn blood_spurts(
                 effect,
                 path: path.to_string(),
             }],
+            // A swing's impact, presented in the frame after every packet.
+            at: None,
         });
     }
 }

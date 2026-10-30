@@ -528,11 +528,17 @@ pub(super) fn tend_world_plants(
     }
 }
 
-/// Apply the router's [`SpellKitFx`] edges per unit in emission order: `Begin` records instances,
-/// `Reap` decays the spell's persistent ones, so a GO's precast dies before its release flash.
+/// Apply the routers' [`SpellKitFx`] edges per unit in the order the packets raised them
+/// ([`SpellKitFx::at`], the frame's own last): `Begin` records instances, `Reap` decays the
+/// spell's persistent ones, so a GO's precast dies before its release flash. A display rebuild
+/// this frame ([`crate::entities::DisplaySwapped::at`]) has already ended what the unit held; the
+/// edges the wire put before it end there too, as the rebuild's loop `0x60ac10` stops what was
+/// started before the display's watcher ran ([`Rebuild::Display`]), and those after it stand.
+#[allow(clippy::too_many_arguments)] // one Bevy system's full input set
 pub(super) fn resolve_spell_fx(
     mut commands: Commands,
     mut events: MessageReader<SpellKitFx>,
+    mut swaps: MessageReader<crate::entities::DisplaySwapped>,
     mut units: Query<&mut FxAttached>,
     fx: Option<ResMut<SpellFx>>,
     time: Res<Time>,
@@ -541,14 +547,18 @@ pub(super) fn resolve_spell_fx(
 ) {
     let Some(mut fx) = fx else { return };
     let now = time.elapsed_secs();
+    let mut rebuilt: EntityHashMap<crate::lanes::Stamp> = EntityHashMap::default();
+    for swap in swaps.read() {
+        if let Some(at) = swap.at {
+            let latest = rebuilt.entry(swap.entity).or_insert(at);
+            *latest = (*latest).max(at);
+        }
+    }
     let mut ops: EntityHashMap<Vec<&SpellKitFx>> = EntityHashMap::default();
     for ev in events.read() {
-        let entity = match ev {
-            SpellKitFx::Begin { entity, .. } | SpellKitFx::Reap { entity, .. } => *entity,
-        };
-        ops.entry(entity).or_default().push(ev);
+        ops.entry(ev.entity()).or_default().push(ev);
     }
-    for (entity, edges) in ops {
+    for (entity, mut edges) in ops {
         if commands.get_entity(entity).is_err() {
             continue;
         }
@@ -557,7 +567,22 @@ pub(super) fn resolve_spell_fx(
             Some(mut att) => std::mem::take(&mut att.instances),
             None => Vec::new(),
         };
-        for edge in edges {
+        // Wire order, stable within a packet; an edge the frame raised comes after every packet.
+        edges.sort_by_key(|e| (e.at().is_none(), e.at()));
+        let cut = rebuilt
+            .get(&entity)
+            .map(|&rebuild| edges.partition_point(|e| e.at().is_some_and(|at| at < rebuild)));
+        let len = edges.len();
+        for (i, edge) in edges.into_iter().enumerate() {
+            if cut == Some(i) {
+                end_for_rebuild(
+                    &mut instances,
+                    Rebuild::Display,
+                    entity,
+                    &mut commands,
+                    &mut emitters,
+                );
+            }
             match edge {
                 SpellKitFx::Begin {
                     spell_id,
@@ -623,6 +648,15 @@ pub(super) fn resolve_spell_fx(
                     );
                 }
             }
+        }
+        if cut == Some(len) {
+            end_for_rebuild(
+                &mut instances,
+                Rebuild::Display,
+                entity,
+                &mut commands,
+                &mut emitters,
+            );
         }
         match units.get_mut(entity) {
             Ok(mut att) => att.instances = instances,
@@ -997,6 +1031,7 @@ pub(super) fn fire_fx_anim_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lanes::Stamp;
     use bevy::asset::AssetPlugin;
     use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 
@@ -1349,13 +1384,62 @@ mod tests {
         }
     }
 
-    /// Write `starts` as this frame's kit edges, beside a display swap from the same update.
-    fn swap_with(app: &mut App, unit: Entity, starts: Vec<SpellKitFx>) {
+    /// Write `starts` as this frame's kit edges, beside a display rebuild at `rebuild`.
+    fn swap_with(app: &mut App, unit: Entity, starts: Vec<SpellKitFx>, rebuild: Stamp) {
         let mut messages = app.world_mut().resource_mut::<Messages<SpellKitFx>>();
         for start in starts {
             messages.write(start);
         }
-        swap_display(app, unit);
+        swap_display_at(app, unit, rebuild);
+    }
+
+    /// `n` places in wire order.
+    fn places<const N: usize>() -> [Stamp; N] {
+        [(); N].map(|_| crate::lanes::stamp())
+    }
+
+    /// A start of one model at `tag`, ready to spawn.
+    fn start(
+        app: &mut App,
+        unit: Entity,
+        (spell_id, persistent, stage): (u32, bool, FxStage),
+        (effect, tag, path): (u32, u16, &str),
+        at: Option<Stamp>,
+    ) -> SpellKitFx {
+        app.world_mut().resource_mut::<SpellFx>().models.insert(
+            path.into(),
+            DisplayModel {
+                parts: Some(Vec::new()),
+                ..crate::entities::display::empty_shell()
+            },
+        );
+        SpellKitFx::Begin {
+            entity: unit,
+            spell_id,
+            persistent,
+            class: if stage == FxStage::State {
+                FxClass::AuraState
+            } else {
+                FxClass::Hold
+            },
+            stage,
+            effects: vec![FxSlot {
+                tag,
+                effect,
+                path: path.into(),
+            }],
+            at,
+        }
+    }
+
+    fn paths_of(app: &App, unit: Entity) -> Vec<(String, bool)> {
+        app.world()
+            .get::<FxAttached>(unit)
+            .unwrap()
+            .instances
+            .iter()
+            .map(|i| (i.path.clone(), i.root.is_some()))
+            .collect()
     }
 
     /// Build the new body a frame on, then let the spawn pass run.
@@ -1375,28 +1459,16 @@ mod tests {
     /// So the sparkle starts on the new body and stays.
     #[test]
     fn a_unit_that_dies_in_a_form_and_turns_lootable_in_one_update_keeps_its_sparkle() {
-        const SPARKLE: &str = "Spells\\LootSparkle.mdx";
         let (mut app, unit) = wearing(vec![]);
-        app.world_mut().resource_mut::<SpellFx>().models.insert(
-            SPARKLE.into(),
-            DisplayModel {
-                parts: Some(Vec::new()),
-                ..crate::entities::display::empty_shell()
-            },
+        let [rebuild, flags] = places();
+        let sparkle = start(
+            &mut app,
+            unit,
+            (u32::MAX, true, FxStage::Relive), // as the loot router writes it
+            (11, 0x13, "Spells\\LootSparkle.mdx"),
+            Some(flags),
         );
-        let sparkle = SpellKitFx::Begin {
-            entity: unit,
-            spell_id: u32::MAX, // as the loot router writes it
-            persistent: true,
-            class: FxClass::Hold,
-            stage: FxStage::Relive,
-            effects: vec![FxSlot {
-                tag: 0x13,
-                effect: 11,
-                path: SPARKLE.into(),
-            }],
-        };
-        swap_with(&mut app, unit, vec![sparkle]);
+        swap_with(&mut app, unit, vec![sparkle], rebuild);
         build_body(&mut app, unit);
         assert!(
             matches!(roots_of(&app, unit)[..], [(u32::MAX, Some(_))]),
@@ -1411,26 +1483,15 @@ mod tests {
     #[test]
     fn an_aura_added_with_a_swap_lands_once_on_the_new_body() {
         let (mut app, unit) = wearing(vec![]);
-        app.world_mut().resource_mut::<SpellFx>().models.insert(
-            "Spells\\IceShield_State.mdx".into(),
-            DisplayModel {
-                parts: Some(Vec::new()),
-                ..crate::entities::display::empty_shell()
-            },
+        let [aura_watch, rebuild] = places();
+        let aura = start(
+            &mut app,
+            unit,
+            (13033, true, FxStage::State),
+            (1499, 0x13, "Spells\\IceShield_State.mdx"),
+            Some(aura_watch),
         );
-        let aura = SpellKitFx::Begin {
-            entity: unit,
-            spell_id: 13033,
-            persistent: true,
-            class: FxClass::AuraState,
-            stage: FxStage::State,
-            effects: vec![FxSlot {
-                tag: 0x13,
-                effect: 1499,
-                path: "Spells\\IceShield_State.mdx".into(),
-            }],
-        };
-        swap_with(&mut app, unit, vec![aura]);
+        swap_with(&mut app, unit, vec![aura], rebuild);
         build_body(&mut app, unit);
         assert!(
             matches!(roots_of(&app, unit)[..], [(13033, Some(_))]),
@@ -1439,10 +1500,82 @@ mod tests {
         );
     }
 
+    /// One update and the packets before it, as 1.12.1 orders them: the fields are written first
+    /// and their watchers run after in field order, so the display's rebuild (131, `0x604990`)
+    /// stops at `0x60ac10` what was started before it: a precast loop from an earlier
+    /// `SMSG_SPELL_START`, the cast kit of the `SMSG_SPELL_GO` a shapeshift's update follows, a
+    /// level-up ding (34, `0x6045b0`). What the mount (133, `0x604570`) and dynamic flags (143,
+    /// `0x604b30`) watchers start after it stands, as does what the frame starts after every
+    /// packet, a breath puff.
+    #[test]
+    fn a_rebuild_ends_the_starts_the_wire_put_before_it_and_keeps_those_after() {
+        let (mut app, unit) = wearing(vec![]);
+        let [spell_start, spell_go, level, rebuild, mount, flags] = places();
+        let starts = vec![
+            start(
+                &mut app,
+                unit,
+                (116, true, FxStage::Relive),
+                (10, 0x15, "Spells\\Precast_Hand.mdx"),
+                Some(spell_start),
+            ),
+            start(
+                &mut app,
+                unit,
+                (768, false, FxStage::OneShot), // Cat Form
+                (7, 0x16, "Spells\\CastFlash.mdx"),
+                Some(spell_go),
+            ),
+            start(
+                &mut app,
+                unit,
+                (0, false, FxStage::OneShot),
+                (12, 0x13, "Spells\\LevelUp.mdx"),
+                Some(level),
+            ),
+            start(
+                &mut app,
+                unit,
+                (0, false, FxStage::OneShot),
+                (13, 0x13, "Spells\\MountPoof.mdx"),
+                Some(mount),
+            ),
+            start(
+                &mut app,
+                unit,
+                (u32::MAX, true, FxStage::Relive),
+                (11, 0x13, "Spells\\LootSparkle.mdx"),
+                Some(flags),
+            ),
+            start(
+                &mut app,
+                unit,
+                (0, false, FxStage::OneShot),
+                (14, 0x11, "Spells\\Breath.mdx"),
+                None,
+            ),
+        ];
+        swap_with(&mut app, unit, starts, rebuild);
+        build_body(&mut app, unit);
+        assert_eq!(
+            paths_of(&app, unit),
+            [
+                ("Spells\\MountPoof.mdx".to_string(), true),
+                ("Spells\\LootSparkle.mdx".to_string(), true),
+                ("Spells\\Breath.mdx".to_string(), true),
+            ],
+            "the precast loop, the cast kit and the ding end; the rest spawn on the new body",
+        );
+    }
+
     /// A new display naming new records, whose rebuild the update announces (`0x60abe0`).
     fn swap_display(app: &mut App, unit: Entity) {
+        swap_display_at(app, unit, crate::lanes::stamp());
+    }
+
+    /// [`swap_display`] with the rebuild at `at` among the packets' edges.
+    fn swap_display_at(app: &mut App, unit: Entity, at: Stamp) {
         app.world_mut().entity_mut(unit).insert(display_field(8));
-        let at = crate::lanes::stamp();
         app.world_mut()
             .resource_mut::<Messages<crate::entities::DisplayRebuilt>>()
             .write(crate::entities::DisplayRebuilt { entity: unit, at });
@@ -1507,6 +1640,7 @@ mod tests {
             spell_id: 13033,
             class: FxClass::AuraState,
             force: true,
+            at: None,
         });
         messages.write(begin(unit, FLASH.0, FLASH.1, FLASH.2));
         app.update();
@@ -1616,6 +1750,7 @@ mod tests {
             .init_asset::<benilla_assets::M2Model>()
             .init_resource::<SpellFx>()
             .add_message::<SpellKitFx>()
+            .add_message::<crate::entities::DisplaySwapped>()
             .add_systems(Update, resolve_spell_fx);
         let unit = app.world_mut().spawn_empty().id();
         (app, unit)
@@ -1634,6 +1769,7 @@ mod tests {
                 effect,
                 path: path.into(),
             }],
+            at: None,
         }
     }
 
@@ -1726,6 +1862,7 @@ mod tests {
             spell_id: 13033,
             class: FxClass::Hold,
             force,
+            at: None,
         };
         let roots = |app: &App| {
             app.world()

@@ -891,6 +891,7 @@ mod tests {
                 spell_id: CHAIN_SPELL,
                 class: FxClass::Hold,
                 force: true,
+                at: None,
             });
             app.update();
             assert_eq!(

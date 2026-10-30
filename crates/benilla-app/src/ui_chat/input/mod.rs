@@ -670,6 +670,7 @@ pub(super) fn drain_chat_input(
                                 spell_id,
                                 kind,
                                 seq: play_seq.next(),
+                                at: None,
                             });
                             // A selected caster's GO hits us, so a missile flies end to end; a
                             // self-cast has no target. `ground` sends the pure dest shape instead,
