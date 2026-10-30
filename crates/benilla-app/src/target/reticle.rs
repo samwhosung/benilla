@@ -68,7 +68,7 @@ pub(super) fn setup_reticle(mut commands: Commands, asset_server: Res<AssetServe
     commands.init_resource::<ReticleState>();
 }
 
-/// Places, sizes and colours the reticle while a location cast awaits its click. Runs after the
+/// Places, sizes and colours the reticle while the targeting word wants a location. Runs after the
 /// targeting cursor drive: `WorldCursor.unable` is the frame's range verdict, one read for the
 /// cursor and the decal, as in the reference.
 ///
@@ -76,7 +76,9 @@ pub(super) fn setup_reticle(mut commands: Commands, asset_server: Res<AssetServe
 /// 0x6e6320`. Either false returns before the draw state, which the hover handler reset to 3, do
 /// not draw (`0x481840`), so a lock or enchant word (`0x4000`, `0x0010`) draws no decal. The
 /// reference's pick is word-gated (`0x481050`) and ours is not, so this consumer carries the guard,
-/// through [`SpellTargeting::spell_for`].
+/// through [`SpellTargeting::spell_for`]. Neither guard reads the cursor mode, so a word a far send
+/// left up still draws (`0x4837c3` → `0x48383b`); only the placement model, which benilla does not
+/// build, rides the mode.
 pub(super) fn update_reticle(
     targeting: Res<SpellTargeting>,
     occlusion: Res<PickOcclusion>,
@@ -88,11 +90,8 @@ pub(super) fn update_reticle(
     mut state: ResMut<ReticleState>,
 ) {
     let state = &mut *state;
-    // The ground model rides the cursor mode (`0x6e50ab`), which a send drops (`0x6e5538`).
     let (Some(spell_id), Some(point)) = (
-        targeting
-            .spell_for(TargetingWants::Location)
-            .filter(|_| targeting.shown()),
+        targeting.spell_for(TargetingWants::Location),
         occlusion.point,
     ) else {
         // Not targeting, a word that wants no location, or no world hit: nothing is drawn.
@@ -192,42 +191,43 @@ mod tests {
     use benilla_world::collision::GroundDecalSurface;
     use bevy::ecs::system::RunSystemOnce;
 
-    /// `0x4820f0`'s second guard. The ground is a real trimesh, so a DEST word draws and "nothing
-    /// drawn" is a verdict, not an empty scene.
+    /// Whether a decal is drawn over a real trimesh ground with the word `arm` leaves, so a DEST
+    /// word draws and "nothing drawn" is a verdict, not an empty scene.
+    fn drawn(arm: impl FnOnce(&mut SpellTargeting)) -> bool {
+        let mut world = World::new();
+        world.init_resource::<ReticleState>();
+        world.init_resource::<WorldCursor>();
+        world.init_resource::<SpellTargeting>();
+        world.init_resource::<crate::spell::SpellModifiers>();
+        world.insert_resource(PickOcclusion {
+            distance: 10.0,
+            point: Some(Vec3::ZERO),
+            ray: None,
+        });
+        arm(&mut world.resource_mut::<SpellTargeting>());
+        // A flat 100×100 yd quad at y = 0 in world space (the marked colliders' identity-pose
+        // contract), inside the ±2.0 slab and wider than any radius.
+        let q = 50.0;
+        world.spawn((
+            GroundDecalSurface,
+            Collider::trimesh(
+                vec![
+                    Vec3::new(-q, 0.0, -q),
+                    Vec3::new(q, 0.0, -q),
+                    Vec3::new(q, 0.0, q),
+                    Vec3::new(-q, 0.0, q),
+                ],
+                vec![[0, 1, 2], [0, 2, 3]],
+            ),
+        ));
+        world.run_system_once(update_reticle).unwrap();
+        world.resource::<ReticleState>().shown
+    }
+
+    /// `0x4820f0`'s second guard.
     #[test]
     fn only_a_location_word_draws_a_decal() {
-        let drawn_for = |word: u16| {
-            let mut world = World::new();
-            world.init_resource::<ReticleState>();
-            world.init_resource::<WorldCursor>();
-            world.init_resource::<SpellTargeting>();
-            world.init_resource::<crate::spell::SpellModifiers>();
-            world.insert_resource(PickOcclusion {
-                distance: 10.0,
-                point: Some(Vec3::ZERO),
-                ray: None,
-            });
-            world
-                .resource_mut::<SpellTargeting>()
-                .enter(2120, CastCommit::Spell, word);
-            // A flat 100×100 yd quad at y = 0 in world space (the marked colliders' identity-pose
-            // contract), inside the ±2.0 slab and wider than any radius.
-            let q = 50.0;
-            world.spawn((
-                GroundDecalSurface,
-                Collider::trimesh(
-                    vec![
-                        Vec3::new(-q, 0.0, -q),
-                        Vec3::new(q, 0.0, -q),
-                        Vec3::new(q, 0.0, q),
-                        Vec3::new(-q, 0.0, q),
-                    ],
-                    vec![[0, 1, 2], [0, 2, 3]],
-                ),
-            ));
-            world.run_system_once(update_reticle).unwrap();
-            world.resource::<ReticleState>().shown
-        };
+        let drawn_for = |word: u16| drawn(|t| t.enter(2120, CastCommit::Spell, word));
 
         // Blizzard's bare DEST word.
         assert!(drawn_for(0x0040), "a DEST word draws its reticle");
@@ -240,5 +240,16 @@ mod tests {
                 "word {word:#06x} wants no location — no decal"
             );
         }
+    }
+
+    /// Eagle Eye sent far at a unit the client does not hold leaves its word up with the cursor
+    /// mode down (`0x6e5454`-`0x6e5467`, `0x6e5547`). The decal reads the word alone (`0x4820f9`,
+    /// `0x482106`) and draws with no placement model (`0x4837c3` → `0x48383b`), so it still draws.
+    #[test]
+    fn a_word_its_send_left_up_still_draws_its_decal() {
+        assert!(drawn(|t| {
+            t.enter(6197, CastCommit::Spell, 0x0040);
+            t.hide();
+        }));
     }
 }
