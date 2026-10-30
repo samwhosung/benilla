@@ -28,7 +28,7 @@ mod seed;
 use fog::select_wmo_fog;
 pub use fog::{CameraWmoFog, WmoFogTarget};
 pub use interior::{
-    indoor_verdict_at, indoors_at, terrain_z_local, IndoorVerdict, LightAttach,
+    indoor_verdict_at, indoors_at, seat_wmo_areas, terrain_z_local, IndoorVerdict, LightAttach,
     INTERIOR_PROBE_HEIGHT,
 };
 pub(crate) use interior::{surface_terrain_sample, WmoAreas, POSITION_PROBE_LIFT};

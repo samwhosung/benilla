@@ -11,6 +11,11 @@ use bevy::prelude::*;
 #[derive(Resource)]
 pub(crate) struct WmoAreas(pub(crate) benilla_formats::WmoAreaCatalog);
 
+/// Seat `catalog` as the `WMOAreaTable` catalog, for a harness that runs without an install.
+pub fn seat_wmo_areas(world: &mut World, catalog: benilla_formats::WmoAreaCatalog) {
+    world.insert_resource(WmoAreas(catalog));
+}
+
 pub(super) fn load_wmo_areas(
     mut commands: Commands,
     assets: Option<Res<benilla_assets::WorldAssets>>,

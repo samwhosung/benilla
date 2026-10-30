@@ -29,6 +29,9 @@ const WESTFALL: u32 = 40;
 const STORMWIND: u32 = 1519;
 /// The city word's row (`0x200`).
 const CITY: u32 = 3459;
+/// An area whose row has no name, and one named as Elwynn in capitals.
+const NAMELESS: u32 = 5000;
+const SHOUTING: u32 = 5001;
 
 /// The client's world, driven a packet at a time through the dispatch, which fires each packet's
 /// lanes after its handlers, and the frame's end, the zone commit's poll.
@@ -108,6 +111,8 @@ fn client(zone: u32, held: Option<&[(u16, u32)]>) -> Client {
             (WESTFALL, row(0, "Westfall")),
             (STORMWIND, row(0x138, "Stormwind City")),
             (CITY, row(0x200, "City")),
+            (NAMELESS, row(0, "")),
+            (SHOUTING, row(0, "ELWYNN FOREST")),
         ]),
     ));
     let catalog = benilla_formats::ChatChannelsCatalog::from_rows(
@@ -502,4 +507,68 @@ fn a_cinematic_holds_the_commits_walk_and_its_end_walks_the_committed_zone() {
             "EndCinematic walks the stored zone"
         );
     }
+}
+
+/// A reload builds a new VM and keeps the stored zone and the real zone text (`0xb4b404`,
+/// `0x495664` → `0x490bd0`): its first commit finds no change, so it walks nothing.
+#[test]
+fn a_reload_keeps_the_real_zone_text_and_walks_nothing() {
+    let mut c = settled_in_elwynn();
+    c.channels().joined = vec![ChannelSlot::confirmed("General - Stale", 1).into()];
+    c.app
+        .world_mut()
+        .insert_non_send_resource(UiScript::new().expect("a VM"));
+    tick(&mut c, 10);
+    assert!(c.wire().is_empty(), "Elwynn was walked before the reload");
+}
+
+/// An empty name leaves the real zone text as it was (`0x49489a` → `0x494936`), so the next
+/// name is compared with the one before it, ignoring case (`0x64a4c0`).
+#[test]
+fn an_empty_or_recased_name_walks_nothing() {
+    let mut c = settled_in_elwynn();
+    stand_in(&mut c, NAMELESS);
+    tick(&mut c, 10);
+    stand_in(&mut c, ELWYNN);
+    tick(&mut c, 10);
+    assert!(c.wire().is_empty(), "Elwynn again after an unnamed zone");
+    stand_in(&mut c, SHOUTING);
+    tick(&mut c, 10);
+    assert!(c.wire().is_empty(), "the same name in capitals");
+}
+
+/// A hit group the indoor dedup passes never reaches `0x494780` (`0x67e510`): the zone is not
+/// stored.
+#[test]
+fn the_indoor_dedup_stores_no_zone() {
+    use benilla_world::wmo_portal::{CurrentAreaInterior, WmoInteriorKeys};
+    let mut c = settled_in_elwynn();
+    let keys = WmoInteriorKeys {
+        wmo_id: 1,
+        name_set: 0,
+        group_area_id: 7,
+    };
+    let room = benilla_formats::WmoArea {
+        id: 1,
+        sound_provider: [0; 2],
+        ambience: 0,
+        zone_music: 0,
+        intro_sound: 0,
+        area_table_id: 0,
+        name: String::new(),
+    };
+    let world = c.app.world_mut();
+    benilla_world::wmo_portal::seat_wmo_areas(
+        world,
+        benilla_formats::WmoAreaCatalog::from_rows([(1, 0, 7, room)]),
+    );
+    world.insert_resource(CurrentAreaInterior(Some(keys)));
+    tick(&mut c, 10);
+    stand_in(&mut c, WESTFALL);
+    tick(&mut c, 10);
+    assert_eq!(
+        c.app.world().resource::<crate::area::CommittedZone>().0,
+        Some(ELWYNN),
+        "the same room: the update is skipped"
+    );
 }
