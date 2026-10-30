@@ -200,9 +200,6 @@ pub(crate) struct ArmPark {
     /// The leg's answer as the word and the candidate stand, and whose word it is.
     leg: cast_target::CastWireTarget,
     on: ArmWord,
-    /// `BindTarget`'s merge refused the bound unit out of range (`0x6e6063` → `0x6e6089`),
-    /// restoring the word (`0x6e6096`) for the leg to go on with.
-    range: Option<u8>,
 }
 
 impl ArmPark {
@@ -781,11 +778,55 @@ impl CastLadder<'_, '_> {
         let Some(ctx) = ctx else {
             return;
         };
+        let binds = self.pending.record_send().is_some();
+        let leg = self.walk_leg(park, ctx, word, record, true, binds);
+        // `BindTarget`'s merge tests a bound unit's range (`0x6e6063` → `0x6e47b0`), which the
+        // attempt's own gate already did for the unit it found (`0x6e4440`): out of range it
+        // reports (`0x6e6089`), restores the word and binds nothing (`0x6e6096`-`0x6e60ba`).
+        let refusal = match leg {
+            CastWireTarget::Unit(guid)
+                if (on != ArmWord::Own || leg != park.leg)
+                    && Some(guid) == ctx.selection_guid
+                    && Some(guid) != ctx.self_guid =>
+            {
+                let spells = self.spells.as_deref();
+                spells.and_then(|s| s.catalog.get(record)).and_then(|d| {
+                    let row = spells.and_then(|s| s.ranges.get(d.range_index));
+                    ctx.range.refusal(d, row, &self.spell_mods)
+                })
+            }
+            _ => None,
+        };
+        park.leg = match refusal {
+            None => leg,
+            Some(reason) => {
+                debug!("ui_action: cast {record} not bound — range ({reason:#x})");
+                self.report_local(CastFail::local(record, reason));
+                // The arm goes on at `autoSelfCast` (`0x6e53d7`). The report cancels only the
+                // spell in flight (`0x6e2201`), and its cancel clears only the active player's
+                // caster (`0x6e4a04`), so an unpushed item's record or a pet's still binds there.
+                let binds = self.pending.record_send().is_some();
+                self.walk_leg(park, ctx, word, record, false, binds)
+            }
+        };
+    }
+
+    /// The arm's leg on `word` with `record` under it ([`cast_target::bind_leg`]), its candidate
+    /// read from `ctx`; `candidate` false once `BindTarget` refused it, which leaves the fallback
+    /// and the tail.
+    fn walk_leg(
+        &self,
+        park: &ArmPark,
+        ctx: &cast_target::CastContext,
+        word: u16,
+        record: u32,
+        candidate: bool,
+        binds: bool,
+    ) -> cast_target::CastWireTarget {
         let spells = self.spells.as_deref();
         let arm = spells.and_then(|s| s.catalog.get(park.spell_id));
         let record_def = spells.and_then(|s| s.catalog.get(record));
-        let binds = self.pending.record_send().is_some();
-        let cand = arm_candidates(
+        let mut cand = arm_candidates(
             ctx,
             arm,
             park.commit.unit_caster().is_none(),
@@ -794,54 +835,33 @@ impl CastLadder<'_, '_> {
             spells,
             &self.spell_mods,
         );
-        let walk = |cand: &cast_target::CastCandidates, binds: bool| {
-            cast_target::bind_leg(
-                arm,
-                word,
-                record_def,
-                cand,
-                ctx.auto_self_cast,
-                &ctx.rel,
-                binds,
-            )
-        };
-        let wants_object = on == ArmWord::Own
-            || self
-                .ground
-                .wants(super::targeting::TargetingWants::GameObject);
-        let mut leg = match park.object {
-            // `BindTarget`'s GameObject arm (`0x6e5f5a`).
-            Some(go) if binds && wants_object => CastWireTarget::Object(go),
-            // A GameObject that binds nothing leaves the fallback and the tail, with no unit
-            // candidate.
-            Some(_) => walk(
-                &cast_target::CastCandidates {
-                    selection: None,
-                    selection_held: false,
-                    ..cand
-                },
-                binds,
-            ),
-            None if on == ArmWord::Own && (word == 0 || arm.is_none()) => {
-                cast_target::resolve_cast_target(arm, &cand, ctx.auto_self_cast, &ctx.rel)
-            }
-            None => walk(&cand, binds),
-        };
-        // `BindTarget`'s merge tests a bound unit's range (`0x6e6063` → `0x6e47b0`), which the
-        // attempt's own gate already did for the unit it found (`0x6e4440`): out of range it
-        // reports, restores the word and binds nothing (`0x6e6089`-`0x6e60ba`), and the leg goes
-        // on past a record its report's cancel left with no caster.
-        if let (CastWireTarget::Unit(guid), Some(d)) = (leg, record_def) {
-            let fresh = on != ArmWord::Own || leg != park.leg;
-            if fresh && Some(guid) == ctx.selection_guid && Some(guid) != ctx.self_guid {
-                let row = spells.and_then(|s| s.ranges.get(d.range_index));
-                if let Some(reason) = ctx.range.refusal(d, row, &self.spell_mods) {
-                    park.range = Some(reason);
-                    leg = walk(&cand, false);
-                }
+        let own = park.on == ArmWord::Own;
+        // `BindTarget`'s GameObject arm (`0x6e5f5a`).
+        if let Some(go) = park.object {
+            let wants = own
+                || self
+                    .ground
+                    .wants(super::targeting::TargetingWants::GameObject);
+            if candidate && binds && wants {
+                return cast_target::CastWireTarget::Object(go);
             }
         }
-        park.leg = leg;
+        // A candidate `BindTarget` refused leaves the fallback and the tail.
+        if !candidate || park.object.is_some() {
+            cand.selection = None;
+            cand.selection_held = false;
+        } else if own && (word == 0 || arm.is_none()) {
+            return cast_target::resolve_cast_target(arm, &cand, ctx.auto_self_cast, &ctx.rel);
+        }
+        cast_target::bind_leg(
+            arm,
+            word,
+            record_def,
+            &cand,
+            ctx.auto_self_cast,
+            &ctx.rel,
+            binds,
+        )
     }
 
     /// `ArmCast` from its word test on (`0x6e5338`), on the leg [`Self::reread_arm`] left, and
@@ -854,7 +874,6 @@ impl CastLadder<'_, '_> {
             attempt,
             leg,
             on,
-            range,
             ..
         } = park;
         // The record `BindTarget` binds: the attempt's own, or the one under a listener's cursor.
@@ -862,10 +881,6 @@ impl CastLadder<'_, '_> {
             ArmWord::Cursor { spell_id, commit } => (spell_id, commit),
             ArmWord::Own | ArmWord::Cleared => (spell_id, commit),
         };
-        if let Some(reason) = range {
-            debug!("ui_action: cast {record} not bound — range ({reason:#x})");
-            self.report_local(CastFail::local(record, reason));
-        }
         let send = CastStage::Send {
             rereads_word: false,
             attempt: Some(attempt),
@@ -1764,7 +1779,6 @@ fn send_spell_cast(
         },
         leg,
         on: ArmWord::Own,
-        range: None,
     })));
 }
 

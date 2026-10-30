@@ -1009,3 +1009,44 @@ fn an_item_use_binds_the_unit_selected_at_its_call() {
     assert_eq!(item_targets(&f), vec![UseItemTarget::Unit(OLD)]);
     assert_eq!(selected(&f), Some(NEW));
 }
+
+/// `BindTarget`'s merge refuses a unit out of range (`0x6e6063` → `0x6e6089`), and the arm goes on
+/// at `autoSelfCast` (`0x6e53d7`). The report cancels only a spell in flight (`0x6e2201`), so a
+/// potion never pushed keeps its record's caster, and the player binds. The bar's item use passes
+/// no guid (`0x4e606f`), so the arm reads the selection a listener moved (`0x6e539f`).
+#[test]
+fn a_bind_refused_out_of_range_goes_on_to_auto_self_cast() {
+    let mut f = frame(true);
+    with_quaff(
+        &mut f,
+        FRIEND,
+        benilla_formats::SpellDisplay {
+            implicit_target_a1: 21,
+            range_index: 5,
+            ..Default::default()
+        },
+    );
+    with_friendly_party1(&mut f, true);
+    let world = f.app.world_mut();
+    world.resource_mut::<crate::ui_action::Spells>().ranges =
+        benilla_formats::SpellRangeCatalog::from_rows(
+            [(
+                5,
+                benilla_formats::SpellRange {
+                    min: 0.0,
+                    max: 30.0,
+                    flags: 0,
+                },
+            )]
+            .into(),
+        );
+    let new = world.resource::<GuidIndex>().0[&NEW];
+    world.entity_mut(new).insert((
+        Transform::from_xyz(100.0, 0.0, 0.0),
+        GlobalTransform::from_translation(Vec3::new(100.0, 0.0, 0.0)),
+    ));
+    world.resource_mut::<crate::spell::AutoSelfCast>().0 = true;
+    once_on_change(&mut f, r#"TargetUnit("party1")"#);
+    run_hosted(&mut f, "UseAction(1)");
+    assert_eq!(item_targets(&f), vec![UseItemTarget::Unit(ME)]);
+}
