@@ -186,8 +186,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - The reference places collision and culling by the raw facing, ours follow the display facing, because a capsule and a sphere barely change under rotation. ([`src/net/motion/facing.rs:9`](../crates/benilla-app/src/net/motion/facing.rs#L9))
 - The reference paces a self move through the same replay chain as a remote's, which would only delay a correction to our own pose. ([`src/net/motion/remote.rs:84`](../crates/benilla-app/src/net/motion/remote.rs#L84))
 - Its rate-limited hover climb (`0x636fa1`, 7 yd/s) is not reproduced, because the cache gate needs a pure function; it converges to this answer. ([`src/net/motion/spline.rs:659`](../crates/benilla-app/src/net/motion/spline.rs#L659))
-- A first-pass values block the clear header byte left unwritten re-fires, for a live object, its last write's edges against the watch copy (`0x465570`, `0x466686`); benilla compares against this packet's copies, which hold none for it, so a stale edge never fires twice. ([`src/net/objects/update.rs:1076`](../crates/benilla-app/src/net/objects/update.rs#L1076))
-- The create notify uses its lookup's result untested (`0x465c97`, `0x465d79`). ([`src/net/objects/update.rs:1088`](../crates/benilla-app/src/net/objects/update.rs#L1088))
+- A first-pass values block the clear header byte left unwritten re-fires, for a live object, its last write's edges against the watch copy (`0x465570`, `0x466686`); benilla compares against this packet's copies, which hold none for it, so a stale edge never fires twice. ([`src/net/objects/update.rs:1086`](../crates/benilla-app/src/net/objects/update.rs#L1086))
+- The create notify uses its lookup's result untested (`0x465c97`, `0x465d79`). ([`src/net/objects/update.rs:1098`](../crates/benilla-app/src/net/objects/update.rs#L1098))
 - On benilla's unattended reconnect, which the reference lacks, the world's VM survives the loss, so the clear signals its `PLAYER_TARGET_CHANGED` and usable refresh as a release's teardown does (`0x493a69`, `0x493a73`), still sending nothing, and the surviving target frame lets the lost unit go. ([`src/net/session.rs:310`](../crates/benilla-app/src/net/session.rs#L310))
 
 #### no_install
@@ -352,7 +352,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 - A script's 16-letter name, which the reference's bindings pass (1 to 16 code points, `0x4d20d0`, `0x4d2210`), is dropped rather than sent or truncated, because vmangos would kick the session. ([`src/ui_guild/feed.rs:72`](../crates/benilla-app/src/ui_guild/feed.rs#L72))
 - Bounded at the ten slots, because the reference's read (`0x4c93e7`) runs past its array. ([`src/ui_guild/mod.rs:87`](../crates/benilla-app/src/ui_guild/mod.rs#L87))
-- Clamped to ten, because the reference's unbounded loop (`0x4d0bb0`) overruns its ten-slot array from a hostile `rankCount` of 11: index 10 is `0xb726f8`, a float its initializer writes (`0x4d279c`). ([`src/ui_guild/mod.rs:539`](../crates/benilla-app/src/ui_guild/mod.rs#L539))
+- Clamped to ten, because the reference's unbounded loop (`0x4d0bb0`) overruns its ten-slot array from a hostile `rankCount` of 11: index 10 is `0xb726f8`, a float its initializer writes (`0x4d279c`). ([`src/ui_guild/mod.rs:562`](../crates/benilla-app/src/ui_guild/mod.rs#L562))
 - An exact tie is `Equal` where the reference answers ±1, and a NaN has a place (`total_cmp`), because Rust's sort requires a total order. ([`src/ui_guild/sort.rs:72`](../crates/benilla-app/src/ui_guild/sort.rs#L72))
 - The reference ties a miss with a hit (`0x4d0e27`, `0x4d0ea1`), no total order. ([`src/ui_guild/sort.rs:89`](../crates/benilla-app/src/ui_guild/sort.rs#L89))
 
@@ -501,11 +501,11 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 - The basis is damped past `PLATE_DIAG_KNEE`, because the reference's unbounded growth (`0x7705b0`) draws plates too large and soft at high resolutions. ([`src/vplates.rs:14`](../crates/benilla-app/src/vplates.rs#L14))
 - The bar fill brightens by `LIT_BOOST` in place of the reference's ADD `Nameplate-Glow` rim, which reads as hard edge lines under benilla's linear blending. ([`src/vplates.rs:18`](../crates/benilla-app/src/vplates.rs#L18))
-- `LEVEL_H` is 0.0086, one em under the reference's 0.009, because the level number read too large. ([`src/vplates.rs:115`](../crates/benilla-app/src/vplates.rs#L115))
-- The reference dims non-target plates to `0x7F`; raised because that fades them too far to read. ([`src/vplates.rs:131`](../crates/benilla-app/src/vplates.rs#L131))
-- The reference draws at fractional device coordinates; the snap keeps the magnified border crisp. ([`src/vplates.rs:190`](../crates/benilla-app/src/vplates.rs#L190))
-- The reference's plates grow with the diagonal without limit (`0x7705b0`), which reads too big and soft; past this diagonal, where the frame is the border art's native 128x32 px, the basis grows at `PLATE_GROWTH_DAMP` of that rate. ([`src/vplates.rs:196`](../crates/benilla-app/src/vplates.rs#L196))
-- A constant one-logical-pixel shadow, not the reference's 0.001 gx, which draws 2 px thick and too heavy at larger windows. ([`src/vplates.rs:703`](../crates/benilla-app/src/vplates.rs#L703))
+- `LEVEL_H` is 0.0086, one em under the reference's 0.009, because the level number read too large. ([`src/vplates.rs:118`](../crates/benilla-app/src/vplates.rs#L118))
+- The reference dims non-target plates to `0x7F`; raised because that fades them too far to read. ([`src/vplates.rs:134`](../crates/benilla-app/src/vplates.rs#L134))
+- The reference draws at fractional device coordinates; the snap keeps the magnified border crisp. ([`src/vplates.rs:193`](../crates/benilla-app/src/vplates.rs#L193))
+- The reference's plates grow with the diagonal without limit (`0x7705b0`), which reads too big and soft; past this diagonal, where the frame is the border art's native 128x32 px, the basis grows at `PLATE_GROWTH_DAMP` of that rate. ([`src/vplates.rs:199`](../crates/benilla-app/src/vplates.rs#L199))
+- A constant one-logical-pixel shadow, not the reference's 0.001 gx, which draws 2 px thick and too heavy at larger windows. ([`src/vplates.rs:670`](../crates/benilla-app/src/vplates.rs#L670))
 - The reference magnifies the 128 × 32 `Interface\Tooltips\Nameplate-Border` art with `GL_LINEAR` (`0x770200`, filter `[0x878cf0]` = 1), smearing its 1 px bevel once the plate is larger than native; we resample the same pixels to the plate's physical size with sharp bilinear and draw it 1:1, because the chosen look is the same art with a crisp bevel. `super::drive_vplates` regenerates it when the physical size changes. ([`src/vplates/border.rs:3`](../crates/benilla-app/src/vplates/border.rs#L3))
 
 #### wdb
@@ -784,11 +784,11 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - A listing that finds no icon stays empty, to be listed again on the next ask, where the reference's dedup then reads below its null list (`0x4f0134`-`0x4f0145`) and faults. ([`src/script/macros.rs:551`](../crates/benilla-ui/src/script/macros.rs#L551))
 - Each line is trimmed, because the reference sends an indented `" /say hi"` as plain chat, never as the command meant. ([`src/script/macros/bind.rs:30`](../crates/benilla-ui/src/script/macros/bind.rs#L30))
 - The `/cast` argument is trimmed, because the reference binds `/cast  Fireball` (two spaces) to a name that never resolves. ([`src/script/macros/bind.rs:50`](../crates/benilla-ui/src/script/macros/bind.rs#L50))
-- The client's Lua has no such bound, as nothing sets a hook (`lua_sethook`, `0x6fba40`, has no caller and no pointer to it), so a load that never ends hangs it. ([`src/script/mod.rs:948`](../crates/benilla-ui/src/script/mod.rs#L948))
-- The reference sets the cells only when glue or the interface is built, `0x41ad10` from `0x46a828` (`0x46a7b0`) and `0x48fe2b` (`0x48fbf0`), and a resize reaches them only through the rebuild it asks for. ([`src/script/mod.rs:1036`](../crates/benilla-ui/src/script/mod.rs#L1036))
+- The client's Lua has no such bound, as nothing sets a hook (`lua_sethook`, `0x6fba40`, has no caller and no pointer to it), so a load that never ends hangs it. ([`src/script/mod.rs:953`](../crates/benilla-ui/src/script/mod.rs#L953))
+- The reference sets the cells only when glue or the interface is built, `0x41ad10` from `0x46a828` (`0x46a7b0`) and `0x48fe2b` (`0x48fbf0`), and a resize reaches them only through the rebuild it asks for. ([`src/script/mod.rs:1041`](../crates/benilla-ui/src/script/mod.rs#L1041))
 - A path that does not resolve is stored, where the reference raises `Invalid model file: %s` (`0x878b44`), because the file loads asynchronously here and the call cannot know yet. ([`src/script/modelframe.rs:333`](../crates/benilla-ui/src/script/modelframe.rs#L333))
-- The reference's free list is FIFO; either keeps every index stable, all an addon can observe. ([`src/script/nameplate.rs:571`](../crates/benilla-ui/src/script/nameplate.rs#L571))
-- The reference adds this rim over the bar; we brighten the bar (`LIT_BOOST`), because the rim reads as hard edge lines in our linear-blending pipeline. ([`src/script/nameplate.rs:1041`](../crates/benilla-ui/src/script/nameplate.rs#L1041))
+- The reference's free list is FIFO (`0x6087f0`, `0x608a5a`); either keeps every index stable, all an addon can observe of the pool's order. ([`src/script/nameplate.rs:807`](../crates/benilla-ui/src/script/nameplate.rs#L807))
+- The reference adds this rim over the bar; we brighten the bar (`LIT_BOOST`), because the rim reads as hard edge lines in our linear-blending pipeline. ([`src/script/nameplate.rs:1430`](../crates/benilla-ui/src/script/nameplate.rs#L1430))
 - A wrapper that decodes to no live widget takes `default_parent`, because the reference, with no `IsA` check, reads a wild pointer. ([`src/script/object/anchor_args.rs:218`](../crates/benilla-ui/src/script/object/anchor_args.rs#L218))
 - An `OnSizeChanged` that resolve produces fires at the next `UiScript::resolve`, because a Lua handler must not run in the middle of a level compaction. ([`src/script/object/toplevel.rs:77`](../crates/benilla-ui/src/script/object/toplevel.rs#L77))
 - A third `%s` gets an empty string, because the reference pushes two varargs (`0x6093f2 add esp,0x14`) and would read uninitialised stack. ([`src/script/pvp/mod.rs:319`](../crates/benilla-ui/src/script/pvp/mod.rs#L319))
