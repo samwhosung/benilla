@@ -29,7 +29,7 @@ A setting boots at the reference's default unless it is listed here (`docs/METHO
 
 Each entry is the first sentence of a `Deviation:` comment, linking to where it lives.
 
-- [benilla-app](#benilla-app): 251
+- [benilla-app](#benilla-app): 252
 - [benilla-assets](#benilla-assets): 6
 - [benilla-blp](#benilla-blp): 1
 - [benilla-formats](#benilla-formats): 24
@@ -98,7 +98,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### cinematic
 
-- Bevy UI nodes computed per frame, not `CinematicFrame.xml`'s textures, because that way a window resized mid-cinematic stays letterboxed. `CinematicFrame` still shows and owns ESC. ([`src/cinematic.rs:187`](../crates/benilla-app/src/cinematic.rs#L187))
+- Bevy UI nodes computed per frame, not `CinematicFrame.xml`'s textures, because that way a window resized mid-cinematic stays letterboxed. `CinematicFrame` still shows and owns ESC. ([`src/cinematic.rs:204`](../crates/benilla-app/src/cinematic.rs#L204))
 
 #### combat_text
 
@@ -315,9 +315,10 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### ui_chat
 
-- Not run on benilla's same-character reconnect, which the reference lacks (it returns to the login screen), because that way the window keeps its scrollback there. ([`src/ui_chat.rs:266`](../crates/benilla-app/src/ui_chat.rs#L266))
+- Not run on benilla's same-character reconnect, which the reference lacks (it returns to the login screen), because that way the window keeps its scrollback there. ([`src/ui_chat.rs:267`](../crates/benilla-app/src/ui_chat.rs#L267))
 - A missing global prints nothing, where the reference prints an empty line (`0x703c02`), because benilla's other `DisplayError` routes do the same. ([`src/ui_chat/broadcast.rs:167`](../crates/benilla-app/src/ui_chat/broadcast.rs#L167))
-- In a capital with a blank city word the walk composes `"Trade - "` (it tests the row pointer, not the string, `0x49a2e4`-`0x49a2ed`); we decline, because a wrong channel name is joined silently and for good. ([`src/ui_chat/channels.rs:157`](../crates/benilla-app/src/ui_chat/channels.rs#L157))
+- A dropped link re-enters the world in this session, where the reference logs in anew, because of benilla's same-character reconnect, which the reference lacks. ([`src/ui_chat/channels.rs:49`](../crates/benilla-app/src/ui_chat/channels.rs#L49))
+- In a capital with a blank city word the walk composes `"Trade - "` (it tests the row pointer, not the string, `0x49a2e4`-`0x49a2ed`); we decline, because a wrong channel name is joined silently and for good. ([`src/ui_chat/channels.rs:160`](../crates/benilla-app/src/ui_chat/channels.rs#L160))
 - The reference holds every line that waits on its `$`-macro subject's name in the name cache's callback list (`0x49daea` → `0x55f080`) until the name answers, with no bound; here at most `MAX_HELD_SUBJECT_LINES` wait, the oldest dropped past that, because a subject no player owns never answers. ([`src/ui_chat/feed.rs:396`](../crates/benilla-app/src/ui_chat/feed.rs#L396))
 - A probe's bare `/assist` assists the live selection, `AssistByName("")` (`0x489c89`), where the stock handler (`ChatFrame.lua:740`) resolves a selected player's name through `AssistByName`, because a name resolve can land on a different player. ([`src/ui_chat/input/mod.rs:594`](../crates/benilla-app/src/ui_chat/input/mod.rs#L594))
 - A line of 256 bytes or more, which reaches here only through `chat_send`'s deviation for `0x49f604`, is slurred whole instead of cut to that buffer, because that way it reaches the server whole for the refusal that deviation leaves to it. ([`src/ui_chat/input/send.rs:305`](../crates/benilla-app/src/ui_chat/input/send.rs#L305))
