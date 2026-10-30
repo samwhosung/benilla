@@ -659,10 +659,12 @@ pub(super) struct RebuildFx<'w, 's> {
 impl RebuildFx<'_, '_> {
     /// The rebuild `0x60abe0` (a display swap, or the rig heal that takes its shape) stops every
     /// effect on the unit's list through `0x6203e0` before the old model goes (`0x60ac10`), a world
-    /// plant too, which `0x61fcf0` links on the same list (`0x61fdbf`). A persistent instance
-    /// re-arms for the new body, the rebuild's replay of the auras (`0x5ff130`) and the channel
-    /// (`0x612a30`); a one-shot or decaying one is dropped. Called before the visual's despawn, so
-    /// each root goes first and no later teardown meets a dead one.
+    /// plant too, which `0x61fcf0` links on the same list (`0x61fdbf`). It then plays kind 2 again
+    /// and nothing else that lives on: the aura slots' state kits (`0x5ff130` at `0x60ada6`) and
+    /// the channel kit (`0x612a30` at `0x60adad`, kind 2 at `0x612b2b`). So a [`FxStage::State`]
+    /// instance re-arms for the new body, and a precast loop, the loot sparkle (hung again only by
+    /// `0x6005d0`'s own callers), a one-shot or a decaying one is dropped. Called before the
+    /// visual's despawn, so each root goes first and no later teardown meets a dead one.
     pub(super) fn end_all(&mut self, commands: &mut Commands, unit: Entity) {
         let Ok(mut att) = self.lists.get_mut(unit) else {
             return;
@@ -671,7 +673,7 @@ impl RebuildFx<'_, '_> {
             if let Some(root) = inst.root.take() {
                 end_root(commands, &mut self.emitters, root);
             }
-            let re_arm = inst.persistent && !inst.decaying;
+            let re_arm = inst.persistent && !inst.decaying && inst.stage == FxStage::State;
             if benilla_assets::trace::enabled() {
                 benilla_assets::trace::line(
                     "fx",
@@ -1128,7 +1130,27 @@ mod tests {
             expires: Some(1.0),
             decaying: false,
         };
-        let unit = world
+        let unit = built_unit(
+            world,
+            body,
+            vec![
+                one_shot(FLASH, flash_root),
+                instance(aura_root, true),
+                one_shot(PLANT, plant_root),
+            ],
+        );
+        world.entity_mut(plant_root).insert(WorldPlantFx {
+            owner: unit,
+            follow: false,
+        });
+        let roots = [flash_root, aura_root, plant_root];
+        let emitters = roots.map(|root| emitter_on(&mut app, root));
+        (app, unit, roots, emitters)
+    }
+
+    /// A unit in display 7 whose visual is built, `body` standing for its rig, wearing `instances`.
+    fn built_unit(world: &mut World, body: Entity, instances: Vec<FxInstance>) -> Entity {
+        world
             .spawn((
                 Transform::default(),
                 GlobalTransform::default(),
@@ -1141,23 +1163,129 @@ mod tests {
                 },
                 display_field(7),
                 crate::entities::live_display::AppliedDisplay(Some(7)),
-                FxAttached {
-                    instances: vec![
-                        one_shot(FLASH, flash_root),
-                        instance(aura_root, true),
-                        one_shot(PLANT, plant_root),
-                    ],
-                },
+                FxAttached { instances },
             ))
             .add_child(body)
+            .id()
+    }
+
+    /// A built unit wearing `kits`, each spawned on a root under its visual, every model ready.
+    fn wearing(kits: Vec<FxInstance>) -> (App, Entity) {
+        let mut app = rebuilding();
+        let world = app.world_mut();
+        for kit in &kits {
+            world.resource_mut::<SpellFx>().models.insert(
+                kit.path.clone(),
+                DisplayModel {
+                    parts: Some(Vec::new()),
+                    ..crate::entities::display::empty_shell()
+                },
+            );
+        }
+        let body = world
+            .spawn((Transform::default(), GlobalTransform::default()))
             .id();
-        world.entity_mut(plant_root).insert(WorldPlantFx {
-            owner: unit,
-            follow: false,
-        });
-        let roots = [flash_root, aura_root, plant_root];
-        let emitters = roots.map(|root| emitter_on(&mut app, root));
-        (app, unit, roots, emitters)
+        let kits = kits
+            .into_iter()
+            .map(|mut kit| {
+                let root = world
+                    .spawn((Transform::default(), GlobalTransform::default()))
+                    .id();
+                world.entity_mut(body).add_child(root);
+                kit.root = Some(root);
+                kit
+            })
+            .collect();
+        let unit = built_unit(world, body, kits);
+        (app, unit)
+    }
+
+    /// Swap the display, then build the new body, as `attach_entity_visuals` would a frame on.
+    fn swap_then_build(app: &mut App, unit: Entity) {
+        app.world_mut().entity_mut(unit).insert(display_field(8));
+        app.update();
+        assert_names_no_dead_root(app, unit);
+        app.world_mut()
+            .entity_mut(unit)
+            .insert(crate::entities::VisualAttached);
+        app.update();
+        app.update();
+        assert_names_no_dead_root(app, unit);
+    }
+
+    /// A persistent hand kit of `spell_id` running `stage`.
+    fn held(spell_id: u32, stage: FxStage, effect: u32, path: &str) -> FxInstance {
+        FxInstance {
+            spell_id,
+            persistent: true,
+            class: FxClass::Hold,
+            stage,
+            tag: 0x15,
+            effect,
+            path: path.into(),
+            root: None,
+            expires: None,
+            decaying: false,
+        }
+    }
+
+    fn roots_of(app: &App, unit: Entity) -> Vec<(u32, Option<Entity>)> {
+        app.world()
+            .get::<FxAttached>(unit)
+            .unwrap()
+            .instances
+            .iter()
+            .map(|i| (i.spell_id, i.root))
+            .collect()
+    }
+
+    /// The rebuild replays the aura slots (`0x5ff130` at `0x60ada6`) and the channel kit
+    /// (`0x612a30` at `0x60adad`, kind 2 at `0x612b2b`), so both come back on the new body, each
+    /// on a fresh root.
+    #[test]
+    fn the_rebuild_replays_the_aura_and_the_channel_on_the_new_body() {
+        let channel = held(5143, FxStage::State, 9, "Spells\\Channel_Hand.mdx"); // Arcane Missiles
+        let (mut app, unit) = wearing(vec![instance(Entity::PLACEHOLDER, true), channel]);
+        let before = roots_of(&app, unit);
+        swap_then_build(&mut app, unit);
+        let after = roots_of(&app, unit);
+        assert_eq!(
+            after.iter().map(|&(spell, _)| spell).collect::<Vec<_>>(),
+            [13033, 5143],
+            "the aura and the channel come back"
+        );
+        for ((_, old), (spell, new)) in before.into_iter().zip(after) {
+            assert!(
+                new.is_some() && new != old,
+                "spell {spell} spawns afresh on the new body"
+            );
+        }
+    }
+
+    /// A precast loop is kind 4 (`0x60ee7e`), which nothing in the rebuild plays again: it ends
+    /// and stays gone.
+    #[test]
+    fn a_precast_loop_ends_at_the_rebuild_and_stays_gone() {
+        let precast = held(116, FxStage::Relive, 10, "Spells\\Precast_Hand.mdx"); // Frostbolt
+        let (mut app, unit) = wearing(vec![precast]);
+        swap_then_build(&mut app, unit);
+        assert_eq!(instances_of(&app, unit), vec![]);
+    }
+
+    /// The loot sparkle (`0x6005d0`) is hung only by its own triggers: the death stamp (`0x5fbe6d`,
+    /// `0x5fc962`), a dynamic-flags write (`0x60058e`), a return (`0x5fbde2`) or a create
+    /// (`0x5fba33`). The rebuild reaches none of them, and the new model plays no death to finish,
+    /// as a dead unit's base pick is 6 or 132 (`0x5fcff0`): the sparkle ends and stays gone.
+    #[test]
+    fn the_loot_sparkle_ends_at_the_rebuild_and_stays_gone() {
+        let sparkle = FxInstance {
+            spell_id: u32::MAX, // the router's loot key
+            tag: 0x13,
+            ..held(0, FxStage::Relive, 11, "Spells\\LootSparkle.mdx")
+        };
+        let (mut app, unit) = wearing(vec![sparkle]);
+        swap_then_build(&mut app, unit);
+        assert_eq!(instances_of(&app, unit), vec![]);
     }
 
     fn display_field(display: u32) -> crate::net::ObjectStore {
@@ -1183,8 +1311,8 @@ mod tests {
 
     /// The rebuild's effect leg, as `0x60abe0` runs it: the `0x60ac10` loop stops every effect on
     /// the unit's list `+0xb4` through `0x6203e0` (`0x61fcf0` links a planted one there too,
-    /// `0x61fdbf`), so each root goes and each emitter drains; what persists re-arms for the new
-    /// body (`0x5ff130`). Then the flash's expiry, a forced reap of the aura and a replay of the
+    /// `0x61fdbf`), so each root goes and each emitter drains; the aura's state kit re-arms for the
+    /// new body (`0x5ff130`). Then the flash's expiry, a forced reap of the aura and a replay of the
     /// flash's slot all run with nothing dead to despawn.
     fn assert_the_rebuild_ended_every_effect(
         mut app: App,

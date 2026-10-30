@@ -7,8 +7,8 @@
 //! ride animation (`0x60ce70`): an instant swap, a ghost's revive too. Its scale handler eases
 //! over 2 s with a cosine smoothstep (`0x614bbf`). Here a swap tears the visual down for
 //! `attach_entity_visuals` to rebuild without the spawn fade, first ending the unit's spell effects
-//! as the rebuild's `0x60ac10` loop does ([`super::spell_fx::RebuildFx`]), so persistent ones
-//! re-spawn on the new body.
+//! as the rebuild's `0x60ac10` loop does ([`super::spell_fx::RebuildFx`]); the auras' and the
+//! channel's re-spawn on the new body.
 
 use benilla_protocol::EntityKind;
 use bevy::prelude::*;
