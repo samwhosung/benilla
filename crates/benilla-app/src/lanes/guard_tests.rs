@@ -354,35 +354,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // runs on inside its call.
     ("::ui_chat::recruitment::guild_recruitment_cascade", &["net::ObjectStore",
         "ui_chat::edit::ChannelState"]),
-    // The CVar mirror `GetCVar` (`0x488ba0`) reads: a write no call made (a handler's among them)
-    // reaches it at the next sync, where the reference's getter reads the registry. The inputs
-    // are the registry and its callbacks' targets.
-    ("::cvars::sync_cvars", &["ClutterConfig", "FfxSwitches", "MsaaSetting", "ParticleTuning",
-        "TexFilterSetting", "ViewDistance", "WeatherState", "chat_bubble::BubbleConfig",
-        "combat_text::law::DamageTextGates", "cvars::Cvars", "game_tip::GameTipSetting",
-        "minimap::MinimapZoom", "nameplates::NameConfig", "perf::journal::FpsJournalSetting",
-        "player::approach::Approach", "player::camera::FollowConfig", "player::camera::LookConfig",
-        "player::camera_dynamics::CameraOptions", "player::camera_zoom::ZoomLimit",
-        "portrait::PaneRate", "realmlist::Realmlist", "sound::SoundConfig",
-        "spell::cast_target::AutoSelfCast", "target::AssistAttack", "target::ClickConfig",
-        "text_filter::TextFilterSwitches", "ui_chat::combat::CombatLogRanges",
-        "ui_chat::combat::LogPeriodicSpells", "ui_gamma::DisplayGamma",
-        "ui_guild::GuildMemberNotify", "ui_loot::LootConfig", "ui_script::UiScaleCvar",
-        "ui_trade::BlockTrades", "video::SpellEffectLevel", "video::VideoConfig", "video::Widescreen",
-        "world_backdrop::RenderScale"]),
-    ("::cvars::sync_input_cvars", &["ClutterConfig", "FfxSwitches", "MsaaSetting", "ParticleTuning",
-        "TexFilterSetting", "ViewDistance", "WeatherState", "chat_bubble::BubbleConfig",
-        "combat_text::law::DamageTextGates", "cvars::Cvars", "game_tip::GameTipSetting",
-        "minimap::MinimapZoom", "nameplates::NameConfig", "perf::journal::FpsJournalSetting",
-        "player::approach::Approach", "player::camera::FollowConfig", "player::camera::LookConfig",
-        "player::camera_dynamics::CameraOptions", "player::camera_zoom::ZoomLimit",
-        "portrait::PaneRate", "realmlist::Realmlist", "sound::SoundConfig",
-        "spell::cast_target::AutoSelfCast", "target::AssistAttack", "target::ClickConfig",
-        "text_filter::TextFilterSwitches", "ui_chat::combat::CombatLogRanges",
-        "ui_chat::combat::LogPeriodicSpells", "ui_gamma::DisplayGamma",
-        "ui_guild::GuildMemberNotify", "ui_loot::LootConfig", "ui_script::UiScaleCvar",
-        "ui_trade::BlockTrades", "video::SpellEffectLevel", "video::VideoConfig", "video::Widescreen",
-        "world_backdrop::RenderScale"]),
     // The plates seated off the units as the frame left them, where the reference moves a plate's
     // bar inside the packet, by its health watcher `0x7cc570` (registered by `0x7cc510`), and
     // binds plates there too: `0x60f600`, called at `0x60706a` from `InvalidateNameDesc`, whose
@@ -447,11 +418,11 @@ pub(super) const BUILT_OUTSIDE_THE_PACKETS_IN_THE_REFERENCE: &[(&str, &[&str], &
 
 /// The systems that write the VM and push no view a getter reads of what a handler writes, by a
 /// suffix of the system's name (beside [`NOT_YET_PLACED`]'s, whose firing is their work), with
-/// what they do: an input's dispatch and the requests its calls
-/// queued, a timer or a poll that signals in place, a session's end or the leave-world sweep's
-/// leg, a save no script reads, a draw no getter reads, or the glue VM's frame, which no lane
-/// fires into. The reference too does each outside every packet, so they stay after the flip;
-/// one that stops writing the VM fails as stale.
+/// what they do: an input's dispatch and the requests its calls queued, a timer or a poll that
+/// signals in place, the CVar writes no call took, a session's end or the leave-world sweep's leg,
+/// a save no script reads, a draw no getter reads, or the glue VM's frame, which no lane fires
+/// into. The reference too does each outside every packet, so they stay after the flip; one that
+/// stops writing the VM fails as stale.
 #[rustfmt::skip]
 pub(super) const WRITES_NO_VIEW: &[(&str, &str)] = &[
     ("::bindings::begin_dispatch", "the input pass's head: the binding calls Lua made, then the \
@@ -461,6 +432,12 @@ pub(super) const WRITES_NO_VIEW: &[(&str, &str)] = &[
         shutdown in the reference (`0x490bd0` → `0x4b65e0`)"),
     ("::cursor::drive_displayed_cursor", "the cursor FrameXML set, and the world frame's hover \
         (`0x481790`)"),
+    ("::cvars::sync_cvars", "the CVar writes no call took into the mirror `GetCVar` reads (the \
+        record's text, `0x488bf9`), and a new VM's seed: a packet's write reaches the mirror \
+        inside its call, as `CVar::Set` runs inside its writer (`0x63df7d`), and every other is \
+        made outside the packets (`every_cvar_write_reaches_the_mirror_before_a_packet`)"),
+    ("::cvars::sync_input_cvars", "the same writes, ahead of the world's mouse and the frame's \
+        packets"),
     ("::death::poll_corpse", "`CheckCorpseRange` (`0x492130`) every frame after the pick \
         (`0x4818c5`), signalling in place"),
     ("::player::camera::apply_late_look_calls", "the look calls the frame's packets made, for \
@@ -1956,6 +1933,135 @@ fn every_view_push_of_what_a_handler_writes_is_listed() {
         wrong.join("\n  ")
     );
     assert!(stale.is_empty(), "stale rows: {stale:?}");
+}
+
+/// The CVar mirror's two syncs are [`WRITES_NO_VIEW`]'s, not [`READS_FRAME_FINAL`]'s, on these
+/// facts. The reference's `GetCVar` reads the one record (`0x488bd1`, `0x488bf9`) that `CVar::Set`
+/// writes, running its callback inside the writer (`0x63df7d`). Here no handler holds the
+/// registry but through the call host, whose appliers sync the VM's mirror inside the call that
+/// writes it ([`crate::cvars::CvarSteps`]), and every other system of the frame that writes it
+/// runs ahead of the input pass's sync or after the dispatch, so that sync carries the write in
+/// before the next packet: a listener inside a packet reads every write made before it. A handler
+/// that writes the registry itself, or a writer between the input sync and the dispatch, fails
+/// here. The other schedules run outside `Update`, and an exclusive system shows no access.
+#[test]
+fn every_cvar_write_reaches_the_mirror_before_a_packet() {
+    use bevy::ecs::query::{FilteredAccess, FilteredAccessSet};
+    use bevy::ecs::schedule::SystemKey;
+    use bevy::ecs::system::System;
+    use std::collections::HashSet;
+    let mut app = headless_client();
+    let host = {
+        let mut host = IntoSystem::into_system(|_: crate::script_calls::ScriptCallHost| {});
+        System::initialize(&mut host, app.world_mut())
+    };
+    let registry = app
+        .world()
+        .components()
+        .get_resource_id(TypeId::of::<crate::cvars::Cvars>())
+        .expect("the client registers the CVar registry");
+    // A write of the registry past the host a system lends, entry by entry, as one that lends the
+    // host holds all of the host's.
+    let past_the_host = |access: &FilteredAccessSet| {
+        let mut with_host = access.clone();
+        with_host.extend(host.clone());
+        let mut own: Vec<&FilteredAccess> = access.filtered_accesses().iter().collect();
+        if with_host.combined_access() == access.combined_access() {
+            for h in host.filtered_accesses() {
+                if let Some(i) = own.iter().position(|o| *o == h) {
+                    own.remove(i);
+                }
+            }
+        }
+        own.iter().any(|o| o.access().has_resource_write(registry))
+    };
+    let handlers = app.world().resource::<crate::net::handlers::NetHandlers>();
+    // The control: the handlers that lend the host hold the registry through it.
+    assert!(
+        handlers
+            .accesses()
+            .iter()
+            .any(|(_, a)| a.combined_access().has_resource_write(registry)),
+        "no handler reaches the registry, even through the host: the scan below reads nothing"
+    );
+    let handlers: Vec<&str> = handlers
+        .accesses()
+        .iter()
+        .filter(|(_, a)| past_the_host(a))
+        .map(|(n, _)| *n)
+        .collect();
+    assert!(
+        handlers.is_empty(),
+        "these handlers write the CVar registry past the call host, so a listener in the packet \
+         reads the VM's mirror as the last sync left it: write it through the host, whose \
+         appliers sync the mirror inside the write:\n  {}",
+        handlers.join("\n  ")
+    );
+    let systems: Vec<(SystemKey, FilteredAccessSet)> =
+        app.world_mut().schedule_scope(Update, |world, schedule| {
+            schedule.graph_mut().systems.initialize(world);
+            let graph = schedule.graph();
+            graph
+                .systems
+                .iter()
+                .filter(|(_, system, _)| !system.is_exclusive())
+                .filter_map(|(k, _, _)| Some((k, graph.systems.get(k)?.access.clone())))
+                .filter(|(_, access)| past_the_host(access))
+                .collect()
+        });
+    let c = census(&mut app, Update, SyncPoints::Declared);
+    if !type_names_available(&c) {
+        eprintln!("skipped: this build carries no type names");
+        return;
+    }
+    let one = |suffix: &str| {
+        let mut hits = c.systems.iter().filter(|(_, s)| s.name.ends_with(suffix));
+        match (hits.next(), hits.next()) {
+            (Some((k, _)), None) => *k,
+            _ => panic!("exactly one system named `…{suffix}` in Update"),
+        }
+    };
+    let (sync, dispatch) = (
+        one("::cvars::sync_input_cvars"),
+        one("::net::apply::apply_net_updates"),
+    );
+    let mut prev: HashMap<SystemKey, Vec<SystemKey>> = HashMap::new();
+    for (a, b) in &c.dependencies {
+        prev.entry(*b).or_default().push(*a);
+    }
+    let ahead_of = |start: SystemKey| {
+        let mut seen = HashSet::new();
+        let mut stack = vec![start];
+        while let Some(n) = stack.pop() {
+            for m in prev.get(&n).into_iter().flatten() {
+                if seen.insert(*m) {
+                    stack.push(*m);
+                }
+            }
+        }
+        seen
+    };
+    // The control: the tip cursor's write at the world entry, a plain one after the dispatch.
+    assert!(
+        systems
+            .iter()
+            .any(|(k, _)| c.name(*k).ends_with("::game_tip::drive_game_tip")),
+        "the scan no longer sees `drive_game_tip`'s write of the registry"
+    );
+    let before_sync = ahead_of(sync);
+    let between: Vec<&str> = systems
+        .iter()
+        .filter(|(k, _)| *k != sync && !before_sync.contains(k))
+        .filter(|(k, _)| !ahead_of(*k).contains(&dispatch))
+        .map(|(k, _)| c.name(*k))
+        .collect();
+    assert!(
+        between.is_empty(),
+        "these write the CVar registry outside any call and may run between the input pass's \
+         sync and the dispatch, so the frame's packets read the VM's mirror without the write: \
+         order each ahead of `sync_input_cvars` or after the dispatch:\n  {}",
+        between.join("\n  ")
+    );
 }
 
 /// The lanes' own state that every firing of the drain reads as of its place, not as the frame left

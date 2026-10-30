@@ -1046,8 +1046,9 @@ pub(crate) fn boot_cvar(name: &str) -> Option<String> {
 /// callbacks and push the registry's writes into the mirror, so the look's rates and the camera's
 /// dynamics have moved before the world's mouse reads them. A Lua verb's write ran its callback
 /// inside its call already ([`CvarSteps`]), as the reference's `CVar::Set` (`0x63df50`) calls it
-/// inside the write (`0x63df7d`). A new VM is seeded by [`sync_cvars`], which drains its writes
-/// first as well.
+/// inside the write (`0x63df7d`). The host's writes outside any call since the last packets (the
+/// tip cursor's, the fullscreen size) reach the mirror here, ahead of the frame's packets. A new VM
+/// is seeded by [`sync_cvars`], which drains its writes first as well.
 pub(crate) fn sync_input_cvars(mut vm: crate::script_calls::VmWith<CvarSteps<'static>>) {
     vm.turn(|script, mut steps| steps.sync(script))
 }
