@@ -78,6 +78,12 @@ pub(crate) enum SpellKitSound {
         entity: Entity,
         spell_id: u32,
         kit_sound: u32,
+        /// A stage-2 play (`0x60f383`), the kind a display rebuild plays again for the channel
+        /// (`0x612b2b`) and each aura slot (`0x5ff130`).
+        state: bool,
+        /// Its packet's place ([`SpellKitFx::at`]), which a hold loop keeps for
+        /// [`Self::Rebuilt`].
+        at: Option<crate::lanes::Stamp>,
     },
     /// Stop the unit's hold loop: for `Some(spell)`, only a loop that spell's kit rang, as
     /// `0x614150(spell, 0)` stops only the effects whose spell matches (`0x614167`); for `None`,
@@ -91,6 +97,14 @@ pub(crate) enum SpellKitSound {
     PlayAt { pos: Vec3, kit_sound: u32 },
     /// Stop this kit's sound on the unit as its aura leaves (`0x614150`, 0.15 s fade).
     StopKit { entity: Entity, kit_sound: u32 },
+    /// A display rebuild at `at` (`0x60abe0`): its loop `0x60ac10` stops each of the unit's
+    /// effects, fading each one's sound (`0x6203e0`, 0.15 s at `0x6204af`). The unit's hold loop
+    /// goes if it rang before `at`, unless the rebuild rings its kit again: the channel's
+    /// (`0x612a30`) or an aura slot's (`0x5ff130`).
+    Rebuilt {
+        entity: Entity,
+        at: crate::lanes::Stamp,
+    },
 }
 
 /// A kit's camera shake (kit field 14 → `SpellEffectCameraShakes.dbc`), consumed by
@@ -608,6 +622,8 @@ fn play_kit(
             entity,
             spell_id,
             kit_sound,
+            state: play.stage_2,
+            at: out.at,
         });
     }
     // The camera shake plays at every stage, gated on nothing.
@@ -910,6 +926,8 @@ pub(super) fn route_cast_visuals(
                             entity: ev.entity,
                             spell_id: ev.spell_id,
                             kit_sound,
+                            state: false,
+                            at: ev.at,
                         });
                     }
                     // Persistent until the cast resolves, re-armed forever (stage 4).
@@ -1200,6 +1218,8 @@ pub(super) fn route_cast_visuals(
                         entity,
                         spell_id: cur,
                         kit_sound,
+                        state: true,
+                        at: None,
                     });
                 }
                 // The CharProc dispatcher's second caller (`0x612b18`): Drain Life's beam is
@@ -1389,6 +1409,8 @@ pub(crate) fn arm_aura_state_fx(
                     entity,
                     spell_id,
                     kit_sound,
+                    state: true,
+                    at: aura_at.get(&entity).copied(),
                 });
             }
             // The stage-2 anim leg, on the add edge only: an aura refreshed in place keeps its id,

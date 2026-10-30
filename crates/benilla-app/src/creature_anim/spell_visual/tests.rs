@@ -2487,7 +2487,9 @@ fn esc_with_a_cursor_up_leaves_the_running_channels_hold_and_loop() {
                 entity,
                 spell_id,
                 kit_sound: AM_HUM,
-            } => loops.rang(entity, spell_id, AM_HUM),
+                state,
+                at,
+            } => loops.rang(entity, (spell_id, AM_HUM), state, at),
             SpellKitSound::StopHold { entity, spell_id } => {
                 loops.stop_hold(entity, spell_id);
             }
@@ -2533,7 +2535,9 @@ fn a_go_stops_the_running_auto_repeat_spells_hold_and_loop_on_its_caster() {
                     entity,
                     spell_id,
                     kit_sound: AUTO_SHOT_LOOP,
-                } => loops.rang(entity, spell_id, AUTO_SHOT_LOOP),
+                    state,
+                    at,
+                } => loops.rang(entity, (spell_id, AUTO_SHOT_LOOP), state, at),
                 SpellKitSound::StopHold { entity, spell_id } => {
                     loops.stop_hold(entity, spell_id);
                 }

@@ -115,6 +115,7 @@ pub(super) fn refresh_live_display(
     mut rebuilds: MessageReader<DisplayRebuilt>,
     mut swapped: MessageWriter<DisplaySwapped>,
     mut fx: super::spell_fx::RebuildFx,
+    mut kit_sounds: MessageWriter<crate::creature_anim::SpellKitSound>,
 ) {
     // This frame's unit rebuilds, the latest of each unit's: it ends whatever came before it.
     let mut rebuilt: bevy::ecs::entity::EntityHashMap<crate::lanes::Stamp> = default();
@@ -146,6 +147,10 @@ pub(super) fn refresh_live_display(
                     at: rebuilt.get(&entity).copied(),
                 });
                 fx.end_all(&mut commands, entity, super::spell_fx::Rebuild::Display);
+                if let Some(&at) = rebuilt.get(&entity) {
+                    // The same loop stops the kit sounds it links (`0x61fedc`).
+                    kit_sounds.write(crate::creature_anim::SpellKitSound::Rebuilt { entity, at });
+                }
                 // `attach_entity_visuals` rebuilds from scratch, fade-skipped by `Reattached`.
                 commands
                     .entity(entity)
@@ -379,6 +384,7 @@ mod tests {
         app.init_resource::<benilla_world::rig_palette::RigPalettes>();
         app.add_message::<DisplaySwapped>();
         app.add_message::<DisplayRebuilt>();
+        app.add_message::<crate::creature_anim::SpellKitSound>();
         app.add_systems(Update, (refresh_live_display, heal_rig_starved));
         let unit = |app: &mut App, display: u32| {
             app.world_mut()
@@ -423,12 +429,13 @@ mod tests {
         }
     }
 
-    /// The update's rebuild of `unit`, as its display watcher announces it.
-    fn rebuild(app: &mut App, unit: Entity) {
+    /// The update's rebuild of `unit`, as its display watcher announces it, at its stamp.
+    fn rebuild(app: &mut App, unit: Entity) -> crate::lanes::Stamp {
         let at = crate::lanes::stamp();
         app.world_mut()
             .resource_mut::<Messages<DisplayRebuilt>>()
             .write(DisplayRebuilt { entity: unit, at });
+        at
     }
 
     /// An app running the swap, and a unit built in display 7 whose descriptor now says 8.
@@ -437,6 +444,7 @@ mod tests {
         app.init_resource::<benilla_world::rig_palette::RigPalettes>();
         app.add_message::<DisplaySwapped>();
         app.add_message::<DisplayRebuilt>();
+        app.add_message::<crate::creature_anim::SpellKitSound>();
         app.add_systems(Update, refresh_live_display);
         let unit = app
             .world_mut()
@@ -477,6 +485,26 @@ mod tests {
         let e = app.world().entity(unit);
         assert!(!e.contains::<VisualAttached>(), "the rebuild swaps it");
         assert_eq!(e.get::<NetEntity>().unwrap().display_id, Some(8));
+    }
+
+    /// The rebuild's loop `0x60ac10` stops the kit sounds it links (`0x61fedc`) with the rest:
+    /// the swap hands the sound side the rebuild's stamp, to stop the hold loops rung before it.
+    #[test]
+    fn a_units_rebuild_hands_its_stamp_to_the_kit_sounds() {
+        use crate::creature_anim::SpellKitSound;
+        let (mut app, unit) = displayed_unit(true);
+        let at = rebuild(&mut app, unit);
+        app.update();
+        let edges: Vec<_> = app
+            .world_mut()
+            .resource_mut::<Messages<SpellKitSound>>()
+            .drain()
+            .filter_map(|ev| match ev {
+                SpellKitSound::Rebuilt { entity, at } => Some((entity, at)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(edges, [(unit, at)]);
     }
 
     /// A unit rebuilt before its visual attached builds the new display, not its create's.

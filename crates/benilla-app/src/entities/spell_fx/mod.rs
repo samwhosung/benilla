@@ -1122,6 +1122,7 @@ mod tests {
         .add_message::<SpellKitFx>()
         .add_message::<crate::entities::live_display::DisplaySwapped>()
         .add_message::<crate::entities::DisplayRebuilt>()
+        .add_message::<crate::creature_anim::SpellKitSound>()
         .add_systems(
             Update,
             (crate::entities::rebuild_then_start_kits(), attach_spell_fx).chain(),
