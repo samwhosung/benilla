@@ -841,6 +841,11 @@ impl TradeSkillSteps<'_, '_> {
     /// and built, or closed, and its events raised for the call's next signal point. Whether any
     /// was raised.
     pub(crate) fn toggle_opens(&mut self, script: &mut UiScript) -> bool {
+        // Read before it is taken, so a call that cast no opener writes nothing here: the
+        // census counts a mutable borrow as a write ([`benilla_ui::script::census`]).
+        if !self.opens.as_deref().is_some_and(|o| !o.0.is_empty()) {
+            return false;
+        }
         let Some(spells) = self.opens.as_deref_mut().map(|o| std::mem::take(&mut o.0)) else {
             return false;
         };
