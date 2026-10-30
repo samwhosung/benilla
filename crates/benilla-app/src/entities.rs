@@ -10,6 +10,8 @@ use benilla_formats::{
     CharSections, CharacterGeosets, CreatureCatalog, GameObjectCatalog,
 };
 use benilla_protocol::EntityKind;
+use bevy::ecs::schedule::ScheduleConfigs;
+use bevy::ecs::system::ScheduleSystem;
 use bevy::prelude::*;
 
 use crate::net::NetEntity;
@@ -646,6 +648,19 @@ fn publish_world_units(
     }
 }
 
+/// A display swap and a rig heal, then the frame's kit starts. The reference writes an update's
+/// fields first and runs their watchers after, in field order, so the display's rebuild (field
+/// 131, `0x604990`) ends the unit's effects before the mount (133), dynamic flags (143) and
+/// channel (144) watchers start theirs. The rebuild's end therefore runs before this frame's starts
+/// are recorded, and they land on the new body.
+fn rebuild_then_start_kits() -> ScheduleConfigs<ScheduleSystem> {
+    (
+        (refresh_live_display, live_display::heal_rig_starved).chain(),
+        resolve_spell_fx,
+    )
+        .chain()
+}
+
 /// Loads the display catalogs at startup and each frame gives every net entity its visual.
 pub(crate) struct EntitiesPlugin;
 
@@ -709,7 +724,7 @@ impl Plugin for EntitiesPlugin {
                 // 20-element ceiling.
                 (resolve_equipment, resolve_corpse_equipment),
                 // Spell effects and missiles create `SpellFx` entries too.
-                resolve_spell_fx,
+                rebuild_then_start_kits(),
                 move_missiles,
                 spawn_missiles,
                 // The dest-anchored lane's three independent producers also create entries.
@@ -745,14 +760,9 @@ impl Plugin for EntitiesPlugin {
                 // A mount change re-seats the rig on the mount's attachment 0 or back, as the
                 // reference re-parents the body model (`0x712f70`, `0x713020`).
                 reseat_mounts,
-                // A display swap rebuilds, a scale change eases over the reference's 2 s, and a
-                // unit denied a palette rig rebuilds once the table has room.
-                (
-                    refresh_live_display,
-                    tick_scale_ease,
-                    live_display::heal_rig_starved,
-                )
-                    .chain(),
+                // A scale change eases over the reference's 2 s, after attach so a rebuild's snap
+                // never draws.
+                tick_scale_ease,
             )
                 .chain()
                 .in_set(EntityVisualsSet)

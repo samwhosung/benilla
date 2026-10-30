@@ -1038,7 +1038,8 @@ mod tests {
     /// A one-shot planted at the unit's feet (kit field 12), standing free of its visual.
     const PLANT: (u32, u16, &str) = (8, benilla_formats::WORLD_EFFECT_TAG, "Spells\\Ring.mdx");
 
-    /// The frame's kit and rebuild systems in the plugin's order, on a clock the test advances.
+    /// The frame's rebuilds, kit starts and spawn pass in the plugin's order (its own
+    /// `rebuild_then_start_kits`), on a clock the test advances.
     fn rebuilding() -> App {
         let mut app = App::new();
         app.add_plugins((
@@ -1058,13 +1059,7 @@ mod tests {
         .add_message::<crate::entities::live_display::DisplaySwapped>()
         .add_systems(
             Update,
-            (
-                resolve_spell_fx,
-                attach_spell_fx,
-                crate::entities::live_display::refresh_live_display,
-                crate::entities::live_display::heal_rig_starved,
-            )
-                .chain(),
+            (crate::entities::rebuild_then_start_kits(), attach_spell_fx).chain(),
         );
         app
     }
@@ -1286,6 +1281,96 @@ mod tests {
         let (mut app, unit) = wearing(vec![sparkle]);
         swap_then_build(&mut app, unit);
         assert_eq!(instances_of(&app, unit), vec![]);
+    }
+
+    /// Write `starts` as this frame's kit edges, beside a display swap from the same update.
+    fn swap_with(app: &mut App, unit: Entity, starts: Vec<SpellKitFx>) {
+        let mut messages = app.world_mut().resource_mut::<Messages<SpellKitFx>>();
+        for start in starts {
+            messages.write(start);
+        }
+        app.world_mut().entity_mut(unit).insert(display_field(8));
+    }
+
+    /// Build the new body a frame on, then let the spawn pass run.
+    fn build_body(app: &mut App, unit: Entity) {
+        app.update();
+        assert_names_no_dead_root(app, unit);
+        app.world_mut()
+            .entity_mut(unit)
+            .insert(crate::entities::VisualAttached);
+        app.update();
+        assert_names_no_dead_root(app, unit);
+    }
+
+    /// A unit that dies in a form leaves the form and turns lootable in one update. The display
+    /// watcher (131, `0x604990`) rebuilds before the dynamic flags' (143, `0x604b30`), whose
+    /// sparkle (`0x60058e`), or the one the death's end hangs (`0x5fc962`), comes after it.
+    /// So the sparkle starts on the new body and stays.
+    #[test]
+    fn a_unit_that_dies_in_a_form_and_turns_lootable_in_one_update_keeps_its_sparkle() {
+        const SPARKLE: &str = "Spells\\LootSparkle.mdx";
+        let (mut app, unit) = wearing(vec![]);
+        app.world_mut().resource_mut::<SpellFx>().models.insert(
+            SPARKLE.into(),
+            DisplayModel {
+                parts: Some(Vec::new()),
+                ..crate::entities::display::empty_shell()
+            },
+        );
+        let sparkle = SpellKitFx::Begin {
+            entity: unit,
+            spell_id: u32::MAX, // as the loot router writes it
+            persistent: true,
+            class: FxClass::Hold,
+            stage: FxStage::Relive,
+            effects: vec![FxSlot {
+                tag: 0x13,
+                effect: 11,
+                path: SPARKLE.into(),
+            }],
+        };
+        swap_with(&mut app, unit, vec![sparkle]);
+        build_body(&mut app, unit);
+        assert!(
+            matches!(roots_of(&app, unit)[..], [(u32::MAX, Some(_))]),
+            "the sparkle hangs on the new body: {:?}",
+            roots_of(&app, unit)
+        );
+    }
+
+    /// A form's aura added in the update that swaps the display: the aura watcher (fields 47 to
+    /// 100, `0x604d00`) starts its state kit before the rebuild, which stops it and replays the
+    /// slot (`0x5ff130`). One instance, on the new body.
+    #[test]
+    fn an_aura_added_with_a_swap_lands_once_on_the_new_body() {
+        let (mut app, unit) = wearing(vec![]);
+        app.world_mut().resource_mut::<SpellFx>().models.insert(
+            "Spells\\IceShield_State.mdx".into(),
+            DisplayModel {
+                parts: Some(Vec::new()),
+                ..crate::entities::display::empty_shell()
+            },
+        );
+        let aura = SpellKitFx::Begin {
+            entity: unit,
+            spell_id: 13033,
+            persistent: true,
+            class: FxClass::AuraState,
+            stage: FxStage::State,
+            effects: vec![FxSlot {
+                tag: 0x13,
+                effect: 1499,
+                path: "Spells\\IceShield_State.mdx".into(),
+            }],
+        };
+        swap_with(&mut app, unit, vec![aura]);
+        build_body(&mut app, unit);
+        assert!(
+            matches!(roots_of(&app, unit)[..], [(13033, Some(_))]),
+            "one aura instance, spawned on the new body: {:?}",
+            roots_of(&app, unit)
+        );
     }
 
     fn display_field(display: u32) -> crate::net::ObjectStore {
