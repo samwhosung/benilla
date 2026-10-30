@@ -1734,9 +1734,10 @@ pub(crate) fn replay_rebuilt_kit_sounds(
     mut sounds: MessageWriter<SpellKitSound>,
 ) {
     for swap in swaps.read() {
-        let (Some(at), Ok(store)) = (swap.at, units.get(swap.entity)) else {
-            continue; // a game object's or corpse's new id, or a unit gone
+        let Ok(store) = units.get(swap.entity) else {
+            continue; // a unit gone
         };
+        let at = swap.at;
         let (Some(visuals), Some(spells)) = (visuals.as_deref(), spells.as_deref()) else {
             continue; // no client data
         };

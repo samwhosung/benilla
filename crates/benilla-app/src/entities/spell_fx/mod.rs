@@ -549,10 +549,8 @@ pub(super) fn resolve_spell_fx(
     let now = time.elapsed_secs();
     let mut rebuilt: EntityHashMap<crate::lanes::Stamp> = EntityHashMap::default();
     for swap in swaps.read() {
-        if let Some(at) = swap.at {
-            let latest = rebuilt.entry(swap.entity).or_insert(at);
-            *latest = (*latest).max(at);
-        }
+        let latest = rebuilt.entry(swap.entity).or_insert(swap.at);
+        *latest = (*latest).max(swap.at);
     }
     let mut ops: EntityHashMap<Vec<&SpellKitFx>> = EntityHashMap::default();
     for ev in events.read() {

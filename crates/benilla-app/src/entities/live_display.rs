@@ -1,13 +1,17 @@
-//! Live appearance changes: a values delta that moves `UNIT_FIELD_DISPLAYID` or
-//! `GAMEOBJECT_DISPLAYID` swaps the entity's model in place, and one that moves
-//! `OBJECT_FIELD_SCALE_X` eases its render scale.
+//! Live appearance changes: a unit's display rebuild swaps its model in place, and a values
+//! delta that moves `OBJECT_FIELD_SCALE_X` eases the render scale.
 //!
 //! The reference's display handler rebuilds the model (`0x60abe0`) when the display record changed
 //! (`0x60ae10`, against `[unit+0xb34]`), re-resolving its model facts (`0x60afb0`) and the stand or
 //! ride animation (`0x60ce70`): an instant swap, a ghost's revive too. Its scale handler eases
 //! over 2 s with a cosine smoothstep (`0x614bbf`). A unit swaps on the update's own rebuild
 //! ([`DisplayRebuilt`]), so a new display naming the same records keeps the body, as `0x60ae10`
-//! keeps it; a game object or corpse swaps on any new id. Here a swap tears the visual down for
+//! keeps it. A game object or corpse keeps the model its create gave it: no watcher of either
+//! covers its display id (the game object's, `0x5f8820`, watch its flags, state, art kit and
+//! animation progress; the corpse's, `0x5d5f60`, its flags and dynamic flags). The corpse's flags
+//! watcher rebuilds its body (`0x5d5fa0` → `0x5d6d60`), the in-place flesh-to-bones flip, which
+//! is not built: vmangos removes the corpse and adds a separate bones object under the same guid
+//! (`Map.cpp:3608-3649`). Here a swap tears the visual down for
 //! `attach_entity_visuals` to rebuild without the spawn fade, first ending the unit's spell effects
 //! as the rebuild's `0x60ac10` loop does ([`super::spell_fx::RebuildFx`]); the auras' and the
 //! channel's re-spawn on the new body.
@@ -23,8 +27,7 @@ use super::{Creatures, VisualAttached};
 /// The reference's scale-ease window: 2 s, cosine smoothstep (`0x614bbf`).
 const SCALE_EASE_SECS: f32 = 2.0;
 
-/// The display id the visual was built with, cube included: [`refresh_live_display`]'s diff key
-/// for a game object or corpse.
+/// The display id the visual was built with, cube included.
 #[derive(Component)]
 pub(crate) struct AppliedDisplay(pub(crate) Option<u32>);
 
@@ -40,15 +43,15 @@ pub(crate) struct DisplayRebuilt {
     pub(crate) display_id: u32,
 }
 
-/// A unit's display rebuild, or a game object's or corpse's new display id, which tore down the
-/// visual it had. The reference's rebuild ends by replaying the pending morph's impact kit
-/// (`0x60ad67`), which `crate::creature_anim`'s morph-latch watcher does on this edge.
+/// A unit's display rebuild, which tore down the visual it had, if any. The reference's rebuild
+/// ends by replaying the pending morph's impact kit (`0x60ad67`), which `crate::creature_anim`'s
+/// morph-latch watcher does on this edge.
 #[derive(Message, Clone, Copy)]
 pub(crate) struct DisplaySwapped {
     pub(crate) entity: Entity,
-    /// A unit's rebuild's place ([`DisplayRebuilt::at`]), at which `spell_fx` ends the kit starts
-    /// the wire put before it; `None` for a game object's or corpse's new id.
-    pub(crate) at: Option<crate::lanes::Stamp>,
+    /// The rebuild's place ([`DisplayRebuilt::at`]), at which `spell_fx` ends the kit starts the
+    /// wire put before it.
+    pub(crate) at: crate::lanes::Stamp,
 }
 
 /// A render-scale ease toward [`NetEntity::scale`], written absolutely each tick so a mid-ease
@@ -58,28 +61,6 @@ pub(super) struct ScaleEase {
     from: f32,
     to: f32,
     elapsed: f32,
-}
-
-/// The live display id, read per kind as `benilla_protocol` reads it at create: `0` is absent, so
-/// it never tears a visual down to a cube.
-fn live_display_id(kind: EntityKind, store: &ObjectStore) -> Option<u32> {
-    match kind {
-        EntityKind::Unit | EntityKind::Player => store
-            .0
-            .unit_displayid()
-            .filter(|&d| d > 0)
-            .map(|d| d as u32),
-        EntityKind::GameObject => store
-            .0
-            .gameobject_displayid()
-            .filter(|&d| d > 0)
-            .map(|d| d as u32),
-        // A death-time snapshot. The in-place flesh-to-bones flip, which the reference reloads on
-        // (`CORPSE_FIELD_FLAGS` handler `0x5d5fa0`, `0x5d6d60`), is not built: vmangos removes the
-        // corpse and adds a separate bones object under the same guid (`Map.cpp:3608-3649`).
-        EntityKind::Corpse => store.0.corpse_display_id(),
-        _ => None,
-    }
 }
 
 /// A unit's rebuild at `at` (`0x60abe0`), short of its body: the loop `0x60ac10` stops every
@@ -93,17 +74,13 @@ fn rebuild_edges(
     entity: Entity,
     at: crate::lanes::Stamp,
 ) {
-    swapped.write(DisplaySwapped {
-        entity,
-        at: Some(at),
-    });
+    swapped.write(DisplaySwapped { entity, at });
     fx.end_all(commands, entity, super::spell_fx::Rebuild::Display);
     kit_sounds.write(crate::creature_anim::SpellKitSound::Rebuilt { entity, at });
 }
 
 /// Each attached entity's live appearance against what its visual was built with: a unit's
-/// rebuild ([`DisplayRebuilt`]) or a game object's or corpse's new display id swaps the model, a
-/// scale move arms the 2 s ease, and a change of the native display or `SCALE_X` restamps
+/// rebuild ([`DisplayRebuilt`]) swaps the model, a scale move arms the 2 s ease, and a change of the native display or `SCALE_X` restamps
 /// [`CollisionHeight`]. A unit rebuilt before its visual attached builds the new display.
 /// Mount children carry no [`ObjectStore`]: their display is the host's field, diffed by
 /// `mount::reseat_mounts`.
@@ -165,35 +142,21 @@ pub(super) fn refresh_live_display(
     }
     for (entity, guid, mut net, store, applied, height, tf) in &mut entities {
         // ── The display swap ─────────────────────────────────────────────────────────────────
-        // A unit takes the row its update's rebuild resolved; any other kind, a new field.
-        let swap = match net.kind {
-            EntityKind::Unit | EntityKind::Player => {
-                rebuilt.get(&entity).map(|&(at, row)| (row, Some(at)))
-            }
-            _ => live_display_id(net.kind, store)
-                .filter(|&live| applied.0 != Some(live))
-                .map(|live| (live, None)),
-        };
-        if let Some((to, at)) = swap {
+        // A unit takes the row its update's rebuild resolved; only a unit's display is watched.
+        if let Some(&(at, to)) = rebuilt.get(&entity) {
             info!(
                 "display swap: guid {:016x} {:?} {:?} -> {} (instant, the 0x60abe0 rebuild)",
                 guid.0, net.kind, applied.0, to
             );
             net.display_id = Some(to);
-            match at {
-                Some(at) => rebuild_edges(
-                    &mut commands,
-                    &mut fx,
-                    &mut swapped,
-                    &mut kit_sounds,
-                    entity,
-                    at,
-                ),
-                None => {
-                    swapped.write(DisplaySwapped { entity, at: None });
-                    fx.end_all(&mut commands, entity, super::spell_fx::Rebuild::Display);
-                }
-            }
+            rebuild_edges(
+                &mut commands,
+                &mut fx,
+                &mut swapped,
+                &mut kit_sounds,
+                entity,
+                at,
+            );
             // `attach_entity_visuals` rebuilds from scratch, fade-skipped by `Reattached`.
             commands
                 .entity(entity)
@@ -559,6 +522,49 @@ mod tests {
         assert_eq!(edges, [(unit, at)]);
     }
 
+    /// No watcher covers a game object's display id (`0x5f8820` registers flags, state, art kit and
+    /// animation progress, GameObject block offsets `0xc`, `0x20`, `0x44`, `0x48`) or a corpse's
+    /// (`0x5d5f60`: offsets `0x74`, `0x78`, its flags and dynamic flags): either keeps the model its
+    /// create gave it on a new id.
+    #[test]
+    fn a_game_object_or_corpse_keeps_its_create_model_on_a_new_display_id() {
+        // `GAMEOBJECT_DISPLAYID` (GameObject block offset `0x8`), `CORPSE_FIELD_DISPLAY_ID` (`0x18`).
+        for (kind, display_field) in [(EntityKind::GameObject, 8), (EntityKind::Corpse, 12)] {
+            let mut app = App::new();
+            app.init_resource::<benilla_world::rig_palette::RigPalettes>();
+            app.add_message::<DisplaySwapped>();
+            app.add_message::<DisplayRebuilt>();
+            app.add_message::<crate::creature_anim::SpellKitSound>();
+            app.add_systems(Update, refresh_live_display);
+            let object = app
+                .world_mut()
+                .spawn((
+                    crate::net::Guid(0xB0B),
+                    NetEntity {
+                        kind,
+                        display_id: Some(7),
+                        scale: 1.0,
+                    },
+                    ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(
+                        display_field,
+                        8,
+                    )])),
+                    Transform::default(),
+                    VisualAttached,
+                    AppliedDisplay(Some(7)),
+                ))
+                .id();
+            app.update();
+            let e = app.world().entity(object);
+            assert!(e.contains::<VisualAttached>(), "{kind:?} keeps its body");
+            assert_eq!(
+                e.get::<NetEntity>().unwrap().display_id,
+                Some(7),
+                "{kind:?}"
+            );
+        }
+    }
+
     /// The rebuild resolves its row at its watcher (`0x60afb0`), and a later packet's id naming
     /// the same records leaves it (`0x60ae10`): the body is the rebuilt row's, not the frame's
     /// last field's, built or not.
@@ -590,7 +596,7 @@ mod tests {
             .drain()
             .map(|s| (s.entity, s.at))
             .collect();
-        assert_eq!(swaps, [(unit, Some(at))], "the morph latch's replay edge");
+        assert_eq!(swaps, [(unit, at)], "the morph latch's replay edge");
         let stops: Vec<_> = app
             .world_mut()
             .resource_mut::<Messages<SpellKitSound>>()

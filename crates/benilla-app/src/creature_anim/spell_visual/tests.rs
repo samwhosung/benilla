@@ -682,7 +682,7 @@ fn a_pushed_kit_carries_its_packets_place() {
 
 /// The rebuild replays the aura slots' state kits (`0x5ff130` at `0x60ada6`), then the channel's
 /// (`0x612a30` at `0x60adad`), as kind 2: each sound rings afresh at the rebuild's place, an aura
-/// in two slots once. A game object's new id replays nothing.
+/// in two slots once.
 #[test]
 fn a_rebuild_rings_the_aura_and_channel_kits_again() {
     use benilla_protocol::field::{FIELD_UNIT_AURA, FIELD_UNIT_CHANNEL_SPELL};
@@ -762,17 +762,8 @@ fn a_rebuild_rings_the_aura_and_channel_kits_again() {
         ))
         .id();
     let at = crate::lanes::stamp();
-    let mut swaps = app
-        .world_mut()
-        .resource_mut::<Messages<crate::entities::DisplaySwapped>>();
-    swaps.write(crate::entities::DisplaySwapped {
-        entity: unit,
-        at: Some(at),
-    });
-    swaps.write(crate::entities::DisplaySwapped {
-        entity: unit,
-        at: None,
-    });
+    app.world_mut()
+        .write_message(crate::entities::DisplaySwapped { entity: unit, at });
     app.update();
     let replays: Vec<_> = app
         .world_mut()
