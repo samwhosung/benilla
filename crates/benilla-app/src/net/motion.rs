@@ -33,7 +33,7 @@ pub(super) use spline::{
     create_spline, ground_clamp_creatures, mark_swimming_creatures, monster_move_spline,
     sample_splines, trace_create_spline, trace_move_snap,
 };
-pub(crate) use spline::{CreatureSwimming, Spline, SplineStopped};
+pub(crate) use spline::{CreatureSwimming, HeldSpline, Spline, SplineStopped};
 
 /// The Bevy rotation of a wire yaw (radians about WoW +Z): a Bevy +Y yaw with no 180° offset,
 /// unlike doodad and WMO placement.

@@ -891,26 +891,33 @@ fn a_listener_reads_a_move_fired_mid_frame_stepped_on_from_its_fire_time() {
 
 /// A monster move keeps its mover's replay chain: the start flushes the queue and stops the
 /// mover (`0x6187a0` → `0x6185f0`, `0x61aa70`), and nothing of it writes bit 31, `+0xa8`, `+0xac`
-/// or the ring. So a move stamped 100 ms further past the mover's last than its arrival is, the
-/// next frame, still times against that last move: standing now, the mover re-bases by the
-/// ring's worst lateness, which this move does not raise, and fires 100 ms past its arrival
-/// (`0x618cfc`-`0x618d41`), so the frame's tick leaves it queued and a later packet's listener
-/// reads the member near where it stood.
+/// or the ring. Rooted, the mover refuses the path before allocating its spline (`0x6187c2`,
+/// `0x6187e0`), so the next move is scheduled, not forced (`0x618c43`). A move stamped 100 ms
+/// further past the mover's last than its arrival is, the next frame, still times against that
+/// last move: standing now, the mover re-bases by the ring's worst lateness, which this move does
+/// not raise, and fires 100 ms past its arrival (`0x618cfc`-`0x618d41`), so the frame's tick
+/// leaves it queued and a later packet's listener reads the member near where it stood.
 #[test]
 fn a_listener_reads_a_member_whose_move_after_a_monster_move_times_on_its_chain() {
     let mut c = seated(FORWARD);
-    c.frame(vec![vec![SessionEvent::MonsterMove {
-        guid: MATE,
-        transport: None,
-        start: [500.0, 600.0, 0.0],
-        spline_id: 1,
-        path: Vec::new(),
-        facing: benilla_protocol::MonsterMoveFacing::None,
-        stop: true,
-        duration_ms: 0,
-        flying: false,
-        run_mode: true,
-    }]]);
+    c.frame(vec![
+        vec![SessionEvent::SplineMoveMode {
+            guid: MATE,
+            mode: benilla_protocol::SplineMode::Root,
+            apply: true,
+        }],
+        vec![walk(
+            MATE,
+            [500.0, 600.0, 0.0],
+            [900.0, 600.0, 0.0],
+            100_000,
+        )],
+    ]);
+    let mate = c.app.world().resource::<crate::net::GuidIndex>().0[&MATE];
+    assert!(
+        c.app.world().get::<crate::net::Spline>(mate).is_none(),
+        "the root refuses the path"
+    );
     // Its last move fired 48 ms before this one arrives.
     c.frame(vec![vec![stamped(
         heartbeat(MATE, [700.0, 800.0, 0.0], FORWARD, None),
@@ -919,6 +926,25 @@ fn a_listener_reads_a_member_whose_move_after_a_monster_move_times_on_its_chain(
     c.frame(vec![vec![member_at(MATE, 20, ELWYNN, (100, 200))]]);
     let seen: Vec<String> = c.eval(false, "return Maps");
     assert_eq!(seen, ["0.5,0.6"]);
+}
+
+/// A monster move's stop holds its spline, so the next move applies at once, where a later
+/// packet's listener reads it: a stop within 3 yd allocates the mover's spline (`0x6019be` →
+/// `0x618750` → `0x619300`), whose end keeps it for a remote mover (`0x619de0`), and a held
+/// spline forces the apply (`0x618c43`).
+#[test]
+fn a_listener_reads_a_member_whose_move_after_a_stop_applied_at_once() {
+    let mut c = seated(FORWARD);
+    c.frame(vec![vec![halt(MATE, [500.0, 600.0, 0.0])]]);
+    c.frame(vec![
+        vec![stamped(
+            heartbeat(MATE, [700.0, 800.0, 0.0], FORWARD, None),
+            148,
+        )],
+        vec![member_at(MATE, 20, ELWYNN, (100, 200))],
+    ]);
+    let seen: Vec<String> = c.eval(false, "return Maps");
+    assert_eq!(seen, ["0.7,0.8"]);
 }
 
 /// `SMSG_MONSTER_MOVE` walking `guid` from `from` to `to` over `duration_ms`.
@@ -958,43 +984,59 @@ fn a_listener_reads_a_member_moved_off_a_path_where_its_packet_put_it() {
     assert_eq!(seen, ["0.7,0.8"]);
 }
 
-/// A path that stops mid-way leaves its member where the path had it, where a later packet's
-/// listener reads it: the follower writes the mover's position each step (`0x7c5490`), so the
-/// mover stands there once the stop ends the path, not where it last stood before it. Half-way
-/// through a 400 yd walk from (500, 600) is (700, 600).
+/// A path that stops leaves its member where the path had it, where a later packet's listener
+/// reads it: the follower writes the mover's position each step (`0x7c5490`), so the mover stands
+/// there once the stop ends the path, not where it stood before the path. A stop within 3 yd of
+/// the unit leaves it there (`0x6019be` → `0x618750`, `0x616d30` snapping only from 3 yd), so the
+/// stop's own point, 2 yd on, is not where it stands either. The walk crawls a yard in 1000 s.
 #[test]
 fn a_listener_reads_a_member_whose_path_stopped_where_the_path_left_it() {
+    let mut c = seated(0);
+    fine_map_spy(&mut c, "party1");
+    c.frame(vec![vec![walk(
+        MATE,
+        [700.0, 600.0, 0.0],
+        [701.0, 600.0, 0.0],
+        1_000_000,
+    )]]);
+    c.frame(vec![]);
+    c.frame(vec![vec![halt(MATE, [702.0, 600.0, 0.0])]]);
+    c.frame(vec![]);
+    c.frame(vec![vec![member_at(MATE, 20, ELWYNN, (100, 200))]]);
+    let seen: Vec<String> = c.eval(false, "return Fine");
+    assert_eq!(seen, ["0.7000,0.6000"]);
+}
+
+/// The first relayed move after a path has ended still applies at once, and the next one waits:
+/// a remote unit's mover keeps its path's spline past the end (`0x619de0` frees only the active
+/// player's), which forces the next relay (`0x618c43`), whose apply frees it (`0x618f43` →
+/// `0x7c6310`). So a later packet's listener reads the member where the first move put it, and
+/// still there after the second, which the frame's tick has not yet fired.
+#[test]
+fn a_listener_reads_the_first_move_after_a_path_where_it_put_it_and_the_next_where_it_stood() {
     let mut c = seated(0);
     c.frame(vec![vec![walk(
         MATE,
         [500.0, 600.0, 0.0],
-        [900.0, 600.0, 0.0],
-        100_000,
+        [510.0, 600.0, 0.0],
+        1,
     )]]);
+    c.frame(vec![]);
     let mate = c.app.world().resource::<crate::net::GuidIndex>().0[&MATE];
-    // The path's clock is real time: fifty of its hundred seconds have passed.
-    c.app
-        .world_mut()
-        .get_mut::<crate::net::Spline>(mate)
-        .expect("the walk installs its path")
-        .start -= std::time::Duration::from_secs(50);
-    c.frame(vec![]);
-    c.frame(vec![vec![SessionEvent::MonsterMove {
-        guid: MATE,
-        transport: None,
-        start: [700.0, 600.0, 0.0],
-        spline_id: 3,
-        path: Vec::new(),
-        facing: benilla_protocol::MonsterMoveFacing::None,
-        stop: true,
-        duration_ms: 0,
-        flying: false,
-        run_mode: true,
-    }]]);
-    c.frame(vec![]);
-    c.frame(vec![vec![member_at(MATE, 20, ELWYNN, (100, 200))]]);
+    assert!(
+        c.app.world().get::<crate::net::Spline>(mate).is_none(),
+        "the path has ended"
+    );
+    c.frame(vec![
+        vec![heartbeat(MATE, [700.0, 800.0, 0.0], 0, None)],
+        vec![member_at(MATE, 20, ELWYNN, (100, 200))],
+    ]);
+    c.frame(vec![
+        vec![heartbeat(MATE, [900.0, 800.0, 0.0], 0, None)],
+        vec![member_at(MATE, 10, ELWYNN, (100, 200))],
+    ]);
     let seen: Vec<String> = c.eval(false, "return Maps");
-    assert_eq!(seen, ["0.7,0.6"]);
+    assert_eq!(seen, ["0.7,0.8", "0.7,0.8"]);
 }
 
 /// A relayed move takes its member's swim state back from the water-at-feet mark a server path

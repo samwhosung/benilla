@@ -20,7 +20,7 @@ use benilla_world::vis_chain::VisChainOnly;
 use super::motion::{
     catch_up, create_spline, gameobject_rotation, monster_move_spline, pose_transform,
     resolve_facing, set_raw_facing, smoothed, trace_create_spline, trace_move_snap, wire_yaw,
-    write_pose, MoverWorld, SplineStopped, ROOT_APPLY_WIPE,
+    write_pose, HeldSpline, MoverWorld, SplineStopped, ROOT_APPLY_WIPE,
 };
 use super::{
     ActiveMover, FieldChanged, Guid, GuidIndex, NetCommands, NetEntity, NetHandlerApp, ObjectStore,
@@ -67,6 +67,9 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::SpeedChanged, on_speed);
 }
 
+/// A body whose mover holds a spline, live ([`Spline`]) or ended ([`HeldSpline`]).
+type HoldsSpline = Or<(With<Spline>, With<HeldSpline>)>;
+
 /// The streamed world as one parameter: the components, caches, lifecycle hooks and edges the
 /// object packets touch.
 #[derive(SystemParam)]
@@ -83,8 +86,8 @@ pub(crate) struct Scene<'w, 's> {
     stores: Query<'w, 's, &'static mut ObjectStore>,
     countdowns: Query<'w, 's, &'static mut crate::items::Countdowns>,
     remote: Query<'w, 's, &'static mut RemoteMotion>,
-    /// Who walks a server path, which forces a relayed move's apply (`0x618c43`).
-    paths: Query<'w, 's, (), With<Spline>>,
+    /// Whose mover holds a spline, which forces a relayed move's apply (`0x618c43`).
+    paths: Query<'w, 's, (), HoldsSpline>,
     modes: Query<'w, 's, &'static mut UnitMoveModes>,
     xp_awarded: Query<'w, 's, (), With<crate::ui_chat::combat::watch::XpAwarded>>,
     client_controlled: Query<'w, 's, (), With<super::ClientControlled>>,
@@ -635,7 +638,7 @@ fn on_unit_move(In(ev): In<SessionEvent>, mut sc: Scene, world: Option<MoverWorl
     {
         let now_ms = sc.real.elapsed_secs_f64() * 1000.0;
         let tick = sc.move_tick.as_deref().and_then(|t| t.0);
-        let splined = sc.index.0.get(&guid).is_some_and(|&e| sc.paths.contains(e));
+        let forced = sc.index.0.get(&guid).is_some_and(|&e| sc.paths.contains(e));
         unit_move(
             guid,
             crate::net::motion::RelayMove {
@@ -651,7 +654,7 @@ fn on_unit_move(In(ev): In<SessionEvent>, mut sc: Scene, world: Option<MoverWorl
             },
             now_ms,
             tick,
-            splined,
+            forced,
             &mut sc.commands,
             &sc.index,
             &sc.self_guid,
@@ -696,6 +699,26 @@ fn on_monster_move(In(ev): In<SessionEvent>, mut sc: Scene) {
                 rm.jump_xy_vel = [0.0; 2];
                 rm.fall_start = None;
                 rooted |= rm.flags & crate::creature_anim::move_flags::ROOT != 0;
+            }
+        }
+        // The start allocates the mover's spline unless the root refuses it (`0x6187e0` after
+        // `0x6187c2`); a stop within 3 yd allocates its own past the root test (`0x6019be` →
+        // `0x618750` → `0x619300`). A remote mover holds it past the end ([`HeldSpline`]).
+        if let Some(e) = sc.index.0.get(&guid).copied() {
+            let drawn = match transport {
+                Some(_) => sc.riders.get(e).ok().map(|r| r.local_pos),
+                None => sc
+                    .transforms
+                    .get(e)
+                    .ok()
+                    .map(|t| bevy_to_wow(t.translation)),
+            };
+            let near = drawn.is_some_and(|p| {
+                let d = [p[0] - start[0], p[1] - start[1], p[2] - start[2]];
+                d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < 9.0
+            });
+            if (!rooted || (stop && near)) && !sc.movers.contains(e) {
+                sc.commands.entity(e).insert(HeldSpline);
             }
         }
         let smooth = sc.index.0.get(&guid).is_some_and(|&e| {
@@ -960,6 +983,7 @@ fn object_create(
     // The walk this unit is already on, joined at the server's progress. Traced first, so a
     // `WOW_CREATE_SPLINE=off` run still records what the wire offered.
     trace_create_spline(guid, spline.as_ref());
+    let carries_path = spline.is_some();
     let walk = spline.and_then(create_spline);
     // A unit's status applies forced (`0x619320` → `0x618c30`): the mover takes the block's pose
     // and its flags word (`new & 0x75a07dff` over the word `0x61936e` cleared), and its replay
@@ -1018,9 +1042,17 @@ fn object_create(
                 }
             }
         });
+    // The create's status installs its path's spline, else frees the one held (`0x619387`,
+    // `0x61940c`); a remote mover keeps it ([`HeldSpline`]).
+    let held = motion.is_some() && carries_path;
     let commands = &mut sc.commands;
     match landing {
         Landing::Live(e) => {
+            if held {
+                commands.entity(e).insert(HeldSpline);
+            } else {
+                commands.entity(e).remove::<HeldSpline>();
+            }
             // A re-create is a fresh snapshot: refresh identity and a unit's pose, and the mover
             // state from the block, its chain going on.
             commands.entity(e).insert(net);
@@ -1113,6 +1145,9 @@ fn object_create(
             }
             if let Some(s) = walk {
                 entity.insert(s);
+            }
+            if held {
+                entity.insert(HeldSpline);
             }
             if let Some(motion) = motion {
                 entity.insert(motion);
@@ -1242,14 +1277,14 @@ fn seat_arrival(
 /// A relayed `MSG_MOVE_*`. The reference schedules a remote's apply (`0x618c30`): the mover's
 /// replay chain gives the packet a fire-time, a move due by the movement clock the last tick
 /// stamped (`tick`, `@0x618dd2`) applies now and any other queues for `drain_pending_moves`, this
-/// frame's tick, with dead-reckoning in between. A unit on a server path (`splined`) applies at
-/// once (`0x618c43`). `WOW_REMOTE_SNAP=1` applies at arrival.
+/// frame's tick, with dead-reckoning in between. A unit whose mover holds a spline (`forced`)
+/// applies at once (`0x618c43`). `WOW_REMOTE_SNAP=1` applies at arrival.
 fn unit_move(
     guid: u64,
     mv: crate::net::motion::RelayMove,
     now_ms: f64,
     tick: Option<f64>,
-    splined: bool,
+    forced: bool,
     commands: &mut Commands,
     index: &GuidIndex,
     self_guid: &SelfGuid,
@@ -1316,6 +1351,7 @@ fn unit_move(
         commands
             .entity(e)
             .remove::<Spline>()
+            .remove::<HeldSpline>()
             .remove::<super::motion::spline::GroundClamped>()
             .remove::<super::motion::CreatureSwimming>()
             .remove::<super::motion::spline::SwimEvaluated>();
@@ -1323,9 +1359,10 @@ fn unit_move(
             // The chain reads the state before this move applies, as the reference times the
             // packet off the live `[esi+0x40]`/`[esi+0x150]`.
             let (flags, queue_empty) = (rm.flags, rm.pending.is_empty());
-            // A live path forces the apply (`0x618c43`): the fire-time is stored unclamped, with
-            // no re-base, no due test and no catch-up (`@0x618d67`, `@0x618e46`).
-            if splined {
+            // A held spline forces the apply (`0x618c43`): the fire-time is stored unclamped, with
+            // no re-base, no due test and no catch-up (`@0x618d67`, `@0x618e46`); the apply frees
+            // the spline (`0x618f43`).
+            if forced {
                 rm.relay.schedule_forced(mv.wire_ms, now_ms);
                 trace_relay(
                     guid,
@@ -1399,9 +1436,9 @@ fn unit_move(
                 fire_ms, now_ms,
                 "a seeding packet's fire-time is its arrival"
             );
-            // A live path forces it, as any mover's (`0x618c43`); a seed's fire-time is its
+            // A held spline forces it, as any mover's (`0x618c43`); a seed's fire-time is its
             // arrival either way, so its lateness is none.
-            if splined || arrival_snap() || rm.fires_at_arrival(fire_ms, tick) {
+            if forced || arrival_snap() || rm.fires_at_arrival(fire_ms, tick) {
                 trace_relay(guid, &mv, &rm.relay, now_ms, 0, RelayOutcome::Seed);
                 apply_move(e, &mv, &mut rm, now_ms, commands, landings);
                 write_pose(
