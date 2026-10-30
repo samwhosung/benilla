@@ -586,8 +586,8 @@ pub(crate) enum RecordCallback {
     TryOn,
     /// A combat-log line that names an item not cached, by its formatter's kind (`0x628f83`,
     /// `0x629650`, `0x6297a0`, `0x6298e1` with `OnCombatLogItemRecord 0x6294b0`), one per line: it
-    /// frees the last waiting entry of its kind and item (`0x6295b0`) and writes that line, a
-    /// found record's, or writes nothing for a refusal (`0x6294fd`-`0x629504`).
+    /// frees the last waiting entry of its kind and item (`0x6295b0`) and, for a found record,
+    /// runs that entry's formatter again; for a refusal it writes nothing (`0x6294fd`-`0x629504`).
     CombatLog(crate::ui_chat::combat::ItemLog),
     /// An auction list result's row whose item was not cached, by the list (`0x4cc9bf` with
     /// `0x4cca10`, `0x4ccbff` with `0x4ccc60`, `0x4cce4f` with `0x4cceb0`), one per row: each

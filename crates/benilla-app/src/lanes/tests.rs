@@ -305,11 +305,13 @@ fn crafted(_: In<SessionEvent>, log: Res<crate::ui_chat::ChatLog>) {
         combat::Named::Item(LINEN, combat::ItemLog::TradeSkill),
     )
     .unwrap();
-    log.push_combat_waiting(line, combat::ItemLog::TradeSkill, LINEN);
+    let kind = combat::ItemLog::TradeSkill;
+    log.push_combat_waiting(kind, LINEN, combat::Replay::Line(Box::new(line)));
 }
 
 /// The item cache's answer as the item handler lands it: the record, then the combat log's
-/// callback for the lines that waited on it (`0x6294b0`).
+/// callback for the line that waited on it, the tradeskill writer's, which tests nothing again
+/// (`0x6294b0` → `0x629610`).
 fn linen_answers(
     In(ev): In<SessionEvent>,
     mut items: ResMut<crate::items::Items>,
@@ -317,7 +319,10 @@ fn linen_answers(
 ) {
     if let SessionEvent::ItemTemplate { entry, info } = ev {
         items.insert_template(entry, info.map(|b| *b));
-        log.item_callback(crate::ui_chat::combat::ItemLog::TradeSkill, entry);
+        let kind = crate::ui_chat::combat::ItemLog::TradeSkill;
+        if let Some(crate::ui_chat::combat::Replay::Line(line)) = log.take_wait(kind, entry) {
+            log.push_combat(*line);
+        }
     }
 }
 
@@ -413,12 +418,12 @@ fn a_monster_line_with_no_macro_fires_at_its_packet() {
     );
 }
 
-/// The handlers the answers come by queue the release behind a line that reads them: the item
-/// handler's (`0x6294b0`), for a crafting line whose handler looked its item up and missed
-/// (`0x629650`), and the name handler's (`0x49ccc0`), for a monster line's subject and a player
-/// line's sender.
+/// The handlers the answers come by queue what shows a line that reads them behind it: the item
+/// handler's callback the line itself (`0x6294b0` → `0x629610`), for a crafting line whose
+/// handler looked its item up and missed (`0x629650`), and the name handler's a release
+/// (`0x49ccc0`), for a monster line's subject and a player line's sender.
 #[test]
-fn each_answer_handler_queues_a_release_behind_a_line_that_reads_it() {
+fn each_answer_handler_queues_what_shows_a_line_that_reads_it() {
     use benilla_protocol::messages::{ExecuteLog, SpellLogExecute};
     let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
     let world = app.world_mut();
@@ -442,24 +447,33 @@ fn each_answer_handler_queues_a_release_behind_a_line_that_reads_it() {
     };
     /// What queues a line that reads the answer's record.
     type Queue = Box<dyn Fn(&mut World)>;
-    let cases: [(Queue, SessionEvent); 3] = [
+    let cases: [(Queue, SessionEvent, &str); 3] = [
         (
             Box::new(move |world: &mut World| {
                 crate::net::handlers::dispatch(world, vec![craft.clone()])
             }),
             linen_named(),
+            "combat",
         ),
-        (Box::new(line(monster_hails_the_stranger)), stranger_named()),
-        (Box::new(line(stranger_whispers)), stranger_named()),
+        (
+            Box::new(line(monster_hails_the_stranger)),
+            stranger_named(),
+            "release",
+        ),
+        (
+            Box::new(line(stranger_whispers)),
+            stranger_named(),
+            "release",
+        ),
     ];
-    for (queue, answer) in cases {
+    for (queue, answer, shows) in cases {
         world.insert_resource(log());
         // Each answer finds the cache without it, so its lookup's callback runs.
         world.insert_resource(crate::names::NameCache::default());
         queue(world);
         crate::net::handlers::dispatch(world, vec![answer]);
         let kinds = world.resource::<crate::ui_chat::ChatLog>().pending_kinds();
-        assert_eq!(kinds.last(), Some(&"release"), "{kinds:?}");
+        assert_eq!(kinds.last(), Some(&shows), "{kinds:?}");
     }
 }
 

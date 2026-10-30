@@ -130,8 +130,8 @@ enum Pending {
         rank: u8,
         female: bool,
     },
-    /// One combat-log line, classified at the packet; it waits only on an item's name, as the
-    /// reference's deferred queue (`0xc4e208`) does, until the cache answers.
+    /// One combat-log line, written by its formatter at the packet or at its item's callback
+    /// ([`crate::combat_log`]); a line whose item missed waits in the wait list, not here.
     Combat(Box<super::combat::PendingCombat>),
     /// A ready event (client-composed lines; name-carrying notices).
     Event(ChatEvent),
@@ -176,8 +176,7 @@ impl Pending {
     /// holds a line for its sender's (a player line's sender, a channel notice's two, an addon
     /// line's or a roll's sender, an emote's performer) and a monster or battleground line for
     /// its `$`-macro subject's, by guid whatever the subject is (`0x49daea` asks the name cache
-    /// `0xc0e228` through `0x55f080` with that callback); and a combat line's entry in the wait
-    /// list (`0x6293a0`).
+    /// `0xc0e228` through `0x55f080` with that callback).
     fn waits_on(&self) -> [Option<Answer>; 2] {
         let some = |g: u64| (g != 0).then_some(Answer::Player(g));
         match self {
@@ -190,7 +189,6 @@ impl Pending {
             Pending::Notice { a_guid, b_guid, .. } => [some(*a_guid), some(*b_guid)],
             Pending::Addon { guid, .. } | Pending::Roll { guid, .. } => [some(*guid), None],
             Pending::TextEmote { performer, .. } => [some(*performer), None],
-            Pending::Combat(line) => [line.wait.map(Answer::Wait), None],
             _ => [None, None],
         }
     }
@@ -285,20 +283,17 @@ struct ChatQueue {
     /// held, not shown ([`Pending::Latched`]), until the world-enter cascade's release
     /// (`0x4989c0`).
     latched: Option<crate::lanes::Mark>,
-    /// The combat log's wait list (`0x6293a0`): one slot per line whose item missed at its
-    /// packet, the lowest free slot taken first (`0x6293f0`).
+    /// The combat log's wait list (`0xc4e208`): one slot per line whose item missed at its
+    /// formatter's lookup, the lowest free slot taken first (`0x6293f0`).
     waits: Vec<Option<CombatWait>>,
-    /// The next waiting line's id.
-    next_wait: u64,
 }
 
 /// A combat line's entry in the wait list: its formatter's kind at `+0`, its item at `+4`, and
-/// the line it writes again ([`super::combat::PendingCombat::wait`]).
-#[derive(Clone, Copy)]
+/// what its callback writes the line again from (`+0x8` on).
 struct CombatWait {
     kind: super::combat::ItemLog,
     item: u32,
-    line: u64,
+    replay: super::combat::Replay,
 }
 
 /// One item in the lane, with its stamp ([`crate::lanes::stamp`]).
@@ -307,12 +302,10 @@ struct Queued {
     item: Pending,
 }
 
-/// A record a held line may read, landed in a packet: a name by guid; or a combat line's entry
-/// in the wait list, freed by an item callback.
+/// A record a held line may read, landed in a packet: a name by guid.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Answer {
     Player(u64),
-    Wait(u64),
 }
 
 /// Why a [`Pending::Release`] retries the held lines.
@@ -550,57 +543,37 @@ impl ChatLog {
         self.q().push(Pending::Combat(Box::new(line)));
     }
 
-    /// Queue a combat-log line whose item missed at its packet, with its entry in the wait list:
-    /// the lowest free slot (`0x6293f0`), its formatter's `kind` and its `item`. It shows only
-    /// once an item callback frees that entry ([`Self::item_callback`]).
+    /// Keep a combat-log line whose item missed at its formatter's lookup in the wait list: the
+    /// lowest free slot (`0x6293f0`), its formatter's `kind`, its `item` and what the item's
+    /// callback writes it again from ([`Self::take_wait`]). Nothing is queued on the lane.
     pub(crate) fn push_combat_waiting(
         &self,
-        mut line: super::combat::PendingCombat,
         kind: super::combat::ItemLog,
         item: u32,
+        replay: super::combat::Replay,
     ) {
         let mut q = self.q();
-        let id = q.next_wait;
-        q.next_wait += 1;
-        let wait = Some(CombatWait {
-            kind,
-            item,
-            line: id,
-        });
+        let wait = Some(CombatWait { kind, item, replay });
         match q.waits.iter().position(Option::is_none) {
             Some(slot) => q.waits[slot] = wait,
             None => q.waits.push(wait),
         }
-        line.wait = Some(id);
-        q.push(Pending::Combat(Box::new(line)));
     }
 
-    /// One combat-log item callback for `item`, of its formatter's `kind`, a record's or a
-    /// refusal's (`0x6294b0`): the last waiting entry of that kind and item, scanned from the
-    /// back, is freed (`0x6295b0`), and its line shows here, at the callback's place among the
-    /// answer's others: written with the record, or, refused, dropped (`0x6294fd`-`0x629504`).
-    /// One line per callback, so lines of one kind and item come out newest first.
-    pub(crate) fn item_callback(&self, kind: super::combat::ItemLog, item: u32) {
+    /// The last waiting entry of `kind` and `item`, scanned from the back and freed (`0x6295b0`):
+    /// what one item callback writes its line again from, so lines of one kind and item come out
+    /// newest first, one per callback.
+    pub(crate) fn take_wait(
+        &self,
+        kind: super::combat::ItemLog,
+        item: u32,
+    ) -> Option<super::combat::Replay> {
         let mut q = self.q();
-        let Some(slot) = q
+        let slot = q
             .waits
             .iter()
-            .rposition(|w| w.is_some_and(|w| w.kind == kind && w.item == item))
-        else {
-            return;
-        };
-        let Some(CombatWait { line, .. }) = q.waits[slot].take() else {
-            return;
-        };
-        q.push(Pending::Release {
-            cause: Release::Answer(Answer::Wait(line)),
-            from: 0,
-        });
-    }
-
-    /// Whether the combat line `line` still has its entry in the wait list.
-    fn wait_open(&self, line: u64) -> bool {
-        self.q().waits.iter().flatten().any(|w| w.line == line)
+            .rposition(|w| w.as_ref().is_some_and(|w| w.kind == kind && w.item == item))?;
+        q.waits[slot].take().map(|w| w.replay)
     }
 
     /// Queue a decoded `SMSG_CHANNEL_NOTIFY`; a guid tail waits for its names.
@@ -1604,7 +1577,7 @@ fn release(
 
 /// Fire one item at `at`, or hand it back to wait: for a name the cache lacks, for one whose
 /// answer comes later in the frame than `at`, so the record the reference's lookup missed there
-/// is not read early (a name, an item's), or for an item's name.
+/// is not read early (a name), or for an item's name.
 fn fire_one(
     reads: &mut ChatReads,
     log: &ChatLog,
@@ -2174,18 +2147,10 @@ fn fire_one(
                 route(script, windows, &event);
             }
             Pending::Combat(mut line) => {
-                // A line whose item missed at its packet waits in the wait list, as long as the
-                // cache takes to answer: the reference's list has no timer or count, and only an
-                // item callback or the session's end frees an entry (`0x6293a0`, `0x6294cc`,
-                // `0x629a90`). Its item was looked up there with the log's callback
-                // ([`crate::combat_log`]); here it is only read, and once its entry is freed a
-                // missing record is the refusal's, which writes nothing.
-                if line.wait.is_some_and(|w| log.wait_open(w)) {
-                    return Some(Pending::Combat(line));
-                }
-                let freed = line.wait.is_some();
-                // Names looked up with a callback as the line's (`0x6265a7`, `0x6265e0`), and
-                // asked again only on its first drain.
+                // Its item was looked up by its formatter, at the packet or again at the item's
+                // callback ([`crate::combat_log`]); here it is only read. Names looked up with a
+                // callback as the line's (`0x6265a7`, `0x6265e0`), and asked again only on its
+                // first drain.
                 let ask = Ask::at(line.tries == 0, commands);
                 let sources = super::combat::NameSources {
                     names,
@@ -2204,7 +2169,7 @@ fn fire_one(
                     },
                     |entry| match items.template(entry, 0, Ask::Read).map(|t| t.name.clone()) {
                         Some(name) => super::combat::ItemName::Named(name),
-                        None if freed || items.template_answered_unknown(entry) => {
+                        None if items.template_answered_unknown(entry) => {
                             super::combat::ItemName::Unknown
                         }
                         None => super::combat::ItemName::Waiting,

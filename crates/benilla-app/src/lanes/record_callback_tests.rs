@@ -698,3 +698,52 @@ fn a_reconnect_clears_the_combat_logs_wait_list() {
     let seen = frame(&mut app, vec![answer(PELT, "Wolf Pelt")]);
     assert_eq!(seen, ["You create Wolf Pelt."]);
 }
+
+/// The wait list has no timer or count: only an item callback or the session's end frees an
+/// entry (`0x6293a0`, `0x6294cc`, `0x629a90`), so a record that lands frames later still writes
+/// its line. A refusal's callback frees its entry and writes nothing (`0x6294fd`-`0x629504`), so
+/// a record after it finds no line waiting.
+#[test]
+fn a_waiting_line_outlasts_its_frames_and_a_refusal_frees_it_unwritten() {
+    use benilla_protocol::messages::{ExecuteLog, SpellLogExecute};
+    const PELT: u32 = 900;
+    const GONE: u32 = 99_999;
+    let mut app = client();
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(
+            r#"
+            TRADESKILL_LOG_FIRSTPERSON = "You create %s."
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("CHAT_MSG_SPELL_TRADESKILLS")
+            f:SetScript("OnEvent", function() table.insert(Seen, arg1) end)
+            "#,
+        )
+        .unwrap();
+    let craft = |item_entry| {
+        SessionEvent::SpellLogExecute(SpellLogExecute {
+            caster: ME,
+            spell_id: 1,
+            effects: vec![(24, vec![ExecuteLog::CreateItem { item_entry }])],
+        })
+    };
+    let answer = |entry, name: Option<&str>| SessionEvent::ItemTemplate {
+        entry,
+        info: name.map(|n| Box::new(crate::items::test_template(n))),
+    };
+    frame(&mut app, vec![craft(PELT), craft(GONE)]);
+    for _ in 0..300 {
+        frame(&mut app, vec![]);
+    }
+    hosted(&mut app, "Seen = {}");
+    assert_eq!(
+        frame(&mut app, vec![answer(PELT, Some("Wolf Pelt"))]),
+        ["You create Wolf Pelt."]
+    );
+    hosted(&mut app, "Seen = {}");
+    assert!(frame(&mut app, vec![answer(GONE, None)]).is_empty());
+    assert!(
+        frame(&mut app, vec![answer(GONE, Some("Late Record"))]).is_empty(),
+        "the refusal freed the entry"
+    );
+}

@@ -924,7 +924,6 @@ fn combat_log_battery(log: &super::feed::ChatLog, get: &dyn Fn(&str) -> Option<S
         named: super::combat::Named::Ready,
         fills: f,
         tries: 0,
-        wait: None,
         word: None,
     };
     let battery = [

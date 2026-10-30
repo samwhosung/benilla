@@ -86,11 +86,12 @@ impl Ctx<'_> {
 }
 
 /// The caches `LogOpenLock` reads (`0xc0e2a0`, `0xc0e318`), the item cache also the item lines'
-/// lookups (`0x628f83`, `0x629650`, `0x6297a0`, `0x6298e1`). They stay out of [`Ctx`] because
+/// lookups (`0x628f83`, `0x629650`, `0x6297a0`, `0x6298e1`) and their callback's formatters
+/// (`0x629513`). They stay out of [`Ctx`] because
 /// `on_missile_miss` runs in `Update` with it, and the sound systems that write the item cache run
 /// there too: a claim on a cache no line of that leg reads would only add undeclared orders.
 #[derive(SystemParam)]
-struct LockCaches<'w> {
+pub(crate) struct LockCaches<'w> {
     items: Option<Res<'w, crate::items::Items>>,
     gameobjects: Option<Res<'w, crate::go_templates::GameObjectTemplates>>,
 }
@@ -407,6 +408,22 @@ fn on_enchantment_log(In(ev): In<SessionEvent>, c: Ctx, caches: LockCaches, l: S
         };
         chat::enchantment_log(e, &ctx, &l.stores, &l.poses, &l.log);
     }
+}
+
+/// The combat log's item callback (`0x6294b0`), run in its answer's list for a record or a
+/// refusal ([`chat::item_answered`]).
+pub(crate) fn item_answered(
+    In((kind, item, answered)): In<(crate::ui_chat::combat::ItemLog, u32, bool)>,
+    c: Ctx,
+    caches: LockCaches,
+    l: Sinks,
+) {
+    let ctx = chat::ChatCtx {
+        items: caches.items.as_deref(),
+        gameobjects: caches.gameobjects.as_deref(),
+        ..c.ctx()
+    };
+    chat::item_answered(kind, item, answered, &ctx, &l.stores, &l.poses, &l.log);
 }
 
 fn on_spell_log_execute(In(ev): In<SessionEvent>, c: Ctx, caches: LockCaches, l: Sinks) {

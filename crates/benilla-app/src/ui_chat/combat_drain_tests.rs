@@ -3,7 +3,7 @@
 
 use benilla_protocol::field::FIELD_OBJECT_ENTRY;
 
-use super::combat::{self, Fills, ItemLog, Named, UnitClass};
+use super::combat::{self, Fills, Named, UnitClass};
 use super::feed::{xp_gain_line, RestState};
 use super::notice_tests::Feed;
 use super::ChatEventKind as K;
@@ -26,88 +26,6 @@ fn spy(feed: &Feed, event: &str) {
 
 fn seen(feed: &Feed) -> Vec<String> {
     feed.script().eval::<Vec<String>>("return Seen").unwrap()
-}
-
-/// The reference parks a line that asked the item cache for a name in a list with no timer or
-/// count (`0x6293a0`), and only the answer (`0x6294cc`-`0x62959c`) or shutdown (`0x629a90`)
-/// removes it, so a record that lands late still writes its line.
-#[test]
-fn a_line_waiting_on_an_item_name_waits_until_the_cache_answers() {
-    let _data = benilla_formats::wow_data_or_skip!();
-    const LINEN: u32 = 2589;
-    let mut feed = Feed::new();
-    spy(&feed, super::event::event_name(K::SpellTradeskills));
-    feed.world.resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
-    let line = combat::queue(
-        K::SpellTradeskills,
-        combat::TRADESKILL_LOG,
-        (ME, UnitClass::Me),
-        (ME, UnitClass::Me),
-        Fills::default(),
-        Named::Item(LINEN, ItemLog::TradeSkill),
-    )
-    .unwrap();
-    feed.world
-        .resource_mut::<super::ChatLog>()
-        .push_combat_waiting(line, ItemLog::TradeSkill, LINEN);
-    for _ in 0..300 {
-        feed.drain();
-    }
-    assert!(seen(&feed).is_empty(), "nothing to name it with yet");
-    feed.world
-        .resource_mut::<crate::items::Items>()
-        .insert_template(LINEN, Some(crate::items::test_template("Linen Cloth")));
-    feed.drain();
-    assert!(seen(&feed).is_empty(), "a record alone frees no entry");
-    feed.world
-        .resource::<super::ChatLog>()
-        .item_callback(ItemLog::TradeSkill, LINEN);
-    feed.drain();
-    assert_eq!(seen(&feed), ["You create Linen Cloth."]);
-    feed.drain();
-    assert_eq!(seen(&feed).len(), 1, "written once");
-}
-
-/// A refusal runs each waiting callback with status 0 (`0x55bea8`, from `0x55be9f`); `0x6294b0`
-/// ignores it, frees its entry and asks the cache again without a callback (`0x6294fd`), which
-/// holds no valid record, so `0x629504` leaves before any formatter runs: the line is dropped.
-#[test]
-fn a_line_whose_item_the_server_refuses_is_dropped() {
-    let _data = benilla_formats::wow_data_or_skip!();
-    const UNKNOWN: u32 = 99_999;
-    let mut feed = Feed::new();
-    spy(&feed, super::event::event_name(K::SpellTradeskills));
-    feed.world.resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
-    let line = combat::queue(
-        K::SpellTradeskills,
-        combat::TRADESKILL_LOG,
-        (ME, UnitClass::Me),
-        (ME, UnitClass::Me),
-        Fills::default(),
-        Named::Item(UNKNOWN, ItemLog::TradeSkill),
-    )
-    .unwrap();
-    feed.world
-        .resource_mut::<super::ChatLog>()
-        .push_combat_waiting(line, ItemLog::TradeSkill, UNKNOWN);
-    feed.drain();
-    feed.world
-        .resource_mut::<crate::items::Items>()
-        .insert_template(UNKNOWN, None);
-    feed.world
-        .resource::<super::ChatLog>()
-        .item_callback(ItemLog::TradeSkill, UNKNOWN);
-    for _ in 0..3 {
-        feed.drain();
-    }
-    assert!(seen(&feed).is_empty(), "no line for a refused item");
-    assert!(
-        feed.world
-            .resource::<super::ChatLog>()
-            .pending_combat()
-            .is_empty(),
-        "and nothing left waiting"
-    );
 }
 
 /// `GetCombatLogName` (`0x6264e0`) names a held object by its type mask: a game object by its

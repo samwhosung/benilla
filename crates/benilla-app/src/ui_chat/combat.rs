@@ -990,9 +990,6 @@ pub(crate) struct PendingCombat {
     pub named: Named,
     /// The drains that found the line waiting; the first asks for its names, the rest only read.
     pub tries: u16,
-    /// The line's entry in the log's wait list while its item is out, which only its record's
-    /// callback frees ([`crate::ui_chat::ChatLog::push_combat_waiting`]).
-    pub wait: Option<u64>,
     /// The `COMBAT_TEXT_UPDATE` the formatter raises once the line is written, and only then: a
     /// missing template, range or spell writes neither.
     pub word: Option<LineWord>,
@@ -1165,6 +1162,21 @@ pub(crate) enum ItemLog {
     Durability,
 }
 
+/// What a wait entry keeps to write its line at its item's callback (`0x6294b0`), which runs the
+/// entry's formatter again past its lookup (`0x629513`).
+pub(crate) enum Replay {
+    /// The packet's arguments, as `0x6293a0` copies them (`+0x8`-`+0x1c`), for `0x628f40` again
+    /// (`0x62952f`): its lines' gates all tested anew, the row (`0x629221`, `0x6290c7`), the
+    /// fade's unit (`0x62902c`) and the range (`0x629209`, `0x6290b6`).
+    Enchantment(benilla_protocol::messages::EnchantmentLog),
+    /// The line as the packet built it, for the feed's and the tradeskill's writers (`0x629760`,
+    /// `0x629690`), which test nothing their callers did not (`0x62d846`, `0x62d916`).
+    Line(Box<PendingCombat>),
+    /// The durability line as the packet built it, whose writer tests the range again
+    /// (`0x629941`).
+    Ranged(Box<PendingCombat>),
+}
+
 /// Build a queued line from an already-classified pair; `None` when neither endpoint resolves.
 pub(crate) fn queue(
     kind: ChatEventKind,
@@ -1188,7 +1200,6 @@ pub(crate) fn queue(
         fills,
         named,
         tries: 0,
-        wait: None,
         word: None,
     })
 }

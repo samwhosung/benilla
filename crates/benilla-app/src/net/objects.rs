@@ -336,13 +336,13 @@ fn run_callback(
             Cb::TryOn if answered => crate::ui_dressup::try_on_answered(world, entry),
             Cb::TryOn => {}
             // The combat log's, for a record and a refusal alike (`0x6294b0`): the last waiting
-            // line of its kind and item freed, and written or, refused, dropped
-            // (`0x6294fd`-`0x629504`), on the chat lane here.
-            Cb::CombatLog(kind) => {
-                if let Some(chat) = world.get_resource::<crate::ui_chat::ChatLog>() {
-                    chat.item_callback(kind, entry);
-                }
-            }
+            // entry of its kind and item freed, and for a record its formatter run again, its
+            // line on the chat lane here.
+            Cb::CombatLog(kind) => run_answer_step(
+                world,
+                crate::combat_log::item_answered,
+                (kind, entry, answered),
+            ),
             _ => run_answer_step(world, run_record_callback, (entry, callback, answered)),
         }
     }

@@ -314,7 +314,6 @@ fn durability_damage_death(log: &crate::ui_chat::ChatLog) {
         fills: crate::ui_chat::combat::Fills::default(),
         named: crate::ui_chat::combat::Named::Ready,
         tries: 0,
-        wait: None,
         word: None,
     });
 }
