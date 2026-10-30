@@ -31,8 +31,8 @@ pub(crate) mod validator;
 // The one cast path: every caster takes [`CastLadder`] and commits through [`CastCommit`];
 // `send_spell_cast` is private to `cast_send`, so no second send path can exist.
 pub(crate) use cast_send::{
-    CastCommit, CastLadder, CastPark, HeldCast, HeldForPick, ScriptCastPermit, TargetedBind,
-    UnitAttackOwed, UnitPress,
+    CastCommit, CastLadder, CastPark, CastStage, HeldCast, HeldForPick, ScriptCastPermit,
+    TargetedBind, UnitAttackOwed, UnitPress,
 };
 pub(crate) use cast_target::AutoSelfCast;
 pub(crate) use cooldowns::{CooldownLive, Cooldowns, Signal};
@@ -63,6 +63,15 @@ pub(crate) use targeting::{
 pub(crate) struct ScriptCast<'w, 's> {
     pub(crate) targeting: cast_target::CastTargeting<'w, 's>,
     pub(crate) ladder: CastLadder<'w, 's>,
+}
+
+impl ScriptCast<'_, '_> {
+    /// `ArmCast` past its signal's listeners (`0x6e5338`): its candidate read again where the
+    /// attempt took it, the selection at `0x6e539f` included ([`CastLadder::reread_arm`]).
+    pub(crate) fn reread_arm(&mut self, park: &mut cast_send::ArmPark) {
+        let ctx = self.targeting.context_for(park.candidate());
+        self.ladder.reread_arm(park, ctx.as_ref());
+    }
 }
 
 /// The local self-cancel's set: a reader of the in-flight state orders `.after(LocalCancel)` so a

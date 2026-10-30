@@ -194,6 +194,9 @@ impl PetLeg<'_> {
 fn feed(cast: &mut crate::spell::ScriptCast, spell_id: u32, item_guid: u64) -> bool {
     let crate::spell::ScriptCast { targeting, ladder } = cast;
     ladder.send(spell_id, &targeting.context(), CastCommit::Spell);
+    // The arm raises the cursor (`0x6e50ab`) before the bind reads it; its signal's listeners
+    // (`0x6e5333`) run after the bind.
+    ladder.run_arm();
     let Some((pending, commit)) = ladder.ground.wanting_item() else {
         debug!("DropItemOnUnit — Feed Pet {spell_id} refused by the attempt; payload kept");
         return false;

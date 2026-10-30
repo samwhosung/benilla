@@ -52,8 +52,6 @@ pub(crate) enum Held {
         item_flags: Option<u32>,
         item: Option<u64>,
     },
-    /// The spell whose cursor the arm raises next ([`SpellTargeting::enter_as`]).
-    Cursor,
 }
 
 /// The in-flight slot, the record's caster word and the targeting word as the two reporters reach
@@ -105,7 +103,6 @@ impl CastCore<'_> {
                 self.queued_melee.push(strike, None);
                 self.pending.push_cast(spell_id, item_flags, item);
             }
-            Held::Cursor => self.queued_melee.push(strike, None),
         }
         self.reports.changed();
     }

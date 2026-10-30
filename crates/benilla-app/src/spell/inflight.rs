@@ -45,6 +45,8 @@ pub(crate) struct PendingCast {
     record_item: Option<u64>,
     /// The record as `SendCast` sends it ([`Self::record_send`]).
     record_send: Option<super::cast_send::CastSend>,
+    /// How many fills the record has had ([`Self::fills`]).
+    fills: u32,
 }
 
 struct PendingCastState {
@@ -109,18 +111,28 @@ impl PendingCast {
     /// `ITEM_FLAG_PLAYERCAST` and a queued strike included, though neither holds this slot.
     pub(crate) fn fill_record(&mut self) {
         self.caster_is_player = true;
-        self.record_target = None;
-        self.record_item = None;
-        self.record_send = None;
+        self.refill();
     }
 
     /// [`Self::fill_record`] for a caster other than the active player (the pet bar's presses
     /// through `0x6e4b60`, `0x4bd385`): the caster word names that unit, so no cancel event fires.
     pub(crate) fn fill_unit_record(&mut self) {
         self.caster_is_player = false;
+        self.refill();
+    }
+
+    /// The fill's zero of the record (`rep stos` at `0x6e4f80`).
+    fn refill(&mut self) {
         self.record_target = None;
         self.record_item = None;
         self.record_send = None;
+        self.fills = self.fills.wrapping_add(1);
+    }
+
+    /// A count of the record's fills, which tells an attempt whether a listener's attempt has
+    /// filled it since its own ([`super::cast_send::ArmPark`]).
+    pub(crate) fn fills(&self) -> u32 {
+        self.fills
     }
 
     /// The attempt's source write (`0x6e4f8f`-`0x6e4fa1`): the casting item's guid when the

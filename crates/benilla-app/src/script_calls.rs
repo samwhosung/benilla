@@ -1006,8 +1006,11 @@ impl ScriptCallHost<'_, '_> {
     /// ([`crate::spell::CastPark`]): its listeners run there, then it goes on, to its next such
     /// signal or its end, as `SignalEvent` (`0x703e50`) runs them inside the cast.
     fn run_casts(&mut self, script: &mut UiScript, at: &mut Signalled) {
-        while let Some(stage) = self.appliers.cast().ladder.take_parked() {
+        while let Some(mut stage) = self.appliers.cast().ladder.take_parked() {
             self.at_point(script, at);
+            if let crate::spell::CastStage::Arm(park) = &mut stage {
+                self.appliers.cast().reread_arm(park);
+            }
             self.appliers.cast().ladder.resume_parked(stage);
             // The attempt's return (`0x6e51e3`) waits past its unit's attack tail (`0x6e51de`),
             // out of the reach of the casts the tail makes.
