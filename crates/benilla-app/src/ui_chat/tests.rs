@@ -4102,6 +4102,8 @@ fn the_combat_edge_and_the_regen_notice_fire_in_their_packets_order() {
         ),
     ] {
         let mut app = App::new();
+        // In the world with the interface up, so the dispatch fires each packet's lanes.
+        app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
         app.add_plugins(crate::ui_unit::UiUnitPlugin);
         crate::ui_chat::add_chat_lane(&mut app);
         app.net_handler(SessionEventKind::LoggedOut, edge)
@@ -4208,6 +4210,8 @@ fn a_notices_chat_line_shows_where_the_notice_fires() {
         ),
     ] {
         let mut app = App::new();
+        // In the world with the interface up, so the dispatch fires each packet's lanes.
+        app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
         app.add_plugins(crate::ui_unit::UiUnitPlugin);
         crate::ui_chat::add_chat_lane(&mut app);
         app.net_handler(SessionEventKind::LoggedOut, enter)

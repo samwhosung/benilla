@@ -79,6 +79,8 @@ fn stranger_named() -> SessionEvent {
 /// records every event it hears, `CHAT_MSG_*` with its text.
 fn client(handlers: impl FnOnce(&mut App)) -> App {
     let mut app = App::new();
+    // In the world with the interface up, so the dispatch fires each packet's lanes.
+    app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
     app.add_plugins(crate::ui_unit::UiUnitPlugin);
     crate::ui_chat::add_chat_lane(&mut app);
     crate::names::net::register(&mut app);
@@ -743,6 +745,9 @@ fn the_session_end_drops_the_cast_and_house_lanes() {
     let mut app = cast_client(|app| {
         app.add_plugins(crate::ui_auction::UiAuctionPlugin);
     });
+    // The world entry, whose UI has not loaded: the client's in-world state, as a real state.
+    app.world_mut()
+        .remove_resource::<State<crate::client_state::ClientState>>();
     app.add_plugins(bevy::state::app::StatesPlugin)
         .insert_state(crate::client_state::ClientState::InWorld);
     let world = app.world_mut();
