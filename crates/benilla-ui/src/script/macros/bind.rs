@@ -36,6 +36,19 @@ pub fn macro_lines(body: &str) -> impl Iterator<Item = &str> {
         .filter(|l| !l.is_empty())
 }
 
+/// The bytes of a line the derivation's tokenizer keeps: its 0x100-byte buffer stores 255
+/// (`0x4efe18`-`0x4efe2f`, `0x64af4b`); the runner's buffer is 0x400 (`0x4f14e0`).
+const DERIVED_LINE_BYTES: usize = 0xff;
+
+/// [`macro_lines`] as the derivation reads them: each raw line cut to [`DERIVED_LINE_BYTES`] first,
+/// backed to a character boundary, then trimmed.
+fn derived_lines(body: &str) -> impl Iterator<Item = &str> {
+    body.split(['\r', '\n'])
+        .filter(|l| !l.is_empty())
+        .map(|l| super::cut_bytes(l, DERIVED_LINE_BYTES).trim())
+        .filter(|l| !l.is_empty())
+}
+
 /// The `/cast` aliases as `0x4efe00` reads them, each time it derives: the globals `SLASH_CAST1`,
 /// `SLASH_CAST2`, … through `FrameScript_GetText` (`0x703bf0`), to the first that is absent or
 /// empty.
@@ -50,7 +63,7 @@ pub(crate) fn cast_aliases(lua: &mlua::Lua) -> Vec<String> {
 /// ([`quoted_call_argument`]). Deviation: the `/cast` argument is trimmed, because the reference
 /// binds `/cast  Fireball` (two spaces) to a name that never resolves.
 pub(crate) fn cast_name(aliases: &[String], body: &str) -> Option<(CastArm, String)> {
-    for line in macro_lines(body) {
+    for line in derived_lines(body) {
         // Arm A: an alias compared without case over its length (`SStrCmpI`, `0x64a4c0`), and the
         // next byte must be a space (`0x4efe96`), so a tab or a bare `/cast` misses.
         let after_alias = aliases.iter().find_map(|alias| {
@@ -203,6 +216,30 @@ mod tests {
         );
         // A computed argument with no quote has no name to bind.
         assert_eq!(cast_name(&t, "/script CastSpellByName(spell)"), None);
+    }
+
+    /// `0x4efe00` tokenizes the body into a 0x100-byte buffer (`0x4efe18`-`0x4efe2f`), which
+    /// stores at most 255 bytes of a line (`0x64af4b`), so a `/cast` name or a `CastSpellByName(`
+    /// quote past byte 255 is never read.
+    #[test]
+    fn a_line_is_cut_to_255_bytes_when_the_cast_is_derived() {
+        let t = aliases();
+        let pad = " ".repeat(240);
+        // The name runs past the cut: the cut text is the name.
+        let long = format!("/cast {}Fireball", "x".repeat(250));
+        assert_eq!(
+            cast_name(&t, &long),
+            Some((CastArm::Slash, format!("{}", "x".repeat(249))))
+        );
+        // The quote opens past the cut: the call has no name, and the walk goes on.
+        let late = format!("/script {pad}CastSpellByName(\"Fireball\")\n/cast Frostbolt");
+        assert_eq!(
+            cast_name(&t, &late),
+            Some((CastArm::Slash, "Frostbolt".into()))
+        );
+        // The quote opens inside and the name is cut by the line's end.
+        let cut = format!("{}CastSpellByName(\"Fireball\")", " ".repeat(236));
+        assert_eq!(cast_name(&t, &cut), Some((CastArm::ByName, "Fi".into())));
     }
 
     /// `0x4efef0`-`0x4efefb` scan for the first quote anywhere after the match, whatever the
