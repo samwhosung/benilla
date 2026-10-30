@@ -1144,6 +1144,42 @@ fn a_teardowns_strike_cancel_listeners_send_ahead_of_the_pet_stop() {
     );
 }
 
+/// A strike cancel's listener that calls the pet off (`PetStopAttack`, `0x4bd650`) lowers the latch
+/// and signals `PET_BAR_UPDATE` (`0x4bd6b4`) there, so the release's pet leg (`0x493a0f`-`0x493a18`)
+/// and its change find the latch down and signal nothing more: one `PET_BAR_UPDATE`, the
+/// listener's, with a possessed unit or a pet of the bar's own.
+#[test]
+fn a_strike_cancel_listeners_pet_stop_signals_the_pet_bar_once() {
+    for possessed in [false, true] {
+        let mut f = frame(true);
+        with_pet_attacking(&mut f, possessed);
+        swinging_at_old(&mut f);
+        queue_strike(&mut f);
+        run(
+            &mut f,
+            r#"BARS = 0
+            local r = CreateFrame("Frame")
+            r:RegisterEvent("SPELLCAST_STOP")
+            r:RegisterEvent("PET_BAR_UPDATE")
+            r:SetScript("OnEvent", function()
+                if event == "SPELLCAST_STOP" then PetStopAttack() else BARS = BARS + 1 end
+            end)"#,
+        );
+        f.rx.try_iter().for_each(drop);
+        run(&mut f, "ClearTarget()");
+        assert_eq!(
+            eval::<i64>(&mut f, "return BARS"),
+            1,
+            "possessed {possessed}"
+        );
+        let stops =
+            f.rx.try_iter()
+                .filter(|c| matches!(c, ClientCommand::PetStopAttack { .. }))
+                .count();
+        assert_eq!(stops, 1, "possessed {possessed}");
+    }
+}
+
 /// `UnitCreatureFamily("target")` (`0x51a310`) reads the held unit's cached creature record
 /// (`0x6055e0`: `[[unit+0xb30]+0x1c]`) through `CreatureFamily.dbc` inside its call, though no
 /// snapshot carries the word; a unit whose record the cache lacks answers nil.

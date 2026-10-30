@@ -718,6 +718,9 @@ impl ScriptCallHost<'_, '_> {
                 script.seat_selection(self.appliers.select().seated());
                 if send.owes_pet_leg() {
                     self.at_point(script, &mut at.mark);
+                    // A listener's `PetStopAttack` lowered the latch and signalled there, so the
+                    // pet leg and the change find it down and signal nothing (`0x4bd650`).
+                    at.latched = self.appliers.pet().attack_latched();
                 }
                 // `PetStopAttack` lowered the latch and signals (`0x4bd6ae`, `0x4bd6b4`).
                 if self.appliers.select().run_pet_leg(&mut send) {
