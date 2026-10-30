@@ -509,6 +509,16 @@ impl ScriptCallHost<'_, '_> {
         script.signal_point(self);
     }
 
+    /// `UseSoulstone()` (`0x48ad70`): the carried stone's cast cancel (`0x48ae6b` → `0x6e4940`),
+    /// its signals' listeners running there, then the stone's use (`0x48ae7d` → `0x5d8d00`).
+    fn use_soulstone(&mut self, script: &mut UiScript, at: &mut Signalled) {
+        let Some(stone) = self.appliers.death().soulstone_head() else {
+            return;
+        };
+        self.at_point(script, at);
+        self.appliers.death().soulstone_use(script, stone);
+    }
+
     /// `AcceptAreaSpiritHeal()` (`0x492310`): the scan first (`0x492316` → `0x4923b0`), each healer
     /// change it makes applied as `0x4921c0` does, its out-of-range signal's listeners running
     /// where it fires, then the send with the healer it left.
@@ -1246,6 +1256,9 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::Battlefield(call) => tail = appliers.battlefield().apply(script, call),
             ScriptCall::Death(DeathAction::AcceptAreaSpiritHeal) => {
                 self.accept_area_spirit_heal(script, &mut at);
+            }
+            ScriptCall::Death(DeathAction::UseSoulstone { .. }) => {
+                self.use_soulstone(script, &mut at)
             }
             ScriptCall::Death(action) => appliers.death().apply(script, action),
             ScriptCall::Duel(DuelRequest::StartByGuid(guid)) => {
