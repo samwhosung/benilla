@@ -811,3 +811,28 @@ fn a_repeats_start_listener_sends_ahead_of_its_attack_stop() {
     run_hosted(&mut f, r#"CastSpellByName("Auto Shot")"#);
     assert_eq!(cast_wire(&f), ["CastSpell 75", "RandomRoll", "AttackStop"]);
 }
+
+/// A listener's `SpellStopCasting` at the attempt's push signal cancels the cast in flight, which
+/// zeroes the record's caster (`0x6e4a5a`), so `SendCast` finds no caster and leaves unsent
+/// (`0x6e5572` → `0x6e59b0`): the wire holds the cancel alone.
+#[test]
+fn a_cancel_at_the_push_signal_leaves_the_cast_unsent() {
+    let mut f = frame(false);
+    with_book_spell(
+        &mut f,
+        HEAL,
+        "Heal",
+        benilla_formats::SpellDisplay::default(),
+    );
+    run(
+        &mut f,
+        r#"local r = CreateFrame("Frame")
+        r:RegisterEvent("CURRENT_SPELL_CAST_CHANGED")
+        r:SetScript("OnEvent", function()
+            if not STOPPED then STOPPED = 1 SpellStopCasting() end
+        end)"#,
+    );
+    f.rx.try_iter().for_each(drop);
+    run_hosted(&mut f, r#"CastSpellByName("Heal")"#);
+    assert_eq!(casts_and_cancels(&f), vec![("cancel", HEAL)]);
+}

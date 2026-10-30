@@ -556,10 +556,13 @@ impl CastLadder<'_, '_> {
                     }
                     return None;
                 }
-                // The record as the listeners left it: a listener's attempt that refilled it and
-                // never reached its own send left no targets block to send.
+                // The record as the listeners left it: a listener's cancel zeroed its caster, which
+                // `SendCast` finds no object for (`0x6e4a5a`, `0x6e5572` → `0x6e59b0`), and a
+                // listener's attempt that refilled it and never reached its own send left no
+                // targets block to send. Neither reaches the send's spell store (`0x6e585a`), so
+                // the attempt's attack tail is skipped (`0x6e51be`).
                 let Some(send) = self.pending.record_send().cloned() else {
-                    debug!("cast: a listener's attempt refilled the record; nothing sent");
+                    debug!("cast: the record a listener left sends nothing");
                     if attempt.is_some() {
                         self.reports.changed();
                     }
@@ -568,6 +571,13 @@ impl CastLadder<'_, '_> {
                 if attempt.is_some() {
                     self.wand_handoff(me);
                 }
+                // The send stores the record's spell (`0x6e585a`), which `TryCast`'s attack tail
+                // compares with its own (`0x6e51be`): a record a listener's attempt refilled
+                // starts no swing of this attempt's.
+                let attempt = attempt.map(|a| Attempt {
+                    attack_guid: a.attack_guid.filter(|_| send.spell_id == a.spell_id),
+                    ..a
+                });
                 let _ = self.commands.0.send(send.packet);
                 let now = attempt.map_or_else(Instant::now, |a| a.now);
                 if let Some(caster) = send.commit.unit_caster() {

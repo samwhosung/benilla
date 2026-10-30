@@ -138,9 +138,14 @@ impl PendingCast {
 
     /// The gate of `AbortCast 0x6e4940`'s events: `SPELLCAST_STOP`, `_FAILED` or `_INTERRUPTED`
     /// fires only while the caster word is the active player's (`0x6e4a04`–`0x6e4a1e`), and firing
-    /// clears it (`0x6e4a5a`), so one record fires at most once whatever pops after it.
+    /// clears it (`0x6e4a5a`), so one record fires at most once whatever pops after it. A send
+    /// the record still owes finds no caster then and leaves unsent (`0x6e5572` → `0x6e59b0`).
     pub(crate) fn take_caster_event(&mut self) -> bool {
-        std::mem::take(&mut self.caster_is_player)
+        let caster = std::mem::take(&mut self.caster_is_player);
+        if caster {
+            self.record_send = None;
+        }
+        caster
     }
 
     /// The record's spell (`0xceac48 + 0x10`), written by the attempt (`0x6e4f88`) and the
@@ -163,7 +168,7 @@ impl PendingCast {
     }
 
     /// The record as an attempt or a cursor's bind completed it for `SendCast 0x6e54f0`, which
-    /// reads it past the signals ahead of it; a refill since leaves none.
+    /// reads it past the signals ahead of it; a refill or a cancel since leaves none.
     pub(crate) fn record_send(&self) -> Option<&super::cast_send::CastSend> {
         self.record_send.as_ref()
     }
