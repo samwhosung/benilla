@@ -583,9 +583,9 @@ pub(crate) fn drive_nameplates(
                 .and_then(|e| names.creature_subname(e))
                 // vmangos sends "" for most templates: an empty subname is no line.
                 .filter(|s| !s.trim().is_empty()),
-            EntityKind::Player if name_cfg.player_guild => {
-                store.and_then(|s| crate::ui_guild::unit_guild_name(&s.0, &guilds, &net_commands))
-            }
+            EntityKind::Player if name_cfg.player_guild => store.and_then(|s| {
+                crate::ui_guild::unit_guild_name(guid.0, &s.0, &guilds, &net_commands)
+            }),
             _ => None,
         };
         // The selector's first-priority branch: the combat flash while we melee this unit.

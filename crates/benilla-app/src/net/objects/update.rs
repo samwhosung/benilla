@@ -864,6 +864,9 @@ fn deactivate(sc: &mut Scene, guid: u64, script: Option<&UiScript>) {
                 call: crate::vplates::PlateCall::Gone,
             });
     }
+    if let Some(guilds) = sc.guilds.as_deref() {
+        guilds.cancel_name_text(guid);
+    }
     {
         let held = |g: u64| held(g).map(|s| &s.0);
         let me = sc.self_guid.0;

@@ -388,6 +388,43 @@ fn record(app: &mut App, entry: u32, name: &str) {
         );
 }
 
+/// `OnGuildRecordForName` (`0x5dd860`): the record the name block's guild line missed lands, and
+/// the callback runs `InvalidateNameDesc` on the unit (`0x5dd88b`), whose gate refuses it now,
+/// gone unselectable (`0x60f622`), and releases its plate at the answer's packet.
+#[test]
+fn a_guild_record_the_name_block_waited_on_gates_the_plate_at_its_packet() {
+    let mut app = plated_client("return Shown(Plate())");
+    let world = app.world_mut();
+    let commands = crate::net::NetCommands(world.resource::<crate::net::NetCommands>().0.clone());
+    let guild = world.resource::<crate::ui_guild::GuildState>();
+    let fields = benilla_protocol::ObjectFields::from_pairs(&[(GUILD_ID, 7)]);
+    assert_eq!(
+        crate::ui_guild::unit_guild_name(BOAR, &fields, guild, &commands),
+        None,
+        "the line misses"
+    );
+    let answer = SessionEvent::GuildQueryResponse(benilla_protocol::messages::GuildQueryResponse {
+        guild_id: 7,
+        name: "Legacy".into(),
+        ..Default::default()
+    });
+    assert_eq!(
+        frame(
+            &mut app,
+            vec![
+                values(WOLF, &health(70)),
+                values(BOAR, &[(FIELD_UNIT_FLAGS, 1 << 25)]),
+                answer,
+                values(WOLF, &health(60)),
+            ]
+        ),
+        ["UNIT_HEALTH:target:shown", "UNIT_HEALTH:target:hidden"]
+    );
+}
+
+/// `PLAYER_GUILDID`.
+const GUILD_ID: u16 = 191;
+
 /// [`client`] with the frame's gate able to run (`drive_vplates`): both kinds of plate on, the
 /// camera looking down on us, and the boar alone drawn, so the gate gives it the one plate. The
 /// spy's `Look` is the test's; the frame's gate has run once.

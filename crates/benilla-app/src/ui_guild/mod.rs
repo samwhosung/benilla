@@ -136,6 +136,10 @@ pub(crate) enum Waiter {
     /// The `PLAYER_GUILD_TIMESTAMP` watcher's `0x5e29c0` (`0x5e299d`): `RefreshGuildTag` on every
     /// held player of the guild (`0x5e29e0`).
     Members,
+    /// `GetGuildName`'s `OnGuildRecordForName` (`0x5e0a25`, `0x5dd860`) for the player `guid`,
+    /// whose name block the guild line missed: `InvalidateNameDesc` on it while the object
+    /// manager holds it (`0x5dd880`, `0x5dd88b`), whose gate may bind its plate there (`0x60706a`).
+    NameText(u64),
 }
 
 /// The guild session mirror: filled by the packet handlers, read by the getters through the call
@@ -448,6 +452,25 @@ impl GuildState {
         }
     }
 
+    /// The name block's guild line missed `guild_id` for the player `guid` (`0x5e0a3a`): its
+    /// callback waits on the record. One a player: each rebuild that misses again leaves the
+    /// reference another, whose run gates the same unit again and moves nothing more.
+    fn wait_for_name_text(&self, guild_id: u32, guid: u64) {
+        let mut waiters = self.waiters();
+        let list = waiters.entry(guild_id).or_default();
+        if !list.contains(&Waiter::NameText(guid)) {
+            list.push(Waiter::NameText(guid));
+        }
+    }
+
+    /// The player `guid` leaves the object manager: its release cancels the name block's callback
+    /// on a record still pending (`0x5e9af8`-`0x5e9b16`), as its destruction does (`0x5dd6f2`).
+    pub(crate) fn cancel_name_text(&self, guid: u64) {
+        for list in self.waiters().values_mut() {
+            list.retain(|w| *w != Waiter::NameText(guid));
+        }
+    }
+
     /// A roster getter missed `guild_id`: the lookup with its callback `0x4d1480` (`0x4d1291`,
     /// `0x4d1f29`), asking as [`Self::wait_for_info`] does and leaving a waiter, with no dedupe.
     pub(crate) fn wait_for_roster(&self, guild_id: u32, commands: &NetCommands) {
@@ -661,16 +684,23 @@ fn guild_of(fields: &ObjectFields, guild: &GuildState, ask: Ask<'_>) -> Option<U
 }
 
 /// A unit's guild name alone: the overhead name stack's guild line (`"\n<%s>"`, `0x860f9c`), shown
-/// under `UnitNamePlayerGuild`'s mask bit `0x10` (`0x609085`) and read through `0x5e09f0`.
+/// under `UnitNamePlayerGuild`'s mask bit `0x10` (`0x609085`) and read through `0x5e09f0`, for the
+/// player `guid`, whose miss leaves its name block's callback ([`Waiter::NameText`]).
 /// [`unit_guild`] without its clones: [`crate::nameplates::drive_nameplates`] reads it per frame.
 pub(crate) fn unit_guild_name<'a>(
+    guid: u64,
     fields: &ObjectFields,
     guild: &'a GuildState,
     commands: &NetCommands,
 ) -> Option<&'a str> {
-    guild
-        .resolve_identity(fields.player_guild_id(), Ask::New(commands))
-        .map(|identity| identity.name.as_str())
+    let guild_id = fields.player_guild_id();
+    let name = guild
+        .resolve_identity(guild_id, Ask::New(commands))
+        .map(|identity| identity.name.as_str());
+    if name.is_none() && guild_id != 0 {
+        guild.wait_for_name_text(guild_id, guid);
+    }
+    name
 }
 
 /// A unit's guild crest for the body composite, off its public `PLAYER_GUILDID`, its guild record
@@ -755,6 +785,20 @@ pub(crate) mod net {
             for waiter in &waiters {
                 match waiter {
                     Waiter::Roster => guild.raise(Fire::Roster(RosterUpdate::Applied)),
+                    // `0x5dd880`: the unit held, with mask 8.
+                    &Waiter::NameText(guid) => {
+                        let held = index
+                            .0
+                            .get(&guid)
+                            .and_then(|&e| stores.get(e).ok())
+                            .is_some_and(|(store, _)| store.is_unit());
+                        if held {
+                            notices.write(FieldNotice::Plate {
+                                guid,
+                                call: crate::vplates::PlateCall::Gate,
+                            });
+                        }
+                    }
                     other => notices.write_batch(waiter_notices(
                         guild_id,
                         std::slice::from_ref(other),
@@ -781,7 +825,7 @@ pub(crate) mod net {
                     guid,
                     id: crate::field_watch::id::PLAYER_GUILD_UPDATE,
                 }),
-                Waiter::Roster => {}
+                Waiter::Roster | Waiter::NameText(_) => {}
                 Waiter::Members => out.extend(
                     players
                         .iter()
@@ -1579,19 +1623,19 @@ mod tests {
         guild.identities.refuse(8);
 
         let guildless = ObjectFields::from_pairs(&[]);
-        assert_eq!(unit_guild_name(&guildless, &guild, &commands), None);
+        assert_eq!(unit_guild_name(1, &guildless, &guild, &commands), None);
         assert_eq!(rx.try_iter().count(), 0, "guild id 0 asks nothing");
 
         let unknown = ObjectFields::from_pairs(&[(191, 9)]);
         assert_eq!(
-            unit_guild_name(&unknown, &guild, &commands),
+            unit_guild_name(1, &unknown, &guild, &commands),
             None,
             "a query in flight draws no line"
         );
         assert_eq!(rx.try_iter().count(), 1, "and the miss asked for it");
 
         let blank = ObjectFields::from_pairs(&[(191, 8)]);
-        assert_eq!(unit_guild_name(&blank, &guild, &commands), None);
+        assert_eq!(unit_guild_name(1, &blank, &guild, &commands), None);
         assert_eq!(
             rx.try_iter().count(),
             0,
@@ -1599,8 +1643,11 @@ mod tests {
         );
 
         let member = ObjectFields::from_pairs(&[(191, 7), (192, 1)]);
-        assert_eq!(unit_guild_name(&member, &guild, &commands), Some("Legacy"));
-        let via_line = unit_guild_name(&member, &guild, &commands).map(str::to_owned);
+        assert_eq!(
+            unit_guild_name(1, &member, &guild, &commands),
+            Some("Legacy")
+        );
+        let via_line = unit_guild_name(1, &member, &guild, &commands).map(str::to_owned);
         let via_api = unit_guild(&member, &guild, &commands).map(|g| g.name);
         assert_eq!(via_line, via_api, "the two readers of one cache disagree");
     }
