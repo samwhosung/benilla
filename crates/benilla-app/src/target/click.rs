@@ -420,6 +420,9 @@ enum Owed {
     /// The rest of StartAttack past its stand-up (`0x5ecca0` on): its own select (`0x5eccaa`),
     /// whose signals run their listeners before its swing ([`attack_select`]).
     Attack { entity: Entity, guid: u64 },
+    /// The NPC-service ladder past its gates and its Unavailable Quest Givers trigger
+    /// (`0x5f0278`), whose listeners run before the ladder (`0x5f0289` on, [`Dispatch::talk_ladder`]).
+    Talk { entity: Entity, guid: u64 },
 }
 
 /// Pay what [`interact`] owed past its turn, on a [`crate::script_calls::VmWith`] whose set, bound
@@ -440,9 +443,9 @@ macro_rules! pay_owed {
                     owed.pay(selection, &mut dispatch.seam);
                 });
             }
-            Some(owed) => $vm.turn(|_, $p| {
+            Some(owed) => $vm.turn(|script, $p| {
                 let (dispatch, _) = $parts;
-                owed.run(dispatch)
+                owed.run(dispatch, script)
             }),
             None => {}
         }
@@ -528,8 +531,9 @@ fn interact_select(
 }
 
 impl Owed {
-    fn run(self, dispatch: &mut Dispatch) {
+    fn run(self, dispatch: &mut Dispatch, script: Option<&mut benilla_ui::script::UiScript>) {
         match self {
+            Owed::Talk { entity, guid } => dispatch.talk_ladder(script, entity, guid),
             // The callers pay it with its select ([`pay_owed`]); with none, the swing alone.
             Owed::Attack { guid, .. } => dispatch.seam.start_tail(guid),
             Owed::LootCorpse { entity, guid, walk } => {
@@ -1032,17 +1036,26 @@ impl Dispatch<'_, '_> {
     /// the spirit guide's event; `None` when no VM is mounted.
     fn talk(
         &mut self,
-        mut script: Option<&mut benilla_ui::script::UiScript>,
+        script: Option<&mut benilla_ui::script::UiScript>,
         entity: Entity,
         guid: u64,
         walk: bool,
     ) {
+        if self.talk_head(entity, guid, walk) {
+            self.talk_ladder(script, entity, guid);
+        }
+    }
+
+    /// [`Self::talk`] up to its ladder: the form test, the reach, the re-click gate and the
+    /// Unavailable Quest Givers trigger (`0x5f0268`-`0x5f0278`), whose listeners a caller runs
+    /// before [`Self::talk_ladder`]. Whether the ladder goes on.
+    fn talk_head(&mut self, entity: Entity, guid: u64, walk: bool) -> bool {
         if self.shapeshifted_from_npcs() {
             debug!("right-click interact: {guid:#x} — refused, shapeshifted");
             self.feedback.errors.push(crate::ui_action::UiError::key(
                 "ERR_CANT_INTERACT_SHAPESHIFTED",
             ));
-            return;
+            return false;
         }
         if !self.in_service_reach(entity) {
             if walk {
@@ -1054,13 +1067,13 @@ impl Dispatch<'_, '_> {
                     crate::player::TALK_STOP,
                 );
             }
-            return;
+            return false;
         }
         // The reference's own `UNIT_NPC_FLAGS` ladder (`0x5f0289`), not the cursor kind, which its
         // cursor ladder (`0x482336`) projects lossily; the re-click gate comes first.
         if interaction_already_open_on(guid, &self.service.interact) {
             debug!("right-click interact: {guid:#x} — its window is already open, nothing sent");
-            return;
+            return false;
         }
         // Dialog status 1, unavailable, triggers Unavailable Quest Givers ahead of the ladder
         // (`0x5f0268`-`0x5f0278`).
@@ -1069,6 +1082,16 @@ impl Dispatch<'_, '_> {
                 tutorials.trigger_now(crate::tutorial::id::UNAVAILABLE_QUEST_GIVERS);
             }
         }
+        true
+    }
+
+    /// [`Self::talk`]'s ladder (`0x5f0289` on), past its head ([`Self::talk_head`]).
+    fn talk_ladder(
+        &mut self,
+        mut script: Option<&mut benilla_ui::script::UiScript>,
+        entity: Entity,
+        guid: u64,
+    ) {
         let npc_flags = self
             .stores
             .get(entity)
@@ -1248,8 +1271,12 @@ impl ClickDispatch<'_, '_> {
 
     /// Pay what [`Self::act`] owed: StartAttack's own select, whose `SetSelection` the call
     /// signals in place before its swing ([`attack_select`]), returned with what it owes; or the
-    /// leg's loot or use, run here.
-    pub(crate) fn pay(&mut self, owed: ActOwed) -> Option<super::SelectDebt> {
+    /// leg's loot, use or service ladder, run here on `script`, the VM when one is mounted.
+    pub(crate) fn pay(
+        &mut self,
+        script: Option<&mut benilla_ui::script::UiScript>,
+        owed: ActOwed,
+    ) -> Option<super::SelectDebt> {
         match owed.0 {
             Owed::Attack { entity, guid } => {
                 let mark = crate::lanes::mark();
@@ -1258,7 +1285,7 @@ impl ClickDispatch<'_, '_> {
                 Some(select.owed)
             }
             owed => {
-                owed.run(&mut self.dispatch);
+                owed.run(&mut self.dispatch, script);
                 None
             }
         }
@@ -1295,7 +1322,7 @@ pub(super) fn act_on_right_click(mut c: ClickDispatch, held: Option<Res<PayloadH
     let Some(owed) = c.act_with(None, held.is_some_and(|h| h.0)) else {
         return;
     };
-    if let Some(owed) = c.pay(owed) {
+    if let Some(owed) = c.pay(None, owed) {
         owed.pay(&mut c.selection, &mut c.dispatch.seam);
     }
 }
@@ -1571,7 +1598,10 @@ fn interact_legs(
                 _ => false,
             };
             if interacts {
-                dispatch.talk(script, entity, guid, walk);
+                // The ladder waits behind the head's trigger's listeners.
+                if dispatch.talk_head(entity, guid, walk) {
+                    return Some(Owed::Talk { entity, guid });
+                }
             } else {
                 debug!("right-click unit {guid:#x}: no interaction and no attack — the greeting");
                 dispatch.greet(entity);

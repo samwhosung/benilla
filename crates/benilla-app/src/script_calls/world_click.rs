@@ -283,7 +283,7 @@ impl ScriptCallHost<'_, '_> {
             .appliers
             .click()
             .dispatch()
-            .and_then(|mut dispatch| dispatch.pay(owed));
+            .and_then(|mut dispatch| dispatch.pay(Some(script), owed));
         // A mailbox or a text object opens inside its use (`0x5f86b0` → `0x5f6820`, `0x5f58c0`).
         self.open_used(script, at);
         if let Some(owed) = owed {
@@ -389,7 +389,7 @@ impl ScriptCallHost<'_, '_> {
             .appliers
             .click()
             .dispatch()
-            .and_then(|mut dispatch| dispatch.pay(owed));
+            .and_then(|mut dispatch| dispatch.pay(Some(script), owed));
         if let Some(owed) = owed {
             self.settle_selection(script, at, owed);
         }

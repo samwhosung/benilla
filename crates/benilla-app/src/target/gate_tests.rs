@@ -225,6 +225,48 @@ fn greeted(sent: &[ClientCommand], guid: u64) -> bool {
         .any(|c| matches!(c, ClientCommand::GossipHello { guid: g } if *g == guid))
 }
 
+/// The Unavailable Quest Givers trigger (`0x5f0278`) signals before the service ladder
+/// (`0x5f0289`), so inside a right-click's call its listener's packet goes ahead of the gossip
+/// hello.
+#[test]
+fn an_unavailable_quest_givers_listener_sends_ahead_of_the_ladder() {
+    let mut f = fix(false);
+    f.app.world_mut().init_resource::<crate::player::Player>();
+    f.app
+        .world()
+        .resource::<crate::tutorial::Tutorials>()
+        .lock()
+        .apply_flags(&[0u8; 32]);
+    let npc = f.unit_with(NPC, 3.0, &[(FIELD_UNIT_NPC_FLAGS, GOSSIP)]);
+    f.app
+        .world_mut()
+        .resource_mut::<crate::ui_quest::QuestGiver>()
+        .set_status(NPC, 1);
+    f.app
+        .world_mut()
+        .insert_non_send_resource(UiScript::new().expect("a VM"));
+    crate::script_calls::with_hosted_vm(f.app.world_mut(), |s| {
+        s.expect("a VM").run(
+            r#"local r = CreateFrame("Frame")
+            r:RegisterEvent("TUTORIAL_TRIGGER")
+            r:SetScript("OnEvent", function() RandomRoll(1, 2) end)"#,
+        )
+    })
+    .expect("the listener installs");
+    f.press_on(npc, NPC, false);
+    f.right_click();
+    let sent: Vec<&str> = f
+        .sent()
+        .into_iter()
+        .filter_map(|c| match c {
+            ClientCommand::RandomRoll { .. } => Some("roll"),
+            ClientCommand::GossipHello { .. } => Some("hello"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sent, ["roll", "hello"]);
+}
+
 /// `CGPlayer_C::InteractWithNpc` (`0x5f0130`) opens with `IsShapeShifted` (`0x60e9f0`, at
 /// `0x5f0150`): a form whose `SpellShapeshiftForm` row lacks flag `0x8` shows message 351 and
 /// returns (`0x5f017f`, `0x5f0185`), ahead of the range test and the walk. A form with `0x8`, a
@@ -661,9 +703,9 @@ fn a_right_press_with_a_payload_is_consumed_before_the_world_sees_it() {
 }
 
 /// Talking to an NPC in reach whose dialog status is 1, unavailable, triggers Unavailable Quest
-/// Givers (`0x5f0268`-`0x5f0278`) ahead of its service ladder; another status triggers nothing.
-/// The click's select lit the NPC, which the selection's tutorial ladder then judges
-/// (`0x493789`).
+/// Givers (`0x5f0268`-`0x5f0278`) inside the click, ahead of its service ladder; another status
+/// triggers nothing. The click's select lit the NPC, which the selection's tutorial ladder then
+/// judges (`0x493789`).
 #[test]
 fn talking_to_an_npc_with_status_one_triggers_unavailable_quest_givers() {
     for (status, fired) in [(1, vec![0x2b]), (5, vec![])] {
@@ -679,11 +721,27 @@ fn talking_to_an_npc_with_status_one_triggers_unavailable_quest_givers() {
             .world_mut()
             .resource_mut::<crate::ui_quest::QuestGiver>()
             .set_status(NPC, status);
+        let mut script = UiScript::new().expect("a VM");
+        script
+            .run(
+                r#"FIRED = {}
+                local r = CreateFrame("Frame")
+                r:RegisterEvent("TUTORIAL_TRIGGER")
+                r:SetScript("OnEvent", function() table.insert(FIRED, arg1) end)"#,
+            )
+            .expect("the listener installs");
+        f.app.world_mut().insert_non_send_resource(script);
         f.press_on(npc, NPC, false);
         f.right_click();
         assert!(greeted(&f.sent(), NPC), "status {status}: in reach");
+        let heard: Vec<u32> = f
+            .app
+            .world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .eval("return FIRED")
+            .expect("the record reads");
+        assert_eq!(heard, fired, "status {status}");
         let tutorials = f.app.world().resource::<crate::tutorial::Tutorials>();
-        assert_eq!(tutorials.take_fired(), fired, "status {status}");
         assert_eq!(tutorials.take_selects(), [(npc, NPC)], "the select it made");
     }
 }
