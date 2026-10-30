@@ -115,7 +115,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - A mounted draw is refused at the setter, because our rider track never replays the reference's per-play force-stow (`0x5fdf80`); the result is the same. ([`src/creature_anim/driver.rs:769`](../crates/benilla-app/src/creature_anim/driver.rs#L769))
 - The reference writes bone 0's rate blindly; we scope it to the swing's own node, because a moving attacker's gait would otherwise slow too. ([`src/creature_anim/driver.rs:1088`](../crates/benilla-app/src/creature_anim/driver.rs#L1088))
 - A time-based rate, because the reference's per-frame step changes with the frame rate. ([`src/creature_anim/select.rs:137`](../crates/benilla-app/src/creature_anim/select.rs#L137))
-- A spell's state kit and body procs are reaped only once no slot holds the spell. ([`src/creature_anim/spell_visual.rs:1275`](../crates/benilla-app/src/creature_anim/spell_visual.rs#L1275))
+- A spell's state kit and body procs are reaped only once no slot holds the spell. ([`src/creature_anim/spell_visual.rs:1351`](../crates/benilla-app/src/creature_anim/spell_visual.rs#L1351))
 
 #### cvars
 
@@ -278,7 +278,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### spell
 
 - An out-of-range byte drops the packet, because the reference's unchecked write overruns the table (`(64, 19)` lands on the class family at `0xcecaac`). ([`src/spell/mods.rs:131`](../crates/benilla-app/src/spell/mods.rs#L131))
-- The fallback is the packet's target guid, started only when the validator keeps it (`on_spell_go`), and with none there is no start, never the nearest-hostile acquire, because that would attack something the player never named. ([`src/spell/net.rs:1670`](../crates/benilla-app/src/spell/net.rs#L1670))
+- The fallback is the packet's target guid, started only when the validator keeps it (`on_spell_go`), and with none there is no start, never the nearest-hostile acquire, because that would attack something the player never named. ([`src/spell/net.rs:1672`](../crates/benilla-app/src/spell/net.rs#L1672))
 - A range failure leaves targeting armed and working. The reference's report cancels the cast (`0x6e2218` → `0x6e4940`): its line, `SPELLCAST_FAILED` and the tradeskill disarm, which benilla keeps; with the word the bind emptied it also sends `CMSG_CANCEL_CAST` for the unsent spell (`0x6e4970`) and clears the caster, then restores the pre-click word (`0x6e6096`), so every later click fails the caster test (`0x6e5b93`) and the cursor is stranded until a cancel. ([`src/spell/targeting/mod.rs:661`](../crates/benilla-app/src/spell/targeting/mod.rs#L661))
 
 #### target
