@@ -679,3 +679,20 @@ fn the_session_end_drops_the_cast_and_house_lanes() {
     fire_frame(world);
     assert!(heard(&mut app).is_empty(), "nothing left to fire");
 }
+
+/// A firing's own pushes are what moves its drain: a stamp another thread takes meanwhile, as a
+/// test beside it does on its own world, nests under nothing it fires.
+#[test]
+fn another_threads_stamp_is_no_push_of_the_firing() {
+    let at = crate::lanes::stamp();
+    let ((), moved) = crate::lanes::firing(at, || {
+        std::thread::spawn(crate::lanes::stamp)
+            .join()
+            .expect("stamps");
+    });
+    assert!(!moved, "another thread's stamp");
+    let ((), moved) = crate::lanes::firing(at, || {
+        crate::lanes::stamp();
+    });
+    assert!(moved, "the firing's own push");
+}
