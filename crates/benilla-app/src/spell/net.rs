@@ -35,14 +35,21 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::SpellLearned, on_spell_learned)
         .net_handler(K::SpellRemoved, on_spell_removed)
         .net_handler(K::SpellSuperceded, on_spell_superceded)
+        .init_resource::<ChainedCast>()
         .net_handler(K::CastResult, on_cast_result)
+        // The `modalNextSpell` chain's cast (`0x6e74aa`), after the edits the report queued have
+        // applied, its precast end's loot release among them (`0x6e1c8e`).
+        .net_handler(K::CastResult, on_cast_result_chain)
         .net_handler(K::SpellStart, on_spell_start)
         .net_handler(K::SpellGo, on_spell_go)
         // `HandleSpellGo`'s tail in its order, each after the edits the one before it queued have
         // applied, the precast end's loot close among them: the repeat hook (`0x6e81e7`), the
-        // chest's loot target (`0x6e831b`), then the cooldown inserts (`0x6e8425`-`0x6e8570`).
+        // chest's loot target (`0x6e831b`), the deferred attack start (`0x6e8402`), then the
+        // cooldown inserts (`0x6e8425`-`0x6e8570`).
+        .init_resource::<GoAttackStart>()
         .net_handler(K::SpellGo, on_go_repeat)
         .net_handler(K::SpellGo, on_go_loot_target)
+        .net_handler(K::SpellGo, on_go_attack_start)
         .net_handler(K::SpellGo, on_go_cooldowns)
         .net_handler(K::SpellChainTargets, on_spell_chain_targets)
         .net_handler(K::SpellFailedOther, on_spell_failed_other)
@@ -333,17 +340,12 @@ pub(crate) struct Reply<'w, 's> {
     items: Option<Res<'w, crate::items::Items>>,
 }
 
-/// `HandleCastResult 0x6e7330`, the one handler that casts: a reply whose spell names a
-/// `modalNextSpell` (column 38) chains it through the ladder in the same call (`0x6e74aa call
-/// 0x6e5a90` → `TryCast 0x6e4b60`), so it arms the in-flight slot before the next packet.
-///
-/// The chained cast goes out at the null target guid (`0x6e74a6 push ebx; push ebx`, `ebx = 0`),
-/// so it binds through `ArmCast 0x6e5250`'s ordinary walk ([`CastTargeting::context`]) and takes
-/// every rung a press takes.
+/// `HandleCastResult 0x6e7330` up to its chain: the report, the slot's pop, and the spell a reply
+/// chains, which [`on_cast_result_chain`] casts once the report's edits have applied.
 fn on_cast_result(
     In(ev): In<SessionEvent>,
     mut ladder: CastLadder,
-    targeting: CastTargeting,
+    mut chain: ResMut<ChainedCast>,
     mut r: Reply,
 ) {
     if let SessionEvent::CastResult {
@@ -379,10 +381,31 @@ fn on_cast_result(
             &ladder.commands,
             r.play_seq.next(),
         );
-        if let Some(next) = chained {
-            let ctx = targeting.context();
-            ladder.send(next, &ctx, CastCommit::Spell);
-        }
+        chain.0 = chained;
+    }
+}
+
+/// The spell a `SMSG_CAST_RESULT` chains, from its handler to the chain's.
+#[derive(Resource, Default)]
+struct ChainedCast(Option<u32>);
+
+/// `HandleCastResult`'s chain, the one handler leg that casts: a reply whose spell names a
+/// `modalNextSpell` (column 38) chains it through the ladder in the same packet (`0x6e74aa call
+/// 0x6e5a90` → `TryCast 0x6e4b60`), so it arms the in-flight slot before the next packet, after
+/// the report's precast end released our loot (`0x6e73ac` → `0x6e1c8e`).
+///
+/// The chained cast goes out at the null target guid (`0x6e74a6 push ebx; push ebx`, `ebx = 0`),
+/// so it binds through `ArmCast 0x6e5250`'s ordinary walk ([`CastTargeting::context`]) and takes
+/// every rung a press takes.
+fn on_cast_result_chain(
+    In(ev): In<SessionEvent>,
+    mut ladder: CastLadder,
+    targeting: CastTargeting,
+    mut chain: ResMut<ChainedCast>,
+) {
+    if let (SessionEvent::CastResult { .. }, Some(next)) = (ev, chain.0.take()) {
+        let ctx = targeting.context();
+        ladder.send(next, &ctx, CastCommit::Spell);
     }
 }
 
@@ -434,27 +457,13 @@ fn on_spell_start(
     }
 }
 
-/// The GO, then its deferred auto-attack start (`0x6e8402` → `0x6131a0`): the player's Attack at
-/// the hit unit, whose validator (`0x612df0`, `0x6131aa`) refuses on the actor's state or the
-/// target with its line and no swing, selects the hit whatever is selected and signals in place,
-/// behind the GO's reports, then swings at the selection it re-read (`0x6130c1`)
-/// ([`crate::script_calls::ScriptCallHost::engine_attack`]).
-#[allow(clippy::type_complexity)] // a Bevy system's full input set
+/// The GO's legs, and the attack its tail defers ([`GoAttackStart`]), which
+/// [`on_go_attack_start`] makes at its place.
 fn on_spell_go(
     In(ev): In<SessionEvent>,
-    mut set: crate::script_calls::disjoint::Pair<
-        (Lifecycle<'static>, Scene<'static, 'static>),
-        crate::script_calls::VmWith<
-            'static,
-            'static,
-            crate::script_calls::disjoint::Pair<
-                'static,
-                'static,
-                crate::ui_action::AttackPress<'static, 'static>,
-                Option<crate::spell::PickBind<'static, 'static>>,
-            >,
-        >,
-    >,
+    mut l: Lifecycle,
+    mut sc: Scene,
+    mut start: ResMut<GoAttackStart>,
 ) {
     let mark = crate::lanes::mark();
     if let SessionEvent::SpellGo {
@@ -481,7 +490,6 @@ fn on_spell_go(
         // No hit leaves the start at the packet's target, the `Deviation:` in [`spell_go`].
         let no_hit = hits.is_empty();
         let deferred = {
-            let (mut l, mut sc) = set.p0();
             let engaged = sc
                 .self_player
                 .single()
@@ -510,25 +518,51 @@ fn on_spell_go(
                 l.play_seq.next(),
             )
         };
+        start.0 = deferred.map(|guid| (guid, no_hit, mark));
+    }
+}
+
+/// The attack a GO defers to its tail ([`spell_go`]): the guid, whether the packet had no hit, and
+/// the mark the GO's handler began at, from the handler to its start's leg.
+#[derive(Resource, Default)]
+struct GoAttackStart(Option<(u64, bool, crate::lanes::Mark)>);
+
+/// The GO's deferred auto-attack start (`0x6e8402` → `0x6131a0`), after its chest's loot target
+/// and the precast end's loot release (`0x6e7fc5`), which the legs' edits made as they returned:
+/// the player's Attack at the hit unit, whose validator (`0x612df0`, `0x6131aa`) refuses on the
+/// actor's state or the target with its line and no swing, selects the hit whatever is selected
+/// and signals in place, behind the GO's reports, then swings at the selection it re-read
+/// (`0x6130c1`) ([`crate::script_calls::ScriptCallHost::engine_attack`]).
+fn on_go_attack_start(
+    In(ev): In<SessionEvent>,
+    mut start: ResMut<GoAttackStart>,
+    mut set: crate::script_calls::VmWith<
+        crate::script_calls::disjoint::Pair<
+            crate::ui_action::AttackPress<'static, 'static>,
+            Option<crate::spell::PickBind<'static, 'static>>,
+        >,
+    >,
+) {
+    if let (SessionEvent::SpellGo { .. }, Some((guid, no_hit, mark))) = (ev, start.0.take()) {
         // The fallback starts only at a unit the validator keeps, so its pick never runs the
         // nearest-enemy cycle (`0x6130b5`) for a target the player is friendly toward.
-        let deferred = deferred.filter(|&guid| !no_hit || set.p1().own().p0().keeps(guid));
-        if let Some(guid) = deferred {
-            set.p1().engine_attack(guid, mark, |mut press| {
-                // With no listeners, the validator's select is paid at once, after its bind.
-                let Some(owed) = press.p0().pick_attack_at(Some(guid), true) else {
-                    return;
-                };
-                if let Some(mut bind) = press.p1() {
-                    bind.bind();
-                }
-                let mut press = press.p0();
-                press.pay(owed);
-                if let Some(target) = press.settle_attack() {
-                    press.start_attack(target);
-                }
-            });
+        if no_hit && !set.own().p0().keeps(guid) {
+            return;
         }
+        set.engine_attack(guid, mark, |mut press| {
+            // With no listeners, the validator's select is paid at once, after its bind.
+            let Some(owed) = press.p0().pick_attack_at(Some(guid), true) else {
+                return;
+            };
+            if let Some(mut bind) = press.p1() {
+                bind.bind();
+            }
+            let mut press = press.p0();
+            press.pay(owed);
+            if let Some(target) = press.settle_attack() {
+                press.start_attack(target);
+            }
+        });
     }
 }
 
@@ -1234,7 +1268,8 @@ fn cast_result(
     // - Equal to the running repeat means re-arm, not re-cast (`0x6e745b` → `0x6e745d`), so a
     //   second sting never resets the swing timer; the record is refilled with the player as its
     //   caster (`0x6e748f`) and nothing is sent.
-    // The chained spell is returned; `on_cast_result` hands it to the ladder in the same call.
+    // The chained spell is returned; [`on_cast_result_chain`] hands it to the ladder in the same
+    // packet, once the report's edits have applied.
     //
     // The handler's own `SPELLCAST_STOP` (0x152), at its two sites, never from the GO (`0x6e7a70`
     // calls neither):

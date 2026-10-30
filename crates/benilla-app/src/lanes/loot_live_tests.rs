@@ -896,6 +896,30 @@ fn a_response_on_the_run_waiting_on_a_record_closes_inside_its_packet() {
     assert!(c.seen().is_empty(), "nothing fires after");
 }
 
+/// Our cast's GO, which ends a precast of `spell_id` with its tail, hitting `hits`.
+fn our_go(spell_id: u32, hits: Vec<u64>) -> SessionEvent {
+    SessionEvent::SpellGo {
+        caster: ME,
+        spell_id,
+        cast_flags: 0x100,
+        hits,
+        misses: vec![],
+        target: None,
+        go_target: None,
+        target_mask: 0,
+        source: None,
+        dest: None,
+        ammo_display_id: None,
+        item_caster: None,
+        unit_caster: ME,
+    }
+}
+
+/// Where the first sent command starting with each of `heads` went, in `sent`.
+fn sent_at(sent: &[String], head: &str) -> Option<usize> {
+    sent.iter().position(|s| s.starts_with(head))
+}
+
 /// `SMSG_STANDSTATE_UPDATE` applies in its packet (`0x603e50` → `0x6127b0` → `0x5f0790`): a sit
 /// closes our loot there (`0x5f07d5`), so a later packet's listener in the frame reads the window
 /// shut, and the stand behind it, which closes nothing (`0x5f07a9`), does not hide the sit.
@@ -919,4 +943,121 @@ fn a_server_sit_closes_our_loot_inside_its_packet() {
         1,
         "released once, at the sit: {sent:?}"
     );
+}
+
+/// A living mark our GO hits.
+const MARK: u64 = 0xF130_0000_0000_00AD;
+/// Cheap Shot, whose GO starts the swing (`AttributesEx2 & 0x100000`, `0x6e83c0`).
+const CHEAP_SHOT: u32 = 1833;
+
+/// The GO's precast end releases our loot at `0x6e7fc5`, ahead of its deferred attack start
+/// (`0x6e8402` → `0x6131a0`), whose validator selects the hit (`0x613100`), so the release goes out
+/// before the start's sends. The window is a chest's, which the select's teardown does not close
+/// (`0x493959`).
+#[test]
+fn a_gos_release_goes_out_before_its_deferred_attack_starts_sends() {
+    use benilla_protocol::messages::ObjectType;
+    /// `UNIT_FIELD_MAXHEALTH`.
+    const MAXHEALTH: u16 = 28;
+    let mut c = client();
+    c.frame(vec![
+        vec![created(
+            MARK,
+            EntityKind::Unit,
+            &[(FIELD_UNIT_HEALTH, 100), (MAXHEALTH, 100)],
+        )],
+        vec![SessionEvent::ObjectCreate {
+            guid: CHEST,
+            kind: EntityKind::GameObject,
+            display_id: None,
+            position: [0.0; 3],
+            orientation: 0.0,
+            scale: 1.0,
+            speeds: None,
+            mover: None,
+            transport_progress: None,
+            transport: None,
+            spline: None,
+            fields: benilla_protocol::ObjectFields::from_pairs(&[(2, 0x21), (21, 3)])
+                .into_created(ObjectType::GameObject),
+        }],
+    ]);
+    c.ask_loot(CHEST);
+    c.frame(vec![vec![response(CHEST, 0, &[LINEN])]]);
+    let world = c.app.world_mut();
+    world.insert_resource(crate::ui_action::Spells {
+        catalog: benilla_formats::SpellCatalog::from_displays(std::collections::HashMap::from([(
+            CHEAP_SHOT,
+            benilla_formats::SpellDisplay {
+                attributes_ex2: 0x0010_0000,
+                ..Default::default()
+            },
+        )])),
+        ..crate::ui_action::Spells::empty_for_tests()
+    });
+    let me = world.resource::<crate::net::GuidIndex>().0[&ME];
+    world.entity_mut(me).insert(crate::creature_anim::Precast {
+        spell_id: CHEAP_SHOT,
+        busy: true,
+    });
+    c.seen();
+    c.sent();
+    c.frame(vec![vec![our_go(CHEAP_SHOT, vec![MARK])]]);
+    let sent = c.sent();
+    let release = sent_at(&sent, "LootRelease");
+    let select = sent
+        .iter()
+        .position(|s| *s == format!("SetSelection {{ guid: {MARK} }}"));
+    assert!(release.is_some() && select.is_some(), "{sent:?}");
+    assert!(release < select, "{sent:?}");
+    if let Some(swing) = sent_at(&sent, "AttackSwing") {
+        assert!(release < Some(swing), "{sent:?}");
+    }
+}
+
+/// A sting whose column 38 names the next spell (`modalNextSpell`).
+const STING: u32 = 1978;
+/// What the sting chains, a plain spell.
+const CHAINED: u32 = 5019;
+
+/// A failed result of our precast spell ends the precast inside its report, releasing our loot
+/// (`0x6e73ac` → `0x6e1a00`, `0x6e1c8e`), ahead of the `modalNextSpell` chain's cast
+/// (`0x6e74aa` → `0x6e5a90`), which reason 0x17 leaves in reach (`0x6e1ce4`).
+#[test]
+fn a_cast_results_release_goes_out_before_its_chained_cast() {
+    let mut c = looting_the_corpse();
+    let world = c.app.world_mut();
+    world.insert_resource(crate::ui_action::Spells {
+        catalog: benilla_formats::SpellCatalog::from_displays(std::collections::HashMap::from([
+            (
+                STING,
+                benilla_formats::SpellDisplay {
+                    modal_next_spell: CHAINED,
+                    ..Default::default()
+                },
+            ),
+            (CHAINED, benilla_formats::SpellDisplay::default()),
+        ])),
+        ..crate::ui_action::Spells::empty_for_tests()
+    });
+    world
+        .resource_mut::<crate::spell::PendingCast>()
+        .push(STING, None, std::time::Instant::now());
+    let me = world.resource::<crate::net::GuidIndex>().0[&ME];
+    world.entity_mut(me).insert(crate::creature_anim::Precast {
+        spell_id: STING,
+        busy: true,
+    });
+    c.seen();
+    c.sent();
+    c.frame(vec![vec![SessionEvent::CastResult {
+        spell_id: STING,
+        success: false,
+        reason: Some(0x17),
+        arg: None,
+    }]]);
+    let sent = c.sent();
+    let (release, cast) = (sent_at(&sent, "LootRelease"), sent_at(&sent, "CastSpell"));
+    assert!(release.is_some() && cast.is_some(), "{sent:?}");
+    assert!(release < cast, "{sent:?}");
 }
