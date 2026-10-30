@@ -283,8 +283,6 @@ pub(super) fn control(
         crate::tutorial::InputHooks,
         // The loot window's move-start close (`0x60e990`), run where its guard does.
         crate::ui_loot::MoveStartClose,
-        // `SMSG_STANDSTATE_UPDATE`, applied locally and ungated, with nothing sent back.
-        MessageReader<super::ServerStandState>,
     ),
     mut speed_capsule: (
         Res<MoveSpeed>,
@@ -698,7 +696,6 @@ pub(super) fn control(
             &mut net.3,
             &mut net.13,
             &mut net.9,
-            &mut net.14,
             reads,
             speed_capsule.10.as_deref().map(|t| &t.0),
             moving,

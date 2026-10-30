@@ -123,6 +123,11 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
     // Quiet: the autorun bit as the frame's calls leave it, read and written inside each call
     // (`0x513de7`), which an auto-move's stop clears in place (`0x514630`).
     "::player::press::CallAutorun",
+    // Quiet: the stand state's prediction `[player+0x1d68]`, which the local apply writes in its
+    // call, in the controller and in `SMSG_STANDSTATE_UPDATE`'s handler (`0x5f07a3`), and which
+    // `GetStandState` reads at the call (`0x5ed570`); the apply's loot close and attack stop
+    // signal in place, and no feed fires off it.
+    "::player::state::StandPending",
     // Quiet: the cast ladder's per-call state, which the cast result's, the loot response's and the
     // go's handlers hold with the ladder and never write. A press holds the first and its call resumes it before it returns
     // (`0x6e4efb`), each call sets and puts back the second, and the pet press applies the third

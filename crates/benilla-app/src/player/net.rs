@@ -1,12 +1,11 @@
-//! The player's packet handlers: `SMSG_STANDSTATE_UPDATE` goes to [`super::posture`] as a
-//! [`ServerStandState`], applied in `control`, which holds the body query and sheath queue;
-//! `SMSG_PLAYER_SKINNED`, among the player object's messages in the reference (`0x5e3010`),
-//! signals `PLAYER_SKINNED` at its packet, on the notice lane.
+//! The player's packet handlers: `SMSG_STANDSTATE_UPDATE` applies in its packet
+//! ([`super::posture::server_stand_state`]); `SMSG_PLAYER_SKINNED`, among the player object's
+//! messages in the reference (`0x5e3010`), signals `PLAYER_SKINNED` at its packet, on the notice
+//! lane.
 
 use benilla_protocol::{SessionEvent, SessionEventKind};
 use bevy::prelude::*;
 
-use super::ServerStandState;
 use crate::net::NetHandlerApp;
 
 /// Registers the handlers; called from [`super::PlayerPlugin`].
@@ -15,9 +14,27 @@ pub(super) fn register(app: &mut App) {
         .net_handler(SessionEventKind::PlayerSkinned, on_player_skinned);
 }
 
-fn on_stand_state_update(In(ev): In<SessionEvent>, mut out: MessageWriter<ServerStandState>) {
+/// `SMSG_STANDSTATE_UPDATE` (`0x603e50`), applied to the active player in its packet
+/// ([`super::posture::server_stand_state`]).
+fn on_stand_state_update(
+    In(ev): In<SessionEvent>,
+    mut pending: ResMut<super::StandPending>,
+    me: super::SelfPosture,
+    player: Option<Res<super::Player>>,
+    mut commands: Commands,
+    mut sheath: MessageWriter<crate::creature_anim::SheathRequest>,
+    mut loot_close: crate::ui_loot::MoveStartClose,
+) {
     if let SessionEvent::StandStateUpdate { state } = ev {
-        out.write(ServerStandState { state });
+        super::posture::server_stand_state(
+            state,
+            &mut pending,
+            &me,
+            player.as_deref().map_or(0, super::Player::move_flags),
+            &mut commands,
+            &mut sheath,
+            &mut loot_close,
+        );
     }
 }
 

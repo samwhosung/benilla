@@ -895,3 +895,28 @@ fn a_response_on_the_run_waiting_on_a_record_closes_inside_its_packet() {
     c.frame(vec![]);
     assert!(c.seen().is_empty(), "nothing fires after");
 }
+
+/// `SMSG_STANDSTATE_UPDATE` applies in its packet (`0x603e50` → `0x6127b0` → `0x5f0790`): a sit
+/// closes our loot there (`0x5f07d5`), so a later packet's listener in the frame reads the window
+/// shut, and the stand behind it, which closes nothing (`0x5f07a9`), does not hide the sit.
+#[test]
+fn a_server_sit_closes_our_loot_inside_its_packet() {
+    let mut c = looting_the_corpse();
+    c.frame(vec![
+        vec![SessionEvent::StandStateUpdate { state: 1 }],
+        vec![boar_says("b")],
+        vec![SessionEvent::StandStateUpdate { state: 0 }],
+    ]);
+    assert_eq!(
+        c.seen(),
+        ["LOOT_CLOSED:nil", "CHAT_MSG_MONSTER_SAY:b", "items:0"]
+    );
+    let sent = c.sent();
+    assert_eq!(
+        sent.iter()
+            .filter(|s| s.starts_with("LootRelease") && s.contains(&format!("{CORPSE}")))
+            .count(),
+        1,
+        "released once, at the sit: {sent:?}"
+    );
+}

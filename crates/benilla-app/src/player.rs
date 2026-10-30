@@ -184,14 +184,6 @@ pub(crate) struct StandStateRequest {
     pub(crate) sent: bool,
 }
 
-/// `SMSG_STANDSTATE_UPDATE` for our body (the eat and drink sit, the stand on damage), applied by
-/// [`posture`] through the same local setter with no refusal and no packet back (`0x603e50` →
-/// `0x6127b0`).
-#[derive(bevy::ecs::message::Message, Clone, Copy, Debug)]
-pub(crate) struct ServerStandState {
-    pub(crate) state: u8,
-}
-
 /// The active player, whichever body is driven: what the posture verbs read and act on, as the
 /// stand-state setter `0x5ed430` and the sheathe toggle `0x5eb480` each refuse any unit but the
 /// active player (`0x5ed46c`, `0x5eb4ba`). Its entity, its driver and committed sheath state, its
@@ -384,7 +376,6 @@ impl Plugin for PlayerPlugin {
         )
         // The posture queue (the `/sit` family), which `control` alone executes.
         .add_message::<StandStateRequest>()
-        .add_message::<ServerStandState>()
         // Land-here, before `control`, so the frame that applies the teleport takes control back.
         .add_message::<land::LandHere>()
         .add_systems(

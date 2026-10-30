@@ -347,7 +347,6 @@ fn under_possession_the_posture_verbs_act_on_the_active_player() {
     world.init_resource::<crate::bindings::BindingsState>();
     world.init_resource::<Messages<crate::creature_anim::SheathRequest>>();
     world.init_resource::<Messages<super::StandStateRequest>>();
-    world.init_resource::<Messages<super::super::ServerStandState>>();
     // The priest channels Mind Control; the creature it drives stands, unchannelled.
     let priest = world
         .spawn((
@@ -372,8 +371,7 @@ fn under_possession_the_posture_verbs_act_on_the_active_player() {
                       mut commands: Commands,
                       mut sheath: MessageWriter<crate::creature_anim::SheathRequest>,
                       mut loot: crate::ui_loot::MoveStartClose,
-                      mut asks: MessageReader<super::StandStateRequest>,
-                      mut server: MessageReader<super::super::ServerStandState>| {
+                      mut asks: MessageReader<super::StandStateRequest>| {
                     super::update(
                         &mut player,
                         &mut pending,
@@ -385,7 +383,6 @@ fn under_possession_the_posture_verbs_act_on_the_active_player() {
                         &mut sheath,
                         &mut loot,
                         &mut asks,
-                        &mut server,
                         super::PlayerReads::default(),
                         None,
                         moving,
@@ -437,7 +434,6 @@ fn a_stand_ask_sent_in_place_applies_locally_and_sends_nothing() {
     world.init_resource::<crate::bindings::BindingsState>();
     world.init_resource::<Messages<crate::creature_anim::SheathRequest>>();
     world.init_resource::<Messages<super::StandStateRequest>>();
-    world.init_resource::<Messages<super::super::ServerStandState>>();
     world.spawn((
         SelfPlayer,
         Embodied,
@@ -459,8 +455,7 @@ fn a_stand_ask_sent_in_place_applies_locally_and_sends_nothing() {
              mut commands: Commands,
              mut sheath: MessageWriter<crate::creature_anim::SheathRequest>,
              mut loot: crate::ui_loot::MoveStartClose,
-             mut asks: MessageReader<super::StandStateRequest>,
-             mut server: MessageReader<super::super::ServerStandState>| {
+             mut asks: MessageReader<super::StandStateRequest>| {
                 super::update(
                     &mut player,
                     &mut pending,
@@ -472,7 +467,6 @@ fn a_stand_ask_sent_in_place_applies_locally_and_sends_nothing() {
                     &mut sheath,
                     &mut loot,
                     &mut asks,
-                    &mut server,
                     super::PlayerReads::default(),
                     None,
                     false,
@@ -503,8 +497,7 @@ fn posture_frame(world: &mut World) -> u8 {
              mut commands: Commands,
              mut sheath: MessageWriter<crate::creature_anim::SheathRequest>,
              mut loot: crate::ui_loot::MoveStartClose,
-             mut asks: MessageReader<super::StandStateRequest>,
-             mut server: MessageReader<super::super::ServerStandState>| {
+             mut asks: MessageReader<super::StandStateRequest>| {
                 super::update(
                     &mut player,
                     &mut pending,
@@ -516,7 +509,6 @@ fn posture_frame(world: &mut World) -> u8 {
                     &mut sheath,
                     &mut loot,
                     &mut asks,
-                    &mut server,
                     super::PlayerReads::default(),
                     None,
                     false,
@@ -540,7 +532,6 @@ fn posture_world() -> (World, crossbeam_channel::Receiver<ClientCommand>) {
     world.init_resource::<crate::creature_anim::UnitEdits>();
     world.init_resource::<Messages<crate::creature_anim::SheathRequest>>();
     world.init_resource::<Messages<super::StandStateRequest>>();
-    world.init_resource::<Messages<super::super::ServerStandState>>();
     (world, rx)
 }
 

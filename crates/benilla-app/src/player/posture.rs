@@ -38,7 +38,6 @@ pub(super) fn update(
     sheath: &mut MessageWriter<crate::creature_anim::SheathRequest>,
     loot_close: &mut crate::ui_loot::MoveStartClose,
     asks: &mut MessageReader<StandStateRequest>,
-    server: &mut MessageReader<super::ServerStandState>,
     reads: PlayerReads,
     classes: Option<&benilla_formats::ChrClasses>,
     moving: bool,
@@ -52,13 +51,6 @@ pub(super) fn update(
     let (stand_byte, gates) = stand_of(me);
     if pending.0 == Some(stand_byte) {
         pending.0 = None; // the echo landed
-    }
-    // `SMSG_STANDSTATE_UPDATE` reaches the local apply directly, with no refusal gate and no
-    // `CMSG_STANDSTATECHANGE` back, before the volunteered logic below; the last packet wins.
-    if let Some(s) = server.read().last().map(|m| m.state) {
-        let stand_now = pending.stand_state(stand_byte);
-        move_trace::posture("server", s, stand_now, player.move_flags());
-        apply_locally(pending, s, stand_now, me, commands, sheath, loot_close);
     }
     // The queued asks (the idle sit, the approach's stand, the attack's stand) ran in the
     // reference's message pass, before the X key is read, each `SetStandState` whole in its order,
@@ -437,6 +429,38 @@ fn toggle_worn(
         w.armed_main().is_some() || w.armed_off().is_some(),
         w.ranged.is_some() && classes.is_none_or(|t| t.has_ranged_sheath(class)),
     )
+}
+
+/// `SMSG_STANDSTATE_UPDATE` (`HandleStandStateUpdatePacket 0x603e50`): its byte applied to the
+/// active player inside its packet (`0x603e8a` → `0x6127b0` → `SetLocalStandState 0x5f0790`), with
+/// no refusal gate and no `CMSG_STANDSTATECHANGE` back ([`apply_locally`]): the prediction, and
+/// for a change to a state but 0 the loot close (`0x5f07d5`) and the attack stop (`0x5f07e7`),
+/// each at its packet, so a sit followed by a stand in one frame closes the loot at the sit.
+/// Nothing with no active player (`0x603e7a`, `0x603e81`).
+pub(super) fn server_stand_state(
+    state: u8,
+    pending: &mut super::StandPending,
+    me: &SelfPosture,
+    flags: u32,
+    commands: &mut Commands,
+    sheath: &mut MessageWriter<crate::creature_anim::SheathRequest>,
+    loot_close: &mut crate::ui_loot::MoveStartClose,
+) {
+    let Some(me) = me.single() else {
+        return;
+    };
+    let (stand_byte, _) = stand_of(Some(me));
+    let stand_now = pending.stand_state(stand_byte);
+    move_trace::posture("server", state, stand_now, flags);
+    apply_locally(
+        pending,
+        state,
+        stand_now,
+        Some(me),
+        commands,
+        sheath,
+        loot_close,
+    );
 }
 
 /// The stand state's local apply, the reference's `0x6127b0`, reached from `SetStandState` after
