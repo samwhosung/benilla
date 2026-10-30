@@ -530,6 +530,9 @@ pub(crate) struct KitPush {
     pub(crate) kit_id: u32,
     /// [`super::PlaySeq`] stamp at the wire drain, in packet order.
     pub(crate) seq: u64,
+    /// The packet's place ([`SpellKitFx::at`]); `None` for a push the frame raised, after every
+    /// packet.
+    pub(crate) at: Option<crate::lanes::Stamp>,
 }
 
 /// The kit lanes [`route_cast_visuals`] writes but does not own, bundled into one param because
@@ -846,6 +849,7 @@ pub(super) fn route_cast_visuals(
     };
 
     for p in pushes.read() {
+        out.at = p.at;
         // No kit-level scan, but each slot's same-(record, tag) replace (`0x6208e0`) swaps the old
         // batch out; the driver's same-id dedup (`0x5fdba0`) keeps a looping clip running.
         if let Some(kit) = visuals.0.kit(p.kit_id) {

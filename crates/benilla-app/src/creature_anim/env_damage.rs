@@ -63,6 +63,8 @@ pub(super) fn hard_landing_dust(
                 entity: l.entity,
                 kit_id,
                 seq: seq.next(),
+                // The landing frame's own prediction, after every packet.
+                at: None,
             });
         }
     }

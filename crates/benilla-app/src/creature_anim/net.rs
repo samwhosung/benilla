@@ -449,6 +449,7 @@ fn play_spell_visual(
             entity: e,
             kit_id,
             seq: play_seq.next(),
+            at: Some(crate::lanes::stamp()),
         });
     }
 }
@@ -473,6 +474,7 @@ fn environmental_damage_log(
                 entity: ent,
                 kit_id,
                 seq: play_seq.next(),
+                at: Some(crate::lanes::stamp()),
             });
         }
     }

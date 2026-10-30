@@ -637,6 +637,49 @@ fn a_gos_impact_kits_carry_the_gos_own_place() {
     assert_eq!(impacts, [(target, Some(go))]);
 }
 
+/// A pushed kit (`SMSG_PLAY_SPELL_VISUAL`, an environmental hit's) carries its packet's place, so
+/// a display rebuild after it (`0x60abe0`) ends it, and one before it spares it.
+#[test]
+fn a_pushed_kit_carries_its_packets_place() {
+    const PUSHED_KIT: u32 = 302;
+    const PUSHED_SOUND: u32 = 3002;
+    let mut app = app();
+    app.insert_resource(SpellVisuals(SpellVisualCatalog::from_tables(
+        HashMap::new(),
+        HashMap::from([(
+            PUSHED_KIT,
+            VisualKit {
+                sound: Some(PUSHED_SOUND),
+                ..Default::default()
+            },
+        )]),
+    )));
+    let unit = app.world_mut().spawn_empty().id();
+    let at = crate::lanes::stamp();
+    app.world_mut().write_message(KitPush {
+        entity: unit,
+        kit_id: PUSHED_KIT,
+        seq: 1,
+        at: Some(at),
+    });
+    app.update();
+    let places: Vec<_> = app
+        .world_mut()
+        .resource_mut::<Messages<SpellKitSound>>()
+        .drain()
+        .filter_map(|ev| match ev {
+            SpellKitSound::Play {
+                entity,
+                kit_sound: PUSHED_SOUND,
+                at,
+                ..
+            } => Some((entity, at)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(places, [(unit, Some(at))]);
+}
+
 /// The ranged weapon-visual merge (`0x60d450`): a spell with `Attributes & 0x2` fills every zero
 /// slot of its own row from the caster's weapon visual; a non-ranged spell never looks.
 #[test]
