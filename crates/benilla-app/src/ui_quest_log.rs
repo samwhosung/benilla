@@ -990,7 +990,7 @@ mod tests {
             data: [0; 24],
         };
         let readied = |world: &mut World| {
-            let mut events: Vec<_> = world.resource_mut::<TappedEvents>().0.drain(..).collect();
+            let mut events = std::mem::take(&mut world.resource_mut::<TappedEvents>().0);
             events.extend(world.resource_mut::<QuestLog>().events.drain(..));
             events
                 .iter()
