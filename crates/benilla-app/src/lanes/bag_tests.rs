@@ -98,6 +98,10 @@ fn combo(n: u32) -> SessionEvent {
 /// the bag equipped, and a VM whose spy records the bag, lock, bank and money events with `arg1`.
 fn client() -> App {
     let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+    // In the world with the interface up, so the dispatch fires each packet's lanes.
+    app.insert_resource(bevy::prelude::State::new(
+        crate::client_state::ClientState::InWorld,
+    ));
     let world = app.world_mut();
     let pairs: Vec<(u16, u32)> = seat(23, POTIONS)
         .into_iter()

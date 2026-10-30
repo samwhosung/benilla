@@ -14,7 +14,7 @@ use crossbeam_channel::{Receiver, Sender};
 
 use super::unit_view_tests::{created, wire_packets};
 use crate::net::ClientCommand;
-use crate::ui_mail::{MailEvent, MailLane, MailOpen, MailPending};
+use crate::ui_mail::{MailLane, MailOpen, MailPending};
 
 const ME: u64 = 0x7;
 const BOB: u64 = 0x42;
@@ -212,35 +212,28 @@ fn the_mail_getters_read_the_session_at_the_call() {
     );
 }
 
-/// The list's tail, a result's tail and the time reply's signal sit on the mail lane at their
-/// handlers, between the stamps of the handlers before and after.
+/// The list's tail, a result's tail and the time reply's signal each fire inside their packet's
+/// dispatch, with no frame after them: a handler's signal runs every listener before the next
+/// packet's handler (`0x537ae5`, `0x703e50`).
 #[test]
-fn the_mail_events_are_stamped_at_their_handlers() {
+fn the_mail_events_fire_inside_their_dispatch() {
     let mut c = client();
     c.open_mailbox();
     c.seen();
-    let before = crate::lanes::stamp();
     c.handle(vec![
         list(vec![letter(1, "Hello", 0)]),
         sent_ok(),
         SessionEvent::NextMailTime { seconds: 0.0 },
     ]);
-    let after = crate::lanes::stamp();
-    let lane = c.app.world().resource::<MailLane>();
-    let stamped = lane.stamped();
-    assert!(
-        stamped.iter().all(|(at, _)| before < *at && *at < after),
-        "stamped inside the handlers"
+    assert!(c.app.world().resource::<MailLane>().stamped().is_empty());
+    assert_eq!(
+        c.seen(),
+        [
+            "MAIL_INBOX_UPDATE:nil",
+            "MAIL_FAILED:nil",
+            "UPDATE_PENDING_MAIL:nil"
+        ]
     );
-    let events: Vec<&MailEvent> = stamped.into_iter().map(|(_, e)| e).collect();
-    assert!(
-        matches!(
-            events[..],
-            [MailEvent::List, MailEvent::Result(_), MailEvent::Pending]
-        ),
-        "{events:?}"
-    );
-    assert!(c.seen().is_empty(), "nothing fired in the handlers");
 }
 
 /// Each mail event fires at its packet's place among a chat line's of the packets around it. The
@@ -397,10 +390,10 @@ fn the_notice_callbacks_signal_at_their_answers() {
     );
 }
 
-/// The list's tail is on the lane when the mailbox is used and a bank opens over it, all with no
-/// frame between: the open's show and the close's reset and signal wait behind the list, and fire
-/// at their place; the close's refresh, its query and its stamp, is the handler's own
-/// (`0x4acda8`), so it goes out there; the window is left shut.
+/// A list, the mailbox used, and a bank opening over it, all with no frame between: the list's
+/// tail fires inside its dispatch, the use shows the window in place, and the bank's handler
+/// closes it, its reset and signal ahead of the bank's own; the close's refresh, its query and its
+/// stamp, is the handler's own (`0x4acda8`), so it goes out there; the window is left shut.
 #[test]
 fn a_one_frame_open_then_close_leaves_no_stale_state() {
     let mut c = client();
@@ -411,7 +404,6 @@ fn a_one_frame_open_then_close_leaves_no_stale_state() {
         .arm_refresh();
     c.open_mailbox();
     c.handle(vec![SessionEvent::ShowBank { banker: BANKER }]);
-    assert!(c.seen().is_empty(), "nothing fired ahead of the list");
     assert!(
         c.sent().iter().any(|s| s.starts_with("QueryNextMailTime")),
         "the close's query goes out inside the handler"

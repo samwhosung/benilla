@@ -1333,11 +1333,6 @@ pub(crate) mod schedule_tests {
              lanes' drain, which fires the tick's packets' signals (`0x420d55`), and ahead of the \
              `OnUpdate` walk (`0x420d6a`)",
         ),
-        (
-            "::ui_unit::views::mark_frame_start",
-            "a debug snapshot of what the frame starts from, ahead of the net stage by design: it \
-             reads the units the resolver's last inputs name and pushes nothing",
-        ),
     ];
 
     /// The create's control restore (`player::regain_control_on_arrival`) runs inside the net

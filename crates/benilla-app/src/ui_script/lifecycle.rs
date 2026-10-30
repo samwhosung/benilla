@@ -368,6 +368,14 @@ pub(crate) fn ingame_ui_up(
         && state.is_some_and(|s| *s.get() == crate::client_state::ClientState::InWorld)
 }
 
+/// [`ingame_ui_up`] off the world, for a caller that holds it.
+pub(crate) fn ingame_ui_up_in(world: &World) -> bool {
+    !world.contains_resource::<PendingEntryUiLoad>()
+        && world
+            .get_resource::<State<crate::client_state::ClientState>>()
+            .is_some_and(|s| *s.get() == crate::client_state::ClientState::InWorld)
+}
+
 /// `PreUpdate`, after [`run_pending_reload`] so a reload never interleaves an armed entry load:
 /// run the armed entry load once the cover has presented, at once when there is no cover (a
 /// capture booting straight `InWorld`). Leaving the world first drops the latch unrun, and

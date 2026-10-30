@@ -701,8 +701,8 @@ fn arbitrate_pointer_over_ui(
 /// The session lifecycle: the VM's birth, identity, death and reload.
 mod lifecycle;
 pub(crate) use lifecycle::{
-    ingame_ui_up, run_pending_reload, setup_script, strings_vm, AddOnIdentity, PendingEntryUiLoad,
-    ReloadUiPending, SessionEnd,
+    ingame_ui_up, ingame_ui_up_in, run_pending_reload, setup_script, strings_vm, AddOnIdentity,
+    PendingEntryUiLoad, ReloadUiPending, SessionEnd,
 };
 /// The leave-world sweep `0x490a80`: its latch, its schedule and its legs' order.
 mod sweep;

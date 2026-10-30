@@ -261,3 +261,29 @@ fn the_who_answer_routes_by_the_flag_its_stamp_finds() {
     assert_eq!(seen[1], "CHAT_MSG_SYSTEM:1 player total");
     assert_eq!(seen[2], "FRIENDLIST_UPDATE", "behind");
 }
+
+/// A listener reads the friend list as the packets ahead of it left it, before the next packet's
+/// handler rewrites it (`0x537ae5`; `GetNumFriends` reads the list at the call, `0x5ad000`): the
+/// time response's `QUEST_LOG_UPDATE` ahead of a list of two counts Ann alone.
+#[test]
+fn a_listener_counts_the_friends_its_packet_left() {
+    let mut c = client();
+    let _: () = c.eval(
+        false,
+        r#"local g = CreateFrame("Frame")
+        g:RegisterEvent("QUEST_LOG_UPDATE")
+        g:SetScript("OnEvent", function() table.insert(Seen, "count " .. GetNumFriends()) end)"#,
+    );
+    c.frame(vec![
+        SessionEvent::ServerUnixTime {
+            unix_time: 1_000_000,
+        },
+        SessionEvent::FriendList {
+            friends: vec![online(ANN, 10), online(BOB, 20)],
+        },
+    ]);
+    assert_eq!(
+        c.seen(),
+        ["QUEST_LOG_UPDATE", "count 1", "FRIENDLIST_UPDATE"]
+    );
+}

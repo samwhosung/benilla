@@ -132,9 +132,8 @@ fn the_readers_events_fire_between_neighbouring_packets_events() {
 }
 
 /// A tablet's page text, then a bank's open in the same frame: the bank's register closes the
-/// reader first (`0x4930d0` → `0x493310` → `0x4e32e0(0, 0)`), so its `ITEM_TEXT_CLOSED` waits
-/// behind the open's signals and fires ahead of `BANKFRAME_OPENED`, and the frame leaves the bank
-/// latched, the reader shut.
+/// reader first (`0x4930d0` → `0x493310` → `0x4e32e0(0, 0)`), so its `ITEM_TEXT_CLOSED` fires
+/// ahead of `BANKFRAME_OPENED`, and the frame leaves the bank latched, the reader shut.
 #[test]
 fn a_one_frame_open_then_close_leaves_no_stale_state() {
     let mut app = client();
@@ -149,8 +148,6 @@ fn a_one_frame_open_then_close_leaves_no_stale_state() {
         &mut app,
         vec![page_text(TABLET), SessionEvent::ShowBank { banker: BANKER }],
     );
-    // Until the lanes fire inside the dispatch, the show's listener reads the reader as the frame
-    // left it, shut.
     let events: Vec<&str> = seen.iter().map(|e| e.split(':').next().unwrap()).collect();
     assert_eq!(
         events,

@@ -12,7 +12,7 @@ use bevy::prelude::*;
 use crossbeam_channel::Sender;
 
 use super::unit_view_tests::{created, wire_packets};
-use crate::ui_trade::{TradeEvent, TradeLane, TradeSession};
+use crate::ui_trade::{TradeLane, TradeSession};
 
 const ME: u64 = 0x7;
 const BOB: u64 = 0x9;
@@ -183,38 +183,30 @@ fn the_trade_getters_read_the_session_at_the_call() {
     );
 }
 
-/// The open's `TRADE_SHOW`, the accept's `TRADE_ACCEPT_UPDATE` and the offer's compare sit on the
-/// trade lane at their handlers, between the stamps of the handlers before and after.
+/// The open's `TRADE_SHOW`, the accept's `TRADE_ACCEPT_UPDATE` and the offer's compare each fire
+/// inside their packet's dispatch, with no frame after them: a handler's signal runs every
+/// listener before the next packet's handler (`0x537ae5`, `0x703e50`).
 #[test]
-fn the_trade_events_are_stamped_at_their_handlers() {
+fn the_trade_events_fire_inside_their_dispatch() {
     let mut c = client();
     c.handle(vec![status(TradeStatus::BeginTrade { partner: BOB })]);
-    let before = crate::lanes::stamp();
+    c.seen();
     c.handle(vec![
         status(TradeStatus::OpenWindow),
         status(TradeStatus::Accept),
         bobs(true, 500),
     ]);
-    let after = crate::lanes::stamp();
-    let stamped = c.app.world().resource::<TradeLane>().stamped();
-    assert!(
-        stamped.iter().all(|(at, _)| before < *at && *at < after),
-        "stamped inside the handlers"
-    );
+    assert!(c.app.world().resource::<TradeLane>().stamped().is_empty());
     assert_eq!(
-        stamped.into_iter().map(|(_, e)| e).collect::<Vec<_>>(),
+        c.seen(),
         [
-            TradeEvent::Show {
-                partner: BOB,
-                purse: None
-            },
-            TradeEvent::Accept(false, true),
-            TradeEvent::Accept(false, false),
-            TradeEvent::TargetItem(0),
-            TradeEvent::TargetMoney,
+            "TRADE_SHOW:nil",
+            "TRADE_ACCEPT_UPDATE:0",
+            "TRADE_ACCEPT_UPDATE:0",
+            "TRADE_TARGET_ITEM_CHANGED:1",
+            "TRADE_MONEY_CHANGED:nil",
         ]
     );
-    assert!(c.seen().is_empty(), "nothing fired in the handlers");
 }
 
 /// Each trade event fires at its packet's place among a chat line's of the packets around it.
@@ -242,6 +234,63 @@ fn the_trade_events_fire_at_their_packets() {
             "CHAT_MSG_MONSTER_SAY:c",
             "TRADE_ACCEPT_UPDATE:0",
             "CHAT_MSG_MONSTER_SAY:d",
+        ]
+    );
+}
+
+/// An `[OpenWindow][Canceled]` frame: the open's `TRADE_SHOW` runs its listeners before the
+/// cancel's handler (`0x537ae5`), so they read the trade open, Bob latched as its unit
+/// (`UnitExists("NPC")`), and the cancel's close half runs after them.
+#[test]
+fn a_shows_listener_reads_the_trade_its_packet_opened() {
+    let mut c = client();
+    let _: () = c.eval(
+        false,
+        r#"local g = CreateFrame("Frame")
+        g:RegisterEvent("TRADE_SHOW")
+        g:SetScript("OnEvent", function()
+            table.insert(Seen, "npc " .. tostring(UnitExists("NPC")))
+        end)"#,
+    );
+    c.handle(vec![status(TradeStatus::BeginTrade { partner: BOB })]);
+    c.frame(vec![
+        vec![status(TradeStatus::OpenWindow)],
+        vec![status(TradeStatus::Canceled)],
+    ]);
+    assert_eq!(c.seen(), ["TRADE_SHOW:nil", "npc 1"]);
+}
+
+/// A close behind another lane's earlier item: a monster's line, then the cancel of a trade an
+/// earlier frame opened. The line's listeners run at its packet (`0x537ae5`), so they read Bob
+/// still latched as the trade's unit, ahead of the cancel's handler and its `TRADE_CLOSED`, which
+/// the core signals twice with Bob latched (`0x493365`).
+#[test]
+fn a_close_fires_behind_another_lanes_earlier_line() {
+    let mut c = client();
+    let _: () = c.eval(
+        false,
+        r#"local g = CreateFrame("Frame")
+        g:RegisterEvent("CHAT_MSG_MONSTER_SAY")
+        g:RegisterEvent("TRADE_CLOSED")
+        g:SetScript("OnEvent", function()
+            if event == "TRADE_CLOSED" then table.insert(Seen, event)
+            else table.insert(Seen, "npc " .. tostring(UnitExists("NPC"))) end
+        end)"#,
+    );
+    c.handle(vec![status(TradeStatus::BeginTrade { partner: BOB })]);
+    c.frame(vec![vec![status(TradeStatus::OpenWindow)]]);
+    c.seen();
+    c.frame(vec![
+        vec![boar_says("a")],
+        vec![status(TradeStatus::Canceled)],
+    ]);
+    assert_eq!(
+        c.seen(),
+        [
+            "CHAT_MSG_MONSTER_SAY:a",
+            "npc 1",
+            "TRADE_CLOSED",
+            "TRADE_CLOSED"
         ]
     );
 }

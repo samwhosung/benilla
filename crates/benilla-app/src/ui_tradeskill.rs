@@ -1957,11 +1957,11 @@ mod tests {
 
     /// Each of our gos runs its hook (`0x4fd7b0`), which counts down (`0x4fd7ca`) and signals
     /// `UPDATE_TRADESKILL_RECAST` (`0x4fd7dc`) inside its packet, so each go's handlers read the
-    /// count it left: 3 at the arm, then 2 and 1. Two gos of one frame park both signals on the
-    /// lane, which reads the count as the frame left it until the lanes fire per packet.
+    /// count it left: 3 at the arm, then 2 and 1, the two gos in one frame.
     #[test]
     fn each_recasts_handlers_read_the_count_its_go_left() {
         let (mut app, _rx) = headless_tailor();
+        app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
         crate::script_calls::with_hosted_vm(app.world_mut(), |vm| vm.expect("a VM").run(
                 "SEEN = '' local f = CreateFrame('Frame') \
                  f:RegisterEvent('UPDATE_TRADESKILL_RECAST') \
@@ -1969,9 +1969,7 @@ mod tests {
                  SelectTradeSkill(2) DoTradeSkill(2, 3)",
             ))
             .unwrap();
-        for _ in 0..2 {
-            frame(&mut app, our_go(2963).to_vec());
-        }
+        frame(&mut app, [our_go(2963), our_go(2963)].concat());
         let script = app.world().non_send_resource::<UiScript>();
         assert_eq!(script.trade_skill_repeat(), (2963, 1));
         assert_eq!(script.eval::<String>("return SEEN").unwrap(), "3 2 1 ");

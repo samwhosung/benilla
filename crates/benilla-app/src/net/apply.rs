@@ -21,17 +21,33 @@ mod world_enter_tests;
 /// load ([`InboundHold`]).
 pub(crate) fn apply_net_updates(world: &mut World) {
     let events: Vec<SessionEvent> = world.resource::<NetEvents>().0.try_iter().collect();
-    // `drn`: where the frame's packets land, against the input records' `prs` and `snd` lines.
-    if !events.is_empty() && benilla_assets::trace::enabled_for("drn") {
-        benilla_assets::trace::line("drn", &format!("events={}", events.len()));
-    }
+    let arrived = events.len();
     let mut hold = world.remove_resource::<InboundHold>().unwrap_or_default();
     let mut out = hold.release(world);
     for ev in events {
         hold.admit(ev, &mut out);
     }
     world.insert_resource(hold);
+    // `drn`: where the frame's packets land, against the input records' `prs` and `snd` lines;
+    // then, behind what they sent, the flushes the dispatch fired, their lane firings and its time.
+    let traced = !out.is_empty() && benilla_assets::trace::enabled_for("drn");
+    if traced {
+        benilla_assets::trace::line("drn", &format!("events={arrived} packets={}", out.len()));
+    }
+    let before = traced.then(|| (crate::lanes::tally(), std::time::Instant::now()));
     super::handlers::dispatch(world, out);
+    if let Some(((flushes, fired), at)) = before {
+        let (f, k) = crate::lanes::tally();
+        benilla_assets::trace::line(
+            "drn",
+            &format!(
+                "done flushes={} fired={} us={}",
+                f - flushes,
+                k - fired,
+                at.elapsed().as_micros()
+            ),
+        );
+    }
 }
 
 /// The world session's inbound events behind its entry load. The reference sends the login only

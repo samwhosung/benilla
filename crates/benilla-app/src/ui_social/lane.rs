@@ -130,8 +130,6 @@ fn fire(script: &mut UiScript, sink: &mut MessageSink, heard: Heard) {
 /// `SMSG_WHO`'s two exits (`0x5adfca`): `WHO_LIST_UPDATE`, or the records' chat lines in wire
 /// order and the count line. `SetWhoToUI`'s flag (`0xc2a12c`) is read as the item fires, after
 /// every listener stamped ahead of it, as the reference reads it in the handler (`0x5adf9c`).
-/// Until the lanes fire inside the dispatch (#2168), an event the feeds fire between the packet
-/// and the drain (WhoFrame's `OnHide` `SetWhoToUI(0)`) can still move a short answer to chat.
 fn who(script: &mut UiScript, sink: &mut MessageSink, raw: u32, wire: &[WhoInfo]) {
     if feed::answer_goes_to_the_frame(script.who_to_ui(), raw) {
         script.fire_event("WHO_LIST_UPDATE", Vec::new());

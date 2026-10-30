@@ -20,16 +20,10 @@ const APPLICATIONS: u16 = 113;
 /// A flag nibble with a shown bit (`& 0xe`) and the cancelable bit.
 const SHOWN: u32 = 0x9;
 
-/// One frame: the packets, then the lanes' drain; what the aura spy saw.
+/// One frame: the packets, each packet's lanes fired after its handlers, then the frame's drain;
+/// what the aura spy saw.
 fn frame(app: &mut App, packets: Vec<Vec<SessionEvent>>) -> Vec<String> {
     let world = app.world_mut();
-    #[cfg(debug_assertions)]
-    {
-        use bevy::ecs::system::RunSystemOnce;
-        world
-            .run_system_once(crate::ui_unit::views::mark_frame_start)
-            .unwrap();
-    }
     crate::net::handlers::dispatch(world, wire_packets(packets));
     crate::lanes::fire_in_order(world);
     let s = world.non_send_resource_mut::<UiScript>();

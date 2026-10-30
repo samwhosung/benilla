@@ -81,3 +81,35 @@ fn logout_cancel_fires_at_the_acks_packet() {
     );
     assert_eq!(seen, [FELL, "LOGOUT_CANCEL", FELL]);
 }
+
+/// A `PLAYER_CAMPING` listener's `CancelLogout` runs before the next packet's handler (`0x537ae5`)
+/// and clears the pending byte as it sends (`0x5aafc2`), so the cancel ack later in the frame
+/// finds nothing pending (`0x5aaf60`) and signals no `LOGOUT_CANCEL`.
+#[test]
+fn a_campings_cancel_leaves_the_later_ack_silent() {
+    let (mut app, rx) = logout_client();
+    app.world()
+        .non_send_resource::<UiScript>()
+        .run(
+            r#"local g = CreateFrame("Frame")
+            g:RegisterEvent("PLAYER_CAMPING")
+            g:SetScript("OnEvent", function() CancelLogout() end)"#,
+        )
+        .unwrap();
+    run(&mut app, "Logout()");
+    let response = SessionEvent::LogoutResponse {
+        reason: 0,
+        instant: false,
+    };
+    let seen = frame(&mut app, vec![response, SessionEvent::LogoutCancelled]);
+    assert_eq!(seen, ["PLAYER_CAMPING"]);
+    let sent: Vec<&str> = rx
+        .try_iter()
+        .filter_map(|c| match c {
+            crate::net::ClientCommand::Logout => Some("logout"),
+            crate::net::ClientCommand::LogoutCancel => Some("cancel"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sent, ["logout", "cancel"]);
+}

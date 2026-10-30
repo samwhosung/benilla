@@ -191,10 +191,10 @@ fn the_gossip_getters_read_the_world_at_the_call() {
     );
 }
 
-/// The draw's `GOSSIP_SHOW` sits on the gossip lane at the text's handler, between the stamps of
-/// the handlers before and after it.
+/// The draw's `GOSSIP_SHOW` fires inside the text's dispatch, with no frame after it: the
+/// handler's signal runs every listener before the next packet's handler (`0x537ae5`, `0x703e50`).
 #[test]
-fn the_show_is_stamped_at_its_handler() {
+fn the_show_fires_inside_its_dispatch() {
     let mut c = client();
     c.handle(vec![menu(7, "Browse")]);
     assert!(c
@@ -203,18 +203,18 @@ fn the_show_is_stamped_at_its_handler() {
         .resource::<crate::ui_gossip::GossipLane>()
         .stamped()
         .is_empty());
-    let before = crate::lanes::stamp();
+    c.seen();
     c.handle(vec![greeting(7, "Hello")]);
-    let after = crate::lanes::stamp();
-    let stamped = c
+    assert!(c
         .app
         .world()
         .resource::<crate::ui_gossip::GossipLane>()
-        .stamped();
-    assert_eq!(stamped.len(), 1);
-    let (at, event) = stamped[0];
-    assert_eq!(event, crate::ui_gossip::GossipEvent::Show);
-    assert!(before < at && at < after, "stamped inside the handler");
+        .stamped()
+        .is_empty());
+    assert!(
+        c.seen().iter().any(|s| s == "GOSSIP_SHOW:nil"),
+        "the show fired inside the dispatch"
+    );
 }
 
 /// A cached text shows at its message and a first visit at its text's arrival, each at its

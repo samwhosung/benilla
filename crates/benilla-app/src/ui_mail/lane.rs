@@ -200,7 +200,7 @@ pub(super) fn waits(world: &World) -> bool {
 /// way, inside the handler as the reference's does (`0x4acda8`), so a later packet's arrival
 /// stamps over it. The reference reads the flag after `MAIL_CLOSED`'s listeners, so a
 /// `MarkMailRead` among them (`0x4adda6`) is read in the same close; read ahead of them here, it
-/// waits for the next close. Both orders hold once the lanes fire inside the dispatch.
+/// waits for the next close.
 pub(super) fn step(world: &mut World, waits: bool, event: MailEvent) {
     if waits && event != MailEvent::Refresh {
         if let Some(mut lane) = world.get_resource_mut::<MailLane>() {

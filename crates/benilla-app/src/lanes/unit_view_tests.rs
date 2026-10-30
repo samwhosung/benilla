@@ -128,6 +128,8 @@ pub(super) fn client() -> App {
     let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
     let (tx, _rx) = crossbeam_channel::unbounded();
     app.insert_resource(crate::net::NetCommands(tx));
+    // In the world with the interface up, so the dispatch fires each packet's lanes.
+    app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
     let world = app.world_mut();
     world.resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
     let script = UiScript::new().unwrap();
@@ -198,27 +200,63 @@ pub(super) fn seat(app: &mut App, tot: u64) {
         });
 }
 
-/// One frame: the packets through the handler table, then the lanes' drain; what the spy saw.
+/// One frame: the packets through the handler table, each packet's lanes fired after its
+/// handlers, then the frame's drain; what the spy saw.
 pub(super) fn frame(app: &mut App, packets: Vec<SessionEvent>) -> Vec<String> {
-    frame_after(app, |_| {}, packets)
+    run_frame(app, wire(packets))
 }
 
-/// [`frame`], with `before` run on the world between the frame-start snapshot and the packets.
+/// [`frame`], with `inside` run inside the dispatch past the span's start and ahead of the
+/// packets, as a handler of an earlier packet would run it ([`inside_the_dispatch`]).
 pub(super) fn frame_after(
     app: &mut App,
-    before: impl FnOnce(&mut World),
+    inside: impl FnOnce(&mut World) + Send + Sync + 'static,
     packets: Vec<SessionEvent>,
 ) -> Vec<String> {
-    let world = app.world_mut();
-    #[cfg(debug_assertions)]
+    let events = inside_the_dispatch(app, inside, wire(packets));
+    run_frame(app, events)
+}
+
+/// A test's step on the world.
+type Step = Box<dyn FnOnce(&mut World) + Send + Sync>;
+
+/// What a test runs inside the dispatch, as a packet's handler.
+#[derive(Resource, Default)]
+struct Inside(Option<Step>);
+
+/// The test's step, run as the handler of the packet [`inside_the_dispatch`] puts first.
+fn run_inside(In(_): In<SessionEvent>, world: &mut World) {
+    if let Some(step) = world
+        .get_resource_mut::<Inside>()
+        .and_then(|mut i| i.0.take())
     {
-        use bevy::ecs::system::RunSystemOnce;
-        world
-            .run_system_once(crate::ui_unit::views::mark_frame_start)
-            .unwrap();
+        step(world);
     }
-    before(world);
-    crate::net::handlers::dispatch(world, wire(packets));
+}
+
+/// `events` behind a `SMSG_PONG`, a packet no handler of the client takes, whose handler here runs
+/// `step`: a write a handler makes past the span's start, which the dispatch takes at its first
+/// packet ([`crate::lanes::span_starts`]).
+pub(super) fn inside_the_dispatch(
+    app: &mut App,
+    step: impl FnOnce(&mut World) + Send + Sync + 'static,
+    events: Vec<SessionEvent>,
+) -> Vec<SessionEvent> {
+    use crate::net::handlers::NetHandlerApp;
+    if !app.world().contains_resource::<Inside>() {
+        app.init_resource::<Inside>()
+            .net_handler(benilla_protocol::SessionEventKind::Pong, run_inside);
+    }
+    app.world_mut().resource_mut::<Inside>().0 = Some(Box::new(step));
+    std::iter::once(SessionEvent::Pong { sequence: 0 })
+        .chain(events)
+        .collect()
+}
+
+/// `events` through the dispatch, then the frame's drain; what the spy saw.
+fn run_frame(app: &mut App, events: Vec<SessionEvent>) -> Vec<String> {
+    let world = app.world_mut();
+    crate::net::handlers::dispatch(world, events);
     crate::lanes::fire_in_order(world);
     let s = world.non_send_resource_mut::<UiScript>();
     let out = s.eval::<Vec<String>>("return Seen").unwrap();
@@ -307,10 +345,10 @@ fn lane_checks(app: &mut App) -> usize {
     std::mem::take(&mut views.checked)
 }
 
-/// The replay ends on the live stores: a frame of moved dwords, a re-create that clears a field,
-/// the target's target released out of range and brought back by a create, each with an event
-/// between, ends with every rewound store equal to the live one (the `debug_assert` in the
-/// lane's end) and none left rewound, so the stores read live again once the drain is done.
+/// The replay ends on the live stores: moved dwords, a re-create that clears a field, the
+/// target's target released out of range and brought back by a create, each with an event
+/// between, end each flush with every rewound store equal to the live one (the `debug_assert` in
+/// the lane's end) and none left rewound, so the stores read live again between packets.
 #[test]
 fn the_replay_ends_on_the_live_stores() {
     let mut app = client();
@@ -352,8 +390,8 @@ fn the_replay_ends_on_the_live_stores() {
     );
     assert_eq!(
         lane_checks(&mut app),
-        2,
-        "the boar and we were rewound and checked"
+        5,
+        "each flush checks its own span: the boar's four, then ours"
     );
     let views = app.world().resource::<crate::ui_unit::views::UnitViews>();
     assert!(
@@ -362,9 +400,9 @@ fn the_replay_ends_on_the_live_stores() {
     );
 }
 
-/// Two packets with no event between them are one gap: the drain applies both at once. A fall
-/// ahead of the first reads the frame's start, one between the second and the third reads after
-/// the second, and the last reads the live stores.
+/// Two packets with no event between them are one gap: the flush after the second applies both.
+/// A fall ahead of the first reads the stores as they were, one between the second and the third
+/// reads after the second, and the last reads the live stores.
 #[test]
 fn two_packets_with_no_event_between_are_one_gap() {
     let mut app = client();
@@ -394,8 +432,8 @@ fn two_packets_with_no_event_between_are_one_gap() {
     );
 }
 
-/// A store written past the log fails the rewind's check against the frame-start snapshot: here
-/// the target's `MAXHEALTH`, a field no entry of the frame names.
+/// A store written past the log fails the rewind's check against the span-start snapshot: here
+/// the target's `MAXHEALTH`, a field no entry of the span names.
 #[cfg(debug_assertions)]
 #[test]
 #[should_panic(expected = "a write the log missed")]
@@ -509,9 +547,6 @@ fn player_dead_reads_its_packets_health_after_an_earlier_packets_line() {
 /// line (`0x62c160`) and ends in `SignalDeathState` (`0x6251cc` → `0x495850`).
 #[test]
 fn our_deaths_list_signals_before_its_line_and_player_dead_after() {
-    #[cfg(debug_assertions)]
-    use bevy::ecs::system::RunSystemOnce;
-
     let mut app = client();
     app.world_mut()
         .resource_mut::<crate::net::NetStatus>()
@@ -532,10 +567,6 @@ fn our_deaths_list_signals_before_its_line_and_player_dead_after() {
         )
         .unwrap();
     let world = app.world_mut();
-    #[cfg(debug_assertions)]
-    world
-        .run_system_once(crate::ui_unit::views::mark_frame_start)
-        .unwrap();
     // The packet's end writes the line among the death's legs.
     crate::net::handlers::dispatch(world, wire([values(ME, &health(0))]));
     crate::lanes::fire_in_order(world);
@@ -554,10 +585,8 @@ fn our_deaths_list_signals_before_its_line_and_player_dead_after() {
 /// The death line's listener runs where the health watcher wrote it, inside its update packet
 /// (`0x465277` → `0x6046f0` → `0x605860` → `0x62c160`), before the next packet's handler runs
 /// (`0x537ae5`): its `SendChatMessage` goes out ahead of the name query the next packet's create
-/// asks in its handler (`0x5dec12` → `0x609210`). The lanes fire after the whole dispatch until
-/// they fire inside it, so the query goes first today.
+/// asks in its handler (`0x5dec12` → `0x609210`).
 #[test]
-#[ignore = "the lanes fire inside the dispatch only from the flip on"]
 fn a_death_lines_listener_sends_ahead_of_the_next_packets_handler() {
     const STRANGER: u64 = 0x31;
     let mut app = client();
@@ -675,4 +704,208 @@ fn a_descriptor_level_change_alone_signals_no_level_up() {
         !seen.iter().any(|e| e.starts_with("PLAYER_LEVEL_UP")),
         "{seen:?}"
     );
+}
+
+/// A friend list of one, Ann, her name cached: a lever no log rewinds, since `GetNumFriends` reads
+/// the list at the call (`0x5ad000`), so the count a listener reads names the packets ahead of it.
+pub(super) fn one_friend(app: &mut App) -> SessionEvent {
+    const ANN: u64 = 0x61;
+    app.world_mut()
+        .resource_mut::<crate::names::NameCache>()
+        .insert_player(ANN, "Ann".into(), None);
+    SessionEvent::FriendList {
+        friends: vec![benilla_protocol::messages::FriendEntry {
+            guid: ANN,
+            status: benilla_protocol::messages::friend_status::ONLINE,
+            area: 0,
+            level: 10,
+            class: 1,
+        }],
+    }
+}
+
+/// A say's listener runs at its packet, before the next packet's handler (`0x537ae5`): its
+/// `SendChatMessage` goes out ahead of the name query the next packet's player create asks in its
+/// handler (`0x5dec12` → `0x609210`).
+#[test]
+fn a_says_listener_sends_ahead_of_the_next_packets_query() {
+    const SPEAKER: u64 = 0x32;
+    const STRANGER: u64 = 0x31;
+    let mut app = client();
+    let (tx, sent) = crossbeam_channel::unbounded();
+    app.insert_resource(crate::net::NetCommands(tx));
+    let world = app.world_mut();
+    world.resource_mut::<crate::net::NetStatus>().connected = true;
+    world
+        .resource_mut::<crate::names::NameCache>()
+        .insert_player(SPEAKER, "Ann".into(), None);
+    world
+        .non_send_resource::<UiScript>()
+        .run(
+            r#"local d = CreateFrame("Frame")
+            d:RegisterEvent("CHAT_MSG_SAY")
+            d:SetScript("OnEvent", function() SendChatMessage("hello", "SAY") end)"#,
+        )
+        .unwrap();
+    let say = SessionEvent::Chat(benilla_protocol::messages::ChatMessage {
+        chat_type: benilla_protocol::messages::CHAT_MSG_SAY,
+        language: 0,
+        sender_guid: SPEAKER,
+        target_guid: 0,
+        sender_name: None,
+        channel: None,
+        text: "hi".into(),
+        chat_tag: 0,
+    });
+    crate::net::handlers::dispatch(
+        world,
+        wire_packets(vec![
+            vec![say],
+            vec![created(
+                STRANGER,
+                EntityKind::Player,
+                &[(FIELD_UNIT_HEALTH, 100)],
+            )],
+        ]),
+    );
+    crate::lanes::fire_in_order(world);
+    let order: Vec<&str> = sent
+        .try_iter()
+        .filter_map(|c| match c {
+            crate::net::ClientCommand::Chat { .. } => Some("chat"),
+            crate::net::ClientCommand::NameQuery { guid: STRANGER } => Some("name query"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(order, ["chat", "name query"]);
+}
+
+/// Each flush rewinds the views to its own span's start: two target health packets with a friend
+/// list between, each `UNIT_HEALTH` listener reading its packet's health and the friends the
+/// packets ahead of it left ([`one_friend`]), and each raising flush checking the wolf's store.
+#[test]
+fn each_flush_rewinds_to_its_own_spans_start() {
+    let mut app = client();
+    let ann = one_friend(&mut app);
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(r#"function Look(event, unit) return UnitHealth(unit) .. "/" .. GetNumFriends() end"#)
+        .unwrap();
+    lane_checks(&mut app);
+    assert_eq!(
+        frame(
+            &mut app,
+            vec![values(WOLF, &health(70)), ann, values(WOLF, &health(40))]
+        ),
+        ["UNIT_HEALTH:target:70/0", "UNIT_HEALTH:target:40/1"]
+    );
+    assert_eq!(lane_checks(&mut app), 2, "the wolf, once a raising flush");
+}
+
+/// A held line ages once a frame, not once a flush: its age pass is a frame begin
+/// ([`crate::ui_chat::ChatLog::begin_frame`]). A stranger's say waits on his name through a frame
+/// of more raising packets than its tries, each fall's listener counting the friends the packets
+/// ahead of it left ([`one_friend`]), and shows at the name's answer in the next frame.
+#[test]
+fn a_held_line_ages_by_frames_not_by_flushes() {
+    const STRANGER: u64 = 0x31;
+    let mut app = client();
+    let ann = one_friend(&mut app);
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(
+            r#"function Look(event, unit) return GetNumFriends() end
+            local s = CreateFrame("Frame")
+            s:RegisterEvent("CHAT_MSG_SAY")
+            s:SetScript("OnEvent", function() table.insert(Seen, "SAY:" .. arg2) end)"#,
+        )
+        .unwrap();
+    let say = SessionEvent::Chat(benilla_protocol::messages::ChatMessage {
+        chat_type: benilla_protocol::messages::CHAT_MSG_SAY,
+        language: 0,
+        sender_guid: STRANGER,
+        target_guid: 0,
+        sender_name: None,
+        channel: None,
+        text: "hi".into(),
+        chat_tag: 0,
+    });
+    let mut packets = vec![say, fall(1), ann];
+    packets.extend((0..crate::ui_chat::NAME_MAX_TRIES).map(|_| fall(1)));
+    let seen = frame(&mut app, packets);
+    assert_eq!(seen.len(), usize::from(crate::ui_chat::NAME_MAX_TRIES) + 1);
+    assert_eq!(seen[0], "UNIT_COMBAT:player:0");
+    assert!(
+        seen[1..].iter().all(|s| s == "UNIT_COMBAT:player:1"),
+        "the line still waits: {seen:?}"
+    );
+    let name = SessionEvent::PlayerName {
+        guid: STRANGER,
+        name: "Zed".into(),
+        race: 1,
+        gender: 0,
+        class: 1,
+    };
+    assert_eq!(frame(&mut app, vec![name]), ["SAY:Zed"]);
+}
+
+/// The dispatch's cost a packet, with each packet's flush and with the frame's one drain alone (the
+/// world's interface not up until the drain, so no flush runs): the target's health, which raises
+/// `UNIT_HEALTH`; a unit no token names, whose notices fire and signal nothing; and its scale,
+/// which queues nothing, so no flush runs.
+///
+/// Run with `cargo nextest run -p benilla-app --lib flush_cost --run-ignored only --no-capture`.
+#[test]
+#[ignore = "a timing, not a check"]
+fn flush_cost() {
+    const PACKETS: u32 = 200;
+    let mut app = client();
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run("function Look() return 0 end")
+        .unwrap();
+    let kinds: [(&str, u64, u16); 3] = [
+        ("raising", WOLF, FIELD_UNIT_HEALTH),
+        ("no token's notices", BOAR, FIELD_UNIT_HEALTH),
+        ("non-raising", BOAR, 4),
+    ];
+    for (what, guid, field) in kinds {
+        for flush in [true, false] {
+            let mut times = Vec::new();
+            let mut counts = (0, 0);
+            for round in 0..30u32 {
+                let packets = wire(
+                    (0..PACKETS).map(|n| values(guid, &[(field, 1 + (round * PACKETS + n) % 99)])),
+                );
+                let world = app.world_mut();
+                if !flush {
+                    world.insert_resource(crate::ui_script::PendingEntryUiLoad);
+                }
+                let (f0, k0) = crate::lanes::tally();
+                let at = std::time::Instant::now();
+                crate::net::handlers::dispatch(world, packets);
+                world.remove_resource::<crate::ui_script::PendingEntryUiLoad>();
+                crate::lanes::fire_in_order(world);
+                times.push(at.elapsed().as_secs_f64() * 1e9 / f64::from(PACKETS));
+                let (f1, k1) = crate::lanes::tally();
+                counts = (f1 - f0, k1 - k0);
+                world
+                    .non_send_resource_mut::<UiScript>()
+                    .run("Seen = {}")
+                    .unwrap();
+            }
+            times.sort_by(f64::total_cmp);
+            eprintln!(
+                "{what}, {}: {:.0} ns a packet; a frame of {PACKETS}: flushes={} fired={}",
+                if flush {
+                    "each packet's flush"
+                } else {
+                    "the drain alone"
+                },
+                times[times.len() / 2],
+                counts.0,
+                counts.1
+            );
+        }
+    }
 }

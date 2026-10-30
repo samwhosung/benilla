@@ -8,7 +8,7 @@
 //! pair, then the bags or the pet's flush), so its listeners read its own records through the
 //! getters' queries (`0x6e2ea0`, `0x6e2ed0`; the pet bar's `0x6e2ea0` on list 1 at `0x4be03c`).
 //! Each list logs its writes and its signals as the handlers make them
-//! ([`crate::spell::Cooldowns`]); its lane rewinds it to the frame's start, replays each write at
+//! ([`crate::spell::Cooldowns`]); its lane rewinds it to the span's start, replays each write at
 //! its stamp, and fires each signal there with the host lent. The player's list is its resource,
 //! the pet's [`crate::ui_pet::PetBar::cooldowns`].
 
@@ -51,6 +51,16 @@ pub(super) fn add_cooldown_lane(app: &mut App) {
             fire_cooldowns::<PetBar>,
             None,
         )
+        .lane_raises("cooldowns", |world| {
+            world
+                .get_resource::<Cooldowns>()
+                .is_some_and(Cooldowns::lane_raises)
+        })
+        .lane_raises("pet cooldowns", |world| {
+            world
+                .get_resource::<PetBar>()
+                .is_some_and(|bar| bar.cooldowns.lane_raises())
+        })
         .add_drain_end(end_cooldowns::<Cooldowns>)
         .add_drain_end(end_cooldowns::<PetBar>)
         .add_systems(
@@ -61,7 +71,7 @@ pub(super) fn add_cooldown_lane(app: &mut App) {
         );
 }
 
-/// A lane's firing: the list rewound to the frame's start, once per drain, at the origin and
+/// A lane's firing: the list rewound to the span's start, once per drain, at the origin and
 /// alone, so every other lane's start is pushed before a signal fires; then each write the drain
 /// admits replayed and each signal fired at its place with the host lent, the usable refresh
 /// through the action states ([`crate::script_calls::VmWith::engine_usable_refresh`]). It stops
@@ -102,7 +112,7 @@ fn fire_cooldowns<R: HoldsList>(
     }
 }
 
-/// The drain's end, however it ended: the list as the frame left it.
+/// The drain's end, however it ended: the list as the span left it.
 fn end_cooldowns<R: HoldsList>(world: &mut World) {
     if let Some(mut holder) = world.get_resource_mut::<R>() {
         holder.list_mut().end_replay();

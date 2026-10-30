@@ -3,10 +3,9 @@
 //! service latches (`0xc4d7c0`, `0xc4d7b0`, `0x48d210`, `0x48d1c0`), the boot and spirit-healer
 //! deadlines (`0xb4e34c`, `0xb4e338`), the meeting stone's area and text (`0xb72038`, `0xb7203c`),
 //! the summon latch (`0xb4e350`-`0xb4e35c`) and the instance terms (`0x48a750`, `0x495c90`), which
-//! the packet handlers write inside themselves. A listener fired from the lanes' drain reads them
-//! as the frame's last packet left them, not as its own did, the residual the merchant and taxi
-//! getters share until the lanes fire inside the dispatch. With no host to ask, the VM's copy
-//! answers; only a test sets it, as every production entry that runs Lua lends the host.
+//! the packet handlers write inside themselves. A listener fired after its packet's handlers reads
+//! them as its packet left them. With no host to ask, the VM's copy answers; only a test sets it,
+//! as every production entry that runs Lua lends the host.
 
 use mlua::Lua;
 

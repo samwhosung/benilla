@@ -457,6 +457,16 @@ fn backstab_lands(f: &mut Frame) {
 
 /// [`backstab_lands`] with `hits` and the packet's `target`.
 fn backstab_lands_at(f: &mut Frame, hits: Vec<u64>, target: Option<u64>) {
+    backstab_lands_after(f, Vec::new(), hits, target);
+}
+
+/// [`backstab_lands_at`] behind `before`'s packets, one dispatch.
+fn backstab_lands_after(
+    f: &mut Frame,
+    before: Vec<benilla_protocol::SessionEvent>,
+    hits: Vec<u64>,
+    target: Option<u64>,
+) {
     const BACKSTAB: u32 = 53;
     let world = f.app.world_mut();
     let me = world.resource::<GuidIndex>().0[&ME];
@@ -482,24 +492,22 @@ fn backstab_lands_at(f: &mut Frame, hits: Vec<u64>, target: Option<u64>) {
         durations: Default::default(),
         radii: Default::default(),
     });
-    crate::net::handlers::dispatch(
-        world,
-        vec![benilla_protocol::SessionEvent::SpellGo {
-            caster: ME,
-            spell_id: BACKSTAB,
-            cast_flags: 0,
-            hits,
-            misses: vec![],
-            target,
-            go_target: None,
-            target_mask: 0x2,
-            source: None,
-            dest: None,
-            ammo_display_id: None,
-            item_caster: None,
-            unit_caster: ME,
-        }],
-    );
+    let go = benilla_protocol::SessionEvent::SpellGo {
+        caster: ME,
+        spell_id: BACKSTAB,
+        cast_flags: 0,
+        hits,
+        misses: vec![],
+        target,
+        go_target: None,
+        target_mask: 0x2,
+        source: None,
+        dest: None,
+        ammo_display_id: None,
+        item_caster: None,
+        unit_caster: ME,
+    };
+    crate::net::handlers::dispatch(world, before.into_iter().chain([go]).collect());
 }
 
 /// A GO with no hit falls back to the packet's target (the `Deviation:` at `spell_go`), but only
@@ -532,6 +540,44 @@ fn a_go_deferred_attack_selects_its_hit_before_it_swings() {
     assert_eq!(
         attack_wire(&f),
         ["SetSelection 0x31", "RandomRoll", "AttackSwing 0x31"]
+    );
+}
+
+/// A line's listeners run at its packet, before the next packet's handler (`0x537ae5`): a
+/// monster's line, then a GO whose deferred attack selects its hit and signals
+/// `PLAYER_TARGET_CHANGED` in place (`0x49389c`), are heard in their packets' order.
+#[test]
+fn a_lines_listeners_run_ahead_of_the_next_packets_in_place_signal() {
+    let mut f = frame(true);
+    f.app.insert_resource(bevy::prelude::State::new(
+        crate::client_state::ClientState::InWorld,
+    ));
+    spawn_mob(&mut f, &[]);
+    swinging_at_old(&mut f);
+    run(
+        &mut f,
+        r#"HEARD = {}
+        local r = CreateFrame("Frame")
+        r:RegisterEvent("CHAT_MSG_MONSTER_SAY")
+        r:RegisterEvent("PLAYER_TARGET_CHANGED")
+        r:SetScript("OnEvent", function() table.insert(HEARD, event) end)"#,
+    );
+    let says = benilla_protocol::SessionEvent::Chat(benilla_protocol::messages::ChatMessage {
+        chat_type: benilla_protocol::messages::CHAT_MSG_MONSTER_SAY,
+        language: 0,
+        sender_guid: 0xF130_0000_0045_0003,
+        target_guid: 0,
+        sender_name: Some("Boar".into()),
+        channel: None,
+        text: "a".into(),
+        chat_tag: 0,
+    });
+    backstab_lands_after(&mut f, vec![says], vec![MOB], Some(MOB));
+    crate::lanes::fire_in_order(f.app.world_mut());
+    assert_eq!(selected(&f), Some(MOB));
+    assert_eq!(
+        eval::<Vec<String>>(&mut f, "return HEARD"),
+        ["CHAT_MSG_MONSTER_SAY", "PLAYER_TARGET_CHANGED"]
     );
 }
 

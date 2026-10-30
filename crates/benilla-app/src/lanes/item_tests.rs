@@ -65,6 +65,10 @@ fn item(guid: u64, entry: u32) -> SessionEvent {
 /// with `arg1`.
 fn client() -> App {
     let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+    // In the world with the interface up, so the dispatch fires each packet's lanes.
+    app.insert_resource(bevy::prelude::State::new(
+        crate::client_state::ClientState::InWorld,
+    ));
     let world = app.world_mut();
     let seat = |n: u16, guid: u64| {
         let lo = FIELD_PLAYER_INV_SLOT_HEAD + 2 * n;

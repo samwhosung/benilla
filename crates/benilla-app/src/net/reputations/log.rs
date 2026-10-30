@@ -1,12 +1,12 @@
 //! The reputation store as each packet left it. In the reference each reputation message's handler
 //! writes the slots, edits the pane's list and signals `UPDATE_FACTION` inside itself (`0x4d56f6`,
 //! `0x4d5699`, `0x4d5984`), and the getters read the slots at their calls (`0x4d65ac`, `0x4d65ea`), so a
-//! listener reads its own packet's standings. Here every handler of the frame writes the store
-//! before any listener runs, so each write is logged with its stamp, as is each list operation
-//! the message made ([`ReputationListOp`]); the lane (`ui_reputation`) rewinds the store to the
-//! frame's start and replays the log in stamp order among the other lanes, applying each list
-//! operation at its place. A write made during the drain, a verb's flag write, lands at its own
-//! place and is not logged.
+//! listener reads its own packet's standings. Here the lanes fire once a packet's handlers are
+//! done, over the span of packets since they last fired, so each write is logged with its stamp,
+//! as is each list operation the message made ([`ReputationListOp`]); the lane (`ui_reputation`)
+//! rewinds the store to the span's start and replays the log in stamp order among the other lanes,
+//! applying each list operation at its place. A write made during the drain, a verb's flag write,
+//! lands at its own place and is not logged.
 
 use std::collections::VecDeque;
 
@@ -42,7 +42,7 @@ enum Entry {
     Op(ReputationListOp),
 }
 
-/// The store's log of the frame's writes and list operations.
+/// The store's log of the span's writes and list operations.
 #[derive(Default)]
 pub(super) struct ReputationLog {
     /// The tables before the log's first write.
@@ -120,7 +120,7 @@ impl ReputationLog {
     }
 
     /// The drain's end, however it ended: the writes it did not replay, for the caller to apply,
-    /// so the store stands as the frame left it; its operations wait for the next drain, as every
+    /// so the store stands as the span left it; its operations wait for the next drain, as every
     /// lane's unfired items do, and the next write opens a new log.
     pub(super) fn finish(&mut self) -> Vec<Write> {
         if !self.replaying {

@@ -51,6 +51,10 @@ fn me_fields(extra: &[(u16, u32)]) -> ObjectFields {
 /// selected, two items in our backpack and 1g in the purse.
 fn client() -> Trade {
     let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+    // In the world with the interface up, so the dispatch fires each packet's lanes.
+    app.insert_resource(bevy::prelude::State::new(
+        crate::client_state::ClientState::InWorld,
+    ));
     let (tx, rx) = crossbeam_channel::unbounded();
     app.insert_resource(NetCommands(tx));
     app.insert_resource(fixture::factions());
@@ -798,6 +802,9 @@ fn an_accept_sends_the_partners_last_flag() {
         [ClientCommand::AcceptTrade { flag: 1 }]
     ));
     partner_slot_7(&mut t, 0);
+    // The offer drops our accept and sends the un-accept inside its dispatch (`0x4bf2b6` →
+    // `0x4bf230(0)`, the send at `0x4bf272`).
+    assert!(matches!(sent(&t)[..], [ClientCommand::UnacceptTrade]));
     run(&mut t, "AcceptTrade()");
     assert!(matches!(
         sent(&t)[..],
@@ -1291,8 +1298,9 @@ fn the_getters_read_the_session_inside_the_calls_and_the_close() {
     );
 }
 
-/// A close core run by a handler while the lane still holds an earlier packet's signals waits
-/// behind them ([`super::lane::close_step`]): the accept, then the close and its line.
+/// A close core run by a handler fires behind the earlier packet's signals, which fired inside its
+/// own packet's dispatch (`0x537ae5`, `0x703e50`): the accept, then the close's two
+/// `TRADE_CLOSED`s, before the dispatch returns.
 #[test]
 fn a_close_fires_behind_the_lanes_earlier_items() {
     let mut t = client();
@@ -1315,12 +1323,12 @@ fn a_close_fires_behind_the_lanes_earlier_items() {
         ],
     );
     t.app.world_mut().flush();
-    assert_eq!(heard(&mut t), "", "nothing fired in the handlers");
-    drain(&mut t);
     assert_eq!(
         heard(&mut t),
         "TRADE_ACCEPT_UPDATE(0,1) TRADE_CLOSED TRADE_CLOSED "
     );
+    drain(&mut t);
+    assert_eq!(heard(&mut t), "", "nothing left for the drain");
 }
 
 /// One frame's `OPEN_WINDOW` then `CANCELED` on a trade a drop started: the open places the held

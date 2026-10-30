@@ -62,6 +62,10 @@ impl House {
 
     fn new(money: u32) -> Self {
         let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        // In the world with the interface up, so the dispatch fires each packet's lanes.
+        app.insert_resource(bevy::prelude::State::new(
+            crate::client_state::ClientState::InWorld,
+        ));
         let (tx, rx) = crossbeam_channel::unbounded();
         app.insert_resource(NetCommands(tx));
         let world = app.world_mut();

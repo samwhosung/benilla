@@ -657,7 +657,8 @@ fn the_roster_events_fire_at_their_packet() {
 }
 
 /// The session's end drops what the cast and house lanes hold, as the chat lane's end drops its
-/// lines: the Lua state they were readied for is replaced.
+/// lines: the Lua state they were readied for is replaced. They hold it here because the world's
+/// UI has not loaded yet, so no flush fires them.
 #[test]
 fn the_session_end_drops_the_cast_and_house_lanes() {
     let mut app = cast_client(|app| {
@@ -673,7 +674,10 @@ fn the_session_end_drops_the_cast_and_house_lanes() {
     world
         .resource_mut::<crate::ui_cast::CastReports>()
         .bar(crate::ui_cast::CastBarEdge::Stop);
+    world.insert_resource(crate::ui_script::PendingEntryUiLoad);
     crate::net::handlers::dispatch(world, vec![outbid()]);
+    assert!(heard(&mut app).is_empty(), "held while the UI loads");
+    let world = app.world_mut();
     world.run_schedule(OnExit(crate::client_state::ClientState::InWorld));
     assert!(world.resource::<crate::ui_cast::CastReports>().is_empty());
     fire_frame(world);

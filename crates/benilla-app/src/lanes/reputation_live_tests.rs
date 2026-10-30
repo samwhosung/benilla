@@ -456,3 +456,32 @@ fn the_chat_listeners_read_the_standing_their_line_follows() {
         "each line reads its message's standing, the rank line after the increase"
     );
 }
+
+/// Each standing listener reads its own message's standing, and the friends the packets ahead of
+/// it left: a friend list between the two messages, which `GetNumFriends` reads at the call
+/// (`0x5ad000`), counts none for the first and Ann for the second.
+#[test]
+fn each_standing_listener_reads_its_own_span() {
+    let mut c = client();
+    let ann = super::unit_view_tests::one_friend(&mut c.app);
+    c.eval::<()>(
+        false,
+        r#"local g = CreateFrame("Frame")
+        g:RegisterEvent("UPDATE_FACTION")
+        g:SetScript("OnEvent", function() table.insert(Seen, "friends " .. GetNumFriends()) end)"#,
+    );
+    c.frame(vec![
+        vec![delta(STORMWIND.1, 100)],
+        vec![ann],
+        vec![delta(STORMWIND.1, 5100)],
+    ]);
+    assert_eq!(
+        c.seen(),
+        [
+            "2 4100/5/nil nil/0",
+            "friends 0",
+            "2 9100/6/nil nil/0",
+            "friends 1"
+        ]
+    );
+}

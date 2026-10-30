@@ -19,7 +19,6 @@ use crate::net::{
     ClientCommand, Guid, GuidIndex, NetCommands, NetEntity, ObjectStore, SelfGuid, SelfPlayer,
 };
 use crate::script_calls::with_hosted_vm;
-use crate::ui_action::{UiError, UiErrorKeys};
 
 /// A dead creature the object manager holds: the loot source.
 pub(super) const CORPSE: u64 = 0xF130_0000_0000_00AB;
@@ -47,6 +46,10 @@ pub(super) struct Loot {
 /// themselves and the money line's strings as the stock ones.
 pub(super) fn client() -> Loot {
     let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+    // In the world with the interface up, so the dispatch fires each packet's lanes.
+    app.insert_resource(bevy::prelude::State::new(
+        crate::client_state::ClientState::InWorld,
+    ));
     let (tx, rx) = crossbeam_channel::unbounded();
     app.insert_resource(NetCommands(tx));
     let world = app.world_mut();
@@ -680,8 +683,8 @@ fn the_count_is_the_last_occupied_rows() {
     assert_eq!(count(&mut l), 1, "the coin alone");
 }
 
-/// A response for an object the client does not hold shows `ERR_LOOT_DIDNT_KILL` and returns
-/// (`0x5ebb33`-`0x5ebb57`), before the latch (`0x5ebb60`) and the open.
+/// A response for an object the client does not hold shows `ERR_LOOT_DIDNT_KILL` inside its
+/// handler and returns (`0x5ebb33`-`0x5ebb57`), before the latch (`0x5ebb60`) and the open.
 #[test]
 fn a_response_for_an_object_we_lack_opens_nothing() {
     let mut l = client();
@@ -699,11 +702,7 @@ fn a_response_for_an_object_we_lack_opens_nothing() {
     let world = l.app.world();
     assert_eq!(world.resource::<LootState>().source(), None);
     assert_eq!(world.resource::<LootLatch>().0, None, "no latch written");
-    assert!(world
-        .resource::<UiErrorKeys>()
-        .snapshot()
-        .contains(&UiError::key("ERR_LOOT_DIDNT_KILL")));
-    assert_eq!(seen(&mut l), "");
+    assert_eq!(seen(&mut l), "UI_ERROR_MESSAGE:ERR_LOOT_DIDNT_KILL");
 }
 
 /// `CloseLoot` on a disenchant window with rows left sweeps it (`0x48f264` → `0x4c1fa0` with the
@@ -825,6 +824,7 @@ fn a_refusal_for_another_session_shows_nothing_and_drops_the_target() {
         let mut l = client();
         open(&mut l, CORPSE, 1, 0, vec![row(0, LINEN)]);
         l.app.world_mut().resource_mut::<LootLatch>().0 = held;
+        seen(&mut l);
         packets(
             &mut l,
             vec![SessionEvent::LootError {
@@ -832,16 +832,15 @@ fn a_refusal_for_another_session_shows_nothing_and_drops_the_target() {
                 error: loot_error::TOO_FAR,
             }],
         );
-        let world = l.app.world();
-        assert!(
-            world.resource::<UiErrorKeys>().snapshot().is_empty(),
-            "held {held:?}: no line"
-        );
-        assert_eq!(world.resource::<LootLatch>().0, None, "held {held:?}");
         assert_eq!(
-            world.resource::<LootState>().queued_unlocks(),
-            [GONE],
-            "held {held:?}: unlocked at the packet"
+            seen(&mut l),
+            "ITEM_LOCK_CHANGED",
+            "held {held:?}: no line, the unlock at the packet"
+        );
+        assert_eq!(
+            l.app.world().resource::<LootLatch>().0,
+            None,
+            "held {held:?}"
         );
     }
 }
@@ -1204,9 +1203,9 @@ fn the_loot_portrait_follows_a_unit_source_only() {
     assert!(!portrait(&mut l), "an item");
 }
 
-/// The response's tail closes a window that opened on the run after the copier's open and
-/// sweep (`0x5ebc3a`-`0x5ebc51`), so `LOOT_OPENED`'s handlers read the open window, its coin
-/// row included, and `LOOT_CLOSED`'s the closed one.
+/// The response's tail closes a window that opened on the run, our body moving as it lands, after
+/// the copier's open and sweep (`0x5ebc3a`-`0x5ebc51`), so `LOOT_OPENED`'s handlers read the open
+/// window, its coin row included, and `LOOT_CLOSED`'s the closed one.
 #[test]
 fn a_window_opened_on_the_run_is_open_to_its_loot_opened_handlers() {
     let mut l = client();
@@ -1221,6 +1220,11 @@ fn a_window_opened_on_the_run_is_open_to_its_loot_opened_handlers() {
         end)"#,
     );
     l.app.world_mut().resource_mut::<LootLatch>().0 = Some(CORPSE);
+    l.app
+        .world_mut()
+        .insert_resource(crate::player::Player::with_move_flags(
+            crate::creature_anim::move_flags::FORWARD,
+        ));
     packets(
         &mut l,
         vec![SessionEvent::LootResponse {
@@ -1230,7 +1234,6 @@ fn a_window_opened_on_the_run_is_open_to_its_loot_opened_handlers() {
             items: Vec::new(),
         }],
     );
-    l.app.world_mut().resource_mut::<super::LootMoveStart>().0 = true;
     feed(&mut l);
     assert_eq!(
         eval::<String>(&mut l, "return table.concat(COUNTS, ',')"),

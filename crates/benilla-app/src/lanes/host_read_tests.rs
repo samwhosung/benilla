@@ -1,37 +1,32 @@
-//! The readiness guard for firing each packet's lanes inside the net dispatch, after its handlers,
-//! with the host lent: the reference's handler signals inside itself (`0x703e50`) and runs whole
-//! before the next packet's (`0x537ae5`), so a listener reads the live state its packet left and
-//! its sends go out in packet order. That move is right once five lists are empty, each the whole
-//! of its remaining work and only shrinking; [`flip_readiness`] prints where they stand.
+//! What a listener inside the net dispatch still reads or hears out of its packet's place. The
+//! dispatch fires each packet's lanes after its handlers, with the host lent
+//! ([`crate::lanes::flush`]), as the reference's handler signals inside itself (`0x703e50`) and
+//! runs whole before the next packet's (`0x537ae5`), so a listener reads the live state its
+//! packet left and its sends go out in packet order. Four lists hold what is left, each the whole
+//! of its remaining work and only shrinking; [`what_the_flip_left`] prints where they stand.
 //!
 //! - [`super::guard_tests::READS_FRAME_FINAL`], held here to its count: the systems, in any
 //!   schedule or set, that push a view of what a handler writes, which a getter reads in place of
-//!   the live state. A family's getters going live ([`crate::script_calls::live`]) drops its
-//!   feed's row; a build the reference too makes outside every packet is
+//!   the live state, so a listener reads the push the last frame left. A family's getters going
+//!   live ([`crate::script_calls::live`]) drops its feed's row; a build the reference too makes
+//!   outside every packet is
 //!   [`super::guard_tests::BUILT_OUTSIDE_THE_PACKETS_IN_THE_REFERENCE`]'s, and a system that
 //!   writes the VM and pushes no view is [`super::guard_tests::WRITES_NO_VIEW`]'s; both stay.
 //! - [`BETWEEN_THE_DISPATCH_AND_THE_DRAIN`]: the systems after the dispatch and ahead of the drain
 //!   that write what a call or a handler reads inside a packet (the host's live reads, the rest of
-//!   the call host's state, and what the handlers read without writing), or push a view the drain
-//!   waits for, where the reference writes inside a packet. A listener fired inside the dispatch
-//!   would read each as the frame before left it. The writers the reference too runs after the
-//!   packets, and those no listener can see, are [`AFTER_THE_PACKETS_IN_THE_REFERENCE`]'s, which
-//!   stays.
+//!   the call host's state, what the lanes' firings touch, and what the handlers read without
+//!   writing), where the reference
+//!   writes inside a packet: a listener reads each as the frame before left it. The writers the
+//!   reference too runs after the packets, and those no listener can see, are
+//!   [`AFTER_THE_PACKETS_IN_THE_REFERENCE`]'s, which stays.
 //! - [`super::guard_tests::NOT_YET_ON_A_LANE`]: what fires off a handler's queue or edge from a
-//!   feed, ahead of every lane. Once the lanes fire inside the dispatch, each such event moves
-//!   from ahead of every packet event of its frame to behind them all.
+//!   feed, behind every packet event of its frame.
 //! - [`super::guard_tests::NOT_YET_PLACED`]: the systems outside the phase that fire off a
 //!   handler queue in system order.
-//! - [`super::guard_tests::PLACED_OUTSIDE_THE_DISPATCH`]: the systems that push lane items off a
-//!   placed queue's field edges after the dispatch, at the edge's earlier stamp, which the
-//!   dispatch's own firing would already have passed, or at their own.
 //!
-//! [`super::guard_tests::LANE_READS_FRAME_FINAL`] and
-//! [`super::guard_tests::HOST_READS_FRAME_FINAL`] empty at the flip itself, which makes the world
-//! a lane firing and its getters read their packet's, and every entry of
-//! [`super::guard_tests::HOST_HELD_UNREAD`] is read first, as quiet or as a row of its own.
-//! [`super::guard_tests::QUEUED_FOR_THE_TICK`] holds the calls that queue an event for the VM's
-//! next tick, which fires behind every packet's events before the flip and after it.
+//! Every entry of [`super::guard_tests::HOST_HELD_UNREAD`] is read first, as quiet or as a row of
+//! its own. [`super::guard_tests::QUEUED_FOR_THE_TICK`] holds the calls that queue an event for
+//! the VM's next tick, which fires behind every packet's events.
 
 use std::any::TypeId;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -52,13 +47,13 @@ const FRAME_FINAL_INPUTS: usize = 36;
 /// (`fire_in_order`), by a suffix of the system's name, with what each writes of the state a
 /// listener's call or a handler reads inside a packet, by its name in the crate, and why: the
 /// host's live reads ([`crate::script_calls::live::LiveReads`]), the rest of the call host's
-/// state, which its verbs read, and what the handlers read without writing
+/// state, which its verbs read, what each lane's firing touches as it fires ([`super::LaneReads`]),
+/// and what the handlers read without writing
 /// ([`super::guard_tests::READ_ONLY_TO_HANDLERS`]), the lanes and the message buffers apart; a
 /// read of what the handlers fill through a shared reference
-/// ([`super::guard_tests::FILLED_THROUGH_A_READ`]) counts as the write it is. These are the
-/// obstacles to the flip, each a write the reference makes inside a packet, or a view pushed in
-/// its place. A listener fired inside the dispatch would read each of these as the frame before
-/// left it. The writers the reference also runs after the packets are
+/// ([`super::guard_tests::FILLED_THROUGH_A_READ`]) counts as the write it is. Each is a write
+/// the reference makes inside a packet, or a view pushed in its place, which a listener fired
+/// inside the dispatch reads as the frame before left it. The writers the reference also runs after the packets are
 /// [`AFTER_THE_PACKETS_IN_THE_REFERENCE`]'s, not these. `Commands` names a component a system
 /// filters out and may add with its commands, which access does not show; `exclusive` a system
 /// whose access Bevy does not report.
@@ -89,8 +84,8 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
 
 /// The systems between the dispatch and the drain that write what the host's live reads read,
 /// as [`BETWEEN_THE_DISPATCH_AND_THE_DRAIN`]'s, but where the reference too runs them after the
-/// packets, or where no listener can read them: they stay after the flip, and a listener fired
-/// inside the dispatch reads them as the frame before left them, as 1.12.1's does. Same shape,
+/// packets, or where no listener can read them: they stay, and a listener fired inside the
+/// dispatch reads them as the frame before left them, as 1.12.1's does. Same shape,
 /// held to its systems' access by the same test.
 #[rustfmt::skip]
 const AFTER_THE_PACKETS_IN_THE_REFERENCE: &[(&str, &[&str], &str)] = &[
@@ -154,6 +149,20 @@ const AFTER_THE_PACKETS_IN_THE_REFERENCE: &[(&str, &[&str], &str)] = &[
     ("::ui_unit::views::drop_unit_views", &["ui_unit::views::UnitViews"],
         "drops the unit views' log, run only while no in-game interface \
          is up, so no listener exists; it goes with the log"),
+    ("::net::send_query_time", &["net::QueryTimeAsks"],
+        "the clock's hourly resync, which writes only its own asks' bookkeeping, seated by the \
+         world-enter cascade's ask (`0x4de45b`): no listener reads it"),
+    ("::poi_marker::expire_marker", &["poi_marker::PoiMarker"],
+        "clears the directions marker on arrival or at its deadline in the minimap's per-frame \
+         update (`0x6d93a0`, its clears at `0x6d93fb` and `0x6d9a3a`), which the minimap frame's \
+         draw runs (`0x4ebea0` → `0x4ec950`) in the frame pass, after the packets (`0x420d6a` \
+         after `0x420d55`)"),
+    ("::ui_battlefield::drive_battlefield_leash", &["ui_battlefield::BattlefieldLeash"],
+        "the list's leash (`0x4aa090`), polled in the world frame's update (`0x4818d5`), which \
+         the frame pass runs after the packets (`0x420d6a` after `0x420d55`)"),
+    ("::ui_chat::language::feed_default_language", &["ui_chat::frames::ChatWindows"],
+        "copies the faction tongue into the log files' composition (`route`'s tee), which no \
+         listener reads: the stock `ChatFrame_OnEvent` holds its own `this.defaultLanguage`"),
 ];
 
 /// The systems [`BETWEEN_THE_DISPATCH_AND_THE_DRAIN`] and [`AFTER_THE_PACKETS_IN_THE_REFERENCE`]
@@ -214,6 +223,38 @@ fn writers_between(app: &mut App) -> Option<BTreeMap<String, BTreeSet<String>>> 
                 | ComponentAccessKind::Shared(id)
                 | ComponentAccessKind::Exclusive(id) => id,
             }));
+        }
+    }
+    // What each lane's firing touches as it fires, inside its packet in the reference: its
+    // declared access ([`super::LaneReads`] for an exclusive one), less the call host's it lends,
+    // counted above.
+    super::measure(world);
+    let lanes: Vec<Vec<FilteredAccess>> = world
+        .resource::<super::Lanes>()
+        .accesses()
+        .into_iter()
+        .map(|set| set.filtered_accesses().to_vec())
+        .collect();
+    for set in &lanes {
+        let mut own: Vec<&FilteredAccess> = set.iter().collect();
+        for h in &host {
+            if let Some(i) = own.iter().position(|o| *o == h) {
+                own.remove(i);
+            }
+        }
+        for fa in own {
+            read_resources.extend(
+                fa.access()
+                    .resource_reads_and_writes()
+                    .filter(|id| is_state(world, *id)),
+            );
+            if let Ok(kinds) = fa.access().try_iter_component_access() {
+                read_components.extend(kinds.map(|k| match k {
+                    ComponentAccessKind::Archetypal(id)
+                    | ComponentAccessKind::Shared(id)
+                    | ComponentAccessKind::Exclusive(id) => id,
+                }));
+            }
         }
     }
     for fa in &live {
@@ -427,14 +468,14 @@ fn the_frame_final_views_only_shrink() {
     );
 }
 
-/// Where the flip stands: every list's count, printed, failing nothing (`cargo test
-/// flip_readiness -- --nocapture`). The flip needs the first five empty; the rest are context.
+/// What the flip left: every list's count, printed, failing nothing (`cargo test
+/// what_the_flip_left -- --nocapture`). The first four are the remaining work; the rest are
+/// context.
 #[test]
-fn flip_readiness() {
+fn what_the_flip_left() {
     use super::guard_tests as g;
     let inputs: usize = g::READS_FRAME_FINAL.iter().map(|(_, i)| i.len()).sum();
-    let lane_inputs: usize = g::LANE_READS_FRAME_FINAL.iter().map(|(_, i)| i.len()).sum();
-    let needs = [
+    let left = [
         (
             "READS_FRAME_FINAL",
             g::READS_FRAME_FINAL.len(),
@@ -451,31 +492,11 @@ fn flip_readiness() {
             String::new(),
         ),
         ("NOT_YET_PLACED", g::NOT_YET_PLACED.len(), String::new()),
-        (
-            "PLACED_OUTSIDE_THE_DISPATCH",
-            g::PLACED_OUTSIDE_THE_DISPATCH.len(),
-            String::new(),
-        ),
     ];
     let context = [
         (
             "HOST_HELD_UNREAD (read, each quiet; stays)",
             g::HOST_HELD_UNREAD.len(),
-            String::new(),
-        ),
-        (
-            "LANE_READS_FRAME_FINAL (empties at the flip)",
-            g::LANE_READS_FRAME_FINAL.len(),
-            format!(" ({lane_inputs} inputs)"),
-        ),
-        (
-            "HOST_READS_FRAME_FINAL (components; empties at the flip)",
-            g::HOST_READS_FRAME_FINAL.len(),
-            String::new(),
-        ),
-        (
-            "RAW_STORE_READS (getters past the views; empties at the flip)",
-            super::raw_store_tests::RAW_STORE_READS.len(),
             String::new(),
         ),
         (
@@ -494,14 +515,14 @@ fn flip_readiness() {
             String::new(),
         ),
         (
-            "QUEUED_FOR_THE_TICK (behind every packet, flip or not)",
+            "QUEUED_FOR_THE_TICK (behind every packet)",
             g::QUEUED_FOR_THE_TICK.len(),
             String::new(),
         ),
     ];
-    let left: usize = needs.iter().map(|(_, n, _)| n).sum();
-    let mut out = format!("flip readiness: {left} rows to empty\n");
-    for (list, n, extra) in &needs {
+    let rows: usize = left.iter().map(|(_, n, _)| n).sum();
+    let mut out = format!("after the flip: {rows} rows to empty\n");
+    for (list, n, extra) in &left {
         out += &format!("  {n:>4}  {list}{extra}\n");
     }
     out += "  context:\n";

@@ -12,7 +12,7 @@ use bevy::prelude::*;
 use crossbeam_channel::Receiver;
 
 use crate::net::ClientCommand;
-use crate::ui_stable::{StableEvent, StableLane, StableOpen};
+use crate::ui_stable::{StableLane, StableOpen};
 
 const ME: u64 = 0x10;
 const MASTER: u64 = 0xF130_0000_4500_0001;
@@ -22,6 +22,10 @@ const BOAR: u32 = 1_126;
 /// event and message line.
 fn client() -> (App, Receiver<ClientCommand>) {
     let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+    // In the world with the interface up, so the dispatch fires each packet's lanes.
+    app.insert_resource(bevy::prelude::State::new(
+        crate::client_state::ClientState::InWorld,
+    ));
     let (tx, rx) = crossbeam_channel::unbounded();
     app.insert_resource(crate::net::NetCommands(tx));
     app.insert_resource(crate::net::SelfGuid(Some(ME)));
@@ -68,23 +72,17 @@ fn boar() -> StabledPet {
     }
 }
 
-/// `packets` through their handlers, each item they put on the stable lane stamped inside them,
-/// none heard before the drain; then the drain, and what the spy heard.
-fn handled(app: &mut App, packets: Vec<SessionEvent>) -> (Vec<StableEvent>, Vec<String>) {
-    let before = crate::lanes::stamp();
+/// `packets` through their handlers: each event the stable lane takes fires inside the dispatch, at
+/// its packet's place, as a handler signals inside itself (`0x703e50`) ahead of the next packet's
+/// (`0x537ae5`), so the drain finds nothing; what the spy heard.
+fn handled(app: &mut App, packets: Vec<SessionEvent>) -> Vec<String> {
     crate::net::handlers::dispatch(app.world_mut(), packets);
     app.world_mut().flush();
-    let after = crate::lanes::stamp();
-    let stamped = app.world().resource::<StableLane>().stamped();
     assert!(
-        stamped.iter().all(|(at, _)| before < *at && *at < after),
-        "stamped inside the handler"
+        app.world().resource::<StableLane>().stamped().is_empty(),
+        "fired inside the dispatch"
     );
-    let heard: Vec<String> = eval(app, false, "return Seen");
-    assert!(heard.is_empty(), "on the lane: {heard:?}");
-    crate::lanes::fire_in_order(app.world_mut());
-    let heard = eval(app, false, "local s = Seen Seen = {} return s");
-    (stamped.into_iter().map(|(_, e)| e).collect(), heard)
+    eval(app, false, "local s = Seen Seen = {} return s")
 }
 
 /// With the host lent the getters read the records as the world holds them, where the VM's copy
@@ -120,36 +118,24 @@ fn the_getters_read_the_stable_through_the_host() {
     );
 }
 
-/// The list's `PET_STABLE_SHOW`, the money refusal's line and code 11's `PET_STABLE_UPDATE` sit
-/// on the stable lane at their handler's place, and fire there in the drain.
+/// The list's `PET_STABLE_SHOW`, the money refusal's line and code 11's `PET_STABLE_UPDATE` fire
+/// inside their packet's dispatch.
 #[test]
-fn the_list_and_the_results_fire_on_the_lane_at_their_handlers() {
+fn the_list_and_the_results_fire_inside_their_dispatch() {
     let (mut app, _rx) = client();
     let list = SessionEvent::ListStabledPets {
         npc: MASTER,
         num_stable_slots: 1,
         pets: vec![boar()],
     };
-    assert_eq!(
-        handled(&mut app, vec![list]),
-        (vec![StableEvent::Show], vec!["PET_STABLE_SHOW:nil".into()])
-    );
+    assert_eq!(handled(&mut app, vec![list]), ["PET_STABLE_SHOW:nil"]);
     let refused = SessionEvent::StableResult {
         result: stable_result::ERR_MONEY,
     };
-    assert_eq!(
-        handled(&mut app, vec![refused]),
-        (
-            vec![StableEvent::Line("ERR_NOT_ENOUGH_MONEY")],
-            vec!["UI_ERROR_MESSAGE:poor".into()]
-        )
-    );
+    assert_eq!(handled(&mut app, vec![refused]), ["UI_ERROR_MESSAGE:poor"]);
     assert_eq!(
         handled(&mut app, vec![SessionEvent::StableResult { result: 11 }]),
-        (
-            vec![StableEvent::Update],
-            vec!["PET_STABLE_UPDATE:nil".into()]
-        )
+        ["PET_STABLE_UPDATE:nil"]
     );
 }
 
@@ -172,7 +158,7 @@ fn answer(found: bool) -> SessionEvent {
 
 /// Each `GetStablePetInfo` call that misses the record keeps the callback `0x4cb3b0` (flag 0),
 /// the cache asking once, owned by the active player; the answer runs each one, which signals
-/// `PET_STABLE_UPDATE` on the lane at its handler (`0x4cb3bf`), and a held record keeps none.
+/// `PET_STABLE_UPDATE` inside its handler (`0x4cb3bf`), and a held record keeps none.
 #[test]
 fn a_missed_record_signals_the_update_once_per_call_when_it_lands() {
     let (mut app, rx) = client();
@@ -194,18 +180,12 @@ fn a_missed_record_signals_the_update_once_per_call_when_it_lands() {
     );
     assert_eq!(
         handled(&mut app, vec![answer(true)]),
-        (
-            vec![StableEvent::Update, StableEvent::Update],
-            vec![
-                "PET_STABLE_UPDATE:nil".into(),
-                "PET_STABLE_UPDATE:nil".into()
-            ]
-        )
+        ["PET_STABLE_UPDATE:nil", "PET_STABLE_UPDATE:nil"]
     );
     eval::<()>(&mut app, true, "GetStablePetInfo(1)");
     assert_eq!(
         handled(&mut app, vec![answer(true)]),
-        (vec![], vec![]),
+        Vec::<String>::new(),
         "a held record keeps no callback"
     );
 }

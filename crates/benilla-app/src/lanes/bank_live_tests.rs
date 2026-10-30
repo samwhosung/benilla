@@ -135,23 +135,18 @@ fn the_bank_getters_read_the_player_at_the_call() {
     );
 }
 
-/// The open's `BANKFRAME_OPENED` sits on the bank lane at its handler's stamp, between the stamps
-/// of the handlers before and after it.
+/// The open's `BANKFRAME_OPENED` fires inside its packet's dispatch, with no frame after it: the
+/// handler's signal runs every listener before the next packet's handler (`0x537ae5`, `0x703e50`).
 #[test]
-fn the_open_is_stamped_at_its_handler() {
+fn the_open_fires_inside_its_dispatch() {
     let mut c = client();
-    let before = crate::lanes::stamp();
     c.handle(vec![SessionEvent::ShowBank { banker: BANKER }]);
-    let after = crate::lanes::stamp();
-    let stamped = c
-        .app
-        .world()
-        .resource::<crate::ui_bank::BankLane>()
-        .stamped();
-    assert_eq!(stamped.len(), 1);
-    let (at, event) = stamped[0];
-    assert_eq!(event, crate::ui_bank::BankEvent::Opened);
-    assert!(before < at && at < after, "stamped inside the handler");
+    let lane = c.app.world().resource::<crate::ui_bank::BankLane>();
+    assert!(lane.stamped().is_empty(), "nothing left on the lane");
+    assert!(
+        c.seen().iter().any(|s| s == "BANKFRAME_OPENED:nil"),
+        "the open fired inside the dispatch"
+    );
 }
 
 /// The open, a refusal's line and a bought slot's watch each fire at their packet's place around

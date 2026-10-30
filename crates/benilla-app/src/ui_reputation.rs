@@ -70,7 +70,7 @@ fn add_reputation_lane(app: &mut App) {
         );
 }
 
-/// The lane's firing: the store rewound to the frame's start, once per drain, at the origin and
+/// The lane's firing: the store rewound to the span's start, once per drain, at the origin and
 /// alone; then each write the drain admits replayed and each list operation applied at its place
 /// with the host lent, over the snapshot the host answers as of there. Changes of the store are
 /// the log's own, so the rewind and the replay mark nothing changed.
@@ -90,7 +90,7 @@ fn fire_reputation(
     }
 }
 
-/// The drain's end, however it ended: the store as the frame left it.
+/// The drain's end, however it ended: the store as the span left it.
 fn end_reputation(world: &mut World) {
     if let Some(mut store) = world.get_resource_mut::<Reputations>() {
         store.bypass_change_detection().end_replay();

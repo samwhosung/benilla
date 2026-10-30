@@ -596,10 +596,9 @@ const RATION_ICON: &str = "Interface\\Icons\\INV_Misc_Food_11";
 /// (`0x5deb00` → `0x4e5d60` → `0x4e6d20`, `0x4e6d69`), which the record's answer runs inside its
 /// packet (`0x55bf39` → `0x4e5b80` → `0x4e5c70`): the slot's `ACTIONBAR_SLOT_CHANGED` fires between
 /// the packets around the answer, and every getter reads the slot's icon, consumable test and count
-/// at its call (`0x4e6a50`, `0x4e5250`, `0x4e6c70`): the first packet's listener reads the count our
-/// arrival stored before the rations reached the pack, and the last the answer's. The record is the
-/// cache's as the frame's packets left it until each packet's events fire inside its dispatch, so
-/// both read the ration's icon.
+/// at its call (`0x4e6a50`, `0x4e5250`, `0x4e6c70`): the first packet's listener reads the cold
+/// record, the question mark and no consumable test, with the count our arrival stored before the
+/// rations reached the pack, and the last the answer's.
 #[test]
 fn a_bar_items_record_repaints_its_slot_at_the_answer_and_the_getters_read_it_live() {
     let mut c = client_with(|world| {
@@ -688,7 +687,7 @@ fn a_bar_items_record_repaints_its_slot_at_the_answer_and_the_getters_read_it_li
     assert_eq!(
         ration,
         [
-            format!("UNIT_MANA:{RATION_ICON}:1:0"),
+            format!("UNIT_MANA:{}:nil:0", crate::ui_action::MISSING_ITEM_ICON),
             format!("ACTIONBAR_SLOT_CHANGED:{RATION_ICON}:1:3"),
             format!("UNIT_MANA:{RATION_ICON}:1:3"),
         ]

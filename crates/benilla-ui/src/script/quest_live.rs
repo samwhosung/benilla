@@ -158,7 +158,7 @@ pub(super) fn coinage(lua: &Lua, model: &Model) -> u64 {
 }
 
 /// The clock now: the host's, else the VM's copy, which only a test sets (production lends the
-/// host). The host's clock is the dispatch's, not each packet's stamp (`0x4deefa`): the flip settles it.
+/// host), as the listener's packet left it (`0x4deefa`).
 pub(super) fn clock(lua: &Lua, model: &Model) -> QuestClockRead {
     ask(lua, &QuestClock).unwrap_or(QuestClockRead {
         server: model.server_unix_time,

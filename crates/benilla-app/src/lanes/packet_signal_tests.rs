@@ -314,8 +314,9 @@ fn an_uncached_page_begins_at_its_answer() {
 
 /// The session's end drops the signals the item-text lane holds, as the other lanes' ends drop
 /// theirs, and its shutdown's sweep closes the reader the packet opened; so does the leave-world
-/// sweep run ahead of the drain (a `/reload`'s), which closes the reader (`0x490abc` →
-/// `0x4e3240`).
+/// sweep (a `/reload`'s), which closes the reader (`0x490abc` → `0x4e3240`). The lane holds the
+/// packet's `ITEM_TEXT_BEGIN` because the world's interface had not loaded at its dispatch, so no
+/// flush fired it.
 #[test]
 fn the_session_end_and_a_sweep_drop_the_item_text_lane() {
     let reader = |app: &App| {
@@ -323,29 +324,44 @@ fn the_session_end_and_a_sweep_drop_the_item_text_lane() {
             .resource::<crate::ui_item_text::ItemTextOpen>()
             .object()
     };
-    let page_text = || vec![SessionEvent::GameObjectPageText { guid: TABLET }];
+    let held = |app: &App| {
+        app.world()
+            .resource::<crate::ui_item_text::ItemTextLane>()
+            .held()
+    };
+    let page_text_held = |app: &mut App| {
+        let world = app.world_mut();
+        world.insert_resource(crate::ui_script::PendingEntryUiLoad);
+        crate::net::handlers::dispatch(
+            world,
+            vec![SessionEvent::GameObjectPageText { guid: TABLET }],
+        );
+        world.remove_resource::<crate::ui_script::PendingEntryUiLoad>();
+    };
     let mut app = client();
     tablet(&mut app, true);
+    page_text_held(&mut app);
+    assert_ne!(held(&app), 0, "the open's signals, unfired");
     let world = app.world_mut();
-    crate::net::handlers::dispatch(world, page_text());
     world
         .resource_mut::<crate::ui_script::LeavingWorldArmed>()
         .arm();
     world.init_resource::<crate::player::CameraControl>();
     world.run_schedule(OnExit(crate::client_state::ClientState::InWorld));
-    crate::lanes::fire_in_order(world);
+    assert_eq!(held(&app), 0, "the session's end drops it");
+    crate::lanes::fire_in_order(app.world_mut());
     assert_eq!(reader(&app), None, "the session's end");
 
     let mut app = client();
     tablet(&mut app, true);
     spy(&mut app, &["ITEM_TEXT_BEGIN"]);
+    page_text_held(&mut app);
     let world = app.world_mut();
-    crate::net::handlers::dispatch(world, page_text());
     world
         .resource_mut::<crate::ui_script::LeavingWorldArmed>()
         .arm();
     crate::ui_script::run_leave_world_sweep(world);
-    assert!(frame(&mut app, vec![]).is_empty(), "the sweep");
+    assert!(frame(&mut app, vec![]).is_empty(), "the sweep drops it");
     assert_eq!(reader(&app), None);
 }
 

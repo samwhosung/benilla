@@ -42,7 +42,7 @@ pub(crate) fn drop_parked_releases(world: &mut World) {
 /// runs the selects a system or a lane owed.
 pub(super) fn register(app: &mut App) {
     use crate::lanes::LaneApp;
-    crate::net::handlers::add_packet_hook(app, |_| {}, super::scan::run_owed_selects);
+    crate::net::handlers::add_packet_end(app, super::scan::run_owed_selects);
     app.init_resource::<OwedReleases>()
         .init_resource::<Releases>()
         .init_resource::<super::scan::OwedSelects>()

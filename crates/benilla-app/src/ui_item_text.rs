@@ -315,6 +315,12 @@ impl ItemTextLane {
     fn admits(&self, serial: u64) -> bool {
         self.firing.is_none_or(|firing| firing == serial)
     }
+
+    /// How many signals wait on the lane, for the tests of its ends.
+    #[cfg(test)]
+    pub(crate) fn held(&self) -> usize {
+        self.steps.len()
+    }
 }
 
 /// Where a step runs: inside a packet's handler, whose signals go on the lane at its place, or

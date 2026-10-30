@@ -5,13 +5,14 @@
 //! slot, `0x6e741a` → `0x6e4940` → `0x6e4ad0`, before its `SPELLCAST_STOP`), and the getters read
 //! them inside the call (`IsCurrentAction` `0x4e53a0`, `IsAutoRepeatAction` `0x4e55b0` →
 //! `0x6e9fd0`, `SpellIsTargeting` `0x6e6cd0`, `SpellStopCasting` `0x6e6e80`), so a listener reads
-//! its own packet's. Here every handler of the frame runs before any listener, so the view each
+//! its own packet's. Here the lanes fire once a packet's handlers are done, over the span of
+//! packets since they last fired, and a handler's events among its writes, so the view each
 //! packet left is logged, stamped ahead of what the packet raised ([`CastViews`]); the views lane
-//! replays the frame's start, then each packet's view at its place among the other lanes' items,
+//! replays the span's start, then each packet's view at its place among the other lanes' items,
 //! and the getters read it there through the host ([`CastLive`]). A listener's call that moves the
-//! state moves it live, after every handler, so what it moved is the live state's from then on:
-//! each later view carries the call's fields as they stand live ([`Moved`]), and the rest as its
-//! packet left them. The VM's copy follows the same views, for a read with no host to ask.
+//! state moves it live, after its span's handlers, so what it moved is the live state's from then
+//! on: each later view carries the call's fields as they stand live ([`Moved`]), and the rest as
+//! its packet left them. The VM's copy follows the same views, for a read with no host to ask.
 
 use std::collections::VecDeque;
 
@@ -24,10 +25,10 @@ use benilla_ui::script::{CastView, CastViewNow, UiScript};
 use crate::lanes::{Stamp, Until};
 use crate::spell::CastState;
 
-/// The cast views the frame's packets left, and what the VM was last given of the live state.
+/// The cast views the span's packets left, and what the VM was last given of the live state.
 #[derive(Resource, Default)]
 pub(crate) struct CastViews {
-    /// The view as the frame's first logged packet found it: what the drain begins from.
+    /// The view as the span's first logged packet found it: what the drain begins from.
     start: Option<CastView>,
     /// Each packet's view that differs from the one before it, stamped ahead of the packet.
     entries: VecDeque<(Stamp, CastView)>,
@@ -174,7 +175,7 @@ impl CastViews {
 
 /// Our cast's state as the getters read it inside the call (`IsCurrentAction` `0x4e53a0`,
 /// `IsAutoRepeatAction` `0x4e55b0` → `0x6e9fd0`, `SpellIsTargeting` `0x6e6cd0`, `SpellStopCasting`
-/// `0x6e6e80`): the live state, as of the drain's place while the views lane replays the frame's
+/// `0x6e6e80`): the live state, as of the drain's place while the views lane replays the span's
 /// packets ([`CastViews::here`]).
 #[derive(SystemParam)]
 pub(crate) struct CastLive<'w, 's> {
@@ -219,7 +220,7 @@ pub(crate) fn slot_moves_here() {
     SLOT_MOVES.set(Some(crate::lanes::stamp()));
 }
 
-/// The net stage's start: the view as the frame's input left it, which the first packet that
+/// A span of packets' start: the view as what ran before it left it, which the first packet that
 /// moves it is compared with.
 fn packets_begin(world: &mut World) {
     SLOT_MOVES.set(None);
@@ -261,7 +262,7 @@ fn packet_end(world: &mut World, at: Stamp) {
     }
 }
 
-/// The lane's head: its start, at the origin, while the frame logged a view; then its next entry.
+/// The lane's head: its start, at the origin, while the span logged a view; then its next entry.
 fn peek(world: &World) -> Option<Stamp> {
     let views = world.get_resource::<CastViews>()?;
     if views.started {
@@ -271,7 +272,7 @@ fn peek(world: &World) -> Option<Stamp> {
     }
 }
 
-/// The lane's firing: the frame's start pushed once a drain, then each view `until` admits, which
+/// The lane's firing: the span's start pushed once a drain, then each view `until` admits, which
 /// raise nothing.
 fn fire_cast_views(
     In(until): In<Until>,
@@ -327,8 +328,8 @@ fn drop_cast_views(mut views: ResMut<CastViews>) {
     };
 }
 
-/// The log, its packet hooks, the lane, its end and the drop under the exact complement of the
-/// drain's gate.
+/// The log, its span start and packet end, the lane, its end and the drop under the exact
+/// complement of the drain's gate.
 pub(super) fn add_cast_views_lane(app: &mut App) {
     use crate::lanes::LaneApp;
     let reader = ViewReader(SystemState::new(app.world_mut()));
@@ -336,11 +337,12 @@ pub(super) fn add_cast_views_lane(app: &mut App) {
         .insert_resource(reader)
         .add_lane("cast views", peek, fire_cast_views, None)
         .add_drain_end(end_cast_views)
+        .add_span_start(packets_begin)
         .add_systems(
             Update,
             drop_cast_views
                 .in_set(crate::ui_script::UiFeed)
                 .run_if(not(crate::ui_script::ingame_ui_up)),
         );
-    crate::net::handlers::add_packet_hook(app, packets_begin, packet_end);
+    crate::net::handlers::add_packet_end(app, packet_end);
 }

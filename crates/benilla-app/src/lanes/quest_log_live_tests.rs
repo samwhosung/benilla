@@ -14,7 +14,7 @@ use benilla_protocol::messages::{
     QuestDetails, QuestGiverList, QuestListEntry, QuestRequestItems, QuestRewardItem,
 };
 use benilla_protocol::{EntityKind, ObjectFields, SessionEvent};
-use benilla_ui::script::{QuestPanel, UiScript};
+use benilla_ui::script::UiScript;
 use bevy::prelude::*;
 use crossbeam_channel::{Receiver, Sender};
 
@@ -721,9 +721,9 @@ fn the_giver_getters_read_the_panel_cells_at_the_call() {
     );
 }
 
-/// A panel's event sits on the questgiver lane at its handler's place and fires there, and a
-/// refusal's close in the same frame runs behind it: `QUEST_DETAIL`, the line, then
-/// `QUEST_FINISHED` (`0x5dbd50`, `0x5dbca0`, `0x501217`).
+/// A panel's event fires inside its packet's dispatch, and a refusal's close in a later packet
+/// runs behind it: `QUEST_DETAIL`, the line, then `QUEST_FINISHED` (`0x5dbd50`, `0x5dbca0`,
+/// `0x501217`).
 #[test]
 fn a_panel_and_its_refusal_fire_on_the_lane_at_their_packets() {
     let mut c = client();
@@ -738,32 +738,19 @@ fn a_panel_and_its_refusal_fire_on_the_lane_at_their_packets() {
         f:SetScript("OnEvent", function() table.insert(Seen, event) end)
         "#,
     );
-    let before = crate::lanes::stamp();
     crate::net::handlers::dispatch(c.app.world_mut(), vec![detail()]);
-    let after = crate::lanes::stamp();
-    let stamped = c
+    assert!(c
         .app
         .world()
         .resource::<crate::ui_quest::QuestGiverLane>()
-        .stamped();
-    assert!(
-        matches!(
-            stamped.as_slice(),
-            [(at, crate::ui_quest::QuestGiverEvent::Panel(QuestPanel::Detail, GIVER))]
-                if before < *at && *at < after
-        ),
-        "stamped inside the handler: {stamped:?}"
-    );
+        .stamped()
+        .is_empty());
+    assert_eq!(c.seen(), ["QUEST_DETAIL"], "inside the panel's dispatch");
     crate::net::handlers::dispatch(
         c.app.world_mut(),
         vec![SessionEvent::QuestGiverInvalid { reason: 13 }],
     );
-    assert!(c.seen().is_empty(), "nothing fires ahead of the drain");
-    crate::lanes::fire_in_order(c.app.world_mut());
-    assert_eq!(
-        c.seen(),
-        ["QUEST_DETAIL", "CHAT_MSG_SYSTEM", "QUEST_FINISHED"]
-    );
+    assert_eq!(c.seen(), ["CHAT_MSG_SYSTEM", "QUEST_FINISHED"]);
 }
 
 /// A panel's event fires once per panel, and the giver's name, which the frame looks up with a

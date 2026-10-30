@@ -280,43 +280,35 @@ fn auto_loot_default_sweeps_a_pickpocket_and_a_disenchant_window() {
     }
 }
 
-/// `SMSG_LOOT_MONEY_NOTIFY` queues `LOOT_MONEY_SPLIT` over the coins as a `CHAT_MSG_MONEY` line at
-/// its packet's place in the chat queue (`0x5ebf20` → `0x5ec011`): the first nonzero coin as `"%d %s"` and each later
-/// one as `", %d %s"` (`0x5ebf88`, `0x5ebf9f`), so a zero middle coin leaves no empty separator;
-/// an amount of 0 shows nothing (`0x5ebf3a`).
+/// `SMSG_LOOT_MONEY_NOTIFY` shows `LOOT_MONEY_SPLIT` over the coins as a `CHAT_MSG_MONEY` line at
+/// its packet (`0x5ebf20` → `0x5ec011`), its listeners run before the next packet's handler
+/// (`0x537ae5`): the first nonzero coin as `"%d %s"` and each later one as `", %d %s"`
+/// (`0x5ebf88`, `0x5ebf9f`), so a zero middle coin leaves no empty separator; an amount of 0 shows
+/// nothing (`0x5ebf3a`).
 #[test]
-fn a_group_coin_share_queues_its_line_at_its_packet() {
+fn a_group_coin_share_shows_its_line_at_its_packet() {
     let mut l = client();
     note_money(&mut l);
-    for amount in [10_203, 10_003, 500, 7, 0] {
+    let lines = [
+        "Your share of the loot is 1 Gold, 2 Silver, 3 Copper.",
+        "Your share of the loot is 1 Gold, 3 Copper.",
+        "Your share of the loot is 5 Silver.",
+        "Your share of the loot is 7 Copper.",
+    ];
+    for (n, amount) in [10_203, 10_003, 500, 7, 0].into_iter().enumerate() {
         packets(&mut l, vec![SessionEvent::LootMoneyNotify { amount }]);
+        assert_eq!(money_lines(&mut l), lines[..(n + 1).min(4)], "{amount}");
     }
-    assert_eq!(
-        seen(&mut l),
-        "",
-        "queued behind the packets before it, not shown in place"
-    );
-    crate::ui_chat::feed_chat_once(l.app.world_mut());
-    assert_eq!(
-        money_lines(&mut l),
-        [
-            "Your share of the loot is 1 Gold, 2 Silver, 3 Copper.",
-            "Your share of the loot is 1 Gold, 3 Copper.",
-            "Your share of the loot is 5 Silver.",
-            "Your share of the loot is 7 Copper.",
-        ]
-    );
     assert_eq!(
         seen(&mut l),
         "CHAT_MSG_MONEY,CHAT_MSG_MONEY,CHAT_MSG_MONEY,CHAT_MSG_MONEY"
     );
 }
 
-/// A release in the frame of an auto-looted response with money: the reference swept inside the
-/// response (`0x4c1ed3` → `0x4c1fa0`) before the release arrived, whose close took the window and
-/// cleared the money line's flag (`0x4c1d95`). Here the release has taken the window before the
-/// lane fires the response, so its end sends nothing after the release and leaves the flag clear:
-/// the next corpse's sweep prints its line.
+/// A release in the frame of an auto-looted response with money: the response sweeps inside its
+/// own packet (`0x4c1ed3` → `0x4c1fa0`), its coin take, store and money line ahead of the release,
+/// whose close takes the window and clears the money line's flag (`0x4c1d95`): nothing is sent
+/// after the release, and the next corpse's sweep prints its line.
 #[test]
 fn a_release_in_the_frame_of_a_swept_response_leaves_the_next_line() {
     let mut l = client();
@@ -340,9 +332,25 @@ fn a_release_in_the_frame_of_a_swept_response_leaves_the_next_line() {
         ],
     );
     feed(&mut l);
-    assert!(sent(&l).is_empty(), "nothing after the release");
-    assert_eq!(seen(&mut l), "LOOT_OPENED,LOOT_CLOSED");
+    let swept = sent(&l);
+    assert!(
+        matches!(
+            swept[..],
+            [
+                ClientCommand::LootMoney,
+                ClientCommand::AutostoreLootItem { slot: 0 }
+            ]
+        ),
+        "the sweep's, inside the response, and nothing after the release: {swept:?}"
+    );
+    assert_eq!(seen(&mut l), "CHAT_MSG_MONEY,LOOT_OPENED,LOOT_CLOSED");
     assert!(!l.app.world().resource::<super::LootState>().coin_line_shown);
     auto_open(&mut l, 1, 250, vec![row(0, WOOL), row(1, LINEN)]);
-    assert_eq!(money_lines(&mut l), ["You loot 2 Silver, 50 Copper"]);
+    assert_eq!(
+        money_lines(&mut l),
+        [
+            "You loot 1 Silver, 50 Copper",
+            "You loot 2 Silver, 50 Copper"
+        ]
+    );
 }

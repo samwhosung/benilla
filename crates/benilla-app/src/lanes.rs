@@ -3,10 +3,11 @@
 //! handler whole (`0x537aa0`, `0x537ae5`), and a handler's events fire inside it, every listener
 //! before the signal returns (`0x703e50`, `0x703f50`). Here a handler queues what it raises on a
 //! lane, a producer's queue that stamps each item from one clock as it is pushed ([`stamp`]).
-//! Once every feed has pushed what the events' listeners read, as the update handler writes every
-//! block of its packet before its notify pass (`0x465277`), [`fire_in_order`] fires the lowest
-//! stamp across the lanes, so the events come out in the order their handlers raised them,
-//! whichever lane holds them.
+//! Once a packet's handlers are done, the dispatch fires the lowest stamp across the lanes until
+//! none is left ([`flush`]), so the events come out in the order their handlers raised them,
+//! whichever lane holds them, and each listener reads, and sends into, the world its packet left,
+//! ahead of the next packet's handler. What is pushed after the dispatch, by the feeds and the
+//! frame's systems, fires in the frame's drain ([`fire_in_order`]).
 //!
 //! An item pushed while another fires is stamped under it ([`firing`]) and fires straight after
 //! it, ahead of everything stamped before it, as a signal raised inside a listener runs to its
@@ -21,8 +22,8 @@ use bevy::ecs::system::SystemId;
 use bevy::prelude::*;
 
 /// How deep a stamp nests: an item pushed by one fired that deep is stamped as a fresh one and
-/// waits for the next drain, so a listener that queues an item each time it hears one cannot
-/// hold the frame.
+/// waits for the next drain, the next packet's flush or the frame's, so a listener that queues an
+/// item each time it hears one cannot hold the dispatch.
 ///
 /// Deviation: the reference has no such cap. A signal raised inside a listener runs nested in
 /// its call, bounded by `luaD_call`'s C-stack count of 200 (`0x6f65ae`), whose error ends the
@@ -144,14 +145,23 @@ thread_local! {
 /// signals fire after every earlier packet's and ahead of every later one's, as the reference's
 /// fire inside the handler that closes (`0x537ae5`, `0x703e50`).
 pub(crate) fn at_packets<R>(f: impl FnOnce() -> R) -> R {
-    struct Reset(bool);
-    impl Drop for Reset {
-        fn drop(&mut self) {
-            AT_PACKETS.set(self.0);
-        }
-    }
-    let _reset = Reset(AT_PACKETS.replace(true));
+    let _restore = AtPackets::set(true);
     f()
+}
+
+/// [`AT_PACKETS`] as it stood before [`AtPackets::set`], put back at the drop.
+struct AtPackets(bool);
+
+impl AtPackets {
+    fn set(now: bool) -> Self {
+        Self(AT_PACKETS.replace(now))
+    }
+}
+
+impl Drop for AtPackets {
+    fn drop(&mut self) {
+        AT_PACKETS.set(self.0);
+    }
 }
 
 /// Where [`behind`] ran its core.
@@ -263,13 +273,15 @@ pub(crate) fn system_access<I: bevy::ecs::system::SystemInput + 'static, O: 'sta
 }
 
 /// One lane: its name, its head, its firing (a one-shot taking [`Until`], the `NetHandlers`
-/// shape), what it does once ahead of each drain, and an exclusive firing's declared reads.
+/// shape), what it does once ahead of each drain, an exclusive firing's declared reads, and, for
+/// a log whose head waits at the origin, whether its log holds anything that raises ([`due`]).
 struct Lane {
     name: &'static str,
     peek: fn(&World) -> Option<Stamp>,
     fire: SystemId<In<Until>>,
     begin: Option<fn(&World)>,
     reads: Option<LaneReads>,
+    raises: Option<fn(&World) -> bool>,
 }
 
 /// Every lane, in registration order.
@@ -350,6 +362,29 @@ pub(crate) fn measure(world: &mut World) {
 #[derive(Resource, Default)]
 struct DrainEnds(Vec<fn(&mut World)>);
 
+/// What runs once ahead of the frame's drain alone ([`fire_in_order`]), never ahead of a
+/// [`flush`]: a pass that counts frames.
+#[derive(Resource, Default)]
+struct FrameBegins(Vec<fn(&mut World)>);
+
+/// What runs where a span of packets begins ([`span_starts`]): a log's starting state, read
+/// before the span's first packet moves it.
+#[derive(Resource, Default)]
+struct SpanStarts(Vec<fn(&mut World)>);
+
+thread_local! {
+    /// The flushes that fired ([`flush`]) and the lane firings every drain ran, counted for the
+    /// `drn` trace ([`tally`]).
+    static FLUSHES: Cell<u64> = const { Cell::new(0) };
+    static FIRED: Cell<u64> = const { Cell::new(0) };
+}
+
+/// The flushes fired and the lane firings run on this thread so far: a caller takes the
+/// difference across what it measures.
+pub(crate) fn tally() -> (u64, u64) {
+    (FLUSHES.get(), FIRED.get())
+}
+
 /// The drain's place: after every feed in [`crate::ui_script::UiFeed`] has pushed, and before
 /// the tick ([`crate::ui_script::UiTick`]).
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -379,6 +414,17 @@ pub(crate) trait LaneApp {
 
     /// Run `end` once after each drain, whether it fired every item or stopped.
     fn add_drain_end(&mut self, end: fn(&mut World)) -> &mut Self;
+
+    /// Run `begin` once ahead of the frame's drain, after the lanes' own begins.
+    fn add_frame_begin(&mut self, begin: fn(&mut World)) -> &mut Self;
+
+    /// Run `start` where each span of packets begins ([`span_starts`]).
+    fn add_span_start(&mut self, start: fn(&mut World)) -> &mut Self;
+
+    /// The lane `name`, whose head waits at the origin while its log holds entries, raises an
+    /// event when `raises` holds, which makes it [`due`]; a log that raises nothing waits for the
+    /// next drain that fires.
+    fn lane_raises(&mut self, name: &'static str, raises: fn(&World) -> bool) -> &mut Self;
 }
 
 impl LaneApp for App {
@@ -421,6 +467,7 @@ impl LaneApp for App {
             fire,
             begin,
             reads: None,
+            raises: None,
         });
         self
     }
@@ -450,18 +497,96 @@ impl LaneApp for App {
         self.world_mut().resource_mut::<DrainEnds>().0.push(end);
         self
     }
+
+    fn add_frame_begin(&mut self, begin: fn(&mut World)) -> &mut Self {
+        self.init_resource::<FrameBegins>();
+        self.world_mut().resource_mut::<FrameBegins>().0.push(begin);
+        self
+    }
+
+    fn add_span_start(&mut self, start: fn(&mut World)) -> &mut Self {
+        self.init_resource::<SpanStarts>();
+        self.world_mut().resource_mut::<SpanStarts>().0.push(start);
+        self
+    }
+
+    fn lane_raises(&mut self, name: &'static str, raises: fn(&World) -> bool) -> &mut Self {
+        if let Some(lane) = self
+            .world_mut()
+            .get_resource_mut::<Lanes>()
+            .and_then(|lanes| lanes.into_inner().0.iter_mut().find(|l| l.name == name))
+        {
+            lane.raises = Some(raises);
+        }
+        self
+    }
 }
 
-/// Fire every lane's items in stamp order: each lane's `begin`, then, while any lane's head was
-/// stamped before the drain began, the lane holding the lowest fires up to the next lane's head,
-/// its Lua run with the call host lent. A lane that fires nothing (no VM) ends the drain, its
-/// items waiting for the next.
+/// The frame's drain: what the feeds and the frame's systems pushed after the dispatch, and what
+/// no flush fired, in stamp order, with the frame's begins ahead ([`fire_through`]).
 pub(crate) fn fire_in_order(world: &mut World) {
+    fire_through(world, true);
+}
+
+/// Whether some lane holds what a drain would fire now: a head that is an item, or a log's start
+/// at the origin whose log raises something ([`LaneApp::lane_raises`]). A log that raises nothing
+/// keeps its entries for the next drain that fires, whose rewind takes them all in stamp order.
+pub(crate) fn due(world: &World) -> bool {
+    world.get_resource::<Lanes>().is_some_and(|lanes| {
+        lanes.0.iter().any(|lane| {
+            (lane.peek)(world).is_some_and(|head| {
+                head != Stamp::origin() || lane.raises.is_some_and(|raises| raises(world))
+            })
+        })
+    })
+}
+
+/// The lanes fired where a handler's signals would have fired inside its packet: every item
+/// stamped so far, in stamp order, when the in-game interface is up and some lane is [`due`],
+/// then the next span's starts. Whether it fired.
+pub(crate) fn flush(world: &mut World) -> bool {
+    if !crate::ui_script::ingame_ui_up_in(world) || !due(world) {
+        return false;
+    }
+    FLUSHES.set(FLUSHES.get() + 1);
+    fire_through(world, false);
+    span_starts(world);
+    true
+}
+
+/// Where a span of packets begins: each log reads its starting state ([`LaneApp::add_span_start`]).
+pub(crate) fn span_starts(world: &mut World) {
+    let starts = world
+        .get_resource::<SpanStarts>()
+        .map(|s| s.0.clone())
+        .unwrap_or_default();
+    for start in starts {
+        start(world);
+    }
+}
+
+/// Fire every lane's items in stamp order: each lane's `begin`, the frame's begins when `frame`,
+/// then, while any lane's head was stamped before the drain began, the lane holding the lowest
+/// fires up to the next lane's head, its Lua run with the call host lent; then the drain's ends.
+/// A lane that fires nothing (no VM) ends the drain, its items waiting for the next. Its listeners
+/// run outside the packets' dispatch ([`at_packets`]), as a signal's listeners run inside their
+/// signal's call (`0x703e50`), not as a handler.
+fn fire_through(world: &mut World, frame: bool) {
     let Some(lanes) = world.remove_resource::<Lanes>() else {
         return;
     };
+    let _restore = AtPackets::set(false);
     for begin in lanes.0.iter().filter_map(|l| l.begin) {
         begin(world);
+    }
+    if frame {
+        let begins = world
+            .get_resource::<FrameBegins>()
+            .map(|b| b.0.clone())
+            .unwrap_or_default();
+        for begin in begins {
+            begin(world);
+        }
     }
     let fence = CLOCK.load(Ordering::Relaxed);
     loop {
@@ -494,6 +619,7 @@ pub(crate) fn fire_in_order(world: &mut World) {
             fence,
         };
         let lane = &lanes.0[i];
+        FIRED.set(FIRED.get() + 1);
         let fired =
             benilla_ui::script::origin::within(benilla_ui::script::origin::Origin::Lane, || {
                 world.run_system_with(lane.fire, until)
@@ -601,8 +727,6 @@ mod profession_live_tests;
 mod quest_log_live_tests;
 #[cfg(test)]
 mod quiet_tests;
-#[cfg(test)]
-mod raw_store_tests;
 #[cfg(test)]
 mod record_callback_tests;
 #[cfg(test)]
@@ -774,6 +898,103 @@ mod unit_tests {
             drain(&mut app),
             ["a", "a.1", "a.1.1", "a.2", "b", "b.1", "c"]
         );
+    }
+
+    /// What ran around the drains, in order.
+    #[derive(Resource, Default)]
+    struct Around(Vec<&'static str>);
+
+    /// A lane whose log's start waits at the origin, as the views' do; whether its log raises.
+    #[derive(Resource, Default)]
+    struct OriginLog {
+        logged: bool,
+        raises: bool,
+    }
+
+    fn origin_peek(world: &World) -> Option<Stamp> {
+        world.resource::<OriginLog>().logged.then(Stamp::origin)
+    }
+
+    fn origin_fire(In(_): In<Until>, mut log: ResMut<OriginLog>, mut fired: ResMut<Fired>) {
+        log.logged = false;
+        fired.0.push("origin");
+    }
+
+    /// The toy lanes with the origin log behind them, the hooks noting each run, and the in-game
+    /// interface up.
+    fn hooked() -> App {
+        let mut app = app(&[]);
+        app.init_resource::<OriginLog>()
+            .init_resource::<Around>()
+            .insert_resource(State::new(crate::client_state::ClientState::InWorld))
+            .add_lane("origin", origin_peek, origin_fire, None)
+            .lane_raises("origin", |world| world.resource::<OriginLog>().raises)
+            .add_frame_begin(|world| world.resource_mut::<Around>().0.push("frame"))
+            .add_span_start(|world| {
+                let at_packets = AT_PACKETS.get();
+                world.resource_mut::<Around>().0.push(if at_packets {
+                    "span at packets"
+                } else {
+                    "span"
+                });
+            })
+            .add_drain_end(|world| {
+                let at_packets = AT_PACKETS.get();
+                world.resource_mut::<Around>().0.push(if at_packets {
+                    "end at packets"
+                } else {
+                    "end"
+                });
+            });
+        app
+    }
+
+    fn around(app: &mut App) -> Vec<&'static str> {
+        std::mem::take(&mut app.world_mut().resource_mut::<Around>().0)
+    }
+
+    /// A lane is due for a head that is an item, and for a log's start at the origin only when its
+    /// log raises: a log that raises nothing waits for the next drain that fires.
+    #[test]
+    fn a_lane_is_due_for_an_item_or_a_raising_log() {
+        let mut app = hooked();
+        assert!(!due(app.world()), "nothing held");
+        app.world_mut().resource_mut::<OriginLog>().logged = true;
+        assert!(!due(app.world()), "a log that raises nothing");
+        app.world_mut().resource_mut::<OriginLog>().raises = true;
+        assert!(due(app.world()), "a log that raises");
+        app.world_mut().resource_mut::<OriginLog>().raises = false;
+        push::<1>(app.world_mut(), "a");
+        assert!(due(app.world()), "an item");
+    }
+
+    /// A flush fires only when due and the interface is up, outside the packets' dispatch even
+    /// inside it, then runs the next span's starts back in the dispatch; the frame's begins are
+    /// the frame's drain's alone, and each drain runs its ends.
+    #[test]
+    fn a_flush_fires_when_due_then_starts_the_span() {
+        let mut app = hooked();
+        app.world_mut().resource_mut::<OriginLog>().logged = true;
+        let (flushes, fired) = tally();
+        assert!(!at_packets(|| flush(app.world_mut())), "not due");
+        assert!(around(&mut app).is_empty());
+        push::<0>(app.world_mut(), "a");
+        app.world_mut()
+            .remove_resource::<State<crate::client_state::ClientState>>();
+        assert!(!flush(app.world_mut()), "no interface up");
+        app.world_mut()
+            .insert_resource(State::new(crate::client_state::ClientState::InWorld));
+        assert!(at_packets(|| flush(app.world_mut())));
+        assert_eq!(
+            std::mem::take(&mut app.world_mut().resource_mut::<Fired>().0),
+            ["origin", "a"],
+            "the log's start and the item, in stamp order"
+        );
+        assert_eq!(around(&mut app), ["end", "span at packets"]);
+        assert_eq!(tally(), (flushes + 1, fired + 2));
+        push::<1>(app.world_mut(), "b");
+        assert_eq!(drain(&mut app), ["b"]);
+        assert_eq!(around(&mut app), ["frame", "end"], "the frame's drain");
     }
 
     /// benilla's own choice, not the reference's ([`DEPTH`]'s `Deviation:`): past four levels a

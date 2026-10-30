@@ -15,7 +15,6 @@ use crossbeam_channel::{Receiver, Sender};
 
 use super::unit_view_tests::{created, wire_packets};
 use crate::net::ClientCommand;
-use crate::ui_dialog_verbs::DialogSignal;
 
 const ME: u64 = 0x7;
 /// An innkeeper, a pet trainer and a talent trainer in one, standing on us.
@@ -226,9 +225,9 @@ fn the_dialog_getters_read_the_world_through_the_host() {
     );
 }
 
-/// Each dialog's event goes on its lane at its handler, stamped there: a frame's packets fire in
-/// their order across the lanes, the talent trainer's notice between them, and a boot's line
-/// ahead of its stop (`0x5e4914`).
+/// Each dialog's event fires inside its packet's dispatch, with no frame after it: a frame's
+/// packets fire in their order across the lanes, the talent trainer's notice between them, and a
+/// boot's line ahead of its stop (`0x5e4914`).
 #[test]
 fn the_dialog_events_fire_at_their_packets() {
     let mut c = client();
@@ -244,31 +243,20 @@ fn the_dialog_events_fire_at_their_packets() {
         },
         SessionEvent::BinderConfirm { binder: NPC },
     ]);
-    let dialogs = c
+    assert!(c
         .app
         .world_mut()
         .resource_mut::<crate::ui_dialog_verbs::DialogLane>()
-        .take_stamped();
-    let notices: Vec<_> = c
-        .app
-        .world_mut()
-        .resource_mut::<crate::field_watch::NoticeLane>()
-        .drain_stamped()
-        .collect();
-    assert_eq!(dialogs.len(), 2);
+        .take_stamped()
+        .is_empty());
     assert_eq!(
-        dialogs[0].1,
-        DialogSignal::Event("CONFIRM_SUMMON".into(), vec![])
-    );
-    assert_eq!(
-        dialogs[1].1,
-        DialogSignal::ConfirmBinder { leaf: None },
-        "named by the area under the player"
-    );
-    assert_eq!(notices.len(), 1);
-    assert!(
-        dialogs[0].0 < notices[0].0 && notices[0].0 < dialogs[1].0,
-        "each stamped at its handler"
+        c.seen(),
+        [
+            "CONFIRM_SUMMON:nil",
+            "CONFIRM_TALENT_WIPE:100",
+            "CONFIRM_BINDER:your inn",
+        ],
+        "each inside its packet's dispatch, the binder named by the area under the player"
     );
 
     c.frame(vec![

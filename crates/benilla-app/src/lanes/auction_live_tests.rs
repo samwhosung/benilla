@@ -168,8 +168,8 @@ fn boar_says(text: &str) -> SessionEvent {
 const NAME: &str = "return tostring((GetAuctionItemInfo('list', 1)))";
 
 /// The page lands with silk's record out, so the VM's row holds no name; the record's answer
-/// then fills it for a host-lent getter at the call, with no push between, while the VM's copy
-/// still holds none until the page's tail runs. The throttle reads the house at the call too.
+/// then fills it for a host-lent getter at the call, and the page's tail, which runs at the
+/// answer's packet, fills the VM's copy there. The throttle reads the house at the call too.
 #[test]
 fn the_auction_getters_read_the_house_at_the_call() {
     let mut c = client();
@@ -177,12 +177,10 @@ fn the_auction_getters_read_the_house_at_the_call() {
     assert_eq!(c.eval::<String>(true, NAME), "nil", "the record is out");
     c.handle(vec![silk()]);
     assert_eq!(c.eval::<String>(true, NAME), "Silk Cloth");
-    assert_eq!(c.eval::<String>(false, NAME), "nil", "the VM's copy waits");
-    c.frame(vec![]);
     assert_eq!(
         c.eval::<String>(false, NAME),
         "Silk Cloth",
-        "the tail's push"
+        "the tail's push at the answer's packet"
     );
 
     const CAN: &str = "return CanSendAuctionQuery() == 1";

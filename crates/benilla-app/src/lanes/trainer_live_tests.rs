@@ -14,7 +14,7 @@ use bevy::prelude::*;
 use std::collections::HashMap;
 
 use super::unit_view_tests::{created, values};
-use crate::ui_trainer::{TrainerEvent, TrainerLane, TrainerOpen};
+use crate::ui_trainer::{TrainerLane, TrainerOpen};
 
 const ME: u64 = 0x10;
 const TRAINER: u64 = 0xF130_0000_4500_0001;
@@ -65,6 +65,10 @@ const SPY: &str = r#"
 /// holds what the lane last pushed: its spy notes each trainer event.
 fn client() -> App {
     let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+    // In the world with the interface up, so the dispatch fires each packet's lanes.
+    app.insert_resource(bevy::prelude::State::new(
+        crate::client_state::ClientState::InWorld,
+    ));
     let (tx, _rx) = crossbeam_channel::unbounded();
     app.insert_resource(crate::net::NetCommands(tx));
     app.insert_resource(crate::ui_action::Spells {
@@ -104,23 +108,17 @@ fn eval<T: benilla_ui::mlua::FromLuaMulti>(app: &mut App, live: bool, chunk: &st
     }
 }
 
-/// `packets` through their handlers, each item they put on the trainer lane stamped inside them,
-/// none heard before the drain; then the drain, and what the spy heard.
-fn handled(app: &mut App, packets: Vec<SessionEvent>) -> (Vec<TrainerEvent>, Vec<String>) {
-    let before = crate::lanes::stamp();
+/// `packets` through their handlers: each event the trainer lane takes fires inside the dispatch, at
+/// its packet's place, as a handler signals inside itself (`0x703e50`) ahead of the next packet's
+/// (`0x537ae5`), so the drain finds nothing; what the spy heard.
+fn handled(app: &mut App, packets: Vec<SessionEvent>) -> Vec<String> {
     crate::net::handlers::dispatch(app.world_mut(), packets);
     app.world_mut().flush();
-    let after = crate::lanes::stamp();
-    let stamped = app.world().resource::<TrainerLane>().stamped();
     assert!(
-        stamped.iter().all(|(at, _)| before < *at && *at < after),
-        "stamped inside the handler"
+        app.world().resource::<TrainerLane>().stamped().is_empty(),
+        "fired inside the dispatch"
     );
-    let heard: Vec<String> = eval(app, false, "return Seen");
-    assert!(heard.is_empty(), "on the lane: {heard:?}");
-    crate::lanes::fire_in_order(app.world_mut());
-    let heard = eval(app, false, "local s = Seen Seen = {} return s");
-    (stamped.into_iter().map(|(_, e)| e).collect(), heard)
+    eval(app, false, "local s = Seen Seen = {} return s")
 }
 
 fn list() -> SessionEvent {
@@ -147,10 +145,7 @@ fn list() -> SessionEvent {
 #[test]
 fn the_ability_getter_reads_the_book_through_the_host() {
     let mut app = client();
-    assert_eq!(
-        handled(&mut app, vec![list()]),
-        (vec![TrainerEvent::Show], vec!["TRAINER_SHOW".into()])
-    );
+    assert_eq!(handled(&mut app, vec![list()]), ["TRAINER_SHOW"]);
     // Row 1 is the group's header.
     let read = "local name, met = GetTrainerServiceAbilityReq(2, 1) return name, met";
     let unmet = (Some("Smelt Copper".to_string()), None);
@@ -178,20 +173,14 @@ fn the_ability_getter_reads_the_book_through_the_host() {
     );
 }
 
-/// The list's `TRAINER_SHOW` and the passes' `TRAINER_UPDATE`s sit on the trainer lane at their
-/// handler's place, and fire there in the drain: the coinage's, a learned spell's, and a product
-/// record's whose lookup the icon getter's call missed, which keeps one callback per call.
+/// The list's `TRAINER_SHOW` and the passes' `TRAINER_UPDATE`s fire inside their packet's
+/// dispatch: the coinage's, a learned spell's, and a product record's whose lookup the icon
+/// getter's call missed, which keeps one callback per call.
 #[test]
-fn the_list_and_the_passes_fire_on_the_lane_at_their_handlers() {
+fn the_list_and_the_passes_fire_inside_their_dispatch() {
     let mut app = client();
-    let show = (vec![TrainerEvent::Show], vec!["TRAINER_SHOW".to_string()]);
-    assert_eq!(handled(&mut app, vec![list()]), show);
-    let update = |n: usize| {
-        (
-            vec![TrainerEvent::Update; n],
-            vec!["TRAINER_UPDATE".to_string(); n],
-        )
-    };
+    assert_eq!(handled(&mut app, vec![list()]), ["TRAINER_SHOW"]);
+    let update = |n: usize| vec!["TRAINER_UPDATE".to_string(); n];
     let money = values(ME, &[(FIELD_PLAYER_FIELD_COINAGE, 200)]);
     let money = vec![money, SessionEvent::ObjectUpdateEnd];
     assert_eq!(handled(&mut app, money), update(1));

@@ -11,7 +11,7 @@
 //! answer on the call's next line.
 //!
 //! Each message's writes are logged with their stamp, and the reputation lane rewinds the store to
-//! the frame's start and replays them packet by packet ([`log`]), so a listener's getters read
+//! the span's start and replays them packet by packet ([`log`]), so a listener's getters read
 //! the standings its own packet left.
 
 use std::sync::atomic::{AtomicI32, AtomicU8, Ordering};
@@ -78,7 +78,7 @@ pub(crate) struct Reputations {
     slots: Arc<Slots>,
     /// The forced table, shared as the slots are: the relation snapshot's reads see the replay.
     forced: Arc<std::sync::RwLock<Vec<(u32, u32)>>>,
-    /// The frame's writes and the pane's list operations each message made, for the lane to replay
+    /// The span's writes and the pane's list operations each message made, for the lane to replay
     /// ([`log`]).
     log: ReputationLog,
 }
@@ -248,7 +248,7 @@ impl Reputations {
         None
     }
 
-    /// The drain's end, however it ended: the store as the frame left it.
+    /// The drain's end, however it ended: the store as the span left it.
     pub(crate) fn end_replay(&mut self) {
         for write in self.log.finish() {
             self.apply(write);
@@ -287,10 +287,10 @@ impl Reputations {
 mod tests {
     use super::*;
 
-    /// The lane's replay: the store rewound to the frame's start, each write applied at its place
-    /// ahead of the operation stamped after it, and the frame's last state once it ends.
+    /// The lane's replay: the store rewound to the span's start, each write applied at its place
+    /// ahead of the operation stamped after it, and the span's last state once it ends.
     #[test]
-    fn the_replay_walks_the_frames_writes_between_its_operations() {
+    fn the_replay_walks_the_spans_writes_between_its_operations() {
         let mut store = Reputations::default();
         store.set_standing(3, 100);
         store.list_op(ReputationListOp::Rebuild);
@@ -307,7 +307,7 @@ mod tests {
         assert_eq!(
             (store.standing(3), store.flags(3)),
             (0, 0),
-            "the frame's start"
+            "the span's start"
         );
         assert_eq!(
             store.replay(until).map(|(_, op)| op),
@@ -331,7 +331,7 @@ mod tests {
         assert!(store.lane_head().is_none());
     }
 
-    /// A drain that stops early leaves the store as the frame wrote it, and its operations for the
+    /// A drain that stops early leaves the store as the span wrote it, and its operations for the
     /// next drain; a verb's write during the replay lands in place and is not logged.
     #[test]
     fn a_drain_that_stops_early_leaves_the_final_store_and_a_verbs_write_stands() {
@@ -391,7 +391,7 @@ mod tests {
         let clone = store.clone();
         assert_eq!(clone.forced_rank(72), Some(7));
         assert!(store.rewind());
-        assert_eq!(clone.forced_rank(72), None, "the frame's start");
+        assert_eq!(clone.forced_rank(72), None, "the span's start");
         store.replay(Until::all());
         assert_eq!(clone.forced_rank(72), Some(7));
         store.end_replay();

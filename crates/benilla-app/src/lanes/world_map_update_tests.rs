@@ -49,6 +49,10 @@ fn northshire_and_other() -> Vec<SessionEvent> {
 /// counts through the getter, and the combo event.
 fn client() -> App {
     let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+    // In the world with the interface up, so the dispatch fires each packet's lanes.
+    app.insert_resource(bevy::prelude::State::new(
+        crate::client_state::ClientState::InWorld,
+    ));
     let world = app.world_mut();
     let me = world
         .spawn((

@@ -12,7 +12,7 @@ use benilla_protocol::SessionEvent;
 use benilla_ui::script::UiScript;
 use bevy::prelude::*;
 
-use crate::ui_petition::{PetitionEvent, PetitionLane};
+use crate::ui_petition::PetitionLane;
 
 const ME: u64 = 0x10;
 const OWNER: u64 = 0xaa;
@@ -23,6 +23,10 @@ const CHARTER: u64 = 0x4000_0000_0000_0099;
 /// each charter event.
 fn client() -> App {
     let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+    // In the world with the interface up, so the dispatch fires each packet's lanes.
+    app.insert_resource(bevy::prelude::State::new(
+        crate::client_state::ClientState::InWorld,
+    ));
     let (tx, _rx) = crossbeam_channel::unbounded();
     app.insert_resource(crate::net::NetCommands(tx));
     app.insert_resource(crate::net::SelfGuid(Some(ME)));
@@ -57,23 +61,17 @@ fn eval<T: benilla_ui::mlua::FromLuaMulti>(app: &mut App, live: bool, chunk: &st
     }
 }
 
-/// `packets` through their handlers, each item they put on the charter lane stamped inside them,
-/// none heard before the drain; then the drain, and what the spy heard.
-fn handled(app: &mut App, packets: Vec<SessionEvent>) -> (Vec<PetitionEvent>, Vec<String>) {
-    let before = crate::lanes::stamp();
+/// `packets` through their handlers: each event the charter lane takes fires inside the dispatch, at
+/// its packet's place, as a handler signals inside itself (`0x703e50`) ahead of the next packet's
+/// (`0x537ae5`), so the drain finds nothing; what the spy heard.
+fn handled(app: &mut App, packets: Vec<SessionEvent>) -> Vec<String> {
     crate::net::handlers::dispatch(app.world_mut(), packets);
     app.world_mut().flush();
-    let after = crate::lanes::stamp();
-    let stamped = app.world().resource::<PetitionLane>().stamped();
     assert!(
-        stamped.iter().all(|(at, _)| before < *at && *at < after),
-        "stamped inside the handler"
+        app.world().resource::<PetitionLane>().stamped().is_empty(),
+        "fired inside the dispatch"
     );
-    let heard: Vec<String> = eval(app, false, "return Seen");
-    assert!(heard.is_empty(), "on the lane: {heard:?}");
-    crate::lanes::fire_in_order(app.world_mut());
-    let heard = eval(app, false, "local s = Seen Seen = {} return s");
-    (stamped.into_iter().map(|(_, e)| e).collect(), heard)
+    eval(app, false, "local s = Seen Seen = {} return s")
 }
 
 fn offered() -> SessionEvent {
@@ -146,32 +144,33 @@ fn the_getters_read_the_charter_through_the_host() {
     );
 }
 
-/// The show waits on the record's and the signer name's answers, and `PETITION_SHOW` sits on the
-/// lane at the last one's handler; our signature's line and `PETITION_CLOSED`, and the turn-in's
-/// `GUILD_REGISTRAR_CLOSED`, sit at theirs, and each fires there in the drain.
+/// The show waits on the record's and the signer name's answers, and `PETITION_SHOW` fires inside
+/// the last one's dispatch; our signature's chat line (the catalog sends the success ids to chat)
+/// and `PETITION_CLOSED`, and the turn-in's
+/// `GUILD_REGISTRAR_CLOSED`, inside theirs.
 #[test]
-fn the_show_and_the_results_fire_on_the_lane_at_their_handlers() {
+fn the_show_and_the_results_fire_inside_their_dispatch() {
     let mut app = client();
-    assert_eq!(handled(&mut app, vec![offered()]), (vec![], vec![]));
-    assert_eq!(handled(&mut app, vec![record()]), (vec![], vec![]));
-    assert_eq!(
-        handled(&mut app, vec![signer_name()]),
-        (vec![PetitionEvent::Show], vec!["PETITION_SHOW".into()])
+    eval::<()>(
+        &mut app,
+        false,
+        r#"ERR_PETITION_SIGNED = "Signed"
+        local g = CreateFrame("Frame")
+        g:RegisterEvent("CHAT_MSG_SYSTEM")
+        g:SetScript("OnEvent", function() table.insert(Seen, "line " .. arg1) end)"#,
     );
+    assert!(handled(&mut app, vec![offered()]).is_empty());
+    assert!(handled(&mut app, vec![record()]).is_empty());
+    assert_eq!(handled(&mut app, vec![signer_name()]), ["PETITION_SHOW"]);
     let signed = SessionEvent::PetitionSignResults(PetitionSignResults {
         item: CHARTER,
         player: ME,
         result: petition_result::OK,
     });
-    let (stamped, heard) = handled(&mut app, vec![signed]);
-    assert!(
-        matches!(
-            stamped.as_slice(),
-            [PetitionEvent::Line(_), PetitionEvent::Closed]
-        ),
-        "{stamped:?}"
+    assert_eq!(
+        handled(&mut app, vec![signed]),
+        ["line Signed", "PETITION_CLOSED"]
     );
-    assert_eq!(heard, ["PETITION_CLOSED"]);
     assert_eq!(
         handled(
             &mut app,
@@ -179,9 +178,6 @@ fn the_show_and_the_results_fire_on_the_lane_at_their_handlers() {
                 result: petition_result::OK
             }]
         ),
-        (
-            vec![PetitionEvent::RegistrarClosed],
-            vec!["GUILD_REGISTRAR_CLOSED".into()]
-        )
+        ["GUILD_REGISTRAR_CLOSED"]
     );
 }

@@ -26,8 +26,7 @@
 //! field callbacks' lane, stamped under the health edge's stamp: they fire in stamp order among the
 //! other lanes' items, ahead of what the packet raised after the edge, their listeners reading the
 //! unit views as of the packet. The death line goes between `0x5e99b0`'s list and `PLAYER_DEAD`, as
-//! `PresentUnitDeath` writes it. A listener reads other state as the frame's packets left it, which
-//! #2217 is about.
+//! `PresentUnitDeath` writes it.
 
 use bevy::prelude::*;
 

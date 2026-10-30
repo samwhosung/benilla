@@ -325,39 +325,6 @@ fn a_toggle_after_the_stop_reads_autorun_clear() {
     );
 }
 
-/// `StopAutoMove` signals `AUTOFOLLOW_END` (`0x60fb84`) before its release clears autorun
-/// (`0x60fc08` → `0x60e83f`), so a toggle made between the stop and the return of END's
-/// listeners is undone: here one between the packet and the drain, where END's listeners run.
-/// The movement verbs' gate (tag 0) refuses an addon's code and passes the client's own only
-/// inside an input event (`0x494ab8`, `0x494b1a`), so the harness makes the listener's call.
-#[test]
-fn the_follows_autorun_clear_runs_after_its_end() {
-    use bevy::ecs::system::RunSystemOnce;
-    let mut app = autorunning();
-    let world = app.world_mut();
-    world
-        .resource_mut::<crate::bindings::BindingsState>()
-        .open_for_test();
-    crate::net::handlers::dispatch(world, vec![our_swing()]);
-    world
-        .run_system_once(|mut steps: crate::player::CommandSteps| {
-            steps.call(benilla_ui::script::BindingInput::Fire(
-                benilla_ui::script::FiredInput::ToggleAutoRun,
-            ))
-        })
-        .unwrap();
-    crate::lanes::fire_in_order(world);
-    let seen = world
-        .non_send_resource_mut::<UiScript>()
-        .eval::<Vec<String>>("return Seen")
-        .unwrap();
-    assert!(seen.iter().any(|e| e == "AUTOFOLLOW_END"), "{seen:?}");
-    assert_eq!(
-        world.resource::<crate::player::CallAutorun>().called(),
-        Some(false)
-    );
-}
-
 /// [`following`] with the boar's loot window open, its own events taken, and a spy on its close.
 fn looting() -> App {
     let mut app = following();

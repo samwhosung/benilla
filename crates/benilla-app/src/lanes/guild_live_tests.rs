@@ -560,3 +560,36 @@ fn last_online_answers_with_no_player_and_the_row_does_not() {
     );
     assert_eq!(got, ["1", "1", "5", "12", "nil"]);
 }
+
+/// Each roster listener reads its own message's roster, and the friends the packets ahead of it
+/// left: a friend list between the two rosters, which `GetNumFriends` reads at the call
+/// (`0x5ad000`), counts none for the first and Ann for the second.
+#[test]
+fn each_roster_listener_reads_its_own_span() {
+    let on = guild_presence::ONLINE;
+    let mut c = named();
+    let ann = super::unit_view_tests::one_friend(&mut c.app);
+    c.eval::<()>(
+        false,
+        r#"local g = CreateFrame("Frame")
+        g:RegisterEvent("GUILD_ROSTER_UPDATE")
+        g:SetScript("OnEvent", function() table.insert(Seen, "friends " .. GetNumFriends()) end)"#,
+    );
+    c.frame(vec![
+        vec![roster("one", vec![member(1, "Alder", 1, on)])],
+        vec![ann],
+        vec![roster(
+            "two",
+            vec![member(1, "Alder", 1, on), member(2, "Birch", 2, on)],
+        )],
+    ]);
+    assert_eq!(
+        c.seen(),
+        [
+            "GUILD_ROSTER_UPDATE:nil:nil:1:Alder:one:Master",
+            "friends 0",
+            "GUILD_ROSTER_UPDATE:nil:nil:2:Birch:two:Master",
+            "friends 1",
+        ]
+    );
+}

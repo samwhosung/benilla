@@ -208,24 +208,23 @@ fn the_taxi_events_fire_at_their_packets() {
     );
 }
 
-/// The open's `TAXIMAP_OPENED` sits on the taxi lane at its handler's stamp; a map that builds no
-/// slot signals nothing and leaves no cell (`0x4dba40`, `0x4dbab0`).
+/// The open's `TAXIMAP_OPENED` fires inside its packet's dispatch, with no frame after it; a map
+/// that builds no slot signals nothing and leaves no cell (`0x4dba40`, `0x4dbab0`).
 #[test]
-fn the_open_is_stamped_at_its_handler() {
+fn the_open_fires_inside_its_dispatch() {
     let data = benilla_formats::wow_data_or_skip!();
     let mut c = client(&data);
-    let before = crate::lanes::stamp();
     c.handle(vec![shown()]);
-    let after = crate::lanes::stamp();
-    let stamped = c
+    assert!(c
         .app
         .world()
         .resource::<crate::ui_taxi::TaxiLane>()
-        .stamped();
-    assert_eq!(stamped.len(), 1);
-    let (at, event) = stamped[0];
-    assert_eq!(event, crate::ui_taxi::TaxiEvent::Opened);
-    assert!(before < at && at < after, "stamped inside the handler");
+        .stamped()
+        .is_empty());
+    assert!(
+        c.seen().iter().any(|s| s == "TAXIMAP_OPENED:nil"),
+        "the open fired inside the dispatch"
+    );
     c.frame(vec![]);
     crate::ui_taxi::close_core(c.app.world_mut());
     c.seen();

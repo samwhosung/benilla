@@ -14,9 +14,11 @@ use bevy::prelude::*;
 pub(crate) const RAISES_AT_THEIR_OWN_PLACE: &[Allow] = &[
     // Their reference places, outside every packet and call.
     Allow {
-        frame: "net::handlers::dispatch",
+        frame: "net::handlers::call",
         why: "a packet's handler that signals in place, inside its packet, as the reference's \
-              handlers run whole (`0x537ae5`) and signal inside themselves (`0x703e50`)",
+              handlers run whole (`0x537ae5`) and signal inside themselves (`0x703e50`): one \
+              handler's run, `NetHandlers::run`'s, not the dispatch's flushes, packet ends and \
+              span starts around it",
     },
     Allow {
         frame: "minimap::feed_minimap_inside",

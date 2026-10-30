@@ -152,7 +152,7 @@ impl CooldownInfo {
 #[derive(Resource, Default)]
 pub(crate) struct Cooldowns {
     records: Vec<Record>,
-    /// The frame's writes and signals, which the drain replays.
+    /// The span's writes and signals, which the drain replays.
     log: CooldownLog,
     /// The pet's list (`0xcecb04`, the list index 1 every site tests): its sites end in the pet's
     /// flush `0x4bce90` where the player's call the bags' or nothing.
@@ -262,7 +262,12 @@ impl Cooldowns {
         self.log.head()
     }
 
-    /// The drain's rewind of the list to the frame's start, once per drain: whether it rewound
+    /// Whether the lane's log holds a signal ([`crate::lanes::LaneApp::lane_raises`]).
+    pub(crate) fn lane_raises(&self) -> bool {
+        self.log.raises()
+    }
+
+    /// The drain's rewind of the list to the span's start, once per drain: whether it rewound
     /// now.
     pub(crate) fn rewind(&mut self) -> bool {
         self.log.rewind(&mut self.records)
@@ -278,7 +283,7 @@ impl Cooldowns {
         self.log.next(&mut self.records, until)
     }
 
-    /// The drain's end: the list as the frame left it, with whatever the drain wrote in its place.
+    /// The drain's end: the list as the span left it, with whatever the drain wrote in its place.
     pub(crate) fn end_replay(&mut self) {
         self.log.finish(&mut self.records);
     }

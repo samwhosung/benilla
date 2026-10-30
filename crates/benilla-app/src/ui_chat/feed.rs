@@ -19,7 +19,7 @@ use super::frames::{route, ChatWindows};
 use crate::query_cache::Ask;
 
 /// Frames a line waits on a name, about 2 s at 60 fps, before it gives up.
-const NAME_MAX_TRIES: u16 = 120;
+pub(crate) const NAME_MAX_TRIES: u16 = 120;
 
 /// The most monster and battleground lines held at once for their `$`-macro subject's name.
 pub(super) const MAX_HELD_SUBJECT_LINES: usize = 64;

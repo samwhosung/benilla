@@ -317,16 +317,20 @@ fn a_candidates_name_signals_the_update_at_its_answer() {
     );
 }
 
-/// A window and the leave-world sweep's close with no frame between: the close shuts the session
-/// at once and its `LOOT_CLOSED` waits behind the open on the lane, so the two fire in order and
-/// leave the window shut, read through the host or after.
+/// A window and the leave-world sweep's close with no frame between: the open fires inside its
+/// dispatch, the close shuts the session at once and its `LOOT_CLOSED` fires at the frame's
+/// drain, leaving the window shut, read through the host or after.
 #[test]
 fn a_one_frame_open_then_close_leaves_no_stale_state() {
     let mut c = client();
     c.ask_loot(CORPSE);
     c.handle(vec![response(CORPSE, 0, &[LINEN])]);
+    assert_eq!(
+        c.seen(),
+        ["LOOT_OPENED:nil"],
+        "the open fires inside its dispatch"
+    );
     crate::ui_script::sweep_test::sweep_in_place(&mut c.app);
-    assert!(c.seen().is_empty(), "nothing fired ahead of the open");
     assert!(
         c.sent()
             .iter()
@@ -336,7 +340,7 @@ fn a_one_frame_open_then_close_leaves_no_stale_state() {
     assert_eq!(c.app.world().resource::<LootState>().source(), None);
     assert_eq!(c.app.world().resource::<LootLatch>().0, None);
     c.frame(vec![]);
-    assert_eq!(c.seen(), ["LOOT_OPENED:nil", "LOOT_CLOSED:nil"]);
+    assert_eq!(c.seen(), ["LOOT_CLOSED:nil"]);
     assert_eq!(c.eval::<i64>(true, "return GetNumLootItems()"), 0);
     c.frame(vec![]);
     c.frame(vec![]);
@@ -561,4 +565,24 @@ fn a_response_with_the_cursor_up_binds_its_unit_at_the_packet() {
         "bound, not selected: {sent:?}"
     );
     assert!(c.eval::<bool>(true, "return SpellIsTargeting() == nil"));
+}
+
+/// A listener's close, then a removal in the same frame: `CloseLoot` at `LOOT_OPENED` runs before
+/// the removal's handler (`0x537ae5`) and clears the latch, so the removal finds none
+/// (`0x5ebedf`) and signals nothing.
+#[test]
+fn a_listeners_close_leaves_a_later_removal_unsignalled() {
+    let mut c = client();
+    c.eval::<()>(
+        false,
+        r#"local g = CreateFrame("Frame")
+        g:RegisterEvent("LOOT_OPENED")
+        g:SetScript("OnEvent", function() CloseLoot() end)"#,
+    );
+    c.ask_loot(CORPSE);
+    c.frame(vec![
+        vec![response(CORPSE, 0, &[LINEN, WOOL])],
+        vec![SessionEvent::LootRemoved { slot: 1 }],
+    ]);
+    assert_eq!(c.seen(), ["LOOT_OPENED:nil", "LOOT_CLOSED:nil"]);
 }

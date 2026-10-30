@@ -89,27 +89,27 @@ fn seat_party_targeting(app: &mut App, pet: u64, target: u64) {
         });
 }
 
-/// One frame: the packets, then the lanes' drain; what the spy saw.
+/// One frame: the packets, each packet's lanes fired after its handlers, then the frame's drain;
+/// what the spy saw.
 fn frame(app: &mut App, packets: Vec<SessionEvent>) -> Vec<String> {
-    frame_after(app, |_| {}, packets)
+    run_frame(app, packets)
 }
 
-/// [`frame`], with `before` run on the world between the frame-start snapshot and the packets.
+/// [`frame`], with `inside` run inside the dispatch past the span's start and ahead of the
+/// packets ([`super::unit_view_tests::inside_the_dispatch`]).
 fn frame_after(
     app: &mut App,
-    before: impl FnOnce(&mut World),
+    inside: impl FnOnce(&mut World) + Send + Sync + 'static,
     packets: Vec<SessionEvent>,
 ) -> Vec<String> {
+    let events = super::unit_view_tests::inside_the_dispatch(app, inside, packets);
+    run_frame(app, events)
+}
+
+/// `events` through the dispatch, then the frame's drain; what the spy saw.
+fn run_frame(app: &mut App, events: Vec<SessionEvent>) -> Vec<String> {
     let world = app.world_mut();
-    #[cfg(debug_assertions)]
-    {
-        use bevy::ecs::system::RunSystemOnce;
-        world
-            .run_system_once(crate::ui_unit::views::mark_frame_start)
-            .unwrap();
-    }
-    before(world);
-    crate::net::handlers::dispatch(world, packets);
+    crate::net::handlers::dispatch(world, events);
     crate::lanes::fire_in_order(world);
     let s = world.non_send_resource_mut::<UiScript>();
     let out = s.eval::<Vec<String>>("return Seen").unwrap();
@@ -261,8 +261,8 @@ fn a_party_pet_replaced_mid_frame_reads_the_old_pet_before_the_swap() {
     assert_eq!(seen, ["UNIT_COMBAT:player:10", "UNIT_COMBAT:player:20"]);
 }
 
-/// A record written past the log fails the rewind's check against the frame-start snapshot: here
-/// the member's maximum health, which no entry of the frame names.
+/// A record written past the log fails the rewind's check against the span-start snapshot: here
+/// the member's maximum health, which no entry of the span names.
 #[cfg(debug_assertions)]
 #[test]
 #[should_panic(expected = "a write the log missed")]
@@ -280,9 +280,9 @@ fn a_record_write_the_log_missed_fails_the_rewind() {
     );
 }
 
-/// A record write after the lanes and before the next frame's snapshot needs no entry: the
+/// A record write after the lanes and before the next span's snapshot needs no entry: the
 /// sandbox's (`/partytest off`, a sandboxed party call) runs in the drains of what the Lua asked,
-/// past the lanes, and the next frame's rewind starts from the roster it left.
+/// past the lanes, and the next span's rewind starts from the roster it left.
 #[test]
 fn a_record_write_between_frames_needs_no_entry() {
     let mut app = party_client();
@@ -1058,8 +1058,8 @@ fn each_listener_finds_the_member_its_own_list_seated_in_party1() {
     );
 }
 
-/// A roster cell written past the log fails the rewind's check against the frame-start snapshot:
-/// here the leader cell, which no entry of the frame names.
+/// A roster cell written past the log fails the rewind's check against the span-start snapshot:
+/// here the leader cell, which no entry of the span names.
 #[cfg(debug_assertions)]
 #[test]
 #[should_panic(expected = "a write the log missed")]

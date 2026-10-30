@@ -550,8 +550,8 @@ fn a_refused_reagent_record_shows_unknown_at_its_answer() {
 
 /// With no frame after them, the getters read through the host the cast state each packet left,
 /// inside the call (`0x4e53a0`, `0x6e6e80`): Heal in flight after its start, popped after its
-/// result, where the VM's copy, which no feed pushes, still holds it in flight; and
-/// `SpellStopCasting` finds nothing to stop.
+/// result, as the VM's copy holds it once the result's lanes fired; and `SpellStopCasting` finds
+/// nothing to stop.
 #[test]
 fn the_cast_getters_read_each_packets_state_at_the_call() {
     let mut c = client();
@@ -587,8 +587,8 @@ fn the_cast_getters_read_each_packets_state_at_the_call() {
     );
     assert_eq!(
         c.eval::<(Option<i64>, Option<i64>)>(false, chunk),
-        (Some(1), None),
-        "the VM's copy"
+        (None, None),
+        "the VM's copy, given the live view at the result's lanes"
     );
     c.press("Stopped = SpellStopCasting()");
     assert_eq!(c.eval::<Option<i64>>(false, "return Stopped"), None);
@@ -685,4 +685,71 @@ fn a_reagent_line_shows_for_a_spell_with_no_record() {
     assert_eq!(c.seen(&["LINE"]), ["LINE:R:Missing reagent: Soul Shard"]);
     refuse_for_a_reagent(&mut c, UNLISTED, Some(SHARD));
     assert_eq!(c.seen(&["LINE"]), ["LINE:S:Missing reagent: Soul Shard"]);
+}
+
+/// A listener's cast, then its failed result in the frame's next packet: `UNIT_MANA`'s listener
+/// casts Heal at its packet, arming the GCD, so the result's report finds Heal in flight
+/// (`0x6e1a00`), clears the GCD and fires its pair (`0x6e1d89` → `0x6e1630`), whose
+/// `SPELL_UPDATE_COOLDOWN` reads it still in flight, then pops it (`0x6e2218`) for
+/// `CURRENT_SPELL_CAST_CHANGED` and `SPELLCAST_FAILED`.
+#[test]
+fn a_listeners_cast_is_in_flight_for_the_next_packets_failure() {
+    let mut c = client();
+    c.app.insert_resource(crate::ui_action::Spells {
+        catalog: SpellCatalog::from_displays(HashMap::from([(
+            HEAL,
+            SpellDisplay {
+                id: HEAL,
+                name: "Heal".into(),
+                icon: Some("Interface\\Icons\\Spell_Holy_Heal".into()),
+                start_recovery_category: 133,
+                start_recovery_ms: 1500,
+                ..Default::default()
+            },
+        )])),
+        ..crate::ui_action::Spells::empty_for_tests()
+    });
+    c.frame(vec![]);
+    c.seen(&[]);
+    c.eval::<()>(
+        false,
+        r#"local g = CreateFrame("Frame")
+        g:RegisterEvent("UNIT_MANA")
+        g:SetScript("OnEvent", function()
+            if arg1 == "player" and not Cast then
+                Cast = true
+                UseAction(1)
+                table.insert(Seen, "CAST")
+            end
+        end)"#,
+    );
+    c.frame(vec![
+        vec![values(ME, &[(MANA, 90)])],
+        vec![SessionEvent::CastResult {
+            spell_id: HEAL,
+            success: false,
+            reason: Some(0x0b),
+            arg: None,
+        }],
+    ]);
+    assert_eq!(c.casts(), [HEAL], "the listener's cast went out");
+    let seen = c.seen(&[
+        "CAST",
+        "SPELL_UPDATE_COOLDOWN",
+        "CURRENT_SPELL_CAST_CHANGED",
+        "SPELLCAST_FAILED",
+    ]);
+    // The send's own GCD pair (`0x6e58fb` → `0x4b31b0`) fires inside `UseAction` in the
+    // reference; here it waits on the lane behind the listener (#2202), so only the result's
+    // tail is held to the reference.
+    assert!(seen.iter().any(|s| s == "CAST"), "{seen:?}");
+    assert_eq!(
+        seen[seen.len().saturating_sub(3)..],
+        [
+            "SPELL_UPDATE_COOLDOWN:1:nil",
+            "CURRENT_SPELL_CAST_CHANGED:nil:nil",
+            "SPELLCAST_FAILED:nil:nil",
+        ],
+        "{seen:?}"
+    );
 }

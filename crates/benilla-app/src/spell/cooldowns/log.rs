@@ -2,12 +2,13 @@
 //! packet's handler writes its list and signals inside itself (`0x6e9460` adds its records, then
 //! `0x4b31b0` at `0x6e95b0`, and for the pet's list `0x4bce90` at `0x6e95b9`), and the getters
 //! query the list inside their calls (`0x6e2ea0` → `0x6e13e0`, the pet's through `0x4be03c`), so
-//! a listener reads its own packet's records. Here every handler of the frame writes the lists
-//! before any listener runs, so each write is logged with its stamp, as are the flushes' signals
-//! ([`Signal`]); each list's lane (`ui_action::cooldown_lane`) rewinds it to the frame's start and
-//! replays its log in stamp order among the other lanes, firing each signal at its place. A write made during the drain, a listener's cast arming its global cooldown, lands at
-//! its own place and is not logged; its signal is, stamped under the item firing, and fires
-//! straight after it.
+//! a listener reads its own packet's records. Here the lanes fire once a packet's handlers are
+//! done, over the span of packets since they last fired, and a handler's signals among its
+//! writes, so each write is logged with its stamp, as are the flushes' signals ([`Signal`]); each
+//! list's lane (`ui_action::cooldown_lane`) rewinds it to the span's start and replays its log in
+//! stamp order among the other lanes, firing each signal at its place. A write made during the
+//! drain, a listener's cast arming its global cooldown, lands at its own place and is not logged;
+//! its signal is, stamped under the item firing, and fires straight after it.
 
 use std::collections::VecDeque;
 use std::time::Instant;
@@ -91,7 +92,7 @@ enum Entry {
     Signal(Signal),
 }
 
-/// A list's log of the frame's writes and signals ([`super::Cooldowns`]), the player's and the
+/// A list's log of the span's writes and signals ([`super::Cooldowns`]), the player's and the
 /// pet's alike.
 #[derive(Debug, Default)]
 pub(crate) struct CooldownLog {
@@ -137,6 +138,13 @@ impl CooldownLog {
         }
     }
 
+    /// Whether the log holds a signal: its replay raises an event.
+    pub(super) fn raises(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|(_, entry)| matches!(entry, Entry::Signal(_)))
+    }
+
     /// Rewind `records` to the log's start, once per drain: whether it did so now.
     pub(super) fn rewind(&mut self, records: &mut Vec<Record>) -> bool {
         if self.replaying {
@@ -169,7 +177,7 @@ impl CooldownLog {
     }
 
     /// The drain's end, however it ended: what it did not replay is written onto `records`, so the
-    /// list stands as the frame left it, and its signals wait for the next drain, as every lane's
+    /// list stands as the span left it, and its signals wait for the next drain, as every lane's
     /// unfired items do; the next write opens a new log.
     pub(super) fn finish(&mut self, records: &mut Vec<Record>) {
         if !self.replaying {

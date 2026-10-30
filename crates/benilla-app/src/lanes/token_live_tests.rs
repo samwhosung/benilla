@@ -702,6 +702,29 @@ fn a_member_in_view_reads_its_objects_map_position() {
     assert_eq!(seen, ["0.5,0.6"]);
 }
 
+/// A member in view whose stats packet's listener reads its map position, destroyed by a later
+/// packet of the frame: the listener runs before the destroy's handler (`0x537ae5`), so
+/// `0x4a7870` still finds the object at the call (`0x4a78ae`) and reads its position
+/// (`0x4a78c1`).
+#[test]
+fn a_member_destroyed_later_in_the_frame_reads_its_objects_map_position() {
+    let mut c = client();
+    map_spy(&mut c, "party1");
+    let mate = c.app.world().resource::<crate::net::GuidIndex>().0[&MATE];
+    c.app
+        .world_mut()
+        .entity_mut(mate)
+        .insert(Transform::from_translation(
+            benilla_assets::coords::wow_to_bevy([500.0, 600.0, 0.0]),
+        ));
+    c.frame(vec![
+        vec![member_at(MATE, 20, DEADMINES, (100, 200))],
+        vec![SessionEvent::ObjectDestroyed(MATE)],
+    ]);
+    let seen: Vec<String> = c.eval(false, "return Maps");
+    assert_eq!(seen, ["0.5,0.6"]);
+}
+
 /// The resolver's per-call cost with the host lent and off the snapshots: 10k calls of a getter
 /// that reads nothing but the guid (`UnitInParty`, `0x516290`), and of `UnitHealth`, for `target`
 /// and `targettarget`.
