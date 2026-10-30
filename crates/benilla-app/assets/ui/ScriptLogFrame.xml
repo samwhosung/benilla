@@ -379,7 +379,8 @@
          declares SlashCmdList. -->
     <Script><![CDATA[
         -- Deviation: 1.12 has no `/reload` (later clients added it; 1.12 reloads through
-        -- `/console reloadui`); kept so a player can reload the interface after toggling addons.
+        -- `/console reloadui`); kept because it lets a player reload the interface after toggling
+        -- addons.
         SLASH_BENILLA_RELOAD1 = "/reload"
         SlashCmdList["BENILLA_RELOAD"] = function()
             ReloadUI()

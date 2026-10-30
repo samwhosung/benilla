@@ -1,22 +1,7 @@
 # Deviations still waiting for their reason (scripts/genmap.sh, "the reason check").
 # One `path<TAB>first eight words of the comment` per line. This list only shrinks: when a comment
 # gains "because ...", delete its line here; never add one. A comment off the list must carry its reason.
-crates/benilla-app/assets/ui/ContainerFrameAdapters.xml	`OpenBackpack` opens every equipped bag, not only the
-crates/benilla-app/assets/ui/FrameXMLFixes.xml	the stock FCF_ChatTabFadeFinished (FloatingChatFrame.lua:989-992) nils oldAlpha even under
-crates/benilla-app/assets/ui/FrameXMLFixes.xml	re-runs UIParent_ManageFramePositions after DurabilityFrame's own OnEvent. The pass
-crates/benilla-app/assets/ui/FrameXMLFixes.xml	friendly plates the player turned on come back
-crates/benilla-app/assets/ui/FrameXMLFixes.xml	a button whose key moved away keeps the
 crates/benilla-app/assets/ui/KeyBindingsPage.xml	every bind, unbind and reset saves at once,
-crates/benilla-app/assets/ui/OptionsFrame.xml	the 1.15 era client's single settings window replaces
-crates/benilla-app/assets/ui/OptionsFrame.xml	AUTO_QUEST_WATCH is the string "1". 1.12 assigns the
-crates/benilla-app/assets/ui/OptionsFrame.xml	the bar toggles precede the lock, which 1.12's
-crates/benilla-app/assets/ui/OptionsFrame.xml	a named ladder reads out its stop; 1.12's
-crates/benilla-app/assets/ui/OptionsFrame.xml	1.12 returns early here; a mute row hides
-crates/benilla-app/assets/ui/OptionsFrame.xml	no partner write of cameraPitchSmoothSpeed, which has no
-crates/benilla-app/assets/ui/OptionsFrame.xml	modern Classic's two-entry Display Mode, as there is
-crates/benilla-app/assets/ui/OptionsFrame.xml	our own row (the reference draws to the
-crates/benilla-app/assets/ui/ScriptLogFrame.xml	1.12 has no `/reload` (later clients added it;
-crates/benilla-app/assets/ui/SpellBookAdapters.xml	the pet page's autocast widgets take the pet
 crates/benilla-app/src/bindings.rs	a press with Super (Cmd) held runs no
 crates/benilla-app/src/bindings.rs	a trackpad's `Pixel` deltas are carried until they
 crates/benilla-app/src/bindings/chord.rs	the Windows key table stops at `VK_F12` and

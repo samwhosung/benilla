@@ -7,7 +7,7 @@
         -- oldAlpha even under a live hover, so leaving and re-entering within
         -- CHAT_FRAME_FADE_TIME (a flick to the scroll buttons, outside the hover box, does it)
         -- stops the plate fading in (l.873) for the rest of the session; this keeps oldAlpha while
-        -- hover is set.
+        -- hover is set because the stock one nils it even under a live hover.
         if FCF_ChatTabFadeFinished then
             function FCF_ChatTabFadeFinished(chatTab, chatFrame)
                 chatTab:Hide()
@@ -18,9 +18,9 @@
         end
 
         -- Deviation: re-runs UIParent_ManageFramePositions after DurabilityFrame's own OnEvent. The
-        -- pass seats the frame 20 further in while a side glyph shows (UIParent.lua:1759-1768),
-        -- but the stock frame runs it only from OnShow/OnHide, so a glyph appearing while the frame
-        -- is shown leaves the shield's overhang off the screen edge. The stock handler runs first,
+        -- pass seats the frame 20 further in while a side glyph shows (UIParent.lua:1759-1768); a
+        -- glyph appearing while the frame is shown leaves the shield's overhang off the screen edge
+        -- because the stock frame runs it only from OnShow/OnHide. The stock handler runs first,
         -- unchanged, on the this/event/arg1 already set for the dispatch.
         if DurabilityFrame then
             local refOnEvent = DurabilityFrame:GetScript("OnEvent")
@@ -30,9 +30,9 @@
             end)
         end
 
-        -- Deviation: friendly plates the player turned on come back at every world entry. The
-        -- stock UpdateNameplates (UIOptionsFrame.lua:768-780) shows them and hides them again at
-        -- once (l.775-776), and FRIENDNAMEPLATES_ON is never saved, since l.182 registers
+        -- Deviation: friendly plates the player turned on come back at every world entry because
+        -- the stock UpdateNameplates (UIOptionsFrame.lua:768-780) shows them and hides them again
+        -- at once (l.775-776), and FRIENDNAMEPLATES_ON is never saved because l.182 registers
         -- NAMEPLATES_ON a second time.
         function UpdateNameplates()
             if ( NAMEPLATES_ON ) then
@@ -49,7 +49,7 @@
         RegisterForSave("FRIENDNAMEPLATES_ON")
 
         -- Deviation: a button whose key moved away keeps the old key's label while it holds an
-        -- action with no range (a stance, a self buff). The stock ActionButton_UpdateHotkeys
+        -- action with no range (a stance, a self buff) because the stock ActionButton_UpdateHotkeys
         -- (ActionButton.lua:129-140) writes no text in that one unbound case; this clears it. The
         -- stock function runs first, unchanged.
         local refUpdateHotkeys = ActionButton_UpdateHotkeys

@@ -1,7 +1,7 @@
 <Ui>
     <!--
-        Deviation: the pet page's autocast widgets take the pet bar button's proportions, so the
-        shine and the corner brackets sit on the button's edge and share its centre. Stock
+        Deviation: the pet page's autocast widgets take the pet bar button's proportions because
+        that seats the shine and the corner brackets on the button's edge, sharing its centre. Stock
         SpellBookFrame.xml has the shine 36x36 at CENTER (1,1), scale 1.22, the brackets 60; 71.53
         is 37 x 58/30 (the art fills 33/64 of UI-AutoCastableOverlay.blp).
     -->

@@ -1,10 +1,11 @@
 <Ui>
     <!--
         The Options window the game menu opens. Deviation: the 1.15 era client's single settings
-        window replaces the 1.12 four-panel family, which is much worse to use; the 1.12 frames
-        still load, hidden, for addons. Every art byte is 1.12-native or a colour fill, so era
-        names below cite geometry only. Hiding discards pending edits and Apply commits outright.
-        A slider shows the 1.12 range; an out-of-range value displays clamped, not written back.
+        window replaces the 1.12 four-panel family because that is much worse to use; the 1.12
+        frames still load, hidden, for addons. Every art byte is 1.12-native or a colour fill, so
+        era names below cite geometry only. Hiding discards pending edits and Apply commits
+        outright. A slider shows the 1.12 range; an out-of-range value displays clamped, not written
+        back.
     -->
 
     <!-- The era's 14 and 20 white fonts, outside Fonts.xml's 1.12 set; MasterFont's shadow. -->
@@ -28,8 +29,8 @@
     <Script><![CDATA[
         -- UIOptionsFrame.xml loads first and owns the uvars; each row captures its default at
         -- OnLoad.
-        -- Deviation: AUTO_QUEST_WATCH is the string "1". 1.12 assigns the number 1 (l.122) but
-        -- every consumer compares against "1" (QuestLogFrame.lua:64/68); 1 ~= "1" in Lua 5.0.
+        -- Deviation: AUTO_QUEST_WATCH is the string "1" because 1.12 assigns the number 1 (l.122)
+        -- but every consumer compares against "1" (QuestLogFrame.lua:64/68); 1 ~= "1" in Lua 5.0.
         AUTO_QUEST_WATCH = "1"
         RegisterForSave("AUTO_QUEST_WATCH")
 
@@ -495,8 +496,8 @@
                 "RowGuildMemberAlert", "RowRemoveChatDelay", "RowChatBubbles", "RowLootSpam",
                 "RowPartyChatBubbles", "RowSpamFilter",
             },
-            -- Deviation: the bar toggles precede the lock, which 1.12's box leads with, so what is
-            -- on screen reads first.
+            -- Deviation: the bar toggles precede the lock, which 1.12's box leads with, because
+            -- what is on screen reads first.
             ActionBars = {
                 "RowMultiBar1", "RowMultiBar2", "RowMultiBar3", "RowMultiBar4",
                 "RowAlwaysShowMultibars", "RowLockActionBar",
@@ -628,8 +629,8 @@
             row.fmt = fmt
             -- Kept for the "travel" readout, a share of the row's own range.
             row.minv, row.maxv = min, max
-            -- Deviation: a named ladder reads out its stop; 1.12's slider labels only its ends, and
-            -- a bare index would mean nothing to a player.
+            -- Deviation: a named ladder reads out its stop because 1.12's slider labels only its
+            -- ends, and a bare index would mean nothing to a player.
             row.stops = stops
             row.refreshing = 1
             slider:SetMinMaxValues(min, max)
@@ -743,7 +744,7 @@
                 GameTooltip:SetOwner(getglobal(row:GetName() .. "Tip"), "ANCHOR_RIGHT", -10, 0)
                 GameTooltip:SetText(text, nil, nil, nil, nil, 1)
             else
-                -- Deviation: 1.12 returns early here; a mute row hides the last plate, so a
+                -- Deviation: 1.12 returns early here; a mute row hides the last plate because a
                 -- neighbour's text cannot stand when its OnLeave was missed.
                 GameTooltip:Hide()
             end
@@ -1695,8 +1696,8 @@
                                             </OnLoad></Scripts>
                                         </Frame>
                                         <!-- UIOptionsFrameSliders row 2. Deviation: no partner
-                                             write of cameraPitchSmoothSpeed, which has no reader:
-                                             the follow here has one rate. -->
+                                             write of cameraPitchSmoothSpeed because it has no
+                                             reader: the follow here has one rate. -->
                                         <Frame name="$parentRowAutoFollowSpeed" inherits="BenillaOptionsSliderRowTemplate">
                                             <Anchors>
                                                 <Anchor point="TOPLEFT" relativeTo="$parentRowHeadBob" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
@@ -1981,7 +1982,7 @@
                                             </Anchors>
                                             <Scripts><OnLoad>
                                                 -- Deviation: modern Classic's two-entry Display
-                                                -- Mode, as there is no exclusive fullscreen;
+                                                -- Mode, because there is no exclusive fullscreen;
                                                 -- gxWindow "0" is the borderless window.
                                                 BenillaOptionsRow_OnLoad(this, "gxWindow", "Display Mode",
                                                     "BENILLA_TOOLTIP_DISPLAY_MODE")
@@ -2010,7 +2011,7 @@
                                             </Anchors>
                                             <Scripts><OnLoad>
                                                 -- Deviation: our own row (the reference draws to
-                                                -- the backbuffer), and no Multisampling, which
+                                                -- the backbuffer), and no Multisampling because it
                                                 -- misses alpha-tested cutouts. Deferred: a write
                                                 -- rebuilds the render target.
                                                 BenillaOptionsRow_OnLoad(this, "renderScale", "Render Scale",
