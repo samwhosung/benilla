@@ -460,6 +460,9 @@ fn drive_vplates(
             world
                 .targeting
                 .wants(crate::spell::targeting::TargetingWants::Location),
+        let my_drunk = self_store
+            .and_then(|s| s.0.player_drunk_byte())
+            .unwrap_or(0);
         );
         let hovered_key = script.hovered_nameplate();
         let my_level = self_store.and_then(|s| s.0.unit_level()).unwrap_or(1);
@@ -473,6 +476,7 @@ fn drive_vplates(
                 names: Some(&names),
                 forms: spells.as_deref().map(|s| &s.forms),
                 words: None,
+            my_drunk,
             },
             names: Some(&names),
             my_level,

@@ -491,8 +491,8 @@ impl UiScript {
     }
 
     /// Set the level latch (bit `0x4` of `[0xc4da34]`, `0x605550`): the active player's level
-    /// moved (`0x5edb93`), so the next sync refreshes each kept plate's level and skull, whose
-    /// colour and threshold read it.
+    /// moved (`0x5edb93`), or its drunkenness (`0x5e2b42`), so the next sync refreshes each kept
+    /// plate's level and skull, whose colour, threshold and shown level read them.
     pub fn latch_nameplate_levels(&mut self) {
         self.model_mut().nameplates.levels_due = true;
     }

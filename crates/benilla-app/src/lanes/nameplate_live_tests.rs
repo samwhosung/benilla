@@ -302,3 +302,112 @@ fn a_plates_bar_reads_its_units_health_signed_and_unclamped() {
         ["UNIT_HEALTH:target:0", "UNIT_HEALTH:target:-1"]
     );
 }
+
+/// A drunk player sees a unit it can attack lower on its plate (`0x7cbb7a` → `0x7cbce0`): at 50,
+/// 20 less `trunc(50 * 0.05 + 0.5)`, 17, where `UnitLevel`'s `50 * 5 * 0.01` (`0x5180c8`) cuts 2;
+/// at 10, 30 less 1, where `UnitLevel` cuts none.
+#[test]
+fn a_drunk_player_reads_a_lower_level_on_the_plate_of_a_unit_it_can_attack() {
+    let mut app = plated_client("return Level():GetText()");
+    assert_eq!(
+        frame(
+            &mut app,
+            vec![
+                values(
+                    ME,
+                    &[
+                        (PLAYER_BYTES_3, DRUNK_50),
+                        (FIELD_UNIT_FLAGS, PLAYER_CONTROLLED)
+                    ]
+                ),
+                values(BOAR, &[(FIELD_UNIT_LEVEL, 20)]),
+                values(WOLF, &health(70)),
+                values(ME, &[(PLAYER_BYTES_3, 10 << 8)]),
+                values(BOAR, &[(FIELD_UNIT_LEVEL, 30)]),
+                values(WOLF, &health(60)),
+            ]
+        ),
+        ["UNIT_HEALTH:target:17", "UNIT_HEALTH:target:29"]
+    );
+}
+
+/// [`client`] with the frame's gate able to run (`drive_vplates`): both kinds of plate on, the
+/// camera looking down on us, and the boar alone drawn, so the gate gives it the one plate. The
+/// spy's `Look` is the test's; the frame's gate has run once.
+fn framed_client(look: &str) -> App {
+    use bevy::camera::visibility::SetViewVisibility;
+    let mut app = client();
+    let world = app.world_mut();
+    world.insert_resource(crate::vplates::VPlateMode {
+        enemies: true,
+        friends: true,
+    });
+    world.init_resource::<crate::player::CameraControl>();
+    let mut camera = Camera::default();
+    camera.computed.clip_from_view =
+        Mat4::perspective_infinite_reverse_rh(1.2, 1024.0 / 768.0, 0.1);
+    camera.computed.target_info = Some(bevy::camera::RenderTargetInfo {
+        physical_size: UVec2::new(1024, 768),
+        scale_factor: 1.0,
+    });
+    world.spawn((
+        camera,
+        Transform::from_xyz(0.0, 60.0, 0.0).looking_at(Vec3::ZERO, Vec3::NEG_Z),
+        benilla_world::view::WorldCamera,
+    ));
+    let index = world.resource::<crate::net::GuidIndex>().0.clone();
+    world.entity_mut(index[&ME]).insert(crate::net::Embodied);
+    let part = world
+        .spawn((
+            Mesh3d::default(),
+            ViewVisibility::HIDDEN,
+            ChildOf(index[&BOAR]),
+        ))
+        .id();
+    world.get_mut::<ViewVisibility>(part).unwrap().set_visible();
+    let mut script = world.non_send_resource_mut::<UiScript>();
+    script.set_screen_size(1024.0, 768.0);
+    script
+        .run(r#"WorldFrame = CreateFrame("WorldFrame", "WorldFrame") WorldFrame:SetAllPoints()"#)
+        .unwrap();
+    script.resolve();
+    helpers(&script, look);
+    crate::vplates::drive_vplates_once(world);
+    app
+}
+
+/// The frame's gate binds the boar's plate.
+#[test]
+fn the_framed_client_binds_the_boars_plate() {
+    let app = framed_client("return ''");
+    let shown: String = crate::script_calls::eval_in_vm(
+        app.world(),
+        "return Shown(Plate()) .. ':' .. Bar():GetValue()",
+    );
+    assert_eq!(shown, "shown:50");
+}
+
+/// The drunkenness's watcher on the active player sets the level latch (`0x5e2a90` at
+/// `0x5e2b42` → `0x605550`), so the frame's gate after the packets refreshes the kept plate's
+/// level (`0x60875f`), which the drunkenness lowers (`0x7cbce0`).
+#[test]
+fn a_change_of_our_drunkenness_refreshes_the_kept_plates_level_at_the_frame() {
+    let mut app = framed_client("return ''");
+    let _ = frame(&mut app, vec![values(BOAR, &[(FIELD_UNIT_LEVEL, 20)])]);
+    let level = |app: &App| -> String {
+        crate::script_calls::eval_in_vm(app.world(), "return Level():GetText()")
+    };
+    assert_eq!(level(&app), "20");
+    let _ = frame(
+        &mut app,
+        vec![values(
+            ME,
+            &[
+                (PLAYER_BYTES_3, DRUNK_50),
+                (FIELD_UNIT_FLAGS, PLAYER_CONTROLLED),
+            ],
+        )],
+    );
+    crate::vplates::drive_vplates_once(app.world_mut());
+    assert_eq!(level(&app), "17");
+}

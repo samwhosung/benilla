@@ -24,6 +24,8 @@ pub(crate) struct Judge<'a> {
     pub(crate) names: Option<&'a NameCache>,
     /// The active player's level, 1 without one.
     pub(crate) my_level: u32,
+    /// The active player's drunkenness, `PLAYER_BYTES_3` byte 1 (`[+0xe68]+0x1d`); 0 without one.
+    pub(crate) my_drunk: u8,
     pub(crate) group: Option<&'a crate::ui_party::GroupState>,
     pub(crate) mode: VPlateMode,
 }
@@ -114,7 +116,11 @@ impl Judge<'_> {
         let tint = plate_tint(rank, is_player);
         let (health, max_health) = store.map_or((0.0, 0.0), bar_of);
         let my_level = self.my_level;
-        let level = store.and_then(|s| s.0.unit_level());
+        // The level the plate shows (`0x7cbb7a` → `0x7cbce0`), which its skull and colour read.
+        let level = store.and_then(|s| {
+            s.0.unit_level()
+                .map(|level| self.displayed_level(guid, s, level))
+        });
         let mark = self.group.map_or(0, |g| g.raid_target_index(guid));
         PlateUnit {
             health,
@@ -145,6 +151,28 @@ impl Judge<'_> {
             // 0-based for the atlas: `col = idx & 3`, `row = idx >> 2`.
             raid_icon: (mark >= 1).then(|| mark - 1),
         }
+    }
+
+    /// `0x7cbce0(player, unit)`: `level` less `trunc(min(drunk, 100) * 0.05 + 0.5)` (`0x7cbd1b`-
+    /// `0x7cbd36`) when the level is above 0 (`0x7cbcf3`, signed), there is an active player
+    /// (`0x7cbcf7`), its drunkenness is nonzero (`0x7cbd04`) and it can attack the unit
+    /// (`0x7cbd09`); never below 1 (`0x7cbd3d`). Its own copy of the reduction: `UnitLevel`'s
+    /// `drunk * 5 * 0.01` (`0x5180c8`) rounds otherwise at 10, 30, 50, 70 and 90.
+    fn displayed_level(&self, guid: u64, store: &ObjectStore, level: u32) -> u32 {
+        let signed = level as i32;
+        if signed <= 0 || self.my_drunk == 0 {
+            return level;
+        }
+        let Some(me) = self.me.as_ref() else {
+            return level;
+        };
+        if !self.rel.can_attack(me, &(self.unit_of)(guid, store)) {
+            return level;
+        }
+        // `fild; fmul [0.05f32]; fadd [0.5f32]; __ftol`: exact in f64 for a byte of at most 100.
+        let n = f64::from(self.my_drunk.min(100));
+        let cut = (n * f64::from(0.05_f32) + f64::from(0.5_f32)) as i32;
+        (signed - cut).max(1) as u32
     }
 
     /// [`Self::unit`] with its rank read as it stands, for a callback's write.

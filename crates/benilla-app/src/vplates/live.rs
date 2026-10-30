@@ -45,13 +45,11 @@ impl NamePlateLive<'_, '_> {
 
     /// `f` with the judge over the reads as of here.
     fn judge<R>(&self, f: impl FnOnce(&super::gate::Judge) -> R) -> R {
-        let my_level = self
-            .me
-            .single()
-            .ok()
-            .and_then(|e| self.stores.get(e).ok())
-            .and_then(|s| s.0.unit_level())
-            .unwrap_or(1);
+        let my_store = self.me.single().ok().and_then(|e| self.stores.get(e).ok());
+        let my_level = my_store.and_then(|s| s.0.unit_level()).unwrap_or(1);
+        let my_drunk = my_store
+            .and_then(|s| s.0.player_drunk_byte())
+            .unwrap_or(0);
         let unit_of = |guid: u64, store: &ObjectStore| self.relations.unit_of(guid, store);
         let judge = super::gate::Judge {
             rel: self.relations.get(),
@@ -64,6 +62,7 @@ impl NamePlateLive<'_, '_> {
             },
             names: self.names.as_deref(),
             my_level,
+            my_drunk,
             group: self.group.as_deref(),
             mode: self.mode.as_deref().copied().unwrap_or_default(),
         };

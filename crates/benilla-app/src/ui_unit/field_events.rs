@@ -519,8 +519,13 @@ fn drunk(
     new: u8,
 ) {
     let me = script.is_active_player(guid);
-    if me && script.player_can_attack_target() {
-        script.fire_event("UNIT_LEVEL", vec![ScriptValue::Str("target".to_string())]);
+    if me {
+        if script.player_can_attack_target() {
+            script.fire_event("UNIT_LEVEL", vec![ScriptValue::Str("target".to_string())]);
+        }
+        // The plates' level latch (`0x5e2b42` → `0x605550`): the next frame's gate refreshes each
+        // kept plate's level, which the drunkenness lowers (`0x7cbce0`).
+        script.latch_nameplate_levels();
     }
     // The name cache as the watcher runs, through the lent host (`0x609210`).
     let name = (!me).then(|| {
