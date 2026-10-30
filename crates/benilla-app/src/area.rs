@@ -78,7 +78,7 @@ fn clear_committed_zone(mut zone: ResMut<CommittedZone>) {
 /// (`0x494970`) and the indoor dedup pair (`[0x868608]`, `[0x86860c]`). It lives per VM, so every
 /// login starts zeroed and its first resolve is a NEW_AREA.
 #[derive(Default)]
-struct ZoneCache {
+pub(crate) struct ZoneCache {
     /// `None` until the first resolve.
     zone_id: Option<u32>,
     zone_text: String,
@@ -125,7 +125,7 @@ fn elect_event(cache: &ZoneCache, next: &ZoneSignal) -> Option<&'static str> {
 /// after the tick's packets (category 6's drain `0x403620`, then category 5's `0x401ec0`), so it
 /// reads a player that arrived this frame.
 #[allow(clippy::too_many_arguments)] // a Bevy system's full input set
-fn feed_zone_events(
+pub(crate) fn feed_zone_events(
     mut ticks: Local<u32>,
     mut hosted_vm: crate::script_calls::HostedVm,
     me: Query<(), (With<crate::net::SelfPlayer>, With<crate::net::ObjectStore>)>,

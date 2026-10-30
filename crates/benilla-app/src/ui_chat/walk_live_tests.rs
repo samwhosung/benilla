@@ -344,3 +344,115 @@ fn our_create_runs_the_cascade_inside_its_packet() {
     assert_eq!(c.heard(), ["1"]);
     assert_eq!(c.wire(), ["join GuildRecruitment - City"]);
 }
+
+/// The poll's ticks: each one the zone feed's system, then the walk's (`0x5db900`), the tenth
+/// committing.
+fn tick(c: &mut Client, n: usize) {
+    for _ in 0..n {
+        let world = c.app.world_mut();
+        world
+            .run_system_cached(crate::area::feed_zone_events)
+            .expect("the feed runs");
+        world
+            .run_system_cached(super::channels::auto_join_zone_channels)
+            .expect("the walk runs");
+    }
+}
+
+/// Elwynn committed and walked, its slots joined, the wire empty.
+fn settled_in_elwynn() -> Client {
+    let mut c = client(ELWYNN, Some(&[]));
+    c.channels().joined = vec![
+        ChannelSlot::confirmed("General - Elwynn Forest", 1).into(),
+        ChannelSlot::confirmed("LocalDefense - Elwynn Forest", 22).into(),
+    ];
+    tick(&mut c, 10);
+    c.wire();
+    c
+}
+
+fn stand_in(c: &mut Client, area: u32) {
+    c.app
+        .world_mut()
+        .insert_resource(benilla_world::terrain_stream::CurrentArea(Some(area)));
+}
+
+/// The walk is `UpdateZoneText`'s (`0x494931`), run by the poll's tenth tick: a zone line crossed
+/// and crossed back between two polls changes nothing on the wire.
+#[test]
+fn a_zone_line_crossed_and_back_between_polls_walks_nothing() {
+    let mut c = settled_in_elwynn();
+    stand_in(&mut c, WESTFALL);
+    tick(&mut c, 3);
+    stand_in(&mut c, ELWYNN);
+    tick(&mut c, 7);
+    assert!(c.wire().is_empty(), "the poll saw Elwynn both times");
+}
+
+/// The channels change at the commit's tick, not on the frame the area moved.
+#[test]
+fn the_walk_runs_at_the_commits_tick_not_before_it() {
+    let mut c = settled_in_elwynn();
+    stand_in(&mut c, WESTFALL);
+    tick(&mut c, 9);
+    assert!(c.wire().is_empty(), "nine ticks return");
+    tick(&mut c, 1);
+    assert_eq!(
+        c.wire(),
+        [
+            "leave General - Elwynn Forest",
+            "join General - Westfall",
+            "leave LocalDefense - Elwynn Forest",
+            "join LocalDefense - Westfall",
+        ]
+    );
+}
+
+/// An area with no row commits nothing (the commit keeps the last zone), so the zone
+/// stays walked and the guild-recruitment cascade reads the last zone's row (`0x49ead7`).
+#[test]
+fn an_area_with_no_row_keeps_the_last_zone_and_the_cascade_reads_it() {
+    let mut c = client(STORMWIND, Some(&[]));
+    crate::script_calls::with_hosted_vm(c.app.world_mut(), |s| {
+        s.expect("a VM").set_guild_recruitment_mode(0);
+    });
+    tick(&mut c, 10);
+    c.wire();
+    stand_in(&mut c, 4242);
+    tick(&mut c, 10);
+    assert!(c.wire().is_empty(), "no row, no walk");
+    crate::script_calls::with_hosted_vm(c.app.world_mut(), |s| {
+        s.expect("a VM")
+            .run("SetGuildRecruitmentMode(1)")
+            .expect("the verb")
+    });
+    assert_eq!(
+        c.wire(),
+        ["join GuildRecruitment - City"],
+        "the cascade finds Stormwind, a capital, committed"
+    );
+}
+
+/// The walk comes before the commit's `ZONE_CHANGED_NEW_AREA` (`0x494931` before `0x49493f`): its
+/// listener finds the renamed slot.
+#[test]
+fn the_walk_runs_before_the_commits_new_area_listeners() {
+    let mut c = settled_in_elwynn();
+    crate::script_calls::with_hosted_vm(c.app.world_mut(), |s| {
+        s.expect("a VM")
+            .run(
+                r#"
+                local f = CreateFrame("Frame")
+                f:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+                f:SetScript("OnEvent", function()
+                    table.insert(Heard, tostring((GetChannelName("General - Westfall"))))
+                end)
+                "#,
+            )
+            .expect("the listener")
+    });
+    tick(&mut c, 9);
+    stand_in(&mut c, WESTFALL);
+    tick(&mut c, 1);
+    assert_eq!(c.heard(), ["1"]);
+}
