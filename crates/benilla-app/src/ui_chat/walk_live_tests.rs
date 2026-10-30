@@ -527,6 +527,8 @@ fn a_reload_keeps_the_real_zone_text_and_walks_nothing() {
 #[test]
 fn an_empty_or_recased_name_walks_nothing() {
     let mut c = settled_in_elwynn();
+    // Stale names, so that any walk shows on the wire.
+    c.channels().joined = vec![ChannelSlot::confirmed("General - Stale", 1).into()];
     stand_in(&mut c, NAMELESS);
     tick(&mut c, 10);
     stand_in(&mut c, ELWYNN);
