@@ -35,6 +35,11 @@ const STEP_FRACTION: f32 = 0.5;
 /// `UNIT_FLAG_STUNNED`, goal-chain row 4.
 const UNIT_FLAG_STUNNED: u32 = 0x0004_0000;
 
+/// `UNIT_FLAG_PLAYER_CONTROLLED`, goal-chain row 6 with the player type bit: vmangos sets it on
+/// every player (`Player.cpp:462`) and clears it while a creature charms one
+/// (`SpellAuras.cpp:3279`).
+const UNIT_FLAG_PLAYER_CONTROLLED: u32 = 0x8;
+
 /// The `EmoteFlags` bit that permits the target and interaction facing during a state emote
 /// (`600d98 test ch,0x20`); the name is ours, the tested bit is the reference's.
 const EMOTE_PERMITS_FACING: u32 = benilla_formats::EMOTE_FLAG_INTERACTION;
@@ -72,12 +77,25 @@ pub(in crate::net) fn set_raw_facing(commands: &mut Commands, e: Entity, wire: f
         .or_insert(DisplayFacing::seeded(wire));
 }
 
-/// Whether [`drive_display_facing`] turns this body's display facing: a unit, not the body we
-/// steer, which shows its raw facing at once (`0x600d03`). The reference smooths players too
-/// (`0x608070`, skipped only for the unit the camera follows at `0x60805b`); benilla's smoother
-/// does not yet, so a player here shows its raw facing at once.
-pub(in crate::net) fn smoothed(kind: Option<EntityKind>, active_mover: bool) -> bool {
-    kind == Some(EntityKind::Unit) && !active_mover
+/// Whether [`drive_display_facing`] turns this body's display facing: a unit, or a player whose
+/// `unit_flags` lack [`UNIT_FLAG_PLAYER_CONTROLLED`], which row 6 passes on to the target and
+/// interaction rows (`0x600df6`-`0x600e08`); not the body we steer, which shows its raw facing at
+/// once (`0x600d03`). Row 6 sends a player with the flag to its raw facing, which the reference
+/// still smooths (`0x608070`, skipped only for the unit the camera follows at `0x60805b`);
+/// benilla's smoother does not yet, so it shows at once.
+pub(in crate::net) fn smoothed(
+    kind: Option<EntityKind>,
+    unit_flags: u32,
+    active_mover: bool,
+) -> bool {
+    if active_mover {
+        return false;
+    }
+    match kind {
+        Some(EntityKind::Unit) => true,
+        Some(EntityKind::Player) => unit_flags & UNIT_FLAG_PLAYER_CONTROLLED == 0,
+        _ => false,
+    }
 }
 
 /// The signed yaw the facing pump applied this frame (positive turns left), the client's
@@ -199,7 +217,7 @@ fn filter_step(cur: f32, goal: f32, hist: &mut [f32; 4]) -> f32 {
 /// | 3 | a state emote lacking [`EMOTE_PERMITS_FACING`] | raw |
 /// | 4 | [`UNIT_FLAG_STUNNED`] | raw |
 /// | 5 | the combat override `+0xc58 & 1` to `+0xcac` (writer `0x624f10`) | not built |
-/// | 6 | unit flag `0x8` on a player (`0x600df6`-`0x600e08`), which vmangos sets on every player | raw: a player is never smoothed ([`smoothed`]) |
+/// | 6 | [`UNIT_FLAG_PLAYER_CONTROLLED`] and the player type bit (`0x600df6`-`0x600e08`) | raw, shown at once ([`smoothed`]) |
 /// | 7 | `UNIT_FIELD_TARGET` resolves | bearing to that unit |
 /// | 9 | this unit is the interaction NPC | bearing to the local player |
 /// | - | none of the above | raw |
@@ -220,8 +238,11 @@ pub(crate) fn drive_display_facing(
     self_q: Query<Entity, With<SelfPlayer>>,
     mut transforms: Query<&mut Transform>,
     mut facings: Query<&mut DisplayFacing>,
-    // The latches this pump owns, a smoothed unit's; a player's is its dead-reckoning's.
-    latched: Query<(Entity, &NetEntity), (With<FacingStep>, Without<ActiveMover>)>,
+    // The latches this pump owns, a smoothed body's; any other's is its dead-reckoning's.
+    latched: Query<
+        (Entity, &NetEntity, Option<&ObjectStore>),
+        (With<FacingStep>, Without<ActiveMover>),
+    >,
     // A unit that starts moving drops its state, so the next seed reads the pose it stops at.
     governed: Query<(Entity, Has<Spline>, Option<&RemoteMotion>), With<DisplayFacing>>,
 ) {
@@ -237,13 +258,13 @@ pub(crate) fn drive_display_facing(
     let mut goals: Vec<(Entity, Option<f32>, GoalSource, Option<f32>)> = Vec::new();
     for (e, net, store, motion) in &candidates {
         let raw = motion.map(|m| m.orientation);
-        if !smoothed(Some(net.kind), false) {
-            continue; // a GameObject sits at its authored facing; a player is row 6's
+        let fields = &store.0;
+        if !smoothed(Some(net.kind), fields.unit_flags(), false) {
+            continue; // a GameObject sits at its authored facing; a player of row 6 shows its raw
         }
         if moving(false, motion) {
             continue; // row 1
         }
-        let fields = &store.0;
         // Rows 2-4.
         if fields.unit_stand_state() != 0
             || fields.unit_flags() & UNIT_FLAG_STUNNED != 0
@@ -313,8 +334,9 @@ pub(crate) fn drive_display_facing(
         }
         trace_face(e, source, goal, cur, new);
     }
-    for (e, net) in &latched {
-        if smoothed(Some(net.kind), false) && !stepping.contains(&e) {
+    for (e, net, store) in &latched {
+        let flags = store.map_or(0, |s| s.0.unit_flags());
+        if smoothed(Some(net.kind), flags, false) && !stepping.contains(&e) {
             commands.entity(e).remove::<FacingStep>();
         }
     }
@@ -709,6 +731,11 @@ mod tests {
     /// A creature, its mover state standing, at (5, 0) and facing `yaw`, in an app that runs the
     /// pump.
     fn creature_with_a_mover(pairs: &[(u16, u32)], yaw: f32) -> (App, Entity) {
+        body_with_a_mover(EntityKind::Unit, pairs, yaw)
+    }
+
+    /// [`creature_with_a_mover`] for a body of `kind`.
+    fn body_with_a_mover(kind: EntityKind, pairs: &[(u16, u32)], yaw: f32) -> (App, Entity) {
         use benilla_protocol::ObjectFields;
         let mut app = App::new();
         app.init_resource::<GuidIndex>()
@@ -719,7 +746,7 @@ mod tests {
             .world_mut()
             .spawn((
                 NetEntity {
-                    kind: EntityKind::Unit,
+                    kind,
                     display_id: None,
                     scale: 1.0,
                 },
@@ -760,6 +787,45 @@ mod tests {
             crate::creature_anim::wrap_pi(yaw - FRAC_PI_2).abs() <= DEAD_BAND,
             "the creature squares up on its target (+pi/2): {yaw}"
         );
+    }
+
+    /// Row 6 sends a player to its raw facing only with unit flag `0x8` and the player type bit
+    /// (`0x600df6`-`0x600e08`): one a creature charms, the flag cleared, squares up on its target
+    /// as a creature does (row 7).
+    #[test]
+    fn a_charmed_player_turns_to_its_target() {
+        use benilla_protocol::field::FIELD_UNIT_FLAGS;
+        for (flags, turns) in [(0, true), (UNIT_FLAG_PLAYER_CONTROLLED, false)] {
+            // UNIT_FIELD_TARGET is field 16, a guid pair; the victim is guid 7, due north.
+            let (mut app, player) = body_with_a_mover(
+                EntityKind::Player,
+                &[(16, 7), (17, 0), (FIELD_UNIT_FLAGS, flags)],
+                0.0,
+            );
+            let victim = app
+                .world_mut()
+                .spawn(Transform::from_translation(wow_to_bevy([5.0, 5.0, 0.0])))
+                .id();
+            app.world_mut()
+                .resource_mut::<GuidIndex>()
+                .0
+                .insert(7, victim);
+            for _ in 0..24 {
+                app.update();
+            }
+            let yaw = yaw_of(
+                app.world()
+                    .entity(player)
+                    .get::<Transform>()
+                    .unwrap()
+                    .rotation,
+            );
+            let want = if turns { FRAC_PI_2 } else { 0.0 };
+            assert!(
+                crate::creature_anim::wrap_pi(yaw - want).abs() <= DEAD_BAND,
+                "flags {flags:#x}: {want} wanted, {yaw} shown"
+            );
+        }
     }
 
     /// A path's end writes a smoothed creature's raw facing, which its display turns to over the

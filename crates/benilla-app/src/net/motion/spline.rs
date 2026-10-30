@@ -331,6 +331,7 @@ pub(in crate::net) fn sample_splines(
         Option<&mut crate::transport::TransportRider>,
         // Who turns to the end's facing through the display smoother.
         Option<&NetEntity>,
+        Option<&ObjectStore>,
         Has<ActiveMover>,
         // The mover state the path's end stops ([`stop_at_path_end`]).
         Option<&mut crate::net::RemoteMotion>,
@@ -351,7 +352,8 @@ pub(in crate::net) fn sample_splines(
     // The paths that ended facing a unit, resolved once every path has moved this frame; `true`
     // for a deck path, whose rider takes the facing.
     let mut facing_targets: Vec<(Entity, u64, [f32; 3], bool)> = Vec::new();
-    for (entity, spline, mut t, swimming, guid, rider, net, mover, mut motion) in &mut q {
+    for (entity, spline, mut t, swimming, guid, rider, net, store, mover, mut motion) in &mut q {
+        let unit_flags = store.map_or(0, |s| s.0.unit_flags());
         let (wow_pos, facing, pitch) = spline.sample(now);
         // A deck path's sample is the rider's transport-local pose, composed later this frame.
         if let Some(deck) = spline.deck {
@@ -440,7 +442,7 @@ pub(in crate::net) fn sample_splines(
                             &mut commands,
                             entity,
                             &mut t,
-                            smoothed(net.map(|n| n.kind), mover),
+                            smoothed(net.map(|n| n.kind), unit_flags, mover),
                             f,
                         );
                     }
@@ -471,7 +473,7 @@ pub(in crate::net) fn sample_splines(
         let Some(f) = resolve_facing(MonsterMoveFacing::Target(guid), at, |_| target) else {
             continue;
         };
-        let Ok((_, _, mut t, _, _, rider, net, mover, motion)) = q.get_mut(entity) else {
+        let Ok((_, _, mut t, _, _, rider, net, store, mover, motion)) = q.get_mut(entity) else {
             continue;
         };
         if on_deck {
@@ -479,7 +481,8 @@ pub(in crate::net) fn sample_splines(
                 rider.local_orientation = f;
             }
         } else {
-            let smooth = smoothed(net.map(|n| n.kind), mover);
+            let flags = store.map_or(0, |s| s.0.unit_flags());
+            let smooth = smoothed(net.map(|n| n.kind), flags, mover);
             rest_facing(&mut commands, entity, &mut t, smooth, f);
             if let Some(mut rm) = motion {
                 rm.orientation = f;

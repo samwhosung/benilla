@@ -538,6 +538,7 @@ pub(in crate::net) fn extrapolate_remote_units(
             Option<&crate::net::UnitMoveModes>,
             // Whose standing facing the display smoother turns ([`super::facing::smoothed`]).
             Option<&crate::net::NetEntity>,
+            Option<&crate::net::ObjectStore>,
         ),
         (Without<Spline>, Without<ActiveMover>),
     >,
@@ -545,7 +546,7 @@ pub(in crate::net) fn extrapolate_remote_units(
     use crate::creature_anim::{ease_strafe_yaw, strafe_body_offset, wrap_pi};
     let frame_dt = time.delta_secs();
     let now_ms = time.elapsed_secs_f64() * 1000.0;
-    for (e, mut t, mut rm, speeds, twist, latched, riding, guid, granted, net) in &mut q {
+    for (e, mut t, mut rm, speeds, twist, latched, riding, guid, granted, net, store) in &mut q {
         // The window this mover steps: the frame's, or its rest past a move the tick fired in it.
         let step = match rm.fired_at_ms.take() {
             Some(fired) => {
@@ -593,7 +594,8 @@ pub(in crate::net) fn extrapolate_remote_units(
         }
         // A standing creature's facing is the display smoother's, its rows 2 to 9
         // ([`super::facing::drive_display_facing`]); only a moving one's is its mover's (row 1).
-        let smoother_faces = super::facing::smoothed(net.map(|n| n.kind), false)
+        let unit_flags = store.map_or(0, |s| s.0.unit_flags());
+        let smoother_faces = super::facing::smoothed(net.map(|n| n.kind), unit_flags, false)
             && !super::facing::moving(false, Some(&rm));
         // A mouse-turning mover sends no turn flag, only facing packets, so a standing, grounded
         // mover's applied yaw latches the shuffle (the reference's display-facing latch,

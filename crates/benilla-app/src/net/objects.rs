@@ -698,10 +698,14 @@ fn on_monster_move(In(ev): In<SessionEvent>, mut sc: Scene) {
                 rooted |= rm.flags & crate::creature_anim::move_flags::ROOT != 0;
             }
         }
-        let smooth =
-            sc.index.0.get(&guid).is_some_and(|&e| {
-                smoothed(sc.nets.get(e).ok().map(|n| n.kind), sc.movers.contains(e))
-            });
+        let smooth = sc.index.0.get(&guid).is_some_and(|&e| {
+            let flags = sc.stores.get(e).map_or(0, |s| s.0.unit_flags());
+            smoothed(
+                sc.nets.get(e).ok().map(|n| n.kind),
+                flags,
+                sc.movers.contains(e),
+            )
+        });
         monster_move(
             guid,
             transport,
