@@ -47,7 +47,8 @@ pub(crate) struct ZoneChannelWalk {
     /// The session's channels have not been walked since they were last emptied: the next commit
     /// walks whatever its zone text did, as a world entry's first commit does on the reference's
     /// empty zone cache. Deviation: a dropped link re-enters the world in this session, where the
-    /// reference logs in anew.
+    /// reference logs in anew, because of benilla's same-character reconnect, which the reference
+    /// lacks.
     owed: bool,
     /// A character session is live: without it the logout frame, still `InWorld`, would join the
     /// zone being left.
