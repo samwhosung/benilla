@@ -351,7 +351,7 @@ pub(in crate::net) fn sample_splines(
     // The paths that ended facing a unit, resolved once every path has moved this frame; `true`
     // for a deck path, whose rider takes the facing.
     let mut facing_targets: Vec<(Entity, u64, [f32; 3], bool)> = Vec::new();
-    for (entity, spline, mut t, swimming, guid, rider, net, mover, motion) in &mut q {
+    for (entity, spline, mut t, swimming, guid, rider, net, mover, mut motion) in &mut q {
         let (wow_pos, facing, pitch) = spline.sample(now);
         // A deck path's sample is the rider's transport-local pose, composed later this frame.
         if let Some(deck) = spline.deck {
@@ -411,6 +411,14 @@ pub(in crate::net) fn sample_splines(
             } else {
                 Quat::from_rotation_y(f)
             };
+        }
+        // The mover walks the path, its position and, from the tangent, its facing written each
+        // step (`0x7c5490`), so whatever ends the path leaves it standing where the path had it.
+        if let Some(rm) = motion.as_deref_mut() {
+            rm.wow_pos = wow_pos;
+            if let Some(f) = facing {
+                rm.orientation = f;
+            }
         }
         if let Some(was) = was {
             trace_ride(guid.map_or(0, |g| g.0), spline, wow_pos, was, now);

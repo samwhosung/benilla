@@ -83,6 +83,8 @@ pub(crate) struct Scene<'w, 's> {
     stores: Query<'w, 's, &'static mut ObjectStore>,
     countdowns: Query<'w, 's, &'static mut crate::items::Countdowns>,
     remote: Query<'w, 's, &'static mut RemoteMotion>,
+    /// Who walks a server path, which forces a relayed move's apply (`0x618c43`).
+    paths: Query<'w, 's, (), With<Spline>>,
     modes: Query<'w, 's, &'static mut UnitMoveModes>,
     xp_awarded: Query<'w, 's, (), With<crate::ui_chat::combat::watch::XpAwarded>>,
     client_controlled: Query<'w, 's, (), With<super::ClientControlled>>,
@@ -633,6 +635,7 @@ fn on_unit_move(In(ev): In<SessionEvent>, mut sc: Scene, world: Option<MoverWorl
     {
         let now_ms = sc.real.elapsed_secs_f64() * 1000.0;
         let tick = sc.move_tick.as_deref().and_then(|t| t.0);
+        let splined = sc.index.0.get(&guid).is_some_and(|&e| sc.paths.contains(e));
         unit_move(
             guid,
             crate::net::motion::RelayMove {
@@ -648,6 +651,7 @@ fn on_unit_move(In(ev): In<SessionEvent>, mut sc: Scene, world: Option<MoverWorl
             },
             now_ms,
             tick,
+            splined,
             &mut sc.commands,
             &sc.index,
             &sc.self_guid,
@@ -1224,12 +1228,14 @@ fn seat_arrival(
 /// A relayed `MSG_MOVE_*`. The reference schedules a remote's apply (`0x618c30`): the mover's
 /// replay chain gives the packet a fire-time, a move due by the movement clock the last tick
 /// stamped (`tick`, `@0x618dd2`) applies now and any other queues for `drain_pending_moves`, this
-/// frame's tick, with dead-reckoning in between. `WOW_REMOTE_SNAP=1` applies at arrival.
+/// frame's tick, with dead-reckoning in between. A unit on a server path (`splined`) applies at
+/// once (`0x618c43`). `WOW_REMOTE_SNAP=1` applies at arrival.
 fn unit_move(
     guid: u64,
     mv: crate::net::motion::RelayMove,
     now_ms: f64,
     tick: Option<f64>,
+    splined: bool,
     commands: &mut Commands,
     index: &GuidIndex,
     self_guid: &SelfGuid,
@@ -1299,6 +1305,26 @@ fn unit_move(
             // The chain reads the state before this move applies, as the reference times the
             // packet off the live `[esi+0x40]`/`[esi+0x150]`.
             let (flags, queue_empty) = (rm.flags, rm.pending.is_empty());
+            // A live path forces the apply (`0x618c43`): the fire-time is stored unclamped, with
+            // no re-base, no due test and no catch-up (`@0x618d67`, `@0x618e46`).
+            if splined {
+                rm.relay.schedule_forced(mv.wire_ms, now_ms);
+                trace_relay(
+                    guid,
+                    &mv,
+                    &rm.relay,
+                    now_ms,
+                    rm.pending.len(),
+                    RelayOutcome::Forced,
+                );
+                apply_move(e, &mv, &mut rm, now_ms, commands, landings);
+                let on_time = Lateness {
+                    late_ms: 0.0,
+                    ..late(now_ms)
+                };
+                seat_arrival(e, &mv, &mut rm, on_time, index, transforms, stores);
+                return;
+            }
             let fire_ms = rm.relay.schedule(mv.wire_ms, now_ms, flags, queue_empty);
             let at_arrival = arrival_snap() || rm.fires_at_arrival(fire_ms, tick);
             trace_relay(
@@ -1355,7 +1381,9 @@ fn unit_move(
                 fire_ms, now_ms,
                 "a seeding packet's fire-time is its arrival"
             );
-            if arrival_snap() || rm.fires_at_arrival(fire_ms, tick) {
+            // A live path forces it, as any mover's (`0x618c43`); a seed's fire-time is its
+            // arrival either way, so its lateness is none.
+            if splined || arrival_snap() || rm.fires_at_arrival(fire_ms, tick) {
                 trace_relay(guid, &mv, &rm.relay, now_ms, 0, RelayOutcome::Seed);
                 apply_move(e, &mv, &mut rm, now_ms, commands, landings);
                 write_pose(

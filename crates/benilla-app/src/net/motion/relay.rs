@@ -99,10 +99,18 @@ impl RelayChain {
     /// and not re-based. The ring takes the apply's lateness, none (`0x618cd1`). The ring and its
     /// base are the mover's own, kept across a re-create.
     pub(crate) fn seed_at_create(&mut self, wire_ms: u32, now_ms: f64) {
-        self.seeded = true;
-        self.last_wire_ms = wire_ms;
-        self.last_fire_ms = now_ms;
-        self.record_lateness(0.0);
+        self.seeded = false;
+        self.schedule_forced(wire_ms, now_ms);
+    }
+
+    /// A forced apply's fire-time (`0x618c30` with its last argument set, as a live path sets it
+    /// at `0x618c43`): the clock plus the skew, unclamped and not re-based, stored at `@0x618d67`;
+    /// the ring still takes its lateness (`0x618cd1`). The move applies now, with no catch-up
+    /// (`@0x618e46`).
+    pub(crate) fn schedule_forced(&mut self, wire_ms: u32, now_ms: f64) -> f64 {
+        let (skew, _) = self.step(wire_ms, now_ms);
+        self.last_fire_ms = now_ms + skew;
+        self.last_fire_ms
     }
 
     /// The move's fire-time (`0x618c30`); `flags` and `queue_empty` are the mover's state before
@@ -116,6 +124,24 @@ impl RelayChain {
         flags: u32,
         queue_empty: bool,
     ) -> f64 {
+        let (mut skew, window_max) = self.step(wire_ms, now_ms);
+        // Only a standing mover with nothing queued re-bases (`@0x618ce4`, `@0x618cf3`; the re-base
+        // `@0x618cfc`-`d41`), never stepping back past the previous fire (`@0x618d3b`).
+        if flags & BUSY_MASK == 0 && queue_empty {
+            skew = (skew + window_max - self.base_ms).clamp(SKEW_MIN_MS, SKEW_MAX_MS);
+            if now_ms + skew < self.last_fire_ms {
+                skew = self.last_fire_ms - now_ms;
+            }
+            self.base_ms = window_max;
+        }
+        let fire_ms = now_ms + skew.clamp(SKEW_MIN_MS, SKEW_MAX_MS);
+        self.last_fire_ms = fire_ms;
+        fire_ms
+    }
+
+    /// The head every apply shares (`0x618c4a`-`0x618cd6`): seeds an unseeded chain, steps the
+    /// wire stamp, and returns the skew and the ring's worst lateness with this packet's.
+    fn step(&mut self, wire_ms: u32, now_ms: f64) -> (f64, f64) {
         // An unseeded chain, a mover whose create carried no status, seeds at this packet: its
         // fire-time is its arrival (`@0x618c54`).
         if !self.seeded {
@@ -133,20 +159,8 @@ impl RelayChain {
         };
         // `skew` (`@0x618ccf`) makes `now + skew == last_fire + wire_delta`.
         let arrival_delta = now_ms - self.last_fire_ms;
-        let mut skew = wire_delta - arrival_delta;
         let window_max = self.record_lateness(arrival_delta - wire_delta);
-        // Only a standing mover with nothing queued re-bases (`@0x618ce4`, `@0x618cf3`; the re-base
-        // `@0x618cfc`-`d41`), never stepping back past the previous fire (`@0x618d3b`).
-        if flags & BUSY_MASK == 0 && queue_empty {
-            skew = (skew + window_max - self.base_ms).clamp(SKEW_MIN_MS, SKEW_MAX_MS);
-            if now_ms + skew < self.last_fire_ms {
-                skew = self.last_fire_ms - now_ms;
-            }
-            self.base_ms = window_max;
-        }
-        let fire_ms = now_ms + skew.clamp(SKEW_MIN_MS, SKEW_MAX_MS);
-        self.last_fire_ms = fire_ms;
-        fire_ms
+        (wire_delta - arrival_delta, window_max)
     }
 
     /// `MSG_MOVE_TIME_SKIPPED`: `[CMovement+0xac] += lag` and nothing else (`0x603b40`,

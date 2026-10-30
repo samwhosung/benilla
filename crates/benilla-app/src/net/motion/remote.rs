@@ -81,6 +81,8 @@ impl FallHeight {
 pub(in crate::net) enum RelayOutcome {
     /// Due, with an empty queue.
     Now,
+    /// A path is live: applied at once (`0x618c43`).
+    Forced,
     Queued,
     /// The first packet on a chain no create seeded, placed at once (only under
     /// `WOW_REMOTE_SNAP=1`: that packet's fire-time is its arrival, past the movement clock).
@@ -98,6 +100,7 @@ impl RelayOutcome {
     fn tag(self) -> &'static str {
         match self {
             Self::Now => "now",
+            Self::Forced => "forced",
             Self::Queued => "queued",
             Self::Seed => "seed",
             Self::SelfMover => "self",
