@@ -641,8 +641,7 @@ impl Model {
         match self.item_templates.get(&item_id) {
             Some(t) => Some((t.name.clone(), t.quality, t.icon.clone())),
             None => {
-                // The view the VM holds no copy of, which the app pushes, and the lookup's ask.
-                self.item_stat_asks.insert(item_id);
+                // The lookup's ask, made inside the call ([`ask_lookups`]).
                 self.quest_store.item_waits.insert(item_id);
                 self.quest_store.item_asks.push(item_id);
                 None
@@ -3885,14 +3884,18 @@ mod tests {
             Some("(GetQuestLogRewardInfo(1))"),
         );
         assert!(
-            s.take_item_stat_asks().is_empty(),
+            s.take_item_asks(crate::script::ItemCallback::QuestLog)
+                .is_empty(),
             "the rebuild asks for no reward"
         );
         s.run("SelectQuestLogEntry(3)").unwrap();
         assert!(s
             .eval::<bool>("return GetQuestLogRewardInfo(1) == nil")
             .unwrap());
-        assert_eq!(s.take_item_stat_asks(), vec![3000]);
+        assert_eq!(
+            s.take_item_asks(crate::script::ItemCallback::QuestLog),
+            vec![3000]
+        );
         s.set_item_template(
             3000,
             ItemTemplateView {
@@ -3909,9 +3912,10 @@ mod tests {
         assert!(heard::take(&s).is_empty());
     }
 
-    /// Two reads of each line in flight: the item asks once and signals once as it lands, where
-    /// the reference's lookups hold a callback a call (`0x4e05c9`); the creature is asked in each
-    /// call that misses it, its wait the host's, and its name read through the host.
+    /// Two reads of each line in flight: the item is looked up in each call that misses it and
+    /// signals once as it lands, where the reference's lookups hold a callback a call
+    /// (`0x4e05c9`); the creature is asked in each call that misses it, its wait the host's, and
+    /// its name read through the host.
     #[test]
     fn each_missed_record_signals_once_however_many_calls_missed_it() {
         let mut s = UiScript::new().unwrap();
@@ -3932,7 +3936,11 @@ mod tests {
                 "... slain: 1/3"
             );
         }
-        assert_eq!(s.take_item_stat_asks(), vec![900]);
+        assert_eq!(
+            s.take_item_asks(crate::script::ItemCallback::QuestLog),
+            vec![900, 900],
+            "one per call, the host's wait kept once"
+        );
         assert_eq!(s.take_quest_creature_asks(), vec![40, 40], "one per call");
         s.set_item_template(
             900,

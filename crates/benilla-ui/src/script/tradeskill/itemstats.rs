@@ -706,6 +706,7 @@ mod tests {
     #[test]
     fn the_binding_answers_zero_values_or_one_string_per_line() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         let table = strings();
         s.run(
             &table
@@ -745,10 +746,11 @@ mod tests {
         }
         // A recipe with no product is no item, and asks nothing.
         assert_eq!(s.arity("GetTradeSkillItemStats(3)").unwrap(), 0);
-        assert!(s.take_item_stat_asks().is_empty());
-        // An uncached template: zero values, and the template is asked for.
+        assert!(s.take_trade_skill_item_waits().is_empty());
+        // An uncached template, not in flight: zero values, and the template is asked for with
+        // the callback inside the call (`0x4fdf95`).
         assert_eq!(s.arity("GetTradeSkillItemStats(2)").unwrap(), 0);
-        assert_eq!(s.take_item_stat_asks(), [5000]);
+        assert_eq!(s.take_trade_skill_item_waits(), [5000]);
         s.set_item_template(
             5000,
             ItemTemplateView {

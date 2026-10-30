@@ -438,6 +438,62 @@ fn a_products_record_answer_rebuilds_the_book_after_a_reload() {
     assert!(rows > 0, "{rows}");
 }
 
+/// A product's record the cache refused is looked up again by `GetTradeSkillItemStats`, which
+/// asks with the callback `0x4fdc30` inside its call (`0x4fdf64`-`0x4fdf95`): a fall's listener's
+/// query goes out ahead of the next packet's handler send, and its callback waits for the answer.
+#[test]
+fn a_products_stats_miss_asks_inside_the_getters_call() {
+    let mut app = crafter();
+    let (tx, sent) = crossbeam_channel::unbounded();
+    app.insert_resource(crate::net::NetCommands(tx));
+    quietly(&mut app, r#"CastSpellByName("Tailoring")"#);
+    let refusal = SessionEvent::ItemTemplate {
+        entry: 2996,
+        info: None,
+    };
+    frame(&mut app, vec![refusal]);
+    sent.try_iter().for_each(drop);
+    app.world()
+        .non_send_resource::<UiScript>()
+        .run(
+            r#"
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("UNIT_COMBAT")
+            f:SetScript("OnEvent", function()
+                if Asked then return end
+                Asked = true
+                for i = 1, GetNumTradeSkills() do
+                    if GetTradeSkillInfo(i) == "Bolt of Linen Cloth" then
+                        GetTradeSkillItemStats(i)
+                    end
+                end
+            end)
+            "#,
+        )
+        .unwrap();
+    let duel = SessionEvent::DuelRequested {
+        arbiter: 0xF110_0000_0000_0055,
+        challenger: ME,
+    };
+    frame(&mut app, vec![fall(5), duel]);
+    let order: Vec<&str> = sent
+        .try_iter()
+        .filter_map(|c| match c {
+            crate::net::ClientCommand::ItemQuery { entry: 2996, .. } => Some("ItemQuery"),
+            crate::net::ClientCommand::DuelAccepted { .. } => Some("DuelAccepted"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(order, ["ItemQuery", "DuelAccepted"]);
+    assert_eq!(
+        app.world_mut()
+            .resource_mut::<crate::items::Items>()
+            .take_waiters(2996, crate::items::RecordCallback::TradeSkill),
+        1,
+        "the getter's callback waits on the answer"
+    );
+}
+
 /// A fall's listener that records `expr`'s answer at its call as `tag:answer`.
 fn listen(app: &mut App, tag: &str, expr: &str) {
     app.world()

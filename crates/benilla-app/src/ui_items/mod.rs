@@ -1029,6 +1029,7 @@ impl Plugin for UiItemsPlugin {
         equip_error::add_equip_error_lane(app);
         // The icons come from the equipment renderer's `ItemDisplays`.
         app.init_resource::<crate::ui_items::locks::HeldItemLocks>()
+            .init_resource::<feed::VmItemRecords>()
             // The soulbind confirmations' pending records: the client's pending-equip array and
             // its one bind-on-use cell.
             .init_resource::<crate::ui_bind_confirm::PendingEquips>()
@@ -1041,8 +1042,7 @@ impl Plugin for UiItemsPlugin {
             .add_systems(
                 Update,
                 (
-                    // The item-tooltip store answers in the feed, so the next frame's input
-                    // records, a re-hover among them, see the answer, and seats a new VM before its world entry.
+                    // The records that land outside an answer, carried into the VM's copy.
                     feed_item_stats.in_set(UnitFeed),
                     // The roll table, pushed whole once per VM, before the first hover.
                     feed_random_properties.in_set(UnitFeed),

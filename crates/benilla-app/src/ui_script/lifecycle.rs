@@ -610,8 +610,9 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
     crate::ui_chat::seed_zone_channel_catalog(world, &mut script);
     crate::bindings::seed_bindings_for_vm(&mut script);
     // The engine globals a previous VM folded out: the quest log's fold mask, with the records its
-    // cache holds, and the tradeskill repeat.
+    // cache holds, the item cache's records, and the tradeskill repeat.
     crate::ui_quest_log::seed_quest_log(world, &mut script);
+    crate::ui_items::feed::seed_vm_item_records(world, &mut script);
     crate::ui_tradeskill::seed_repeat(world, &mut script);
     crate::ui_unit::seed_language_table(world, &mut script);
     // The world map's continent and zone lists: static DBC data in the reference, read at file

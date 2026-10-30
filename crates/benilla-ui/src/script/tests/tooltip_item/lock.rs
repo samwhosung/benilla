@@ -243,13 +243,16 @@ fn a_key_lock_names_its_key_in_white_under_locked() {
 #[test]
 fn a_key_the_cache_lacks_adds_no_line_and_is_asked_for() {
     let mut s = fixture(vec![key_slot(KEY)], Some(LockOpeners::default()));
+    s.keep_calls();
     let lines = bag_lines(&mut s);
     assert!(line(&lines, "[LOCKED]").is_some());
     assert!(
         lines.iter().all(|(t, _)| !t.starts_with("[LOCKED_WITH")),
         "{lines:?}"
     );
-    assert!(s.take_item_stat_asks().contains(&KEY));
+    assert!(s
+        .take_item_asks(crate::script::ItemCallback::Tooltip)
+        .contains(&KEY));
 }
 
 /// A skill slot names the lock type, in the ramp colour of the spell the walk tried last

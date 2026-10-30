@@ -535,7 +535,11 @@ fn hovered_bag_tooltip_fills_itself_when_the_stats_land() {
         1,
         "in-flight template: the name-only fallback line"
     );
-    assert_eq!(s.take_item_stat_asks(), vec![25], "the miss asks the app");
+    assert!(
+        s.take_item_asks(benilla_ui::script::ItemCallback::Tooltip)
+            .contains(&25),
+        "the miss asks inside the build's call"
+    );
 
     // The template lands; the next frame's `OnUpdate` repaints the open tooltip.
     s.set_item_template(

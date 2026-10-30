@@ -1018,7 +1018,6 @@ fn lock_lines(lua: &Lua, v: &ItemTemplateView, inst: Option<&ItemInstance>) -> O
                 let entry = first.index;
                 let name = model.item_templates.get(&entry).map(|t| t.name.clone());
                 if name.is_none() && entry != 0 {
-                    model.item_stat_asks.insert(entry);
                     note_miss(model, CacheWait::Template(entry));
                 }
                 name.map(|arg| LockSubLine {

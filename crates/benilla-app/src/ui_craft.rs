@@ -1570,8 +1570,6 @@ mod tests {
             .filter(|c| matches!(c, crate::net::ClientCommand::ItemQuery { .. }))
             .collect();
         assert!(asked.is_empty(), "{asked:?}");
-        let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
-        assert!(script.take_item_stat_asks().is_empty(), "no pre-ask");
     }
 
     /// The pet book and a learn or an unlearn of a craft spell rebuild the open list once per

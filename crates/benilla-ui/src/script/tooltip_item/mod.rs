@@ -28,13 +28,13 @@ use render::BuilderFlags;
 
 /// The cached template as the build reads it at the call, its spell lines expanded and its
 /// reputation line gendered against the player as it stands (`0x5075f0` at `0x52da24`,
-/// `0x52d80f`); a miss records the ask and waits for its answer (`0x52b716`).
+/// `0x52d80f`); a miss is noted for the build, which asks it with the tooltip as the cookie
+/// inside its call and waits for its answer (`0x52b716`, [`build::ask_tooltip_records`]).
 fn view_of(lua: &Lua, item_id: u32) -> Option<ItemTemplateView> {
     let live = crate::script::item_stats::live_record(lua, item_id);
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     let v = live.unwrap_or_else(|| model.item_templates.get(&item_id).cloned());
     if v.is_none() && item_id != 0 {
-        model.item_stat_asks.insert(item_id);
         build::note_miss(&mut model, build::CacheWait::Template(item_id));
     }
     v

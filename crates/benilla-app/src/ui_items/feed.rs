@@ -8,7 +8,7 @@ use benilla_ui::script::{ContainerSlot, ItemRead, UiScript};
 
 use crate::entities::ItemDisplays;
 use crate::items::Items;
-use crate::net::{NetCommands, ObjectStore};
+use crate::net::ObjectStore;
 use crate::query_cache::Ask;
 
 use super::find_equip_slot;
@@ -733,29 +733,56 @@ pub(crate) fn tooltips_answered(world: &mut World, entry: u32) {
     }
 }
 
-/// The item-record feed: every template that lands outside an answer (a cache file's load) is
-/// pushed unprompted, and a new VM is seated with every cached one, so the first hover never
-/// misses, as the reference reads one item cache synchronously that a `/reload` keeps. The copy's
-/// texts read no player ([`RecordViews::build`]). A miss the VM asked for is the getter's lookup
-/// with a callback, which queries it here and asks a refused one again; a miss `GetItemInfo` read
-/// is served from the cache and never queried (`0x48e172`).
+/// The change count each VM's copy of the item records has taken in ([`Items::changed_since`]):
+/// set where a new interface's load seats the copy ([`seed_vm_item_records`]), then carried on by
+/// [`feed_item_stats`]. A VM no load seated has none.
+#[derive(Resource, Default)]
+pub(crate) struct VmItemRecords(crate::ui_script::VmMemo<Option<u64>>);
+
+/// A new interface's copy of the item records, seated at its load before any file or event runs:
+/// every record the cache holds, so its files and the listeners of the login's first packets read
+/// it whole, as the reference's interface reads the one item cache a `/reload` keeps from its
+/// first file (`0x55ba30`). The copy's texts read no player and the VM's strings as they stand,
+/// none yet: they serve a VM with no host alone, as every getter of a hosted VM reads its
+/// record's lines through the host at the call ([`ItemViewLive`]).
+pub(crate) fn seed_vm_item_records(world: &mut World, script: &mut UiScript) {
+    let mut state = bevy::ecs::system::SystemState::<(Option<Res<Items>>, RecordViews)>::new(world);
+    let (items, views) = state.get(world);
+    let Some(items) = items else {
+        return;
+    };
+    let count = items.change_count();
+    let built = views.build(&items, script, items.cached_template_ids());
+    for (id, view) in built {
+        script.set_item_template(id, view);
+    }
+    *world.get_resource_or_init::<VmItemRecords>().0.get(script) = Some(count);
+}
+
+/// The item-record feed: the records that land or go outside an answer, a cache file's load and
+/// another realm's forget, carried into the VM's copy, and the ones `GetItemInfo` or a link verb
+/// read that the copy lacked, served from the cache (`0x48e172`); a VM no load seated is seated
+/// whole first. None of it is a packet's: an answer's record reaches the copy at its packet, ahead
+/// of its callbacks ([`push_answered_record`]), a getter's miss asks inside its call through the
+/// host (`0x55ba30`), and the cache's file is loaded at the character's pick, ahead of the world
+/// entry's load. The copy's texts read no player ([`RecordViews::build`]).
 pub(super) fn feed_item_stats(
-    mut vm: crate::script_calls::VmWith<(Res<'static, Items>, RecordViews<'static>)>,
-    commands: Res<NetCommands>,
+    mut vm: crate::script_calls::VmWith<(
+        Res<'static, Items>,
+        RecordViews<'static>,
+        ResMut<'static, VmItemRecords>,
+    )>,
     mut pending: Local<crate::ui_script::VmMemo<std::collections::HashSet<u32>>>,
-    // The record changes this VM has taken in ([`Items::changed_since`]).
-    mut cursor: Local<crate::ui_script::VmMemo<u64>>,
 ) {
-    vm.turn(|script, (items, views)| {
+    vm.turn(|script, (items, views, mut seated)| {
         let Some(script) = script else {
             return;
         };
-        let (pending, new_vm) = pending.get_reset(script);
-        let cursor = cursor.get(script);
-        if new_vm {
+        let pending = pending.get(script);
+        let cursor = seated.0.get(script).get_or_insert_with(|| {
             pending.extend(items.cached_template_ids());
-            *cursor = items.change_count();
-        }
+            items.change_count()
+        });
         // A landed record is pushed unprompted; a refusal on a held record removed it from the
         // cache (`0x556f35`), and the VM's copy goes.
         if *cursor != items.change_count() {
@@ -768,10 +795,6 @@ pub(super) fn feed_item_stats(
                 }
             }
             *cursor = items.change_count();
-        }
-        for id in script.take_item_stat_asks() {
-            items.template(id, 0, Ask::Event(&commands));
-            pending.insert(id);
         }
         // A read the cache misses has nothing to push; a later landing pushes it unprompted.
         pending.extend(
@@ -1895,25 +1918,34 @@ mod ask_tests {
     use crate::items::Items;
     use crate::net::NetCommands;
 
-    /// A `/reload` keeps the reference's item cache, so a new VM is seated with every cached
-    /// record its first frame, ahead of its world entry, and its first read hits.
-    #[test]
-    fn a_new_vm_is_seated_with_every_cached_template() {
+    /// The feed alone over a fresh VM, with the sends kept.
+    fn feed_app() -> (App, crossbeam_channel::Receiver<crate::net::ClientCommand>) {
         let (tx, rx) = crossbeam_channel::unbounded();
         let mut app = App::new();
         app.insert_resource(NetCommands(tx))
             .init_resource::<Items>()
+            .init_resource::<super::VmItemRecords>()
             .init_resource::<crate::spell::SpellModifiers>()
             .add_systems(Update, super::feed_item_stats);
+        (app, rx)
+    }
+
+    /// `GetItemInfo(25)` off the VM's copy, with no host lent.
+    fn name(app: &mut App) -> Option<String> {
+        app.world_mut()
+            .non_send_resource_mut::<benilla_ui::script::UiScript>()
+            .eval::<Option<String>>("return (GetItemInfo(25))")
+            .unwrap()
+    }
+
+    /// A VM no interface's load seated (a harness's) is seated with every cached record by the
+    /// feed, and a new one again; nothing is asked.
+    #[test]
+    fn a_vm_no_load_seated_is_seated_with_every_cached_template() {
+        let (mut app, rx) = feed_app();
         app.world_mut()
             .resource_mut::<Items>()
             .insert_template(25, Some(crate::items::test_template("Linen Cloth")));
-        let name = |app: &mut App| {
-            app.world_mut()
-                .non_send_resource_mut::<benilla_ui::script::UiScript>()
-                .eval::<Option<String>>("return (GetItemInfo(25))")
-                .unwrap()
-        };
         app.insert_non_send_resource(benilla_ui::script::UiScript::new().unwrap());
         app.update();
         assert_eq!(name(&mut app).as_deref(), Some("Linen Cloth"));
@@ -1927,26 +1959,53 @@ mod ask_tests {
         assert!(crate::query_cache::queries(&rx).is_empty());
     }
 
+    /// A VM its load seated takes no second copy from the feed: only what changed since.
+    #[test]
+    fn a_vm_its_load_seated_takes_only_what_changed_since() {
+        let (mut app, _rx) = feed_app();
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(25, Some(crate::items::test_template("Linen Cloth")));
+        let mut script = benilla_ui::script::UiScript::new().unwrap();
+        super::seed_vm_item_records(app.world_mut(), &mut script);
+        app.insert_non_send_resource(script);
+        assert_eq!(
+            name(&mut app).as_deref(),
+            Some("Linen Cloth"),
+            "seated at the load"
+        );
+        app.world_mut()
+            .non_send_resource_mut::<benilla_ui::script::UiScript>()
+            .drop_item_template(25);
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(26, Some(crate::items::test_template("Wool Cloth")));
+        app.update();
+        assert_eq!(
+            name(&mut app),
+            None,
+            "the seated record is not pushed again"
+        );
+        assert_eq!(
+            app.world_mut()
+                .non_send_resource_mut::<benilla_ui::script::UiScript>()
+                .eval::<Option<String>>("return (GetItemInfo(26))")
+                .unwrap()
+                .as_deref(),
+            Some("Wool Cloth"),
+            "the record landed since is"
+        );
+    }
+
     /// A refusal on a record the cache held removes it (`0x556ec0`-`0x556f37`), so the VM's copy
     /// goes too: its readers, the equip questions among them, miss where they read it before.
     #[test]
     fn a_refusal_on_a_held_record_leaves_the_vm_too() {
-        let (tx, _rx) = crossbeam_channel::unbounded();
-        let mut app = App::new();
-        app.insert_resource(NetCommands(tx))
-            .init_resource::<Items>()
-            .init_resource::<crate::spell::SpellModifiers>()
-            .add_systems(Update, super::feed_item_stats);
+        let (mut app, _rx) = feed_app();
         app.world_mut()
             .resource_mut::<Items>()
             .insert_template(25, Some(crate::items::test_template("Linen Cloth")));
         app.insert_non_send_resource(benilla_ui::script::UiScript::new().unwrap());
-        let name = |app: &mut App| {
-            app.world_mut()
-                .non_send_resource_mut::<benilla_ui::script::UiScript>()
-                .eval::<Option<String>>("return (GetItemInfo(25))")
-                .unwrap()
-        };
         app.update();
         assert_eq!(name(&mut app).as_deref(), Some("Linen Cloth"));
         app.world_mut()
@@ -1956,17 +2015,11 @@ mod ask_tests {
         assert_eq!(name(&mut app), None, "the refusal removed it");
     }
 
-    /// A miss the VM asks for is the getter's lookup with a callback: it queries, a frame between
-    /// asks queries nothing, and the next ask queries a refused id again. A miss `GetItemInfo`
-    /// reads never queries (`0x48e172`).
+    /// A miss `GetItemInfo` reads never queries (`0x48e172`): not at the read, not at a frame,
+    /// not on a refused record.
     #[test]
-    fn a_refused_template_is_asked_by_the_next_getter_and_never_by_get_item_info() {
-        let (tx, rx) = crossbeam_channel::unbounded();
-        let mut app = App::new();
-        app.insert_resource(NetCommands(tx))
-            .init_resource::<Items>()
-            .init_resource::<crate::spell::SpellModifiers>()
-            .add_systems(Update, super::feed_item_stats);
+    fn get_item_info_never_queries_a_miss() {
+        let (mut app, rx) = feed_app();
         app.insert_non_send_resource(benilla_ui::script::UiScript::new().unwrap());
         let run = |app: &mut App, lua: &str| {
             app.world_mut()
@@ -1980,14 +2033,6 @@ mod ask_tests {
             crate::query_cache::queries(&rx).is_empty(),
             "a read asks nothing"
         );
-        let ask = |app: &mut App| {
-            app.world_mut()
-                .non_send_resource_mut::<benilla_ui::script::UiScript>()
-                .ask_item_templates([25]);
-            app.update();
-        };
-        ask(&mut app);
-        assert_eq!(crate::query_cache::queries(&rx).len(), 1);
         app.world_mut()
             .resource_mut::<Items>()
             .insert_template(25, None);
@@ -1997,12 +2042,6 @@ mod ask_tests {
         assert!(
             crate::query_cache::queries(&rx).is_empty(),
             "no frame or read asks a refusal"
-        );
-        ask(&mut app);
-        assert_eq!(
-            crate::query_cache::queries(&rx).len(),
-            1,
-            "the next getter asks again"
         );
     }
 

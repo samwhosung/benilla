@@ -1510,8 +1510,6 @@ mod tests {
             ),
             "{asked:?}"
         );
-        let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
-        assert!(script.take_item_stat_asks().is_empty(), "no pre-ask");
     }
 
     /// A learn or an unlearn of a profession spell rebuilds the open list once per packet

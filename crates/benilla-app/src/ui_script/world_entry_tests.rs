@@ -921,6 +921,44 @@ fn the_roster_flag_outlives_a_reload_and_not_a_login() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// A new interface's copy of the item records is seated at its load, before its first frame's
+/// feed: a read off the copy finds every record the cache holds from the load on, at a login and
+/// at a reload, as the reference's interface reads the one item cache from its first file
+/// (`0x55ba30`). The login's first packets dispatch in that frame, ahead of the feed.
+#[test]
+fn a_new_interfaces_item_records_are_seated_at_its_load() {
+    use benilla_ui::script::UiScript;
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (tmp, _c, _h) = hermetic_probe("item-records");
+    let mut world = booted_world();
+    world.init_resource::<crate::items::Items>();
+    world
+        .resource_mut::<crate::items::Items>()
+        .insert_template(25, Some(crate::items::test_template("Linen Cloth")));
+    // Off the VM's copy, with no host lent to read the cache through.
+    let copy = |world: &World| -> Option<String> {
+        world
+            .non_send_resource::<UiScript>()
+            .eval("return (GetItemInfo(25))")
+            .unwrap()
+    };
+
+    log_in_as(&mut world, "Onehunter", 1);
+    assert_eq!(
+        copy(&world).as_deref(),
+        Some("Linen Cloth"),
+        "a login's load"
+    );
+    reload(&mut world, crate::client_state::ClientState::InWorld);
+    assert_eq!(copy(&world).as_deref(), Some("Linen Cloth"), "a reload's");
+
+    drop(world);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// `GetDefaultLanguage` reads the held player (`0x49fce9`, zero values without one at `0x49fcf0`),
 /// and a login's load runs before the player's create can arrive (`0x401789`): its file scope gets
 /// nothing, whatever the roster row's race.

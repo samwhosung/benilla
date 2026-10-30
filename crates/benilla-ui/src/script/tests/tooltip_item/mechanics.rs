@@ -11,6 +11,7 @@ use crate::script::*;
 #[test]
 fn bag_item_money_law_and_fallback() {
     let mut s = script();
+    s.keep_calls();
     s.set_screen_size(800.0, 600.0);
     let mut slots = HashMap::new();
     slots.insert(
@@ -77,7 +78,11 @@ fn bag_item_money_law_and_fallback() {
     "#,
     )
     .unwrap();
-    assert_eq!(s.take_item_stat_asks(), vec![9999], "the miss asked");
+    assert_eq!(
+        s.take_item_asks(crate::script::ItemCallback::Tooltip),
+        vec![9999],
+        "the miss asked inside the build's call"
+    );
     s.set_item_template(
         9999,
         ItemTemplateView {

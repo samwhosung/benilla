@@ -1183,9 +1183,9 @@ fn reward_row_hover_serves_the_shared_item_tooltip() {
     seat(&mut s, &eight());
     s.run("ToggleQuestLog()").unwrap();
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
-    assert_eq!(
-        s.take_item_stat_asks(),
-        vec![2024],
+    assert!(
+        s.take_item_asks(benilla_ui::script::ItemCallback::QuestLog)
+            .contains(&2024),
         "the detail's reward getter missed and asked"
     );
     s.set_item_template(

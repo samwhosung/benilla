@@ -1251,7 +1251,7 @@ fn the_link_verbs_answer_the_clients_shapes() {
             .unwrap(),
         "an uncached reagent template is nil, and nothing is queried"
     );
-    assert!(s.take_item_stat_asks().is_empty());
+    assert!(s.take_record_asks().is_empty());
     s.set_item_template(
         r.reagents[0].item,
         crate::script::ItemTemplateView {
@@ -1583,16 +1583,66 @@ fn leaving_the_world_zeroes_the_pending_count_and_entering_it_does_not() {
     assert!(s.trade_skill_record_landed());
 }
 
-/// `GetTradeSkillItemStats` waits only on a record the item cache lacks (`0x4fdf77`): a product
-/// the app holds asks for none, though the getter's own view of it is not filled yet.
+/// A host whose item cache holds every record, each answered through its live read, and that
+/// keeps the calls it applies.
+#[derive(Default)]
+struct HoldsEveryRecord(Vec<crate::script::ScriptCall>);
+
+impl crate::script::CallHost for HoldsEveryRecord {
+    fn apply(
+        &mut self,
+        _: &mut UiScript,
+        call: crate::script::ScriptCall,
+    ) -> Option<crate::script::CallTail> {
+        self.0.push(call);
+        None
+    }
+
+    fn read_live(&mut self, ask: &mut crate::script::live::LiveAsk<'_>) -> bool {
+        ask.answer(|q: &crate::script::ItemViewQuery| {
+            Some(Some(crate::script::LiveItemView {
+                view: crate::script::ItemTemplateView {
+                    name: format!("Product {}", q.0),
+                    // "Unique", a line whatever its string holds (`0x4fe0ba`).
+                    max_count: 1,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }))
+        })
+    }
+}
+
+/// `GetTradeSkillItemStats` reads the product's record in the item cache at the call
+/// (`0x4fdf95`): one the cache holds answers its lines and asks for nothing, though the VM's copy
+/// lacks it; one it lacks is asked with the callback inside the call, in flight or not.
 #[test]
-fn the_item_stats_getter_waits_only_on_a_record_in_flight() {
+fn the_item_stats_getter_reads_the_cache_at_the_call_and_asks_a_miss() {
     let mut s = UiScript::new().unwrap();
-    s.keep_calls();
     s.set_trade_skill(Some(two_recipe_state()));
+    let mut host = HoldsEveryRecord::default();
+    let lines: i64 = s
+        .hosted(&mut host, |s| {
+            s.eval("return table.getn({ GetTradeSkillItemStats(2) })")
+        })
+        .unwrap();
+    assert!(lines > 0, "the record the cache holds answers its lines");
+    assert!(
+        !host
+            .0
+            .iter()
+            .any(|c| matches!(c, crate::script::ScriptCall::RecordAsk(_))),
+        "nothing asked: {:?}",
+        host.0
+    );
+    s.keep_calls();
     s.run("GetTradeSkillItemStats(2) GetTradeSkillItemStats(3)")
         .unwrap();
-    assert!(s.take_trade_skill_item_waits().is_empty());
+    assert_eq!(
+        s.take_trade_skill_item_waits().len(),
+        2,
+        "a miss of the copy with no host asks each call's lookup"
+    );
 }
 
 /// The world-enter init (`0x4fc750`) zeroes the row and header counts and keeps the open line

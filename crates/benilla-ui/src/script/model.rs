@@ -917,9 +917,6 @@ pub(crate) struct Model {
     pub(crate) quest_blip: Option<quest_log::QuestBlip>,
     /// Item id to its tooltip view.
     pub(crate) item_templates: HashMap<u32, ItemTemplateView>,
-    /// Item ids asked for and missing, for the app to answer: a lookup with a callback, which
-    /// asks the server.
-    pub(crate) item_stat_asks: HashSet<u32>,
     /// Item ids `GetItemInfo` read and missing: its lookup passes no callback (`0x48e185`), so
     /// the app answers from its cache only.
     pub(crate) item_stat_reads: HashSet<u32>,
@@ -1648,7 +1645,6 @@ impl Model {
             random_properties: HashMap::new(),
             enchant_names: HashMap::new(),
             known_spells: HashSet::new(),
-            item_stat_asks: HashSet::new(),
             item_stat_reads: HashSet::new(),
             player_req: PlayerReqState::default(),
             lock_rows: HashMap::new(),

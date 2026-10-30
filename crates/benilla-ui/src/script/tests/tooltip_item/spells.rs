@@ -222,6 +222,7 @@ fn a_recipe_line_is_white_and_shows_its_product_and_reagents() {
 #[test]
 fn a_reagent_or_product_in_flight_waits_for_its_answer() {
     let mut s = recipe_fixture();
+    s.keep_calls();
     s.run(
         r#"
         local a = CreateFrame("Button", "RecipeSlot"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
@@ -239,7 +240,10 @@ fn a_reagent_or_product_in_flight_waits_for_its_answer() {
         "no reagent line: {:?}",
         texts(&mut s)
     );
-    assert_eq!(s.take_item_stat_asks(), [VIAL]);
+    assert_eq!(
+        s.take_item_asks(crate::script::ItemCallback::Tooltip),
+        [VIAL]
+    );
     vial_arrives(&mut s);
     assert_eq!(
         texts(&mut s).last().map(String::as_str),
@@ -248,6 +252,7 @@ fn a_reagent_or_product_in_flight_waits_for_its_answer() {
     );
 
     let mut s = recipe_fixture();
+    s.keep_calls();
     vial_arrives(&mut s);
     s.set_item_template(
         RECIPE + 2,
@@ -274,7 +279,10 @@ fn a_reagent_or_product_in_flight_waits_for_its_answer() {
             "\n[REQ_SKILL Empty Vial]"
         ]
     );
-    assert_eq!(s.take_item_stat_asks(), [9999]);
+    assert_eq!(
+        s.take_item_asks(crate::script::ItemCallback::Tooltip),
+        [9999]
+    );
     assert!(s.take_errors().is_empty());
 }
 

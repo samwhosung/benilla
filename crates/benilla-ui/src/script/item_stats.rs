@@ -1,9 +1,9 @@
 //! The shared item-template store every item tooltip renders through, as the reference's one
 //! renderer (`0x52b650`, behind 8 of the 9 `Set*Item` bindings) reads one template cache.
 //!
-//! The app pushes each template as it lands; a read of an unknown id records an ask that the app
-//! turns into `CMSG_ITEM_QUERY`, the reference's uncached-item early-out. The app resolves every
-//! DBC string, as the engine reads no DBCs.
+//! The app seats the VM's copy at its load and pushes each template as it lands; a getter's miss
+//! asks the item cache inside its call through the lent host (`0x55ba30`), the reference's
+//! uncached-item early-out. The app resolves every DBC string, as the engine reads no DBCs.
 
 use std::collections::{HashMap, HashSet};
 
@@ -513,10 +513,9 @@ impl super::UiScript {
 }
 
 impl super::UiScript {
-    /// Stores or replaces an item's template view, clearing its ask and its read.
+    /// Stores or replaces an item's template view, clearing its read.
     pub fn set_item_template(&mut self, item_id: u32, view: ItemTemplateView) {
         let mut model = self.model_mut();
-        model.item_stat_asks.remove(&item_id);
         model.item_stat_reads.remove(&item_id);
         model.item_templates.insert(item_id, view);
         model.quest_store.item_landed(item_id);
@@ -525,17 +524,6 @@ impl super::UiScript {
     /// Removes an item's template view: the app's cache lost the record to a refusal.
     pub fn drop_item_template(&mut self, item_id: u32) {
         self.model_mut().item_templates.remove(&item_id);
-    }
-
-    /// Asks for the templates of `ids` the store lacks, for the trade-skill and craft lists,
-    /// whose link verbs never query: the reference has them cached before the list shows.
-    pub fn ask_item_templates(&mut self, ids: impl IntoIterator<Item = u32>) {
-        let mut model = self.model_mut();
-        for id in ids {
-            if id != 0 && !model.item_templates.contains_key(&id) {
-                model.item_stat_asks.insert(id);
-            }
-        }
     }
 
     /// Reads the templates of `ids` the store lacks off the app's cache, asking nothing: the
@@ -548,11 +536,6 @@ impl super::UiScript {
                 model.item_stat_reads.insert(id);
             }
         }
-    }
-
-    /// Drains the ids asked for that the store did not hold.
-    pub fn take_item_stat_asks(&mut self) -> Vec<u32> {
-        self.model_mut().item_stat_asks.drain().collect()
     }
 
     /// The guids of the creators and givers the item builds a harness's VM kept the calls of
@@ -939,9 +922,10 @@ mod tests {
     #[test]
     fn miss_records_a_read_and_push_serves_the_stats() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         assert!(s.eval::<bool>("return GetItemInfo(25) == nil").unwrap());
         assert_eq!(s.take_item_stat_reads(), vec![25]);
-        assert!(s.take_item_stat_asks().is_empty(), "no ask of the server");
+        assert!(s.take_record_asks().is_empty(), "no ask of the server");
 
         s.set_item_template(
             25,
@@ -1147,6 +1131,7 @@ mod get_item_info_tests {
     #[test]
     fn an_uncached_id_returns_nothing_and_records_a_read() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         assert_eq!(
             s.arity("GetItemInfo(2589)").unwrap(),
             0,
@@ -1158,7 +1143,7 @@ mod get_item_info_tests {
             vec![2589],
             "the read was recorded"
         );
-        assert!(s.take_item_stat_asks().is_empty(), "and no ask");
+        assert!(s.take_record_asks().is_empty(), "and no ask");
 
         s.set_item_template(
             2589,
@@ -1173,17 +1158,19 @@ mod get_item_info_tests {
             "Linen Cloth",
             "the app's push answers the next read"
         );
-        assert!(s.take_item_stat_asks().is_empty(), "the push cleared it");
+        assert!(s.take_item_stat_reads().is_empty(), "the push cleared it");
 
         // Id 0 and a negative id record no ask.
         assert_eq!(s.arity("GetItemInfo(0)").unwrap(), 0);
         assert_eq!(s.arity("GetItemInfo(-5)").unwrap(), 0);
-        assert!(s.take_item_stat_asks().is_empty());
+        assert!(s.take_record_asks().is_empty());
+        assert!(s.take_item_stat_reads().is_empty());
     }
 
     #[test]
     fn the_argument_forms_are_the_references_own() {
         let mut s = UiScript::new().unwrap();
+        s.keep_calls();
         s.set_item_template(25, worn_shortsword());
 
         for arg in ["25", "\"25\"", "25.7"] {
@@ -1220,7 +1207,7 @@ mod get_item_info_tests {
                 "argument {arg} resolves to item id 0"
             );
         }
-        assert!(s.take_item_stat_asks().is_empty());
+        assert!(s.take_record_asks().is_empty());
 
         // Neither a number nor a string raises the usage error (`0x842d24`).
         let err = s

@@ -170,40 +170,41 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // GetTradeSkillItemStats(index) (`0x4fdec0`): one string per tooltip line of the item the
-    // recipe
-    // creates ([`super::itemstats`]), and zero values on any miss: an index outside the full row
-    // list, a header, a spell with no product, or a template not cached yet, which is asked for
-    // (`0x4fdf95`) so the next call finds it.
+    // recipe creates ([`super::itemstats`]), and zero values on any miss: an index outside the
+    // full row list, a header, a spell with no product, or a record the item cache lacks at the
+    // call, which is asked for with the callback (`0x4fdf95`) so its answer rebuilds the list.
     g.set(
         "GetTradeSkillItemStats",
         lua.create_function(|lua, index: Value| {
             let index = number_arg(lua, index, "Usage: GetTradeSkillItemStats(index)")?;
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            let product = usize::try_from(index)
-                .ok()
-                .and_then(|i| i.checked_sub(1))
-                .and_then(|n| rows(&model).get(n).cloned())
-                .and_then(|row| match row {
-                    Row::Header { .. } => None,
-                    Row::Entry(ei) => model.trade_skill.as_ref().map(|t| &t.recipes[ei]),
-                })
-                .map(|r| {
-                    let in_flight = r.icon_pending == Some(r.product_item);
-                    (r.product_item, in_flight, r.spell_id)
-                });
-            let Some((product, in_flight, spell_id)) = product else {
+            let product = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                usize::try_from(index)
+                    .ok()
+                    .and_then(|i| i.checked_sub(1))
+                    .and_then(|n| rows(&model).get(n).cloned())
+                    .and_then(|row| match row {
+                        Row::Header { .. } => None,
+                        Row::Entry(ei) => model.trade_skill.as_ref().map(|t| &t.recipes[ei]),
+                    })
+                    .map(|r| (r.product_item, r.spell_id))
+            };
+            let Some((product, spell_id)) = product else {
                 return Ok(MultiValue::new());
             };
-            let Some(view) = model.item_templates.get(&product).cloned() else {
+            // The record as the item cache holds it at the call, the VM's copy with no host lent.
+            let view = (product != 0)
+                .then(|| crate::script::item_stats::live_record(lua, product))
+                .flatten();
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            let view = view.unwrap_or_else(|| model.item_templates.get(&product).cloned());
+            let Some(view) = view else {
+                drop(model);
+                // The item cache's miss asks and waits with the callback `0x4fdc30` inside the
+                // call, in flight or not (`0x4fdf64`-`0x4fdf95`); a zero key asks nothing
+                // (`0x55ba42`).
                 if product != 0 {
-                    // The view the VM holds no copy of, which the app pushes.
-                    model.item_stat_asks.insert(product);
-                    drop(model);
-                    // The item cache's miss asks and waits with the callback `0x4fdc30` inside
-                    // the call (`0x4fdf77`).
-                    if in_flight {
-                        ask_item(lua, product, spell_id)?;
-                    }
+                    ask_item(lua, product, spell_id)?;
                 }
                 return Ok(MultiValue::new());
             };
