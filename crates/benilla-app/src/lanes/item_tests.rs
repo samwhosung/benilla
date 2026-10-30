@@ -480,29 +480,54 @@ fn a_looted_items_set_up_runs_ahead_of_its_push_at_the_answer() {
 }
 
 /// The close our own gather's GO owes runs inside the GO (`0x60d10b` → `0x48f200`), ahead of the
-/// response behind it: it takes the window open then, or nothing (`0x48f23f`), never the one
-/// the response opens.
+/// response behind it in the same frame: it takes the window open then, or nothing (`0x48f23f`),
+/// never the one the response opens.
 #[test]
 fn a_close_owed_ahead_of_a_response_takes_only_the_window_before_it() {
+    const GATHER: u32 = 7620;
     let mut app = client();
     stream_bobber(&mut app);
-    let owe = |app: &mut App| {
-        app.world_mut()
-            .resource_mut::<crate::ui_loot::LootCloseAtRest>()
-            .0 = true
+    app.world_mut().insert_resource(crate::ui_action::Spells {
+        catalog: benilla_formats::SpellCatalog::from_displays(std::collections::HashMap::from([(
+            GATHER,
+            Default::default(),
+        )])),
+        ..crate::ui_action::Spells::empty_for_tests()
+    });
+    // Our gather's GO, its precast held, ending it with its tail (`0x6e7fc5`).
+    let go = |app: &mut App| {
+        let world = app.world_mut();
+        let me = world.resource::<crate::net::GuidIndex>().0[&ME];
+        world.entity_mut(me).insert(crate::creature_anim::Precast {
+            spell_id: GATHER,
+            busy: true,
+        });
+        SessionEvent::SpellGo {
+            caster: ME,
+            spell_id: GATHER,
+            cast_flags: 0x100,
+            hits: vec![],
+            misses: vec![],
+            target: None,
+            go_target: None,
+            target_mask: 0,
+            source: None,
+            dest: None,
+            ammo_display_id: None,
+            item_caster: None,
+            unit_caster: ME,
+        }
     };
     let open = |app: &App| app.world().resource::<crate::ui_loot::LootState>().source();
-    owe(&mut app);
+    let first = go(&mut app);
     assert_eq!(
-        frame(&mut app, vec![fished(&[(0, POTION)])]),
+        frame(&mut app, vec![first, fished(&[(0, POTION)])]),
         ["LOOT_OPENED:nil"]
     );
     assert_eq!(open(&app), Some(BOBBER));
-    // Settled at the response: nothing is left owed for the frame's drain to close it with.
-    assert!(!app.world().resource::<crate::ui_loot::LootCloseAtRest>().0);
-    owe(&mut app);
+    let second = go(&mut app);
     assert_eq!(
-        frame(&mut app, vec![fished(&[(1, POTION)])]),
+        frame(&mut app, vec![second, fished(&[(1, POTION)])]),
         ["LOOT_CLOSED:nil", "LOOT_OPENED:nil"]
     );
     assert_eq!(open(&app), Some(BOBBER));

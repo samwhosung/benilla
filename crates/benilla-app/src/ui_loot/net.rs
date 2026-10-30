@@ -5,7 +5,7 @@ use benilla_protocol::messages::ItemPushResult;
 use benilla_protocol::{SessionEvent, SessionEventKind};
 use bevy::prelude::*;
 
-use super::{LootCloseAtRest, LootLatch, LootMoveStart, LootState};
+use super::{LootLatch, LootMoveStart, LootState};
 use crate::net::{ClientCommand, NetCommands, NetHandlerApp, SelfGuid};
 use crate::query_cache::Ask;
 use crate::ui_action::{UiError, UiErrorKeys};
@@ -34,9 +34,9 @@ pub(super) fn register(app: &mut App) {
 /// `ERR_LOOT_DIDNT_KILL` and returns (`0x5ebb33`, mask 1, `0x5ebb3f`) before the latch
 /// (`0x5ebb60`) and the open. One that lands while our own
 /// body moves takes the move-start close (`0x5ebc3a`-`0x5ebc51`), which the loot lane runs after
-/// the copier's end, or the drain when the window waits on an item template. A close owed ahead of
-/// it takes the window it found first ([`OwedAhead`]), on the lane ahead of this one's steps. The
-/// copier asks each row's record here (`0x4c1e77`).
+/// the copier's end, or the drain when the window waits on an item template. A move-start close
+/// owed ahead of it takes the window it found first ([`OwedAhead`]), on the lane ahead of this
+/// one's steps. The copier asks each row's record here (`0x4c1e77`).
 fn on_response(
     In(ev): In<SessionEvent>,
     mut set: crate::script_calls::disjoint::Pair<
@@ -137,24 +137,20 @@ impl Response<'_, '_> {
     }
 }
 
-/// The closes owed ahead of a response, which the reference runs where they are owed: our own
-/// cast's GO ends its precast with the tail's close (`0x60d10b` → `0x48f200`), on the move the
-/// move-start one ([`LootMoveStart`]), at rest the full one ([`LootCloseAtRest`]). They take the
-/// window open then, or nothing (`0x48f23f`), never the one this response opens.
+/// The move-start close owed ahead of a response ([`LootMoveStart`]), which the reference runs
+/// where it is owed, ahead of this packet (the movement guard's `0x60e9dd`, the stand apply's
+/// `0x5f07d5`): it takes the window open then, or nothing (`0x48f23f`), never the one this
+/// response opens.
 #[derive(bevy::ecs::system::SystemParam)]
 struct OwedAhead<'w, 's> {
     move_start: ResMut<'w, LootMoveStart>,
-    at_rest: ResMut<'w, LootCloseAtRest>,
-    objects: crate::net::Objects<'w, 's>,
     dead: super::DeadUnitDeselect<'w, 's>,
 }
 
 impl OwedAhead<'_, '_> {
-    /// Run the owed closes at this packet, the move-start one first, their steps queued ahead of
-    /// the response's. A move-start close an earlier response in this drain owes stays for the
-    /// loot lane, which runs it after that window's copier end (`0x5ebc51`). A disenchant hold's
-    /// sweep (`0x48f264`) needs the VM and is owed to the lane, which runs it unless this
-    /// response's copier replaces the session.
+    /// Run the owed close at this packet, its steps queued ahead of the response's. A move-start
+    /// close an earlier response in this drain owes stays for the loot lane, which runs it after
+    /// that window's copier end (`0x5ebc51`).
     fn settle(&mut self, loot: &mut LootState, latch: &mut LootLatch, net: &NetCommands) {
         let response_owes = loot
             .steps
@@ -163,14 +159,6 @@ impl OwedAhead<'_, '_> {
         if !response_owes && std::mem::take(&mut self.move_start.0) {
             let closed = super::close_on_move_start(loot, latch, net);
             self.dead.after_close(closed);
-        }
-        if std::mem::take(&mut self.at_rest.0) {
-            if loot.disenchant_hold(&self.objects) {
-                loot.owe_sweep();
-            } else {
-                let closed = super::close_interaction(loot, latch, Some(net));
-                self.dead.after_close(closed);
-            }
         }
     }
 }
@@ -1141,7 +1129,6 @@ mod tests {
         world.init_resource::<bevy::ecs::message::Messages<crate::player::StandStateRequest>>();
         world.init_resource::<crate::player::Player>();
         world.init_resource::<super::super::LootMoveStart>();
-        world.init_resource::<super::super::LootCloseAtRest>();
         world.init_resource::<super::super::AutoLootByte>();
         world.init_resource::<UiErrorKeys>();
         world.spawn((
@@ -1574,9 +1561,10 @@ mod tests {
         }
     }
 
-    /// The close our own cast's GO owes (`0x60d040` at `0x6e7fc5`, its tail `0x60d10b`): at rest
-    /// the full one, on the move (`& 0x200f`, falling included) the move-start one, which a
-    /// response's own tail (`0x5ebc40`, the low byte alone) does not owe while falling.
+    /// The close our own cast's GO makes inside its packet (`0x60d040` at `0x6e7fc5`, its tail
+    /// `0x60d10b`): at rest the full one, on the move (`& 0x200f`, falling included) the
+    /// move-start one, which a response's own tail (`0x5ebc40`, the low byte alone) does not owe
+    /// while falling.
     #[derive(Clone, Copy, Debug)]
     enum Owed {
         AtRest,
@@ -1589,11 +1577,9 @@ mod tests {
             (Owed::MoveStart, crate::creature_anim::move_flags::FALLING),
         ];
 
+        /// The GO's close, where its end applies.
         fn owe(self, world: &mut World) {
-            match self {
-                Owed::AtRest => world.resource_mut::<super::super::LootCloseAtRest>().0 = true,
-                Owed::MoveStart => world.resource_mut::<super::super::LootMoveStart>().0 = true,
-            }
+            super::super::close_at_precast_end(world, matches!(self, Owed::MoveStart));
         }
     }
 
@@ -1660,8 +1646,7 @@ mod tests {
         }
     }
 
-    /// A close owed after the response, by a GO behind it or a step, still takes its window in
-    /// the drain.
+    /// A GO behind the response takes the window it opened, at that GO.
     #[test]
     fn a_close_owed_after_the_response_takes_its_window() {
         for (owed, flags) in Owed::BOTH {
@@ -1670,7 +1655,6 @@ mod tests {
             world.resource_mut::<LootLatch>().0 = Some(CHEST);
             respond(&mut world, CHEST, 1);
             owed.owe(&mut world);
-            drain(&mut world);
             assert_eq!(world.resource::<LootState>().source(), None, "{owed:?}");
             assert_eq!(world.resource::<LootLatch>().0, None, "{owed:?}");
             assert_eq!(releases(&rx), [CHEST], "{owed:?}");

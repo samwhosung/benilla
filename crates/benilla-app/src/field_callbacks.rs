@@ -6,7 +6,8 @@
 //!
 //! - the combat log's aura, stack and loyalty lines (`0x604d00`, `0x604ea0`, `0x604530` →
 //!   `0x5ff860`), [`crate::ui_chat::combat::watch`]'s;
-//! - the health watcher's death (`0x6046f0` → `OnDied 0x605860`), its line among its legs,
+//! - the health watcher's death (`0x6046f0` → `OnDied 0x605860`), its line among its legs, and
+//!   the active player's precast end on a selection still held after it (`0x6047e7`),
 //!   `crate::target`'s;
 //! - the form watcher's latch release (`0x5de07f`) and the lost service flags' closes (`0x604a20`
 //!   → `0x60b420`), [`crate::ui_session`]'s;
@@ -99,8 +100,12 @@ pub(crate) fn run(world: &mut World, edges: &[FieldChanged], calls: &[AuraFields
     crate::ui_chat::combat::watch::lines(world, edges, calls);
     for &e in edges {
         if e.unit_died() {
-            // What the legs stamp nests under the edge, ahead of what the packet raised after it.
-            crate::lanes::firing(e.at, || crate::target::died(world, e));
+            // What the legs stamp nests under the edge, ahead of what the packet raised after it:
+            // `OnDied` (`0x6047a3`), then the watcher's precast end for a selection that stayed.
+            crate::lanes::firing(e.at, || {
+                crate::target::died(world, e);
+                crate::target::dead_selection_ends_precast(world, e);
+            });
         }
         crate::ui_session::on_field_edge(world, e);
         crate::ui_pet::on_field_edge(world, e);

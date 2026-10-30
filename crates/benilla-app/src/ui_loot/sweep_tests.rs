@@ -4,13 +4,12 @@
 
 use benilla_protocol::messages::GroupMemberEntry;
 use benilla_protocol::SessionEvent;
-use bevy::ecs::system::RunSystemOnce;
 use bevy::prelude::*;
 
 use super::call_tests::{
     client, eval, feed, open, packets, row, run, seen, sent, Loot, CORPSE, LINEN, ME, THRALL, WOOL,
 };
-use super::{AutoLootByte, LootCloseAtRest, LootLatch};
+use super::{AutoLootByte, LootLatch};
 use crate::net::{ClientCommand, GuidIndex, SelfPlayer};
 
 /// Disenchanting: a window `CloseLoot` sweeps while rows are left.
@@ -194,8 +193,7 @@ fn a_disenchant_window_whose_source_is_gone_closes_at_rest() {
     let world = l.app.world_mut();
     let corpse = world.resource_mut::<GuidIndex>().0.remove(&CORPSE).unwrap();
     world.despawn(corpse);
-    world.resource_mut::<LootCloseAtRest>().0 = true;
-    world.run_system_once(super::drain_loot).unwrap();
+    super::close_at_precast_end(world, false);
     assert!(matches!(
         sent(&l)[..],
         [ClientCommand::LootRelease { guid: CORPSE }]

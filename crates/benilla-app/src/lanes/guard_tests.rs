@@ -1347,11 +1347,11 @@ const AT_THEIR_OWN_PLACE: &[(&str, &str)] = &[
 /// in system order: remaining work, which only shrinks, by a suffix of the system's name.
 pub(super) const NOT_YET_PLACED: &[(&str, &str)] = &[(
     "::ui_loot::drain_loot",
-    "the loot closes a precast end owes (`0x60d040` → `EndLootWindow` `0x48f200` at `0x60d10b`), \
-     which the reference makes inside the packet that ends it: `HandleSpellGo` (`0x6e7fc5`), the \
-     spell failures (`0x6e8dd7`, `0x6e8e8c`), the health watcher (`0x6047e7`) and \
-     `OnMonsterMove` (`0x6020e8`); the unit edits owe them after the handler and the drain \
-     closes them in its own phase, so `LOOT_CLOSED` fires behind the frame's packets",
+    "the move-start close a loot response owes while we move (`0x5ebc3a`-`0x5ebc51`) when its \
+     copier returns with an item record outstanding (`0x4c1ea6`), which the reference makes \
+     inside the response's handler all the same: the loot lane takes it only at the copier's \
+     end, so the drain closes it in its own phase and `LOOT_CLOSED` fires behind the frame's \
+     packets",
 )];
 
 /// The placed queues' readers that defer work to their commands and push nothing onto a lane
@@ -1621,13 +1621,13 @@ fn the_systems_unordered_against_the_drain_meet_it_only_on_a_pure_cache() {
         for t in [
             TypeId::of::<crate::creature_anim::PlaySeq>(),
             TypeId::of::<bevy::ecs::message::Messages<crate::creature_anim::CastEvent>>(),
-            TypeId::of::<crate::ui_loot::LootMoveStart>(),
-            TypeId::of::<crate::ui_loot::LootCloseAtRest>(),
         ] {
             if let Some(id) = world.components().get_resource_id(t) {
                 drain.add_resource_write(id);
             }
         }
+        // The tail's loot close, which runs as its end applies.
+        drain.extend(crate::ui_loot::precast_end_close_access(world).combined_access());
         if let Some(id) = world
             .components()
             .get_resource_id(TypeId::of::<crate::player::Player>())

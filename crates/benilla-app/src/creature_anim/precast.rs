@@ -14,7 +14,11 @@
 //!   the auto-repeat cancel (`0x6ea12b`), as edits;
 //! - with the unit's own spell, so always, by a spline move (`0x6020e8`) and by the mover's own
 //!   move messages and acks that `0x60e0a0` does not send at once (`0x60e15d`), through
-//!   [`end_precast`].
+//!   [`end_precast`], and the active player's by the health watcher on a selection that dies and
+//!   stays selected (`0x6047e7`), as an edit.
+//!
+//! The tail's loot release closes where the end applies, so a handler's end closes inside its
+//! packet ([`crate::ui_loot::close_at_precast_end`]).
 //!
 //! The bit alone is cleared by the local StartAttack (`0x5ecd87` → `0x60fc50`); `0x5fbd60`,
 //! which clears it when a unit is re-shown, has no counterpart, as a unit that leaves is
@@ -102,10 +106,17 @@ impl Change {
     }
 }
 
-/// Applies `change` to `entity`'s precast, and the tail of an end that matched ([`end`]).
-pub(super) fn apply(world: &mut World, entity: Entity, change: Change, tail: PrecastTail) {
+/// Applies `change` to `entity`'s precast, and the tail of an end that matched ([`end`]), its
+/// loot close placed at `at`, where the end was made; what the tail closed.
+pub(super) fn apply(
+    world: &mut World,
+    entity: Entity,
+    change: Change,
+    tail: PrecastTail,
+    at: Option<crate::lanes::Stamp>,
+) -> Option<TailClose> {
     let Ok(mut unit) = world.get_entity_mut(entity) else {
-        return;
+        return None;
     };
     let held = unit.get::<Precast>().copied();
     let (after, ended) = change.after(held);
@@ -115,9 +126,10 @@ pub(super) fn apply(world: &mut World, entity: Entity, change: Change, tail: Pre
             None => unit.remove::<Precast>(),
         };
     }
-    if ended {
-        run_tail(world, entity, tail);
+    if !ended {
+        return None;
     }
+    run_tail(world, entity, tail, at)
 }
 
 /// `0x60d040`'s `b` argument: whether a matched end runs its tail, whose last step releases the
@@ -135,43 +147,73 @@ pub(crate) enum PrecastTail {
 
 /// An end with the unit's own spell, `0x60d040(+0xc8c, 1, 1)`, from a system that holds
 /// `Commands`: a spline move (`0x6020e8`) and the mover's move messages and acks (`0x60e15d`).
+/// Its place is taken here, at the call, for the close its tail makes as the command applies.
 pub(crate) fn end_precast(commands: &mut Commands, entity: Entity, tail: PrecastTail) {
-    commands.queue(move |world: &mut World| end(world, entity, None, tail));
+    let at = (tail != PrecastTail::Skip).then(crate::lanes::stamp);
+    commands.queue(move |world: &mut World| {
+        end(world, entity, None, tail, at);
+    });
 }
 
 /// `0x60d040`: keyed by `spell`, or with the unit's own spell for `None`, which matches an empty
 /// `+0xc8c` too (`0x60d049`). A matched end clears the precast and, unless `tail` skips it, runs
-/// the tail, whose last step releases the active player's loot window (`0x60d0ee`-`0x60d10b`):
-/// `0x48f200(1, moving, 0)`, `moving` its flags `& 0x200f`, the four directions and FALLING.
-/// Moving, that is the move-start close ([`crate::ui_loot::LootMoveStart`]); at rest the full one
-/// ([`crate::ui_loot::LootCloseAtRest`]). An end made in the VM pass applies after it, so its
-/// release reaches the loot drain the next frame. A loot response that lands before the drain
-/// takes it runs it first, on the window the end found.
-pub(super) fn end(world: &mut World, entity: Entity, spell: Option<u32>, tail: PrecastTail) {
-    apply(world, entity, Change::End(spell), tail);
+/// the tail, whose last step closes the active player's loot window (`0x60d0ee`-`0x60d10b`):
+/// `0x48f200(1, moving, 0)`, `moving` its flags `& 0x200f`, the four directions and FALLING
+/// ([`crate::ui_loot::close_at_precast_end`]). The close runs as the end applies: a handler's
+/// inside its packet, before the next, with its signals at `at`, the place of the call that made
+/// the end, among what that packet raised.
+pub(super) fn end(
+    world: &mut World,
+    entity: Entity,
+    spell: Option<u32>,
+    tail: PrecastTail,
+    at: Option<crate::lanes::Stamp>,
+) -> Option<TailClose> {
+    apply(world, entity, Change::End(spell), tail, at)
 }
 
-fn run_tail(world: &mut World, entity: Entity, tail: PrecastTail) {
+/// Which close a matched end's tail made of the active player's loot window (`0x48f200`'s `dl`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TailClose {
+    /// Moving: the move-start close.
+    MoveStart,
+    /// At rest: the full close.
+    AtRest,
+}
+
+/// The tail's loot close for the active player (`0x5fa6d0` at `0x60d0ee`), as the flags read
+/// (`0x60d0f7`-`0x60d106`), run at `at` so its signals nest there.
+fn run_tail(
+    world: &mut World,
+    entity: Entity,
+    tail: PrecastTail,
+    at: Option<crate::lanes::Stamp>,
+) -> Option<TailClose> {
     let active_player = world
         .get_entity(entity)
         .is_ok_and(|unit| unit.contains::<crate::net::SelfPlayer>());
     let moving = match tail {
-        PrecastTail::Skip => return,
+        PrecastTail::Skip => return None,
         PrecastTail::Moving(moving) => moving,
         PrecastTail::Run => world
             .get_resource::<crate::player::Player>()
             .is_some_and(|p| p.move_flags() & MOVING != 0),
     };
     if !active_player {
-        return;
+        return None;
     }
-    if moving {
-        if let Some(mut close) = world.get_resource_mut::<crate::ui_loot::LootMoveStart>() {
-            close.0 = true;
+    let close = |world: &mut World| crate::ui_loot::close_at_precast_end(world, moving);
+    match at {
+        Some(at) => {
+            crate::lanes::firing(at, || close(world));
         }
-    } else if let Some(mut close) = world.get_resource_mut::<crate::ui_loot::LootCloseAtRest>() {
-        close.0 = true;
+        None => close(world),
     }
+    Some(if moving {
+        TailClose::MoveStart
+    } else {
+        TailClose::AtRest
+    })
 }
 
 /// The flags the tail's release reads as moving (`0x60d0fd`).
@@ -362,98 +404,150 @@ mod tests {
         assert_eq!(precast(&world, unit), None, "the repeat spell's cancel");
     }
 
-    /// What an end owes the active player's loot window: (`LootMoveStart`, `LootCloseAtRest`).
-    fn owed(world: &mut World) -> (bool, bool) {
-        (
-            std::mem::take(&mut world.resource_mut::<crate::ui_loot::LootMoveStart>().0),
-            std::mem::take(&mut world.resource_mut::<crate::ui_loot::LootCloseAtRest>().0),
-        )
+    /// A creature's corpse, which every close takes.
+    const CORPSE: u64 = 0xF130_0000_0000_0042;
+    /// A lockbox, an item source, which the move-start close keeps (`0x48f2ab`).
+    const LOCKBOX: u64 = 0x4000_0000_0000_0007;
+
+    /// The loot window and the wire the tail's close takes, in `world`.
+    fn seat_loot(world: &mut World) -> crossbeam_channel::Receiver<crate::net::ClientCommand> {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        world.insert_resource(crate::net::NetCommands(tx));
+        world.init_resource::<crate::net::GuidIndex>();
+        world.init_resource::<crate::ui_loot::LootState>();
+        world.init_resource::<crate::ui_loot::LootLatch>();
+        rx
+    }
+
+    /// A fresh window on `source`, one row, its latch armed.
+    fn open_loot(world: &mut World, source: u64) {
+        let mut loot = world.resource_mut::<crate::ui_loot::LootState>();
+        loot.clear_session();
+        loot.open(
+            source,
+            benilla_protocol::messages::loot_type::CORPSE,
+            0,
+            vec![benilla_protocol::messages::LootItem {
+                slot: 0,
+                item_id: 117,
+                count: 1,
+                display_info_id: 0,
+                random_property_id: 0,
+                slot_type: 0,
+            }],
+        );
+        world.resource_mut::<crate::ui_loot::LootLatch>().0 = Some(source);
+    }
+
+    fn loot_open(world: &World) -> bool {
+        world
+            .resource::<crate::ui_loot::LootState>()
+            .source()
+            .is_some()
     }
 
     /// `0x60d040`'s tail ends in the active player's loot release (`0x60d0ee`-`0x60d10b`):
     /// `0x48f200(1, moving, 0)`, `moving` its flags `& 0x200f` (`0x60d0fd`), the four directions
-    /// and FALLING, so the move-start close while it moves and the full close at rest. Only a
-    /// matched end (`0x60d04f`) with `b` set (`0x60d076`) reaches it, and only for the active
-    /// player (`0x5fa6d0`); an end with the unit's own spell matches an empty `+0xc8c` too.
+    /// and FALLING, so the move-start close while it moves and the full close at rest, each made
+    /// as the end applies. Only a matched end (`0x60d04f`) with `b` set (`0x60d076`) reaches it,
+    /// and only for the active player (`0x5fa6d0`); an end with the unit's own spell matches an
+    /// empty `+0xc8c` too.
     #[test]
     fn an_end_releases_the_active_players_loot_as_it_moves_or_rests() {
         use crate::creature_anim::move_flags::{FALLING, FORWARD, STRAFE_LEFT, SWIMMING};
         let (mut world, me) = world();
         world.entity_mut(me).insert(crate::net::SelfPlayer);
         let other = world.spawn_empty().id();
-        world.init_resource::<crate::ui_loot::LootMoveStart>();
-        world.init_resource::<crate::ui_loot::LootCloseAtRest>();
-        fn case(
-            world: &mut World,
-            flags: u32,
-            unit: Entity,
-            held: Option<u32>,
-            spell: Option<u32>,
-            tail: PrecastTail,
-        ) -> (bool, bool) {
+        let rx = seat_loot(&mut world);
+        // The close the tail reports, each run against a corpse's window, which any close takes,
+        // and a lockbox's, which only the full one does, each released as it closes.
+        let case = |world: &mut World,
+                    flags: u32,
+                    unit: Entity,
+                    held: Option<u32>,
+                    spell: Option<u32>,
+                    tail: PrecastTail| {
             world.insert_resource(crate::player::Player::with_move_flags(flags));
-            world.entity_mut(unit).remove::<Precast>();
-            if let Some(spell_id) = held {
-                world.entity_mut(unit).insert(Precast {
-                    spell_id,
-                    busy: true,
-                });
+            let mut made = None;
+            for source in [CORPSE, LOCKBOX] {
+                world.entity_mut(unit).remove::<Precast>();
+                if let Some(spell_id) = held {
+                    world.entity_mut(unit).insert(Precast {
+                        spell_id,
+                        busy: true,
+                    });
+                }
+                open_loot(world, source);
+                made = end(world, unit, spell, tail, None);
+                let closes = match made {
+                    None => false,
+                    Some(TailClose::MoveStart) => source == CORPSE,
+                    Some(TailClose::AtRest) => true,
+                };
+                assert_eq!(!loot_open(world), closes, "{source:#x}: {made:?}");
+                let released: Vec<_> = rx.try_iter().collect();
+                assert_eq!(
+                    released.len(),
+                    usize::from(closes),
+                    "{source:#x}: {released:?}"
+                );
             }
-            end(world, unit, spell, tail);
-            owed(world)
-        }
+            made
+        };
         let keyed = Some(VISUAL_SPELL);
         let held = Some(VISUAL_SPELL);
         let run = PrecastTail::Run;
+        let moving = Some(TailClose::MoveStart);
+        let at_rest = Some(TailClose::AtRest);
         assert_eq!(
             case(&mut world, FORWARD, me, held, keyed, run),
-            (true, false),
+            moving,
             "running"
         );
         assert_eq!(
             case(&mut world, STRAFE_LEFT, me, held, keyed, run),
-            (true, false),
+            moving,
             "strafing"
         );
         assert_eq!(
             case(&mut world, FALLING, me, held, keyed, run),
-            (true, false),
+            moving,
             "falling"
         );
         assert_eq!(
             case(&mut world, 0, me, held, keyed, run),
-            (false, true),
+            at_rest,
             "at rest"
         );
         assert_eq!(
             case(&mut world, SWIMMING, me, held, keyed, run),
-            (false, true),
+            at_rest,
             "afloat and still: 0x200f has no swim bit"
         );
         assert_eq!(
             case(&mut world, 0, me, held, Some(OTHER_VISUAL_SPELL), run),
-            (false, false),
+            None,
             "another spell's end"
         );
         assert_eq!(
             case(&mut world, 0, me, None, keyed, run),
-            (false, false),
+            None,
             "a keyed end with nothing held"
         );
         assert_eq!(
             case(&mut world, 0, me, None, None, run),
-            (false, true),
+            at_rest,
             "the unit's own spell matches an empty +0xc8c"
         );
         assert_eq!(
             case(&mut world, 0, me, held, keyed, PrecastTail::Skip),
-            (false, false),
+            None,
             "b clear"
         );
         assert_eq!(precast(&world, me), None, "b clear still ends it");
         assert_eq!(
             case(&mut world, 0, me, held, None, PrecastTail::Moving(true)),
-            (true, false),
+            moving,
             "a spline's path"
         );
         assert_eq!(
@@ -465,12 +559,12 @@ mod tests {
                 None,
                 PrecastTail::Moving(false)
             ),
-            (false, true),
+            at_rest,
             "a refused path"
         );
         assert_eq!(
             case(&mut world, 0, other, held, keyed, run),
-            (false, false),
+            None,
             "another unit"
         );
 
@@ -480,6 +574,7 @@ mod tests {
             spell_id: VISUAL_SPELL,
             busy: true,
         });
+        open_loot(&mut world, LOCKBOX);
         apply(
             &mut world,
             UnitEdit::EndPrecast {
@@ -488,7 +583,7 @@ mod tests {
                 tail: false,
             },
         );
-        assert_eq!(owed(&mut world), (false, false), "an edit with b clear");
+        assert!(loot_open(&world), "an edit with b clear");
         world.entity_mut(me).insert(Precast {
             spell_id: VISUAL_SPELL,
             busy: true,
@@ -500,10 +595,9 @@ mod tests {
                 spell_id: VISUAL_SPELL,
             },
         );
-        assert_eq!(
-            owed(&mut world),
-            (false, true),
-            "the auto-repeat cancel (0x6ea12b)"
+        assert!(
+            !loot_open(&world),
+            "the auto-repeat cancel (0x6ea12b), at rest"
         );
     }
 

@@ -87,6 +87,34 @@ pub(crate) fn died(world: &mut World, e: FieldChanged) {
     drop(parked);
 }
 
+/// The health watcher's leg after `OnDied` (`0x6047a8`-`0x6047e7`): with the dead unit still the
+/// selection (`0xb4e2d8`, `0x6047c7`-`0x6047d8`), which `OnDied`'s deselect leaves only when it
+/// was refused (a charmed player, `0x49359c`), the active player's precast ends with its own
+/// spell and its tail (`0x60d040(+0xc8c, 1, 1)`), whose loot close runs here, inside the update
+/// packet, at the edge's place.
+pub(crate) fn dead_selection_ends_precast(world: &mut World, e: FieldChanged) {
+    if world.get_resource::<Selection>().and_then(|s| s.guid) != Some(e.guid) {
+        return;
+    }
+    // The active player, looked up as one (`0x468550`, `0x6047be` with type mask 0x10).
+    let Some(me) = world
+        .query_filtered::<Entity, With<SelfPlayer>>()
+        .iter(world)
+        .next()
+    else {
+        return;
+    };
+    let Some(edits) = world.get_resource::<crate::creature_anim::UnitEdits>() else {
+        return;
+    };
+    edits.push(UnitEdit::EndPrecast {
+        entity: me,
+        spell_id: None,
+        tail: true,
+    });
+    crate::creature_anim::apply_unit_edits(world);
+}
+
 /// Run one leg of a death on `e` in place, its unit edits applied as it returns.
 fn step<M: 'static>(
     world: &mut World,

@@ -1134,6 +1134,16 @@ fn cast_result(
                 }
             }
         }
+        // The report's player cleanup ends the precast of the failed spell, with its tail, whatever
+        // the reason (`0x6e1c7f`, `0x6e1c8e`), ahead of the auto-repeat stop (`0x6e1cea`), the GCD
+        // clear and the line, so its loot close signals at this place.
+        if let Some(e) = self_e {
+            edits.push(crate::creature_anim::UnitEdit::EndPrecast {
+                entity: e,
+                spell_id: Some(spell_id),
+                tail: true,
+            });
+        }
         if auto_repeat.0 == Some(spell_id) && !dont_report {
             crate::creature_anim::cancel_auto_repeat_local(self_e, auto_repeat, edits, core);
         }
@@ -1167,7 +1177,7 @@ fn cast_result(
             info!("cast-trace: RECV CAST_RESULT failure — spell {spell_id} reason={reason:?}; reaches_tail={reaches}");
         }
         // Our cast died (vmangos never sends `SMSG_SPELL_FAILURE`): end the self avatar's cast
-        // state and precast hold, keyed by spell id.
+        // state, keyed by spell id; its precast ended above.
         if let Some(e) = self_e {
             if casting.get(e).is_ok_and(|c| c.spell_id == spell_id) {
                 edits.push(crate::creature_anim::UnitEdit::ReapCasting {
@@ -1175,13 +1185,6 @@ fn cast_result(
                     spell_id,
                 });
             }
-            // The report's player cleanup ends the precast of the failed spell (`0x6e1c7f`,
-            // `0x6e1c8e`), with its tail.
-            edits.push(crate::creature_anim::UnitEdit::EndPrecast {
-                entity: e,
-                spell_id: Some(spell_id),
-                tail: true,
-            });
             cast_events.write(CastEvent {
                 entity: e,
                 spell_id,
@@ -2824,11 +2827,35 @@ mod tests {
     }
 
     /// The GO's end runs its tail as `0x6e4870` answers for the record and the cast flags
-    /// (`0x6e7fa1`, pushed at `0x6e7fbd`), its last step our loot's release; a failure's always
-    /// runs it (`0x6e8e8c` and `0x6e1c8e` push `b` 1).
+    /// (`0x6e7fa1`, pushed at `0x6e7fbd`), its last step our loot's release, at rest the full
+    /// close, which takes a lockbox's window; a failure's always runs it (`0x6e8e8c` and
+    /// `0x6e1c8e` push `b` 1). Each closes inside its packet, as the handler's edits apply.
     #[test]
     fn the_go_releases_our_loot_as_its_attribute_test_answers_and_a_failure_always() {
+        use crate::ui_loot::{LootLatch, LootState};
         use benilla_formats::{SpellCatalog, SpellDisplay};
+        const LOCKBOX: u64 = 0x4000_0000_0000_0007;
+        /// Whether `packet` closes a lockbox's window open ahead of it, released.
+        fn closes(s: &mut CastSeq, packet: impl FnOnce(&mut CastSeq)) -> bool {
+            let world = s.app.world_mut();
+            let mut loot = world.resource_mut::<LootState>();
+            loot.clear_session();
+            loot.open(
+                LOCKBOX,
+                benilla_protocol::messages::loot_type::CORPSE,
+                5,
+                vec![],
+            );
+            world.resource_mut::<LootLatch>().0 = Some(LOCKBOX);
+            let _ = s.sent.try_iter().count();
+            packet(s);
+            let closed = s.app.world().resource::<LootState>().source().is_none();
+            let released = s.sent.try_iter().any(
+                |c| matches!(c, crate::net::ClientCommand::LootRelease { guid } if guid == LOCKBOX),
+            );
+            assert_eq!(closed, released, "a close is released at its packet");
+            closed
+        }
         let mut s = CastSeq::new();
         let me = s.self_e;
         let world = s.app.world_mut();
@@ -2846,32 +2873,31 @@ mod tests {
             ..Spells::empty_for_tests()
         });
         world.insert_resource(crate::player::Player::with_move_flags(0));
-        world.init_resource::<crate::ui_loot::LootMoveStart>();
-        world.init_resource::<crate::ui_loot::LootCloseAtRest>();
-        let owed = |s: &mut CastSeq| {
-            let world = s.app.world_mut();
-            assert!(
-                !world.resource::<crate::ui_loot::LootMoveStart>().0,
-                "at rest"
-            );
-            std::mem::take(&mut world.resource_mut::<crate::ui_loot::LootCloseAtRest>().0)
-        };
+        world.init_resource::<LootState>();
+        world.init_resource::<LootLatch>();
         s.give_precast(me, FIREBALL);
-        s.go_flagged(FIREBALL, 0x100);
-        assert!(owed(&mut s), "a plain record's GO");
+        assert!(
+            closes(&mut s, |s| s.go_flagged(FIREBALL, 0x100)),
+            "a plain record's GO"
+        );
         s.give_precast(me, FROSTBOLT);
-        s.go_flagged(FROSTBOLT, 0x100);
+        assert!(
+            !closes(&mut s, |s| s.go_flagged(FROSTBOLT, 0x100)),
+            "with no tail"
+        );
         assert_eq!(s.precast(me), None, "an `AttributesEx & 0x400` GO ends it");
-        assert!(!owed(&mut s), "with no tail");
         s.give_precast(me, FIREBALL);
-        s.go_flagged(FIREBALL, 0x1);
-        assert!(!owed(&mut s), "flag bit 0");
+        assert!(
+            !closes(&mut s, |s| s.go_flagged(FIREBALL, 0x1)),
+            "flag bit 0"
+        );
         s.give_precast(me, FIREBALL);
-        s.failed_other(FIREBALL);
-        assert!(owed(&mut s), "its failure");
+        assert!(closes(&mut s, |s| s.failed_other(FIREBALL)), "its failure");
         s.give_precast(me, FIREBALL);
-        s.result(FIREBALL, Some(0x23));
-        assert!(owed(&mut s), "its failed result");
+        assert!(
+            closes(&mut s, |s| s.result(FIREBALL, Some(0x23))),
+            "its failed result"
+        );
     }
 
     /// vmangos sends, for every non-triggered cast, `SMSG_SPELL_START` at `Spell::prepare`

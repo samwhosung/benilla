@@ -6,8 +6,8 @@
 //! `LOOT_OPENED` or the auto-loot sweep, a candidate name's `UPDATE_MASTER_LOOT_LIST` (`0x4c2fba`),
 //! and each push's `ITEM_PUSH` and line. The getters read the session through the host
 //! ([`live::LootLive`]). The loot verbs and a row's click apply inside their calls
-//! ([`calls::LootSteps::apply`]), and [`drain_loot`] takes the closes a movement and the precast's
-//! end owe.
+//! ([`calls::LootSteps::apply`]), a precast end's close where the end applies
+//! ([`close_at_precast_end`]), and [`drain_loot`] takes the close a movement start owes.
 
 use benilla_protocol::messages::{ItemPushResult, LootItem, BAG_PLAYER_INVENTORY};
 use bevy::prelude::*;
@@ -954,20 +954,13 @@ impl LootLatch {
 /// The loot window's close owed this frame, `0x48f200(1, 1, 0)` while a loot target is latched
 /// (`0x6126b0`). Two writers call it: the movement-start guard `0x60e990` (`0x60e9dd`), called by
 /// every movement-start emitter, turning included, but not by mouse-look facing; and the local
-/// stand-state apply for a change to any state but 0 (`0x5f07d5`). The precast end's release
-/// owes it too while the player moves (`0x60d10b`, [`LootCloseAtRest`] at rest). No loot target reaches the
+/// stand-state apply for a change to any state but 0 (`0x5f07d5`). No loot target reaches the
 /// range gate `0x493230`, so there is no distance leash. vmangos also releases on movement
 /// (`MovementHandler.cpp:1104`), but the close is the client's. A loot response that lands while
-/// we move sets it too (`0x5ebc3a`).
+/// we move sets it too (`0x5ebc3a`). A precast end's release closes where the end applies
+/// ([`close_at_precast_end`]), owing nothing here.
 #[derive(Resource, Default)]
 pub(crate) struct LootMoveStart(pub(crate) bool);
-
-/// The loot window's close owed this frame with `dl` clear, `0x48f200(1, 0, 0)`: the precast
-/// end's release for the active player at rest (`0x60d0ee`-`0x60d10b`, its flags `& 0x200f`
-/// clear), which closes an item's loot and sweeps a disenchant window with rows left, where the
-/// move-start close keeps both.
-#[derive(Resource, Default)]
-pub(crate) struct LootCloseAtRest(pub(crate) bool);
 
 pub(crate) struct UiLootPlugin;
 
@@ -993,7 +986,6 @@ impl Plugin for UiLootPlugin {
             .init_resource::<LootLatch>()
             .init_resource::<LootKneel>()
             .init_resource::<LootMoveStart>()
-            .init_resource::<LootCloseAtRest>()
             .init_resource::<AutoLootByte>()
             .add_sweep_leg(SweepLeg::Loot, close_loot_on_leave_world)
             .add_systems(
@@ -2039,36 +2031,68 @@ pub(super) fn move_start_keeps(loot: &LootState, source: u64) -> bool {
         || guid::is_item(source)
 }
 
-/// The closes the drain takes: the movement start's and the precast end's at rest.
-type OwedCloses = (
-    ResMut<'static, LootMoveStart>,
-    ResMut<'static, LootCloseAtRest>,
-);
+/// The move-start close the frame owes from outside the VM, after the input pass
+/// ([`LootMoveStart`]): the input's, and a loot response's whose copier waits on an item record,
+/// which no copier end has taken. The loot lane signals its `LOOT_CLOSED`.
+fn drain_loot(mut owed: ResMut<LootMoveStart>, mut close: MoveStartClose) {
+    if std::mem::take(&mut owed.0) {
+        close.close();
+    }
+}
 
-/// The closes the frame owes from outside the VM, after the input pass: the movement start's
-/// ([`LootMoveStart`]) and the precast end's at rest ([`LootCloseAtRest`]), which sweeps a
-/// disenchant window with rows left instead. The loot lane signals `LOOT_CLOSED` for them.
-fn drain_loot(mut vm: VmWith<(LootSteps<'static, 'static>, OwedCloses)>) {
-    vm.turn(|script, (mut steps, (mut move_start, mut at_rest))| {
-        if std::mem::take(&mut move_start.0) {
-            let closed = close_on_move_start(&mut steps.loot, &mut steps.latch, &steps.net);
-            steps.dead.after_close(closed);
-        }
-        // After the move-start close, which it subsumes: whichever runs first, a window either
-        // keeps is the one this takes.
-        if std::mem::take(&mut at_rest.0) {
-            if steps.loot.disenchant_hold(&steps.objects) {
-                match script {
-                    Some(script) => steps.sweep(script, false),
-                    None => steps.loot.owe_sweep(),
-                }
-            } else {
-                let closed = close_interaction(&mut steps.loot, &mut steps.latch, Some(&steps.net));
-                steps.dead.after_close(closed);
-            }
-        }
-    });
-    run_then(&mut vm);
+/// `EndLootWindow 0x48f200(1, moving, 0)` as a precast end's tail runs it for the active player
+/// (`0x60d0ee`-`0x60d10b`, `moving` its flags `& 0x200f`), wherever the end applies: inside the
+/// packet whose handler ended the precast, its release sent there and its unlocks, its
+/// `LOOT_CLOSED` and its dead source's deselect on their lanes at the end's place. Moving, the
+/// move-start close, which keeps an item's loot and a disenchant window with rows left
+/// ([`move_start_keeps`]); at rest the full one, which closes an item's loot with both unlocks and
+/// owes a disenchant window with contents its sweep (`0x48f24f` → `0x4c2a70`, `0x48f264`), which
+/// the loot lane runs. Nothing with no window open (`0x48f23f`), and nothing in a harness without
+/// the loot window or the wire.
+pub(crate) fn close_at_precast_end(world: &mut World, moving: bool) {
+    if let Err(e) = world.run_system_cached_with(precast_end_close, moving) {
+        debug!("ui_loot: the precast end's close did not run: {e}");
+    }
+}
+
+fn precast_end_close(In(moving): In<bool>, mut close: PrecastEndClose) {
+    close.close(moving);
+}
+
+/// What [`close_at_precast_end`] reads and writes.
+#[derive(bevy::ecs::system::SystemParam)]
+struct PrecastEndClose<'w, 's> {
+    /// Absent in a harness without the loot window, which closes nothing.
+    loot: Option<ResMut<'w, LootState>>,
+    latch: Option<ResMut<'w, LootLatch>>,
+    net: Res<'w, NetCommands>,
+    objects: crate::net::Objects<'w, 's>,
+    dead: DeadUnitDeselect<'w, 's>,
+}
+
+impl PrecastEndClose<'_, '_> {
+    fn close(&mut self, moving: bool) {
+        let (Some(loot), Some(latch)) = (self.loot.as_deref_mut(), self.latch.as_deref_mut())
+        else {
+            return;
+        };
+        let closed = if moving {
+            close_on_move_start(loot, latch, &self.net)
+        } else if loot.disenchant_hold(&self.objects) {
+            loot.owe_sweep();
+            None
+        } else {
+            close_interaction(loot, latch, Some(&self.net))
+        };
+        self.dead.after_close(closed);
+    }
+}
+
+/// [`precast_end_close`]'s declared access, for the guards that model what the unit edits touch
+/// as they apply.
+#[cfg(test)]
+pub(crate) fn precast_end_close_access(world: &mut World) -> bevy::ecs::query::FilteredAccessSet {
+    crate::lanes::system_access(world, precast_end_close)
 }
 #[cfg(test)]
 mod tests {
@@ -2162,7 +2186,6 @@ mod tests {
             .init_resource::<LootState>()
             .init_resource::<LootLatch>()
             .init_resource::<LootMoveStart>()
-            .init_resource::<LootCloseAtRest>()
             .init_resource::<AutoLootByte>()
             .init_resource::<LootConfig>()
             .init_resource::<GroupState>()
@@ -3563,13 +3586,14 @@ mod tests {
     /// The precast end's release at rest, `0x48f200(1, 0, 0)` (`0x60d10b`): with `dl` clear an
     /// item's loot closes with its release and both unlocks (`0x48f2b5` falls through to
     /// `0x48f2bd`), and a disenchant window with rows left owes its sweep (`0x48f264`), where the
-    /// move-start close keeps both. Owed beside a move-start close it decides, as the two commute.
+    /// move-start close keeps both. Beside a move-start close the drain takes after it, it decides
+    /// alike, as the two commute.
     #[test]
     fn a_close_at_rest_takes_an_items_loot_and_sweeps_a_disenchant_hold() {
         const LOCKBOX: u64 = 0x4000_0000_0000_0007;
         let (mut app, rx) = close_app();
         let step = |app: &mut App, move_start: bool| {
-            app.world_mut().resource_mut::<LootCloseAtRest>().0 = true;
+            close_at_precast_end(app.world_mut(), false);
             app.world_mut().resource_mut::<LootMoveStart>().0 = move_start;
             app.update();
         };
@@ -3607,10 +3631,7 @@ mod tests {
         step(&mut app, false);
         let loot = app.world().resource::<LootState>();
         assert_eq!(loot.source(), Some(CORPSE), "a disenchant hold stays open");
-        assert!(
-            loot.sweep_owed,
-            "and owes its sweep to the lane, with no VM here"
-        );
+        assert!(loot.sweep_owed, "and owes its sweep to the lane");
         assert!(rx.try_recv().is_err(), "unreleased");
         app.world_mut().resource_mut::<LootState>().clear();
         deselects(&mut app);

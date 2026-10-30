@@ -73,8 +73,9 @@ pub(crate) use cursor_mode::{
 };
 /// `GO_FLAG_LOCKED`, the bit the lock chain and the GameObject tooltip's "Locked" line read.
 pub(crate) use lock::GO_FLAG_LOCKED;
-// `OnDied`, which the update packet's field callbacks run on a unit's death edge.
-pub(crate) use died::died;
+// `OnDied`, which the update packet's field callbacks run on a unit's death edge, and the health
+// watcher's precast end after it.
+pub(crate) use died::{dead_selection_ends_precast, died};
 // This frame's combat-flash verdict, for the ring's material and the nameplate colour gate.
 pub(crate) use flash::CombatFlash;
 // The discount `0x612b80` the repair cost and the taxi fare take off their DBC prices.

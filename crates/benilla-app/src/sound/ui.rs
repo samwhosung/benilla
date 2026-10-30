@@ -271,9 +271,9 @@ fn play_item_gesture(
     }
 }
 
-/// A looted row's pickup sound, written by [`crate::ui_loot::drain_loot`]. The client plays it at
-/// the loot-slot click (`0x4c2790`); `SMSG_ITEM_PUSH` itself is silent, so a purchase makes no
-/// pickup sound.
+/// A looted row's pickup sound, written by the take ([`crate::ui_loot::LootSteps`]). The client
+/// plays it at the loot-slot click (`0x4c2790`); `SMSG_ITEM_PUSH` itself is silent, so a purchase
+/// makes no pickup sound.
 #[derive(Message, Clone, Copy)]
 pub(crate) struct LootPickupSound {
     pub(crate) display_id: u32,

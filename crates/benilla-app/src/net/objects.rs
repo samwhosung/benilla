@@ -3204,13 +3204,30 @@ mod tests {
         /// `0x6020e8`: a spline move ends the unit's precast whatever it is, a rooted unit's too
         /// (the tail `0x6020db`-`0x6020ef` runs on every path). On our own player the end's loot
         /// release reads the flags the path just wrote: an installed path is moving
-        /// (`0x7c6ad4`), a refused one has stopped (`0x6187b1`), whatever we last sent.
+        /// (`0x7c6ad4`), so the move-start close, which keeps an item's loot, and a refused one
+        /// has stopped (`0x6187b1`), so the full close, whatever we last sent; each closes as the
+        /// handler's commands apply, inside its packet.
         #[test]
         fn a_spline_move_ends_the_precast() {
-            for (rooted, ours) in [(false, false), (true, false), (false, true), (true, true)] {
+            const CORPSE: u64 = 0xF130_0000_0000_0042;
+            const LOCKBOX: u64 = 0x4000_0000_0000_0007;
+            for (rooted, ours, source) in [false, true]
+                .into_iter()
+                .flat_map(|r| [false, true].map(|o| (r, o)))
+                .flat_map(|(r, o)| [CORPSE, LOCKBOX].map(|s| (r, o, s)))
+            {
                 let mut w = World::new();
-                w.init_resource::<crate::ui_loot::LootMoveStart>();
-                w.init_resource::<crate::ui_loot::LootCloseAtRest>();
+                let (tx, rx) = crossbeam_channel::unbounded();
+                w.insert_resource(NetCommands(tx));
+                w.init_resource::<crate::ui_loot::LootState>();
+                w.init_resource::<crate::ui_loot::LootLatch>();
+                w.resource_mut::<crate::ui_loot::LootState>().open(
+                    source,
+                    benilla_protocol::messages::loot_type::CORPSE,
+                    5,
+                    vec![],
+                );
+                w.resource_mut::<crate::ui_loot::LootLatch>().0 = Some(source);
                 let moving = crate::creature_anim::move_flags::FORWARD;
                 w.insert_resource(crate::player::Player::with_move_flags(if rooted {
                     moving
@@ -3262,13 +3279,20 @@ mod tests {
                     w.entity(e).get::<crate::creature_anim::Precast>().is_none(),
                     "rooted={rooted}: the precast ends"
                 );
+                let closes = ours && (rooted || source == CORPSE);
                 assert_eq!(
-                    (
-                        w.resource::<crate::ui_loot::LootMoveStart>().0,
-                        w.resource::<crate::ui_loot::LootCloseAtRest>().0,
-                    ),
-                    (ours && !rooted, ours && rooted),
-                    "rooted={rooted}, ours={ours}: the loot release"
+                    w.resource::<crate::ui_loot::LootState>().source().is_none(),
+                    closes,
+                    "rooted={rooted}, ours={ours}, {source:#x}: the loot release"
+                );
+                assert_eq!(
+                    rx.try_iter()
+                        .filter(
+                            |c| matches!(c, ClientCommand::LootRelease { guid } if *guid == source)
+                        )
+                        .count(),
+                    usize::from(closes),
+                    "rooted={rooted}, ours={ours}, {source:#x}: released once as it closes"
                 );
             }
         }

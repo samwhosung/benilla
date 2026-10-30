@@ -175,13 +175,27 @@ impl UnitEdit {
             | Self::EndAttack(_) => None,
         }
     }
+
+    /// Whether this is a precast end with its tail, which closes the active player's loot window
+    /// when it matches: an [`Self::EndPrecast`] with `b` set and the auto-repeat stop's
+    /// (`0x6ea12b`, `b` 1).
+    fn runs_a_tail(&self) -> bool {
+        matches!(
+            self,
+            Self::EndPrecast { tail: true, .. } | Self::ClearAutoRepeat { .. }
+        )
+    }
 }
+
+/// One queued change with the place it was made, for a precast end whose tail may close the loot
+/// window: the close's signals go there ([`precast::end`]).
+type Queued = (UnitEdit, Option<crate::lanes::Stamp>);
 
 /// The queue, pushed through `&self` as the chat log is: its users run one at a time, in the VM
 /// pass's order ([`crate::vm_pass::shared_sinks`]) or inside the net drain.
 #[derive(Resource, Default)]
 pub(crate) struct UnitEdits {
-    queue: Mutex<Vec<UnitEdit>>,
+    queue: Mutex<Vec<Queued>>,
     /// Every unit's [`Precast`] as applied, kept by the component's hooks.
     precasts: Mutex<EntityHashMap<Precast>>,
     /// Every unit's [`Engaged`] target as applied, kept by the component's hooks.
@@ -194,13 +208,15 @@ pub(crate) struct UnitEdits {
 pub(crate) type WorldRun = Box<dyn FnOnce(&mut World) + Send>;
 
 impl UnitEdits {
-    fn queue(&self) -> MutexGuard<'_, Vec<UnitEdit>> {
+    fn queue(&self) -> MutexGuard<'_, Vec<Queued>> {
         self.queue.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Queue `edit` behind the ones already queued.
+    /// Queue `edit` behind the ones already queued; a precast end that runs its tail takes its
+    /// place here, where its caller made it.
     pub(crate) fn push(&self, edit: UnitEdit) {
-        self.queue().push(edit);
+        let at = edit.runs_a_tail().then(crate::lanes::stamp);
+        self.queue().push((edit, at));
     }
 
     /// Queue `run` against the world, after the unit edits: a console command that writes engine
@@ -226,7 +242,7 @@ impl UnitEdits {
             .unwrap_or_else(PoisonError::into_inner)
             .get(&entity)
             .copied();
-        for (unit, change) in self.queue().iter().filter_map(UnitEdit::precast_change) {
+        for (unit, change) in self.queue().iter().filter_map(|(e, _)| e.precast_change()) {
             if unit == entity {
                 held = change.after(held).0;
             }
@@ -245,7 +261,7 @@ impl UnitEdits {
             .unwrap_or_else(PoisonError::into_inner)
             .get(&entity)
             .copied();
-        for edit in self.queue().iter() {
+        for (edit, _) in self.queue().iter() {
             match *edit {
                 UnitEdit::StartAttack { entity: e, target } if e == entity => held = Some(target),
                 UnitEdit::EndAttack(e) if e == entity => held = None,
@@ -321,16 +337,18 @@ pub(crate) fn flush_unit_edits(queued: Res<UnitEdits>, mut commands: Commands) {
 }
 
 /// The resources the edits write as they apply, beside the units' own components: the loot
-/// closes a precast end's tail owes the active player (`0x60d0ee`-`0x60d10b`), and the cast edges
-/// with their stamps. A handler's edits apply after it in the net drain, by an exclusive system
-/// whose writes Bevy's access does not show, so the lanes' guards count these as what a handler
-/// writes.
+/// close a precast end's tail makes for the active player (`0x60d0ee`-`0x60d10b`), the window,
+/// its latch and the dead source's deselect ([`crate::ui_loot::close_at_precast_end`]), and the
+/// cast edges with their stamps. A handler's edits apply after it in the net drain, by an
+/// exclusive system whose writes Bevy's access does not show, so the lanes' guards count these as
+/// what a handler writes.
 #[cfg(test)]
-pub(crate) fn applied_resources() -> [std::any::TypeId; 4] {
+pub(crate) fn applied_resources() -> [std::any::TypeId; 5] {
     use std::any::TypeId;
     [
-        TypeId::of::<crate::ui_loot::LootMoveStart>(),
-        TypeId::of::<crate::ui_loot::LootCloseAtRest>(),
+        TypeId::of::<crate::ui_loot::LootState>(),
+        TypeId::of::<crate::ui_loot::LootLatch>(),
+        TypeId::of::<crate::target::OwedSelects>(),
         TypeId::of::<PlaySeq>(),
         TypeId::of::<Messages<CastEvent>>(),
     ]
@@ -354,8 +372,8 @@ fn reap(world: &mut World, entity: Entity, spell_id: u32) {
     }
 }
 
-fn apply(world: &mut World, edits: Vec<UnitEdit>) {
-    for edit in edits {
+fn apply(world: &mut World, edits: Vec<Queued>) {
+    for (edit, at) in edits {
         match edit {
             UnitEdit::ReapCasting { entity, spell_id } => reap(world, entity, spell_id),
             UnitEdit::AbortCasting { entity, spell_id } => {
@@ -397,7 +415,7 @@ fn apply(world: &mut World, edits: Vec<UnitEdit>) {
                 UnitEdit::EndPrecast { tail: false, .. } => precast::PrecastTail::Skip,
                 _ => precast::PrecastTail::Run,
             };
-            precast::apply(world, entity, change, tail);
+            precast::apply(world, entity, change, tail, at);
         }
         // Past the stop's precast end: its kit reap (`0x6ea139`) and the un-nock (`0x6ea140`).
         if let UnitEdit::ClearAutoRepeat { entity, spell_id } = edit {
@@ -431,14 +449,37 @@ mod tests {
 
     /// Every resource an edit writes as it applies is one [`applied_resources`] names, so the
     /// guards that follow what a handler writes see it: each kind applied to the active player
-    /// with a precast, at rest and moving.
+    /// with a precast, at rest and moving, a dead unit's loot window open, which the tail closes.
     #[test]
     fn the_edits_write_no_resource_but_the_applied_ones() {
         const SPELL: u32 = 133;
+        const CORPSE: u64 = 0xF130_0000_0000_0042;
         let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
         let world = app.world_mut();
         super::super::precast::install_visuals_for_tests(world, &[SPELL], &[]);
         let me = world.spawn(crate::net::SelfPlayer).id();
+        let corpse = world
+            .spawn((
+                crate::net::NetEntity {
+                    kind: benilla_protocol::EntityKind::Unit,
+                    display_id: None,
+                    scale: 1.0,
+                },
+                crate::net::ObjectStore(
+                    benilla_protocol::messages::ObjectFields::from_pairs(&[(
+                        benilla_protocol::field::FIELD_UNIT_HEALTH,
+                        0,
+                    )])
+                    .into_created(benilla_protocol::messages::ObjectType::Unit),
+                ),
+            ))
+            .id();
+        world
+            .resource_mut::<crate::net::GuidIndex>()
+            .0
+            .insert(CORPSE, corpse);
+        // The close's one-shot registers itself on its first run, which is bookkeeping, not state.
+        crate::ui_loot::close_at_precast_end(world, false);
         let declared: Vec<ComponentId> = applied_resources()
             .into_iter()
             .filter_map(|t| world.components().get_resource_id(t))
@@ -499,6 +540,13 @@ mod tests {
         let mut owed = std::collections::BTreeSet::new();
         for flags in [0, crate::creature_anim::move_flags::FORWARD] {
             world.insert_resource(crate::player::Player::with_move_flags(flags));
+            world.resource_mut::<crate::ui_loot::LootState>().open(
+                CORPSE,
+                benilla_protocol::messages::loot_type::CORPSE,
+                5,
+                vec![],
+            );
+            world.resource_mut::<crate::ui_loot::LootLatch>().0 = Some(CORPSE);
             let last = world.increment_change_tick();
             for edit in edits {
                 world.resource::<UnitEdits>().push(edit);

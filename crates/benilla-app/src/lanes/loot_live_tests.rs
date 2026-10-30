@@ -12,7 +12,7 @@ use benilla_ui::script::UiScript;
 use bevy::prelude::*;
 use crossbeam_channel::{Receiver, Sender};
 
-use super::unit_view_tests::{created, wire_packets};
+use super::unit_view_tests::{created, values, wire_packets};
 use crate::net::ClientCommand;
 use crate::ui_loot::{LootLatch, LootState};
 
@@ -585,4 +585,176 @@ fn a_listeners_close_leaves_a_later_removal_unsignalled() {
         vec![SessionEvent::LootRemoved { slot: 1 }],
     ]);
     assert_eq!(c.seen(), ["LOOT_OPENED:nil", "LOOT_CLOSED:nil"]);
+}
+
+/// Fireball, which our precast holds.
+const FIREBALL: u32 = 133;
+
+/// The corpse's window open, read in full, and a listener of the monster's line that reads the
+/// window's row count as it fires, after the spy's own line; what the frames heard and sent
+/// taken.
+fn looting_the_corpse() -> Client {
+    let mut c = client();
+    c.ask_loot(CORPSE);
+    c.frame(vec![vec![response(CORPSE, 0, &[LINEN])]]);
+    assert_eq!(c.seen(), ["LOOT_OPENED:nil"]);
+    c.eval::<()>(
+        false,
+        r#"local g = CreateFrame("Frame")
+        g:RegisterEvent("CHAT_MSG_MONSTER_SAY")
+        g:SetScript("OnEvent", function()
+            table.insert(Seen, "items:" .. GetNumLootItems())
+        end)"#,
+    );
+    c.sent();
+    c
+}
+
+/// Our precast of [`FIREBALL`], with its record held, as a send or a start left it.
+fn precasting(c: &mut Client) {
+    let world = c.app.world_mut();
+    world.insert_resource(crate::ui_action::Spells {
+        catalog: benilla_formats::SpellCatalog::from_displays(std::collections::HashMap::from([(
+            FIREBALL,
+            Default::default(),
+        )])),
+        ..crate::ui_action::Spells::empty_for_tests()
+    });
+    let me = world.resource::<crate::net::GuidIndex>().0[&ME];
+    world.entity_mut(me).insert(crate::creature_anim::Precast {
+        spell_id: FIREBALL,
+        busy: true,
+    });
+}
+
+/// `packet` ends our precast with its tail, whose loot close (`0x60d040` → `0x48f200` at
+/// `0x60d10b`) runs inside it: its release goes out there and its `LOOT_CLOSED` fires there, so the
+/// next packet's listener in the same frame hears it fired and reads the window shut.
+fn closes_inside_its_packet(c: &mut Client, packet: SessionEvent) {
+    c.frame(vec![vec![packet], vec![boar_says("b")]]);
+    assert_eq!(
+        c.seen(),
+        ["LOOT_CLOSED:nil", "CHAT_MSG_MONSTER_SAY:b", "items:0"]
+    );
+    let sent = c.sent();
+    assert_eq!(
+        sent.iter()
+            .filter(|s| s.starts_with("LootRelease") && s.contains(&format!("{CORPSE}")))
+            .count(),
+        1,
+        "released once, in its frame: {sent:?}"
+    );
+    assert_eq!(c.app.world().resource::<LootState>().source(), None);
+    c.frame(vec![]);
+    assert!(c.seen().is_empty(), "nothing fires after");
+}
+
+/// Our cast's GO ends its precast (`0x6e7fc5`), the tail run as `0x6e4870` answers for a plain
+/// record.
+#[test]
+fn a_go_closes_our_loot_inside_its_packet() {
+    let mut c = looting_the_corpse();
+    precasting(&mut c);
+    closes_inside_its_packet(
+        &mut c,
+        SessionEvent::SpellGo {
+            caster: ME,
+            spell_id: FIREBALL,
+            cast_flags: 0x100,
+            hits: vec![],
+            misses: vec![],
+            target: None,
+            go_target: None,
+            target_mask: 0,
+            source: None,
+            dest: None,
+            ammo_display_id: None,
+            item_caster: None,
+            unit_caster: ME,
+        },
+    );
+}
+
+/// `SMSG_SPELL_FAILED_OTHER` on our cast ends its precast with `b` set (`0x6e8e8c`).
+#[test]
+fn a_spell_failure_closes_our_loot_inside_its_packet() {
+    let mut c = looting_the_corpse();
+    precasting(&mut c);
+    closes_inside_its_packet(
+        &mut c,
+        SessionEvent::SpellFailedOther {
+            caster: ME,
+            spell_id: FIREBALL,
+        },
+    );
+}
+
+/// A failed `SMSG_CAST_RESULT` reports the failure, whose player leg ends the precast of the
+/// spell with its tail (`0x6e1c7f`-`0x6e1c8e`), whatever the reason.
+#[test]
+fn a_failed_cast_result_closes_our_loot_inside_its_packet() {
+    let mut c = looting_the_corpse();
+    precasting(&mut c);
+    closes_inside_its_packet(
+        &mut c,
+        SessionEvent::CastResult {
+            spell_id: FIREBALL,
+            success: false,
+            reason: Some(0x23),
+            arg: None,
+        },
+    );
+}
+
+/// The health watcher's death of our selection: `OnDied`'s deselect is refused while we are
+/// charmed (`0x49359c`), so the selection is still the dead unit (`0x6047c7`) and the active
+/// player's precast ends with its own spell and its tail (`0x6047e7`), inside the update packet.
+#[test]
+fn a_selection_that_dies_and_stays_selected_closes_our_loot_inside_its_packet() {
+    /// A living mark, selected.
+    const MARK: u64 = 0xF130_0000_0000_00AD;
+    /// `UNIT_FIELD_CHARMEDBY`, its low dword.
+    const CHARMEDBY: u16 = 0x0a;
+    let mut c = looting_the_corpse();
+    c.frame(vec![
+        vec![created(MARK, EntityKind::Unit, &[(FIELD_UNIT_HEALTH, 100)])],
+        vec![values(ME, &[(CHARMEDBY, 0x99), (CHARMEDBY + 1, 0)])],
+    ]);
+    let world = c.app.world_mut();
+    let mark = world.resource::<crate::net::GuidIndex>().0[&MARK];
+    let mut selection = world.resource_mut::<crate::target::Selection>();
+    selection.guid = Some(MARK);
+    selection.target = Some(mark);
+    c.frame(vec![]);
+    c.seen();
+    c.sent();
+    assert_eq!(c.app.world().resource::<LootState>().source(), Some(CORPSE));
+    closes_inside_its_packet(&mut c, values(MARK, &[(FIELD_UNIT_HEALTH, 0)]));
+    assert_eq!(
+        c.app.world().resource::<crate::target::Selection>().guid,
+        Some(MARK),
+        "the charmed deselect refused"
+    );
+}
+
+/// A spline move on our own player ends its precast whatever it is (`0x6020e8`), the tail's
+/// close read off the path it installed: moving, the move-start close, which takes a corpse's.
+#[test]
+fn a_monster_move_closes_our_loot_inside_its_packet() {
+    let mut c = looting_the_corpse();
+    closes_inside_its_packet(
+        &mut c,
+        SessionEvent::MonsterMove {
+            guid: ME,
+            transport: None,
+            start: [0.0; 3],
+            spline_id: 7,
+            path: vec![[0.0; 3], [10.0, 0.0, 0.0]],
+            facing: benilla_protocol::MonsterMoveFacing::None,
+            stop: false,
+            duration_ms: 1000,
+            flying: false,
+            run_mode: true,
+        },
+    );
 }
