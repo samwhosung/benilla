@@ -963,9 +963,11 @@ fn object_create(
     // keeps; the queue empties. `UpdateActiveState` (`0x619426` → `0x618940`) then lists it while a
     // flag of `0x20ff` is set, so a unit created moving is dead-reckoned from its create, and a
     // standing one is listed by its fall start (`0x619456` → `0x617b00`). Every unit but ours
-    // takes the mover state ([`RemoteMotion`]), a path riding on it ([`Spline`]). Not built: that
-    // fall start (`0x7c61c0`), which needs a landing a remote mover lacks; the clamp grounds a
-    // standing unit instead.
+    // takes the mover state ([`RemoteMotion`]), a path riding on it ([`Spline`]). A unit created
+    // airborne goes on along its arc: the apply copies the block's fall time and launch under
+    // `JUMPING` (`0x618e1b` → `0x7c6490`), the word cleared first, so it is a takeoff. Not built:
+    // the standing unit's fall start (`0x7c61c0`), which needs a landing a remote mover lacks; the
+    // clamp grounds a standing unit instead.
     let motion = matches!(kind, EntityKind::Unit | EntityKind::Player)
         .then_some(mover)
         .flatten()
@@ -975,7 +977,22 @@ fn object_create(
                 Landing::Live(e) => sc.remote.get(*e).ok().map(|rm| rm.relay.clone()),
                 Landing::New { .. } => None,
             };
-            let flags = crate::creature_anim::move_flags::merge_server_authored(0, m.flags);
+            use crate::creature_anim::move_flags;
+            let flags = move_flags::merge_server_authored(0, m.flags);
+            let airborne = flags & move_flags::FALLING != 0;
+            let (vertical_velocity, jump_xy_vel) = if airborne {
+                crate::net::motion::jump_seed(
+                    m.jump,
+                    m.fall_time,
+                    flags & move_flags::SAFE_FALL != 0,
+                )
+            } else {
+                (0.0, [0.0; 2])
+            };
+            let fall_start = airborne.then(|| crate::net::motion::FallHeight {
+                world_z: position[2],
+                aboard: transport.map(|t| (t.guid, t.pos.z)),
+            });
             {
                 let now_ms = sc.real.elapsed_secs_f64() * 1000.0;
                 let mut relay = held.unwrap_or_default();
@@ -986,9 +1003,9 @@ fn object_create(
                     flags,
                     pitch: m.pitch,
                     speed: 0.0,
-                    vertical_velocity: 0.0,
-                    jump_xy_vel: [0.0; 2],
-                    fall_start: None,
+                    vertical_velocity,
+                    jump_xy_vel,
+                    fall_start,
                     pending: std::collections::VecDeque::new(),
                     relay,
                     last_apply_ms: now_ms,

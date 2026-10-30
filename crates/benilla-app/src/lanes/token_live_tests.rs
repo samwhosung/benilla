@@ -1122,6 +1122,8 @@ fn living(mut create: SessionEvent, flags: u32, stamp: u32) -> SessionEvent {
             flags,
             pitch: 0.0,
             time: stamp,
+            fall_time: 0,
+            jump: None,
         });
     }
     create
@@ -1171,6 +1173,39 @@ fn a_listener_reads_a_member_created_running_where_it_has_run_to() {
         *speeds = Some(benilla_protocol::MoveSpeeds {
             run: 7.0,
             ..Default::default()
+        });
+    }
+    c.frame(vec![vec![create]]);
+    for _ in 0..10 {
+        c.frame(vec![]);
+    }
+    c.frame(vec![vec![member_at(MATE, 20, ELWYNN, (100, 200))]]);
+    let seen: Vec<String> = c.eval(false, "return Fine");
+    assert_eq!(seen, ["0.5012,0.6000"]);
+}
+
+/// A member created mid-jump goes on along its arc from its create: the apply copies the block's
+/// fall time and launch under `JUMPING` (`0x618e1b` → `0x7c6490`), so each frame's tick carries
+/// it on at the launch's horizontal speed. Eleven frames of 16 ms at 7 yd/s carry it 1.232 yd
+/// along the launch, +x, where a later packet's listener reads it.
+#[test]
+fn a_listener_reads_a_member_created_mid_jump_where_its_arc_has_carried_it() {
+    let mut c = client();
+    c.app
+        .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            std::time::Duration::from_millis(16),
+        ));
+    map_spy(&mut c, "party1");
+    fine_map_spy(&mut c, "party1");
+    let falling = crate::creature_anim::move_flags::FALLING;
+    let mut create = living(mate_created([500.0, 600.0, 0.0], None), falling, 0);
+    if let SessionEvent::ObjectCreate { mover: Some(m), .. } = &mut create {
+        m.fall_time = 100;
+        m.jump = Some(benilla_protocol::JumpInfo {
+            zspeed: -7.955_547,
+            cos_angle: 1.0,
+            sin_angle: 0.0,
+            xy_speed: 7.0,
         });
     }
     c.frame(vec![vec![create]]);

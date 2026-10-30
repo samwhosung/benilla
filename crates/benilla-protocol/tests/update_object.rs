@@ -458,7 +458,9 @@ fn unit_living_block_surfaces_the_swim_it_is_already_in() {
                 &Some(benilla_protocol::MoverState {
                     flags,
                     pitch: -0.4,
-                    time: 0
+                    time: 0,
+                    fall_time: 0,
+                    jump: None,
                 }),
                 "the live flags word and its swim-pitch tail both reach the app"
             );
@@ -502,7 +504,9 @@ fn a_dry_living_block_has_no_pitch_tail_and_reads_level() {
                 &Some(benilla_protocol::MoverState {
                     flags,
                     pitch: 0.0,
-                    time: 123_456
+                    time: 123_456,
+                    fall_time: 0,
+                    jump: None,
                 }),
                 "no tail on the wire reads as a level pitch, and the stamp as the server wrote it"
             );
@@ -510,6 +514,60 @@ fn a_dry_living_block_has_no_pitch_tail_and_reads_level() {
                 speeds.map(|s| s.walk),
                 Some(2.5),
                 "the speeds land right after fall_time — the tail really was absent"
+            );
+        }
+        other => panic!("expected one ObjectCreate, got {other:?}"),
+    }
+}
+
+/// A create mid-jump carries its fall time and its `JUMPING` tail to the app, which the apply
+/// copies to the mover (`0x618e1b` → `0x7c6490`); the speeds still follow the tail.
+#[test]
+fn a_living_block_mid_jump_surfaces_its_fall_and_launch() {
+    let mut body = 1u32.to_le_bytes().to_vec();
+    body.push(0);
+    body.push(2);
+    write_packed_guid(0xAC, &mut body).unwrap();
+    body.push(3); // TypeId::Unit
+
+    body.push(0x20); // LIVING
+    let flags: u32 = 0x2000 | 0x1; // JUMPING | FORWARD
+    body.extend_from_slice(&flags.to_le_bytes());
+    body.extend_from_slice(&0u32.to_le_bytes()); // timestamp
+    for v in [10.0f32, 20.0, 30.0, 0.5] {
+        body.extend_from_slice(&v.to_le_bytes()); // pos + orientation
+    }
+    body.extend_from_slice(&250u32.to_le_bytes()); // fall_time, ms
+    for v in [-7.955_547f32, 0.6, 0.8, 7.0] {
+        body.extend_from_slice(&v.to_le_bytes()); // zspeed, cos, sin, xy speed
+    }
+    for v in [2.5f32, 7.0, 4.5, 4.722_222_3, 2.5, std::f32::consts::PI] {
+        body.extend_from_slice(&v.to_le_bytes());
+    }
+    body.push(0);
+
+    let packet = messages::parse_server(messages::opcode::SMSG_UPDATE_OBJECT, &body).unwrap();
+    match decode(packet).as_slice() {
+        [SessionEvent::ObjectCreate { mover, speeds, .. }, SessionEvent::ObjectUpdateEnd] => {
+            assert_eq!(
+                mover,
+                &Some(benilla_protocol::MoverState {
+                    flags,
+                    pitch: 0.0,
+                    time: 0,
+                    fall_time: 250,
+                    jump: Some(benilla_protocol::JumpInfo {
+                        zspeed: -7.955_547,
+                        cos_angle: 0.6,
+                        sin_angle: 0.8,
+                        xy_speed: 7.0,
+                    }),
+                }),
+            );
+            assert_eq!(
+                speeds.map(|s| s.walk),
+                Some(2.5),
+                "the speeds follow the tail"
             );
         }
         other => panic!("expected one ObjectCreate, got {other:?}"),

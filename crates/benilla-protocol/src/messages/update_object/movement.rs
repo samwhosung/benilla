@@ -1,7 +1,7 @@
 use std::io::{self, Read};
 
 use crate::messages::movement::{
-    TransportPose, MOVEMENT_FLAG_JUMPING, MOVEMENT_FLAG_ON_TRANSPORT,
+    JumpInfo, TransportPose, MOVEMENT_FLAG_JUMPING, MOVEMENT_FLAG_ON_TRANSPORT,
     MOVEMENT_FLAG_SPLINE_ELEVATION, MOVEMENT_FLAG_SPLINE_ENABLED, MOVEMENT_FLAG_SWIMMING,
 };
 use crate::messages::MonsterMoveFacing;
@@ -77,7 +77,8 @@ pub struct CreateSpline {
     pub facing: MonsterMoveFacing,
 }
 
-/// A `LIVING` block's live mover state: the `MOVEMENTFLAGS` word and the swim pitch that rides it.
+/// A `LIVING` block's live mover state: the `MOVEMENTFLAGS` word, the swim pitch and the fall that
+/// ride it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MoverState {
     /// The raw `MOVEMENTFLAGS` word (`CMovement+0x40`).
@@ -88,6 +89,11 @@ pub struct MoverState {
     /// the unit's last move's arrival there, or a second past the create when it has sent none
     /// (`Object.cpp:517-521`). The create seeds its mover's replay chain with it (`0x618c5e`).
     pub time: u32,
+    /// The ms the unit has been airborne (`MovementInfo::fallTime`), which the apply copies to the
+    /// mover under `JUMPING` (`0x618e1b` → `0x7c6490`, status `+0x38` to `+0x78`).
+    pub fall_time: u32,
+    /// The `JUMPING` tail, the launch the same apply copies (`+0x3c` to `+0x48`).
+    pub jump: Option<JumpInfo>,
 }
 
 /// The decoded fields of a movement block; the rest is read and discarded to stay aligned.
@@ -138,13 +144,24 @@ impl MovementBlock {
             } else {
                 0.0
             };
-            mover = Some(MoverState { flags, pitch, time });
-            let _fall_time = read_f32_le(r)?;
-            if flags & MOVEMENT_FLAG_JUMPING != 0 {
-                for _ in 0..4 {
-                    let _ = read_f32_le(r)?; // z_speed, cos_angle, sin_angle, xy_speed
-                }
-            }
+            let fall_time = read_u32_le(r)?;
+            let jump = if flags & MOVEMENT_FLAG_JUMPING != 0 {
+                Some(JumpInfo {
+                    zspeed: read_f32_le(r)?,
+                    cos_angle: read_f32_le(r)?,
+                    sin_angle: read_f32_le(r)?,
+                    xy_speed: read_f32_le(r)?,
+                })
+            } else {
+                None
+            };
+            mover = Some(MoverState {
+                flags,
+                pitch,
+                time,
+                fall_time,
+                jump,
+            });
             if flags & MOVEMENT_FLAG_SPLINE_ELEVATION != 0 {
                 let _ = read_f32_le(r)?;
             }
