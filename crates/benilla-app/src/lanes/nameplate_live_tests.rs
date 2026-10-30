@@ -559,7 +559,8 @@ fn a_packets_gate_binds_a_plate_in_the_frame_the_plates_come_on() {
 
 /// The frame's gate after the packets moves nothing a packet's callback already moved: the bar's
 /// value, its colour and the level stay as the callbacks left them, and no `OnValueChanged` runs
-/// again (`0x6086e0` on a kept plate takes `0x60875f`'s branch, not the bind's).
+/// again (`0x6086e0` on a kept plate takes `0x60875f`'s branch, not the bind's). A guard against a
+/// double write, not a test of a fix: the driver before the callbacks moved in passes it too.
 #[test]
 fn the_frames_gate_after_the_packets_writes_no_kept_plate_again() {
     let mut app = framed_client("return ''");
@@ -651,6 +652,8 @@ fn the_party_seat_and_clear_recolour_the_members_plate() {
         ["UNIT_HEALTH:target:0,0,255"],
         "seated"
     );
+    // Painted red behind the plate's back: only the clear's own refresh paints it blue again.
+    crate::script_calls::eval_in_vm::<()>(app.world(), "Bar():SetStatusBarColor(1, 0, 0)");
     assert_eq!(
         frame(
             &mut app,
