@@ -273,6 +273,8 @@ impl ScriptCallHost<'_, '_> {
             .click()
             .dispatch()
             .and_then(|mut dispatch| dispatch.act(script));
+        // A text object's read opens inside the click (`0x5f58c0` → `0x4e32e0`).
+        self.read_item_texts(script, at);
         let Some(owed) = owed else {
             return;
         };

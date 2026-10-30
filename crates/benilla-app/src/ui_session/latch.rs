@@ -63,6 +63,23 @@ pub(crate) enum NpcWindow {
 }
 
 impl NpcWindow {
+    /// Every window, in `0x493310`'s order.
+    pub(crate) const ORDER: [Self; 13] = [
+        Self::Trade,
+        Self::ItemText,
+        Self::Gossip,
+        Self::Quest,
+        Self::Merchant,
+        Self::Taxi,
+        Self::Trainer,
+        Self::Bank,
+        Self::Registrar,
+        Self::Tabard,
+        Self::Mail,
+        Self::Auction,
+        Self::Stable,
+    ];
+
     /// The window's bit among [`PARKED_CLOSES`].
     const fn bit(self) -> u16 {
         1 << self as u16
@@ -171,6 +188,31 @@ impl LatchSteps<'_> {
         #[cfg(debug_assertions)]
         latch.released.push(cell);
         true
+    }
+
+    /// `0x4930d0`'s walk inside a call that opens: the latched guid, taken (`0x49334b`), whose
+    /// holder the caller closes next ([`register`]'s), and checked once the call is done as a
+    /// release is ([`check_call_releases`]).
+    pub(crate) fn take(&mut self) -> Option<u64> {
+        let latch = self.latch.as_deref_mut()?;
+        let old = latch.guid.take()?;
+        #[cfg(debug_assertions)]
+        latch.released.push(old);
+        Some(old)
+    }
+
+    /// `0x4930d0`'s tail inside a call that opens: `guid` latched (`0x493114`), and greeted when
+    /// it differs from `before`, the guid latched ahead of the walk (`0x49318f`).
+    pub(crate) fn latch(&mut self, guid: u64, before: Option<u64>) {
+        let Some(latch) = self.latch.as_deref_mut() else {
+            return;
+        };
+        latch.guid = Some(guid);
+        if guid != 0 && before != Some(guid) {
+            if let Some(vocal) = self.vocal.as_deref_mut() {
+                vocal.write(LatchVocal::Hello(guid));
+            }
+        }
     }
 }
 

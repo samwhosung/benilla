@@ -26,6 +26,11 @@ pub(crate) struct QuestVerbs<'w, 's> {
 }
 
 impl QuestVerbs<'_, '_> {
+    /// The panel's cell `[0xbe0810]`, the source it was opened on.
+    pub(crate) fn source(&self) -> Option<u64> {
+        self.giver.as_deref().and_then(|g| g.npc)
+    }
+
     /// Apply one quest call: the source a teardown zeroed the cell of, whose release and
     /// `QUEST_FINISHED` the host owes next ([`Self::teardown`]).
     pub(crate) fn apply(&mut self, script: &mut UiScript, call: QuestCall) -> Option<u64> {

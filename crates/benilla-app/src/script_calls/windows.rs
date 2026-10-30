@@ -249,6 +249,159 @@ impl ScriptCallHost<'_, '_> {
         self.signalled(script, at);
     }
 
+    /// The reads the click or the call just asked for (`0x5f58c0`, the bag use's `0x4e32e0`), each
+    /// run inside it, in order ([`Self::read_item_text`]).
+    pub(super) fn read_item_texts(&mut self, script: &mut UiScript, at: &mut super::Signalled) {
+        while let Some(read) = self.appliers.item_text().next_read() {
+            self.read_item_text(script, at, read);
+        }
+    }
+
+    /// `0x4e32e0(guid, 0)` inside the click or the call that reads. The open object again
+    /// (`0x4e330c`) releases the latch on the cell (`0x4e3323`), which re-enters the reader's core
+    /// while it holds the latch, then signals `ITEM_TEXT_CLOSED` (`0x4e332d`); one never begun
+    /// keeps its cell. Another object releases the latch on the old cell (`0x4e3357`), takes the
+    /// cell (`0x4e3364`) and opens: its text looked up, and only with it at hand the latch, whose
+    /// holder closes first (`0x4e349a`), then `ITEM_TEXT_BEGIN` (`0x4e34a4`), then a bag book's
+    /// read request or the show and its `ITEM_TEXT_READY` (`0x4e359b`), each signal's listeners
+    /// running where it is raised.
+    fn read_item_text(
+        &mut self,
+        script: &mut UiScript,
+        at: &mut super::Signalled,
+        read: crate::ui_item_text::QueuedRead,
+    ) {
+        let guid = read.guid();
+        let cell = self.appliers.item_text().cell();
+        if let Some((_, serial)) = cell.filter(|(object, _)| *object == guid) {
+            self.release_into(script, at, guid, Self::close_item_text);
+            self.appliers.item_text().closed_again(serial);
+            script.fire_event("ITEM_TEXT_CLOSED", vec![]);
+            self.signalled(script, at);
+            return;
+        }
+        if let Some((old, _)) = cell {
+            self.release_into(script, at, old, Self::close_item_text);
+        }
+        self.appliers.item_text().begin(read);
+        let Some(object) = self.appliers.item_text().look_up() else {
+            return;
+        };
+        self.register_latch(script, at, object);
+        script.fire_event("ITEM_TEXT_BEGIN", vec![]);
+        self.signalled(script, at);
+        if !self.appliers.item_text().request_read(object)
+            && self.appliers.item_text().show_open(object)
+        {
+            script.fire_event("ITEM_TEXT_READY", vec![]);
+            self.signalled(script, at);
+        }
+    }
+
+    /// `CGGameUI::SetInteractNPC` (`0x4930d0`) inside the call that opens: with anything latched,
+    /// `0x493310`'s walk, which clears the latch (`0x49334b`) and closes the first window in its
+    /// order whose cell holds the old guid, its listeners running there; then `guid` latched
+    /// (`0x493114`), greeted when it differs from the one before (`0x49318f`).
+    fn register_latch(&mut self, script: &mut UiScript, at: &mut super::Signalled, guid: u64) {
+        let before = self.appliers.latch().take();
+        if let Some(old) = before {
+            let holder = NpcWindow::ORDER
+                .into_iter()
+                .find(|&window| self.latched_cell(window) == Some(old));
+            if let Some(window) = holder {
+                self.close_latched(script, at, window);
+            }
+        }
+        self.appliers.latch().latch(guid, before);
+    }
+
+    /// The cell `0x493310` tests for `window` (`0x493341`-`0x4934de`).
+    fn latched_cell(&mut self, window: NpcWindow) -> Option<u64> {
+        let appliers = &mut self.appliers;
+        match window {
+            NpcWindow::Trade => appliers.trade().partner_cell(),
+            NpcWindow::ItemText => appliers.item_text().cell().map(|(object, _)| object),
+            NpcWindow::Gossip => appliers.gossip().npc(),
+            NpcWindow::Quest => appliers.quest().source(),
+            NpcWindow::Merchant => appliers.merchant().vendor(),
+            NpcWindow::Taxi => appliers.taxi().flightmaster(),
+            NpcWindow::Trainer => appliers.trainer().trainer(),
+            NpcWindow::Bank => appliers.bank().banker(),
+            NpcWindow::Registrar => appliers.petition().registrar_npc(),
+            NpcWindow::Tabard => appliers.tabard().vendor(),
+            NpcWindow::Mail => appliers.mail().mailbox(),
+            NpcWindow::Auction => appliers.auction().auctioneer(),
+            NpcWindow::Stable => appliers.stable().master(),
+        }
+    }
+
+    /// `window`'s close core as `0x493310` enters it, inside the call that opens.
+    fn close_latched(
+        &mut self,
+        script: &mut UiScript,
+        at: &mut super::Signalled,
+        window: NpcWindow,
+    ) {
+        let tail = match window {
+            NpcWindow::Trade => {
+                self.close_trade(script, at);
+                None
+            }
+            NpcWindow::ItemText => {
+                self.close_item_text(script, at);
+                None
+            }
+            NpcWindow::Gossip => {
+                self.close_gossip(script, at);
+                None
+            }
+            // `0x501130(0, 1)`, `CloseQuest`'s core.
+            NpcWindow::Quest => {
+                let call = benilla_ui::script::QuestCall::Close;
+                if let Some(giver) = self.appliers.quest().apply(script, call) {
+                    self.finish_quest_teardown(script, at, giver);
+                }
+                None
+            }
+            NpcWindow::Merchant => {
+                self.close_merchant(script, at);
+                None
+            }
+            NpcWindow::Taxi => {
+                self.close_taxi(script, at);
+                None
+            }
+            NpcWindow::Trainer => {
+                self.close_trainer(script, at);
+                None
+            }
+            NpcWindow::Bank => {
+                self.close_bank(script, at);
+                None
+            }
+            NpcWindow::Registrar => self.close_registrar(),
+            NpcWindow::Tabard => self.close_tabard(),
+            NpcWindow::Mail => {
+                self.close_mail(script, at);
+                None
+            }
+            NpcWindow::Auction => {
+                self.close_auction(script, at);
+                None
+            }
+            NpcWindow::Stable => {
+                self.close_stable(script, at);
+                None
+            }
+        };
+        // The registrar's and the designer's signals, which their own verbs raise as the call's
+        // tail, are the core's: here they fire inside the walk.
+        if let Some(tail) = tail {
+            tail(script);
+            self.signalled(script, at);
+        }
+    }
+
     /// `ItemTextPrevPage()` (`0x4e3b50` → `0x4e3870`) or `ItemTextNextPage()` (`0x4e3b60` →
     /// `0x4e38b0`) inside its call: the page moved and shown (`0x4e35b0`), whose
     /// `ITEM_TEXT_READY` (`0x4e3860`) runs its listeners before the verb returns.

@@ -430,3 +430,71 @@ fn a_pages_show_reads_the_skill_its_frames_earlier_packet_wrote() {
         "hello"
     );
 }
+
+/// A bag letter's `UseContainerItem` opens the reader inside its call (`0x4e32e0`): the register
+/// closes the gossip menu that holds the latch first (`0x4e349a` → `0x4930d0` → `0x493310`), then
+/// `ITEM_TEXT_BEGIN` and the show's `ITEM_TEXT_READY` run their listeners there, and the call's
+/// next line reads the letter through the getters.
+#[test]
+fn a_bag_letters_read_opens_inside_its_call() {
+    use benilla_protocol::field::FIELD_PLAYER_INV_SLOT_HEAD;
+    use benilla_protocol::messages::ObjectType;
+    const LETTER: u64 = (benilla_protocol::guid::HIGH_ITEM as u64) << 48 | 0x09;
+    let mut app = client();
+    let world = app.world_mut();
+    world
+        .resource_mut::<crate::items::Items>()
+        .insert_template(5_000, Some(crate::items::test_template("Letter")));
+    world
+        .resource_mut::<crate::ui_mail::MailOpen>()
+        .bodies
+        .insert(77, "Dear you.".into());
+    crate::items::test_spawn_object(
+        world,
+        BANKER,
+        benilla_protocol::ObjectFields::from_pairs(&[(2, 0x9)]),
+    );
+    let letter = SessionEvent::ItemCreate {
+        guid: LETTER,
+        container: false,
+        fields: benilla_protocol::ObjectFields::from_pairs(&[
+            (2, 0x3),
+            (3, 5_000),
+            (6, ME as u32),
+            (8, ME as u32),
+            (14, 1),
+            (45, 77),
+        ])
+        .into_created(ObjectType::Item),
+    };
+    let seat = FIELD_PLAYER_INV_SLOT_HEAD + 2 * 23;
+    frame(
+        &mut app,
+        vec![
+            letter,
+            values(
+                ME,
+                &[(seat, LETTER as u32), (seat + 1, (LETTER >> 32) as u32)],
+            ),
+        ],
+    );
+    crate::ui_gossip::open_menu(app.world_mut(), BANKER, 0, Vec::new(), Vec::new());
+    spy(&mut app, &["GOSSIP_CLOSED"], false);
+    let read: String = eval(
+        &mut app,
+        true,
+        "UseContainerItem(0, 1) return tostring(ItemTextGetItem()) .. ' after ' \
+            .. table.concat(Seen, ',')",
+    );
+    assert_eq!(
+        read,
+        "Letter after GOSSIP_CLOSED,ITEM_TEXT_BEGIN,ITEM_TEXT_READY:Dear you./nil/1"
+    );
+    assert_eq!(
+        app.world()
+            .resource::<crate::ui_session::InteractLatch>()
+            .guid(),
+        Some(LETTER),
+        "the letter holds the latch"
+    );
+}

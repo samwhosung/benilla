@@ -59,9 +59,6 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
         "the arrival snap `0x7c6420` (`0x618dfc`) is written inside the packet"),
     ("::transport::compose_riders", &["Transform", "net::motion::remote::RemoteMotion"],
         "the arrival snap `0x7c6420` (`0x618dfc`) is written inside the packet"),
-    ("::ui_item_text::apply_reads", &["ui_item_text::ItemTextOpen"],
-        "a click's or a bag use's read, queued in its input or its call, which the reference \
-         opens inside them (`0x5f58c0`, `0x4e32e0`), ahead of the packets (`0x420d23`)"),
 ];
 
 /// The systems between the dispatch and the drain that write what the host's live reads read,

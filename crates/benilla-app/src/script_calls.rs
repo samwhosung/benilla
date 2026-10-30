@@ -1081,6 +1081,8 @@ impl CallHost for ScriptCallHost<'_, '_> {
                 if let Some(open) = appliers.item_use().use_container_item(script, call) {
                     tail = appliers.loot().open_item(script, open);
                 }
+                // A book's or a letter's read opens inside the call (`0x4e32e0`).
+                self.read_item_texts(script, &mut at);
             }
             ScriptCall::UseInventoryItem { slot, on_self, .. } => appliers
                 .item_use()

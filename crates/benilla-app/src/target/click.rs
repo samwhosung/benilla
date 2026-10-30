@@ -817,7 +817,7 @@ impl Dispatch<'_, '_> {
             return;
         }
         // TEXT (type 9) opens locally (`0x5f58c0` → `0x4e32e0(goGuid, 0)`; vmangos' `Use` has no
-        // type-9 case); a re-click closes it, and the page is read at paint time.
+        // type-9 case), inside the click as its host runs the read; a re-click closes it.
         if go_type == cursor_mode::GO_TYPE_TEXT {
             if !in_reach {
                 self.walk_to_object(entity, guid, go_type, walk);

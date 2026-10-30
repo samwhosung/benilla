@@ -20,9 +20,10 @@
 //!
 //! Each step runs whole where its caller runs it: a packet's in its handler (the object's page
 //! text, a record's answer, a read's reply, a name's answer), a page turn and `CloseItemText`
-//! inside their calls, a click's or a bag use's read at its apply. What a handler signals goes on
-//! the item-text lane at its place ([`ItemTextLane`]); the getters read the session through the
-//! host at the call ([`ItemTextLive`]).
+//! inside their calls, and a click's or a bag use's read inside the click or the call
+//! ([`crate::script_calls::ScriptCallHost`]). What a handler signals goes on the item-text lane at
+//! its place ([`ItemTextLane`]); the getters read the session through the host at the call
+//! ([`ItemTextLive`]).
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -176,9 +177,9 @@ enum Wait {
 #[derive(Resource, Default)]
 pub(crate) struct ItemTextOpen {
     pub(crate) pending: Option<ReadSession>,
-    /// Reads a click or a bag use asked for, in order; [`apply_reads`] runs each as `0x4e32e0`
-    /// with flag 0, with the world in hand for the latch.
-    reads: Vec<(u64, ReadSource)>,
+    /// Reads a click or a bag use asked for, in order, each `0x4e32e0` with flag 0, which the
+    /// call host runs before the click or the call goes on ([`ItemTextSteps::next_read`]).
+    reads: Vec<QueuedRead>,
     /// The last read's serial.
     serials: u64,
 }
@@ -197,7 +198,10 @@ impl ItemTextOpen {
 
     fn read(&mut self, object_guid: u64, source: ReadSource) -> bool {
         let reread = self.object() == Some(object_guid);
-        self.reads.push((object_guid, source));
+        self.reads.push(QueuedRead {
+            guid: object_guid,
+            source,
+        });
         reread
     }
 
@@ -224,6 +228,19 @@ impl ItemTextOpen {
     #[cfg(test)]
     pub(crate) fn open_letter(&mut self, item_guid: u64, text_id: u32) {
         self.open(item_guid, ReadSource::Letter { text_id });
+    }
+}
+
+/// A read a click or a bag use asked for, which its host runs ([`ItemTextOpen::reads`]).
+pub(crate) struct QueuedRead {
+    guid: u64,
+    source: ReadSource,
+}
+
+impl QueuedRead {
+    /// The object read.
+    pub(crate) fn guid(&self) -> u64 {
+        self.guid
     }
 }
 
@@ -438,17 +455,12 @@ fn item_text_reads(_: &mut World) -> bevy::ecs::query::FilteredAccessSet {
     bevy::ecs::query::FilteredAccessSet::default()
 }
 
-/// The queued reads, each `0x4e32e0(guid, 0)`, run with the world in hand ([`read_core`]).
-fn apply_reads(mut open: ResMut<ItemTextOpen>, mut commands: Commands) {
-    for (guid, source) in std::mem::take(&mut open.reads) {
-        commands.queue(move |world: &mut World| read_core(world, guid, source, Place::Here));
-    }
-}
-
-/// One read, `0x4e32e0(guid, 0)`. The open object again (`0x4e330c`) releases the latch on the
-/// cell (`0x4e3323`), which closes the reader if it holds it, then fires `ITEM_TEXT_CLOSED`
-/// (`0x4e332d`); one never begun keeps its cell. Another object releases the latch on the old cell
-/// (`0x4e3357`), closing a begun reader through `0x493310` once, then takes the cell (`0x4e3364`)
+/// One read, `0x4e32e0(guid, 0)`, with the world in hand: one an engine makes outside any call
+/// ([`read_now`]); a click's and a bag use's run inside them, through the call host. The open
+/// object again (`0x4e330c`) releases the latch on the cell (`0x4e3323`), which closes the reader
+/// if it holds it, then fires `ITEM_TEXT_CLOSED` (`0x4e332d`); one never begun keeps its cell.
+/// Another object releases the latch on the old cell (`0x4e3357`), closing a begun reader through
+/// `0x493310` once, then takes the cell (`0x4e3364`)
 /// and opens ([`open_tail`]).
 fn read_core(world: &mut World, guid: u64, source: ReadSource, place: Place) {
     let cell = world
@@ -550,6 +562,11 @@ fn show(
 /// hand is waited on. A page chain with no page keeps its cell and stops (`0x4e341d`). With the record at hand,
 /// the session is marked latched for the register that follows; its object and serial.
 fn look_up_text(mut open: ResMut<ItemTextOpen>, reads: ItemTextShow) -> Option<(u64, u64)> {
+    look_up(&mut open, &reads)
+}
+
+/// [`look_up_text`] on the reader and its reads as the caller holds them.
+fn look_up(open: &mut ItemTextOpen, reads: &ItemTextShow) -> Option<(u64, u64)> {
     let sess = open.pending.as_mut()?;
     if sess.registered || sess.awaiting.is_some() {
         return None;
@@ -676,6 +693,11 @@ fn request_read(
     objects: Objects,
     net: Res<NetCommands>,
 ) -> bool {
+    request(&open, &objects, &net, object)
+}
+
+/// [`request_read`] on the reader, the objects and the wire as the caller holds them.
+fn request(open: &ItemTextOpen, objects: &Objects, net: &NetCommands, object: u64) -> bool {
     let Some(sess) = open.pending.as_ref().filter(|s| s.object_guid == object) else {
         return true;
     };
@@ -688,7 +710,7 @@ fn request_read(
     if !reads_by_server {
         return false;
     }
-    match read_position(object, &objects) {
+    match read_position(object, objects) {
         Some((bag, slot)) => {
             let _ = net.0.send(ClientCommand::ReadItem { bag, slot });
         }
@@ -734,13 +756,13 @@ fn player_slot(player: &benilla_protocol::ObjectFields, i: u8) -> Option<u64> {
     }
 }
 
-/// A read of `object_guid`'s pages run whole, as a click's apply runs it, for a test.
-#[cfg(test)]
+/// A read of `object_guid`'s pages run whole outside any call, as an engine's own read makes it
+/// (the book probe's).
 pub(crate) fn read_now(world: &mut World, object_guid: u64) {
     read_core(world, object_guid, ReadSource::pages(), Place::Here);
 }
 
-/// A read of the bag letter `item_guid` run whole, as a bag use's apply runs it, for a test.
+/// A read of the bag letter `item_guid` run whole outside any call, for a test.
 #[cfg(test)]
 pub(crate) fn read_letter_now(world: &mut World, item_guid: u64, text_id: u32) {
     read_core(
@@ -916,13 +938,9 @@ impl Plugin for UiItemTextPlugin {
             )
             .add_systems(
                 Update,
-                (
-                    // With no in-game interface up no drain fires the lane, and no listener
-                    // hears it.
-                    drop_unheard.run_if(not(crate::ui_script::ingame_ui_up)),
-                    apply_reads,
-                )
-                    .chain()
+                // With no in-game interface up no drain fires the lane, and no listener hears it.
+                drop_unheard
+                    .run_if(not(crate::ui_script::ingame_ui_up))
                     .in_set(UiFeed),
             );
     }
@@ -1148,7 +1166,8 @@ pub(crate) struct PageMaterials(pub(crate) benilla_formats::PageTextMaterialCata
 
 /// The reader's verbs inside their calls ([`benilla_ui::script::ItemTextCall`]): the page turns
 /// and the creator's lookup here, the close core in the host
-/// ([`crate::script_calls::ScriptCallHost`]).
+/// ([`crate::script_calls::ScriptCallHost`]); and the steps of a click's or a bag use's read,
+/// whose core the host runs inside them.
 #[derive(SystemParam)]
 pub(crate) struct ItemTextSteps<'w, 's> {
     /// Absent in a harness without the reader.
@@ -1197,6 +1216,67 @@ impl ItemTextSteps<'_, '_> {
     /// The reader's cell `[0xbc3fa0]`, as a close its listeners call finds it.
     pub(crate) fn object(&mut self) -> Option<u64> {
         self.session().map(|s| s.object_guid)
+    }
+
+    /// The next read a click or a bag use asked for, in order.
+    pub(crate) fn next_read(&mut self) -> Option<QueuedRead> {
+        let open = self.open.as_deref_mut()?;
+        (!open.reads.is_empty()).then(|| open.reads.remove(0))
+    }
+
+    /// The reader's cell `[0xbc3fa0]` and its read, as the read core tests it (`0x4e330c`).
+    pub(crate) fn cell(&self) -> Option<(u64, u64)> {
+        let sess = self.open.as_deref()?.pending.as_ref()?;
+        Some((sess.object_guid, sess.serial))
+    }
+
+    /// The object read again: what read `serial` still owes the listeners of its open and its
+    /// show is dropped, as its `ITEM_TEXT_CLOSED` fires in place.
+    pub(crate) fn closed_again(&mut self, serial: u64) {
+        if let Some(lane) = self.lane.as_deref_mut() {
+            lane.closed_in_place(serial);
+        }
+    }
+
+    /// The cell taken by `read` (`0x4e3364`), the session written afresh.
+    pub(crate) fn begin(&mut self, read: QueuedRead) {
+        if let Some(open) = self.open.as_deref_mut() {
+            open.open(read.guid, read.source);
+        }
+    }
+
+    /// The open's lookups (`0x4e33b0`-`0x4e348b`, [`look_up_text`]): the object, with its text
+    /// at hand and the session marked latched, or `None` where the open waits or ends.
+    pub(crate) fn look_up(&mut self) -> Option<u64> {
+        let (Some(open), Some(show)) = (self.open.as_deref_mut(), self.show.as_ref()) else {
+            return None;
+        };
+        look_up(open, show).map(|(object, _)| object)
+    }
+
+    /// A bag book's read request after the begin ([`request_read`]); `true` when it is one.
+    pub(crate) fn request_read(&mut self, object: u64) -> bool {
+        let (Some(open), Some(show)) = (self.open.as_deref(), self.show.as_ref()) else {
+            return true;
+        };
+        request(open, &show.objects, &show.net, object)
+    }
+
+    /// The show `0x4e35b0(object, 1)` on the open reader: whether it wrote the page, for the
+    /// caller to signal `ITEM_TEXT_READY` (`0x4e3860`).
+    pub(crate) fn show_open(&mut self, object: u64) -> bool {
+        let Some(show) = self.show.as_ref() else {
+            return false;
+        };
+        let Some(sess) = self
+            .open
+            .as_deref_mut()
+            .and_then(|o| o.pending.as_mut())
+            .filter(|s| s.object_guid == object)
+        else {
+            return false;
+        };
+        show.show(sess, true)
     }
 
     /// The close core's cell clear (`0x4e3364`), in place: what the read still owes its listeners
@@ -1296,8 +1376,7 @@ mod tests {
                 .insert_resource(crate::text_filter::TextFilterSwitches {
                     profanity,
                     ..Default::default()
-                })
-                .add_systems(Update, apply_reads);
+                });
             app.insert_non_send_resource(UiScript::new().unwrap());
             app.world_mut()
                 .resource_mut::<Items>()
@@ -1312,9 +1391,7 @@ mod tests {
                 .resource_mut::<MailOpen>()
                 .bodies
                 .insert(77, "Oh darn it.".into());
-            app.world_mut()
-                .resource_mut::<ItemTextOpen>()
-                .read_letter(LETTER, 77);
+            read_letter_now(app.world_mut(), LETTER, 77);
             for _ in 0..4 {
                 app.update();
             }
@@ -1340,8 +1417,7 @@ mod tests {
             .init_resource::<crate::net::GuidIndex>()
             .init_resource::<crate::world_state::WorldStates>()
             .insert_resource(darn_filter())
-            .init_resource::<crate::text_filter::TextFilterSwitches>()
-            .add_systems(Update, apply_reads);
+            .init_resource::<crate::text_filter::TextFilterSwitches>();
         net::register(&mut app);
         app.insert_non_send_resource(UiScript::new().unwrap());
         let mut data = [0i32; 24];
@@ -1409,8 +1485,7 @@ mod tests {
                 .init_resource::<NameCache>()
                 .init_resource::<GameObjectTemplates>()
                 .init_resource::<crate::net::GuidIndex>()
-                .init_resource::<crate::world_state::WorldStates>()
-                .add_systems(Update, apply_reads);
+                .init_resource::<crate::world_state::WorldStates>();
             net::register(&mut app);
             let script = UiScript::new().unwrap();
             script
@@ -1473,9 +1548,7 @@ mod tests {
                     .collect()
             };
 
-            app.world_mut()
-                .resource_mut::<ItemTextOpen>()
-                .read_pages(BOOK);
+            read_now(app.world_mut(), BOOK);
             for _ in 0..4 {
                 app.update();
             }
@@ -1535,9 +1608,7 @@ mod tests {
                 assert_eq!(flags, Some(2), "the item is marked read (`0x5d9a80`)");
                 // A read of it again: no request, the page at once (`0x4e359b`).
                 close_core(app.world_mut());
-                app.world_mut()
-                    .resource_mut::<ItemTextOpen>()
-                    .read_pages(BOOK);
+                read_now(app.world_mut(), BOOK);
                 for _ in 0..4 {
                     app.update();
                 }
@@ -1569,8 +1640,7 @@ mod tests {
             .init_resource::<NameCache>()
             .init_resource::<GameObjectTemplates>()
             .init_resource::<crate::net::GuidIndex>()
-            .init_resource::<crate::world_state::WorldStates>()
-            .add_systems(Update, apply_reads);
+            .init_resource::<crate::world_state::WorldStates>();
         net::register(&mut app);
         app.insert_non_send_resource(UiScript::new().unwrap());
         let mut data = [0i32; 24];
@@ -1659,12 +1729,7 @@ mod tests {
     fn a_page_read_opens_before_its_template_lands() {
         let mut world = World::new();
         world.init_resource::<ItemTextOpen>();
-        assert!(!world
-            .resource_mut::<ItemTextOpen>()
-            .read_pages(0xF110_0000_0000_0001));
-        use bevy::ecs::system::RunSystemOnce;
-        world.run_system_once(apply_reads).unwrap();
-        world.flush();
+        read_now(&mut world, 0xF110_0000_0000_0001);
         let open = world.resource::<ItemTextOpen>();
         let sess = open.pending.as_ref().expect("open");
         assert!(matches!(&sess.source, ReadSource::Pages { list, page: 0 } if list.is_empty()));
@@ -1696,8 +1761,7 @@ mod tests {
             .init_resource::<GameObjectTemplates>()
             .init_resource::<crate::net::GuidIndex>()
             .init_resource::<crate::world_state::WorldStates>()
-            .insert_resource(crate::ui_chat::ChatLanguages::for_test(orcish()))
-            .add_systems(Update, apply_reads);
+            .insert_resource(crate::ui_chat::ChatLanguages::for_test(orcish()));
         net::register(&mut app);
         let world = app.world_mut();
         crate::ui_chat::test_speaker::know(world, 1);
@@ -1784,9 +1848,7 @@ mod tests {
             .resource_mut::<MailOpen>()
             .bodies
             .insert(77, PAGE.into());
-        app.world_mut()
-            .resource_mut::<ItemTextOpen>()
-            .read_letter(LETTER, 77);
+        read_letter_now(app.world_mut(), LETTER, 77);
         for _ in 0..4 {
             app.update();
         }
@@ -1840,9 +1902,7 @@ mod tests {
                 ]),
                 false,
             );
-            app.world_mut()
-                .resource_mut::<ItemTextOpen>()
-                .read_pages(BOOK);
+            read_now(app.world_mut(), BOOK);
             for _ in 0..4 {
                 app.update();
             }
