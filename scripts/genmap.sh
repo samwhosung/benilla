@@ -9,6 +9,10 @@
 set -u
 cd "$(dirname "$0")/.."
 
+# `--check` runs every stage but writes the docs into a scratch folder, for the gates.
+out=docs
+if [ "${1:-}" = "--check" ]; then out=$(mktemp -d "${TMPDIR:-/tmp}/genmap-out.XXXXXX"); trap 'rm -rf "$out"' EXIT; fi
+
 # Extract a quoted `key = "value"` field from a Cargo.toml.
 field() { grep -m1 "^$2" "$1" 2>/dev/null | sed -E "s/^$2[[:space:]]*=[[:space:]]*\"//; s/\".*$//"; }
 
@@ -122,16 +126,16 @@ field() { grep -m1 "^$2" "$1" 2>/dev/null | sed -E "s/^$2[[:space:]]*=[[:space:]
   done
   echo
 
-} > docs/MAP.md
+} > "$out/MAP.md"
 
-echo "genmap: wrote docs/MAP.md"
+echo "genmap: wrote $out/MAP.md"
 
 # ── docs/DEVIATIONS.md ─────────────────────────────────────────────────────────────────────────────
 # Every place benilla writes down that it differs from 1.12.1: the `Deviates` rows of the CVar table,
 # and each `Deviation:` comment in the crates (Rust and WGSL `//`, Lua `--`, XML `<!-- -->`). A
 # deviation's wording is read from where it lives, so the list cannot drift from the code.
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/genmap.XXXXXX") || exit 1
-trap 'rm -rf "$tmp"' EXIT
+trap 'rm -rf "$tmp"; [ "$out" = docs ] || rm -rf "$out"' EXIT
 
 # Test code is left out: a file under `tests/`, named `tests.rs` or `*_tests.rs`, or declared by a
 # `#[cfg(test)] mod x;` (listed here, resolved the way rustc does, `#[path]` included), and a
@@ -423,28 +427,33 @@ MDESC='
     $2 != module { if (module != "") print ""; module = $2; printf "#### %s\n\n", module }
     { printf "- %s. ([`%s:%d`](../crates/%s/%s#L%d))\n", mdesc($5), $3, $4, $1, $3, $4 }
     END { print "" }' "$tmp/code.sorted"
-} > docs/DEVIATIONS.md
+} > "$out/DEVIATIONS.md"
 
-echo "genmap: wrote docs/DEVIATIONS.md ($(wc -l < "$tmp/code.sorted" | tr -d ' ') code entries, $(wc -l < "$tmp/cvars.tsv" | tr -d ' ') CVar rows)"
+echo "genmap: wrote $out/DEVIATIONS.md ($(wc -l < "$tmp/code.sorted" | tr -d ' ') code entries, $(wc -l < "$tmp/cvars.tsv" | tr -d ' ') CVar rows)"
 
 # ── the reason check ───────────────────────────────────────────────────────────────────────────────
 # `docs/METHOD.md`: a deviation is written down with the reference fact and why we differ. So a
 # `Deviation:` comment carries "because …" somewhere in its paragraph, and a CVar `Deviates` row
 # carries a Why. `scripts/deviation-why.allow` is the ratchet for the comments still waiting for a
-# reason: one `path<TAB>first eight words` per line. It only shrinks. An entry that gained its reason,
+# reason: one `path<TAB>first twelve words` per line. It only shrinks. An entry that gained its reason,
 # or whose comment is gone or reworded, fails until it is removed; a comment off the list without
 # "because" fails; and an entry new against origin/main's copy of the list fails.
 allow=scripts/deviation-why.allow
-touch "$tmp/allow.old"
-git show "origin/main:$allow" 2>/dev/null | grep -vE '^(#|$)' > "$tmp/allow.old" || true
+haveold=0
+if git cat-file -e "origin/main:$allow" 2>/dev/null; then
+  haveold=1
+  git show "origin/main:$allow" | grep -vE '^(#|$)' > "$tmp/allow.old" || true
+else
+  : > "$tmp/allow.old"
+fi
 grep -vE '^(#|$)' "$allow" 2>/dev/null > "$tmp/allow.now" || : > "$tmp/allow.now"
-LC_ALL=C awk -F '\t' -v oldf="$tmp/allow.old" -v nowf="$tmp/allow.now" '
-  function key(t,   n, w, i, k) { n = split(t, w, " "); k = ""; for (i = 1; i <= n && i <= 8; i++) k = k (i > 1 ? " " : "") w[i]; return k }
+LC_ALL=C awk -F '\t' -v haveold="$haveold" -v oldf="$tmp/allow.old" -v nowf="$tmp/allow.now" '
+  function key(t,   n, w, i, k) { n = split(t, w, " "); k = ""; for (i = 1; i <= n && i <= 12; i++) k = k (i > 1 ? " " : "") w[i]; return k }
   BEGIN {
     while ((getline l < oldf) > 0) old[l] = 1
-    close(oldf); haveold = (length(old) > 0)
+    close(oldf)
     FS = "\t"
-    while ((getline l < nowf) > 0) { listed[l] = 1; order[++nl] = l; if (haveold && !(l in old)) { print "deviation-why: new on the allowlist, which only shrinks: " l; bad++ } }
+    while ((getline l < nowf) > 0) { listed[l] = 1; order[++nl] = l; if (haveold == 1 && !(l in old)) { print "deviation-why: new on the allowlist, which only shrinks: " l; bad++ } }
   }
   FILENAME ~ /cvars\.tsv$/ { if ($4 == "") { print "deviation-why: the `" $1 "` Deviates row has no Why"; bad++ } next }
   {
@@ -452,8 +461,9 @@ LC_ALL=C awk -F '\t' -v oldf="$tmp/allow.old" -v nowf="$tmp/allow.now" '
     seen[k] = 1
     if (tolower($6) ~ /(^|[^a-z])because([^a-z]|$)/) {
       if (k in listed) { print "deviation-why: " path ":" $4 " has its reason now; remove it from the allowlist"; bad++ }
-    } else if (!(k in listed)) {
-      print "deviation-why: " path ":" $4 " gives no reason; add \"because …\" (" substr($6, 1, 60) "…)"; bad++
+    } else {
+      if (++dup[k] > 1) { print "deviation-why: " path ":" $4 " shares its first twelve words with another comment without a reason; reword one"; bad++ }
+      if (!(k in listed)) { print "deviation-why: " path ":" $4 " gives no reason; add \"because …\" (" substr($6, 1, 60) "…)"; bad++ }
     }
   }
   END {

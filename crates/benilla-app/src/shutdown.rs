@@ -53,7 +53,7 @@ pub(crate) fn on_app_exit(app: &mut App, systems: ScheduleConfigs<ScheduleSystem
 /// `0x402840`, asked at `0x423a21`) answers 0 and tears the context down (`0x41f9b0`), with no
 /// logout timer, at the login screen and in game alike. benilla reads the chord itself and asks for
 /// the same close, which the shutdown tail above already serves, because a tiling window manager
-/// (i3, sway, Hyprland) binds nothing to it. Not on macOS: `Cmd+Q` is
+/// (i3, sway, Hyprland) binds nothing to Alt+F4. Not on macOS: `Cmd+Q` is
 /// [`benilla_world::mac_quit`].
 pub(crate) struct AltF4Plugin;
 

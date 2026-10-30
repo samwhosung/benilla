@@ -10,7 +10,7 @@
 //! Deviation: the reference loads the world first and logs in after: the entry's first frame
 //! starts the load at the record's map and position (`0x401570`, called at `0x46c236`), and a
 //! later one, once its file reader is idle (`0x46c247`), sends the login (`0x46c272`). Here the two
-//! overlap because that way entry is a round trip faster, and a refusal ends the cycle as a logout
+//! overlap because that way entry is a round trip faster; a refusal ends the cycle as a logout
 //! does.
 //!
 //! A logout or a later `SMSG_CHARACTER_LOGIN_FAILED` ends the world session, announced as a

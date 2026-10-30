@@ -242,13 +242,13 @@ impl WorldSession {
         // `SMSG_ADDON_INFO` can reach any of the handshake's read loops, so it is caught here.
         match &packet {
             ServerPacket::AddonInfo { records } => self.link.addon_info = Some(records.clone()),
-            // Deviation: benilla runs no Warden module and answers nothing, where the reference
-            // hands `SMSG_WARDEN_DATA` to the module its connect loads (`0x6ca2f0`, `0x6ca5c0`)
-            // and sends that module's answer as `CMSG_WARDEN_DATA` (`0x6ca6a0`). The message is
-            // read past like any stray and the login goes on, because the answers come from native
-            // Win32 x86 code the server sends, which the client maps, links and runs in its own
-            // process (`0x7a79d0`), and benilla runs no such code on any platform
-            // ([`crate::auth::AuthReject::reply`] gives the rule). What follows is the server's
+            // Deviation: benilla runs no Warden module and answers nothing, because the answers
+            // come from native Win32 x86 code the server sends, which the client maps, links and
+            // runs in its own process (`0x7a79d0`), and benilla runs no such code on any platform
+            // ([`crate::auth::AuthReject::reply`] gives the rule). The reference hands
+            // `SMSG_WARDEN_DATA` to the module its connect loads (`0x6ca2f0`, `0x6ca5c0`) and sends
+            // that module's answer as `CMSG_WARDEN_DATA` (`0x6ca6a0`); here the message is read
+            // past like any stray and the login goes on. What follows is the server's
             // policy (vmangos kicks after `Warden.ClientResponseDelay`, `Warden.cpp:686-691`).
             ServerPacket::Other {
                 opcode: opcode::SMSG_WARDEN_DATA,

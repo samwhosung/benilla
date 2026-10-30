@@ -497,7 +497,7 @@
                 "RowPartyChatBubbles", "RowSpamFilter",
             },
             -- Deviation: the bar toggles precede the lock, which 1.12's box leads with, because
-            -- what is on screen reads first.
+            -- that way what is on screen reads first.
             ActionBars = {
                 "RowMultiBar1", "RowMultiBar2", "RowMultiBar3", "RowMultiBar4",
                 "RowAlwaysShowMultibars", "RowLockActionBar",
@@ -744,8 +744,8 @@
                 GameTooltip:SetOwner(getglobal(row:GetName() .. "Tip"), "ANCHOR_RIGHT", -10, 0)
                 GameTooltip:SetText(text, nil, nil, nil, nil, 1)
             else
-                -- Deviation: 1.12 returns early here; a mute row hides the last plate because a
-                -- neighbour's text cannot stand when its OnLeave was missed.
+                -- Deviation: 1.12 returns early here; a mute row hides the last plate because
+                -- otherwise a neighbour's text stands when its OnLeave was missed.
                 GameTooltip:Hide()
             end
         end

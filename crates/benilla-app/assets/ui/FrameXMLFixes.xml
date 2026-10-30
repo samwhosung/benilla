@@ -30,8 +30,8 @@
             end)
         end
 
-        -- Deviation: friendly plates the player turned on come back at every world entry because
-        -- the stock UpdateNameplates (UIOptionsFrame.lua:768-780) shows them and hides them again
+        -- Deviation: friendly plates the player turned on come back at every world entry; the stock
+        -- UpdateNameplates (UIOptionsFrame.lua:768-780) shows them and hides them again
         -- at once (l.775-776), and FRIENDNAMEPLATES_ON is never saved because l.182 registers
         -- NAMEPLATES_ON a second time.
         function UpdateNameplates()

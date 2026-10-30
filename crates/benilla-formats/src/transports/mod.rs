@@ -79,10 +79,10 @@ impl TransportTimetable {
     /// `accelRate`, each made a float through `fild` of the zero-extended value. `None` for no
     /// node or a period of 0, which the reference ticks with a modulus of 1 (`0x5f50d5`) and no
     /// leg ending after 0, so it never moves the ship (`0x5f511c`), as a ship with no timetable.
-    /// Deviation: `None` too because the reference's build overruns its stack or reads memory it
-    /// never wrote (`transports#path-faults`), so the ship stays at its spawn: more than 1024
-    /// nodes in a leg (`0x5f9530`), a leg of 3 nodes or fewer (`0x4532e3`) and a stop on a leg's
-    /// last node (`0x5f91a1`). No shipped path reaches one.
+    /// Deviation: `None` too, so the ship stays at its spawn, where the reference's build overruns
+    /// its stack or reads memory it never wrote (`transports#path-faults`), because that build
+    /// faults there: more than 1024 nodes in a leg (`0x5f9530`), a leg of 3 nodes or fewer
+    /// (`0x4532e3`) and a stop on a leg's last node (`0x5f91a1`). No shipped path reaches one.
     pub fn build(nodes: &[TaxiPathNode], move_speed: u32, accel_rate: u32) -> Option<Self> {
         let speed = f64::from(move_speed) as f32;
         let accel = f64::from(accel_rate) as f32;

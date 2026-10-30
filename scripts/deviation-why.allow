@@ -1,46 +1,46 @@
 # Deviations still waiting for their reason (scripts/genmap.sh, "the reason check").
-# One `path<TAB>first eight words of the comment` per line. This list only shrinks: when a comment
+# One `path<TAB>first twelve words of the comment` per line. This list only shrinks: when a comment
 # gains "because ...", delete its line here; never add one. A comment off the list must carry its reason.
-crates/benilla-app/assets/ui/KeyBindingsPage.xml	every bind, unbind and reset saves at once,
-crates/benilla-app/src/bindings/layout.rs	on the Mac and Linux a key its
-crates/benilla-app/src/cvars/listing.rs	the reference's list runs in creation order, the
-crates/benilla-app/src/game_tip.rs	the reference rasterizes the tip's font at most
-crates/benilla-app/src/go_templates.rs	one per entry, where the reference keeps one
-crates/benilla-app/src/loading_screen/input.rs	the world pick is cleared, where the reference's
-crates/benilla-app/src/player/approach.rs	the reference re-projects the point's height onto the
-crates/benilla-app/src/portrait/mod.rs	the reference widget draws only its model; a
-crates/benilla-app/src/sound/mod.rs	with no character the reference leaves the listener
-crates/benilla-app/src/target/click.rs	the reference's arm reads the last object's stop
-crates/benilla-app/src/target/click.rs	it runs on the first frame with none,
-crates/benilla-app/src/ui_duel.rs	the challenger's name comes from the [`NameCache`], so
-crates/benilla-app/src/ui_guild/sort.rs	the reference ties a miss with a hit
-crates/benilla-app/src/ui_loot/mod.rs	`autoLootDefault` is benilla's own option, 1.12 auto-looting only
-crates/benilla-app/src/ui_quest/verbs.rs	the row one past a full pool is
-crates/benilla-app/src/ui_social/live.rs	after a full 50 the reference reads the
-crates/benilla-app/src/ui_text/outline.rs	`r × floor(dpi)` passes as in [`outlined_cell`], the
-crates/benilla-app/src/ui_tooltip/spell_view.rs	a pet view with no pet unit costs
-crates/benilla-assets/src/shaders/liquid.wgsl	this is the `specular`/`pixelShaders` = 1 leg the
-crates/benilla-formats/src/macro_icons.rs	of names equal but for case, benilla keeps
-crates/benilla-lua/src/heap.rs	C Lua has no such bound; past it
-crates/benilla-lua/src/heap.rs	the client's `luaM_realloc` (`0x6fc980`) has no failure path
-crates/benilla-lua/src/lib_string.rs	5.1's `match` recurses without a bound and overflows
-crates/benilla-lua/src/pools.rs	that sequence is not wholly the client's. A
-crates/benilla-lua/src/vm.rs	these are benilla's own needs, past what the
-crates/benilla-lua/src/vm.rs	benilla's scratch registers above a frame's `c_maxstack` (`Proto::maxstack`)
-crates/benilla-protocol/src/world/session.rs	checked per queue packet where the reference checks
-crates/benilla-ui/src/civil.rs	the zone database's offset for the date, where
-crates/benilla-ui/src/loader/mod.rs	a `<Script file=>` value with a separator joins
-crates/benilla-ui/src/script/binding_abi.rs	`pow(10, n)` is the platform's, where the reference's
-crates/benilla-ui/src/script/button.rs	the disabled-checked leg (`0x785380`) tests and reloads the
-crates/benilla-ui/src/script/chat_window.rs	one past `i32::MAX` clamps where the reference keeps
-crates/benilla-ui/src/script/glue_create.rs	past [`NAME_TRIES`] names the answer is nil, where
-crates/benilla-ui/src/script/nameplate.rs	the reference's free list is FIFO (`0x6087f0`, `0x608a5a`);
-crates/benilla-ui/src/script/quest_log.rs	one signal per missed record, where the reference
-crates/benilla-ui/src/script/reputation.rs	the reference bounds the index with `jbe` against
-crates/benilla-ui/src/script/slash.rs	skipped as no command. The stock walk calls
-crates/benilla-ui/src/script/sound.rs	the app plays the queued file after the
-crates/benilla-ui/src/script/stdlib.rs	a format that ends in `%` reads past
-crates/benilla-ui/src/script/stdlib.rs	with `#` and one byte of room, `_store_number`
-crates/benilla-ui/src/script/tooltip/size.rs	`0x530a52` lays it out at once; getters resolve
-crates/benilla-ui/src/script/worldmap.rs	the engine's own push (the world-enter sync) queues
-crates/benilla-world/src/collision/one_sided.rs	the reference keeps the later record in file
+crates/benilla-app/assets/ui/KeyBindingsPage.xml	every bind, unbind and reset saves at once, as the era panel
+crates/benilla-app/src/bindings/layout.rs	on the Mac and Linux a key its platform reports no character
+crates/benilla-app/src/cvars/listing.rs	the reference's list runs in creation order, the records `Config.wtf` created first
+crates/benilla-app/src/game_tip.rs	the reference rasterizes the tip's font at most 32 px (`0x5ca096`/`0x5ca09b` in
+crates/benilla-app/src/go_templates.rs	one per entry, where the reference keeps one per call, as the
+crates/benilla-app/src/loading_screen/input.rs	the world pick is cleared, where the reference's freezes: the screen's layer
+crates/benilla-app/src/player/approach.rs	the reference re-projects the point's height onto the first walkable facet a
+crates/benilla-app/src/portrait/mod.rs	the reference widget draws only its model; a body pane clears to
+crates/benilla-app/src/sound/mod.rs	with no character the reference leaves the listener where it was; benilla
+crates/benilla-app/src/target/click.rs	the reference's arm reads the last object's stop (`0x611336` before `0x610383` stores
+crates/benilla-app/src/target/click.rs	it runs on the first frame with none, so an arrival that
+crates/benilla-app/src/ui_duel.rs	the challenger's name comes from the [`NameCache`], so a name still being
+crates/benilla-app/src/ui_guild/sort.rs	the reference ties a miss with a hit (`0x4d0e27`, `0x4d0ea1`), no total
+crates/benilla-app/src/ui_loot/mod.rs	`autoLootDefault` is benilla's own option, 1.12 auto-looting only on a shift-click, and
+crates/benilla-app/src/ui_quest/verbs.rs	the row one past a full pool is read from the cells
+crates/benilla-app/src/ui_social/live.rs	after a full 50 the reference reads the 160 bytes past the
+crates/benilla-app/src/ui_text/outline.rs	`r × floor(dpi)` passes as in [`outlined_cell`], the first `floor(dpi)` of them
+crates/benilla-app/src/ui_tooltip/spell_view.rs	a pet view with no pet unit costs 0, an empty cell,
+crates/benilla-assets/src/shaders/liquid.wgsl	this is the `specular`/`pixelShaders` = 1 leg the reference install runs; both
+crates/benilla-formats/src/macro_icons.rs	of names equal but for case, benilla keeps the first in source
+crates/benilla-lua/src/heap.rs	C Lua has no such bound; past it the string is `not
+crates/benilla-lua/src/heap.rs	the client's `luaM_realloc` (`0x6fc980`) has no failure path to ask from; here
+crates/benilla-lua/src/lib_string.rs	5.1's `match` recurses without a bound and overflows the C stack (near
+crates/benilla-lua/src/pools.rs	that sequence is not wholly the client's. A table's node vector is
+crates/benilla-lua/src/vm.rs	these are benilla's own needs, past what the client's checks ([`Vm::checkstack`]) reserve:
+crates/benilla-lua/src/vm.rs	benilla's scratch registers above a frame's `c_maxstack` (`Proto::maxstack`) stay on the stack;
+crates/benilla-protocol/src/world/session.rs	checked per queue packet where the reference checks each tick, so a
+crates/benilla-ui/src/civil.rs	the zone database's offset for the date, where the reference's CRT applies
+crates/benilla-ui/src/loader/mod.rs	a `<Script file=>` value with a separator joins the including document's directory,
+crates/benilla-ui/src/script/binding_abi.rs	`pow(10, n)` is the platform's, where the reference's (`0x73f940`, `fyl2x`) rounds its
+crates/benilla-ui/src/script/button.rs	the disabled-checked leg (`0x785380`) tests and reloads the checked slot (`[+0x4e0]`, `0x785388`/`0x7853a5`),
+crates/benilla-ui/src/script/chat_window.rs	one past `i32::MAX` clamps where the reference keeps the low 32 bits,
+crates/benilla-ui/src/script/glue_create.rs	past [`NAME_TRIES`] names the answer is nil, where the reference keeps trying,
+crates/benilla-ui/src/script/nameplate.rs	the reference's free list is FIFO (`0x6087f0`, `0x608a5a`); either keeps every index
+crates/benilla-ui/src/script/quest_log.rs	one signal per missed record, where the reference runs every callback of
+crates/benilla-ui/src/script/reputation.rs	the reference bounds the index with `jbe` against the entry count (`0xb73760`),
+crates/benilla-ui/src/script/slash.rs	skipped as no command. The stock walk calls an entry only when
+crates/benilla-ui/src/script/sound.rs	the app plays the queued file after the call, so the refusals
+crates/benilla-ui/src/script/stdlib.rs	a format that ends in `%` reads past its terminator in the
+crates/benilla-ui/src/script/stdlib.rs	with `#` and one byte of room, `_store_number` writes no digit and
+crates/benilla-ui/src/script/tooltip/size.rs	`0x530a52` lays it out at once; getters resolve first, so only OnSizeChanged
+crates/benilla-ui/src/script/worldmap.rs	the engine's own push (the world-enter sync) queues `WORLD_MAP_UPDATE` for the next
+crates/benilla-world/src/collision/one_sided.rs	the reference keeps the later record in file order on an exact

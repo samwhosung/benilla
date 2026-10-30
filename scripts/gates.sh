@@ -110,6 +110,8 @@ run() {
 }
 
 run fmt cargo fmt --all -- --check
+# deviation-why: every `Deviation:` comment and `Deviates` row names its reason (`scripts/genmap.sh --check`).
+run deviation-why scripts/genmap.sh --check
 run clippy cargo clippy --workspace --all-targets -- -D warnings
 
 # test: where the install resolves and the `wow-addons-vanilla` corpus link exists,
