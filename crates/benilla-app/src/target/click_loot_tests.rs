@@ -433,6 +433,41 @@ fn a_shift_click_on_a_chest_stores_the_byte_before_the_use() {
     assert!(!c.byte());
 }
 
+/// The skin cast's push signal (`0x6e5026` → `0x4b3250`) runs its listeners before its send, and
+/// `InteractWithSpell`'s store waits for the cast (`0x5f06dc`, then `0x5f06e1`): the listener's
+/// packet, the cast, then the sweep.
+#[test]
+fn a_skin_casts_signal_listener_sends_ahead_of_the_cast_and_its_sweep() {
+    let mut c = client();
+    c.app
+        .world()
+        .non_send_resource::<benilla_ui::script::UiScript>()
+        .run(
+            r#"local r = CreateFrame("Frame")
+            r:RegisterEvent("CURRENT_SPELL_CAST_CHANGED")
+            r:SetScript("OnEvent", function()
+                if not ROLLED then ROLLED = 1 RandomRoll(1, 2) end
+            end)"#,
+        )
+        .expect("the listener installs");
+    c.looting(BODY_A, vec![linen(0)]);
+    c.shift(true);
+    c.right_click_body(HIDE);
+    c.drain_casts();
+    let wire: Vec<&str> =
+        c.rx.try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::RandomRoll { .. } => Some("roll"),
+                ClientCommand::CastSpell {
+                    spell_id: SKINNING, ..
+                } => Some("skin"),
+                ClientCommand::AutostoreLootItem { .. } => Some("store"),
+                _ => None,
+            })
+            .collect();
+    assert_eq!(wire, ["roll", "skin", "store"]);
+}
+
 /// The skin leg's `InteractWithSpell` casts (`0x5f06dc`), then stores the byte (`0x5f06e1`-
 /// `0x5f06ef`, its `set` given by the leg, `0x60c06e`): alone, the byte waits for the skinning's
 /// loot; with a window open, the cast goes out ahead of the sweep's stores.

@@ -808,6 +808,9 @@ fn repeat_at_go(
     let Some(recast) = recast else {
         return;
     };
+    // The cast's points run its listeners only once this runs outside the go's parked leg
+    // ([`repeat_hook_at_go`]): inside it every signal is held past the leg, so for now they do
+    // nothing.
     vm.engine_cast(recast, |(targeting, mut ladder)| {
         ladder.send(recast, &targeting.context(), CastCommit::Spell);
     });

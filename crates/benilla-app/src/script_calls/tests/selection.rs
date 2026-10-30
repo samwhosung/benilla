@@ -1221,6 +1221,78 @@ fn a_unit_casters_pick_signals_its_target_change_before_the_cast_and_the_order()
     );
 }
 
+/// A listener of `CURRENT_SPELL_CAST_CHANGED` that rolls each time it hears it.
+fn roll_on_cast_changes(f: &mut Frame) {
+    run(
+        f,
+        r#"local r = CreateFrame("Frame")
+        r:RegisterEvent("CURRENT_SPELL_CAST_CHANGED")
+        r:SetScript("OnEvent", function() RandomRoll(1, 2) end)"#,
+    );
+}
+
+/// The send signals once more past its packet (`0x6e589d`), and its listeners run before
+/// `TryCast`'s attack tail swings (`0x6e51de` → `0x6131a0`): a roll between the strike's cast and
+/// its `CMSG_ATTACKSWING`.
+#[test]
+fn a_sends_own_signal_listener_sends_ahead_of_its_swing() {
+    let mut f = frame(false);
+    spawn_mob(&mut f, &[]);
+    with_named_mob(&mut f);
+    with_strike(&mut f);
+    roll_on_cast_changes(&mut f);
+    f.rx.try_iter().for_each(drop);
+    run(&mut f, "UseAction(1)");
+    let wire = pick_wire(&f);
+    let cast = wire
+        .iter()
+        .position(|w| w == "CastSpell 0x31")
+        .expect("the strike goes out");
+    assert_eq!(
+        wire[cast + 1..cast + 3],
+        ["RandomRoll", "AttackSwing 0x31"],
+        "{wire:?}"
+    );
+}
+
+/// A unit caster's attempt runs its attack tail (`0x6e51de` → the bar's Attack, `0x4bd630`) before
+/// it signals as it returns (`0x6e51e3`): the last roll follows the pet's order.
+#[test]
+fn a_unit_casters_return_signals_after_its_attack_tail() {
+    const PUMMEL: u32 = 10887;
+    let mut f = frame(true);
+    with_factions(&mut f, FRIEND, &[]);
+    spawn_mob(&mut f, &[(TEMPLATE, FOE)]);
+    with_pet(
+        &mut f,
+        true,
+        PUMMEL | (u32::from(benilla_protocol::messages::PET_ACT_ENABLED) << 24),
+    );
+    f.app.world_mut().insert_resource(crate::ui_action::Spells {
+        catalog: benilla_formats::SpellCatalog::from_displays(
+            [(
+                PUMMEL,
+                benilla_formats::SpellDisplay {
+                    name: "Pummel".into(),
+                    attributes_ex: 0x200,
+                    ..Default::default()
+                },
+            )]
+            .into(),
+        ),
+        ..crate::ui_action::Spells::empty_for_tests()
+    });
+    roll_on_cast_changes(&mut f);
+    f.rx.try_iter().for_each(drop);
+    run_pressed(&mut f, "CastPetAction(1)");
+    let wire = pet_wire(&f);
+    assert_eq!(
+        wire[wire.len() - 2..],
+        ["PetAction 0x31", "RandomRoll"],
+        "{wire:?}"
+    );
+}
+
 /// A queued on-next-swing strike in the in-flight slot, Heroic Strike's.
 pub(super) fn queue_strike(f: &mut Frame) {
     let world = f.app.world_mut();
