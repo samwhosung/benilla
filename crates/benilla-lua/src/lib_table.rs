@@ -32,9 +32,9 @@ pub fn open(vm: &mut Vm) {
 }
 
 /// The most elements one `insert` or `remove` may shift. Deviation: the client's loops have no
-/// bound (`0x7fb728`, `0x7fb7e0`), but a remembered size is whatever an addon wrote, and the
-/// instruction-budget hook never sees a native's loop, so one over two billion slots would hang
-/// the client.
+/// bound (`0x7fb728`, `0x7fb7e0`); here they are bounded because a remembered size is whatever an
+/// addon wrote, and the instruction-budget hook never sees a native's loop, so one over two billion
+/// slots would hang the client.
 const MAX_SHIFT: i64 = 1_000_000;
 
 /// `luaB_getn` (`0x7fb630`).

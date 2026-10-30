@@ -232,9 +232,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // The reference computes the hovered node's route here; the app precomputes every route.
-    // Deviation: returns nothing. The handler ends `mov eax,1` with nothing pushed (`0x4dcd7c`), so
-    // Lua 5.0 hands back the stack top, the node argument: an accident of the handler, not an API,
-    // and copying a stack-top leak would copy a bug.
+    // Deviation: returns nothing because the handler ends `mov eax,1` with nothing pushed
+    // (`0x4dcd7c`), so Lua 5.0 hands back the stack top, the node argument: an accident of the
+    // handler, not an API, and copying a stack-top leak would copy a bug.
     g.set(
         "TaxiNodeSetCurrent",
         lua.create_function(|lua, slot: Value| {

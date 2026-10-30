@@ -657,7 +657,8 @@ fn equip_loc_token(inventory_type: u32) -> &'static str {
         "INVTYPE_QUIVER",
         "INVTYPE_RELIC",
     ];
-    // Deviation: bounds-checked where the reference indexes unguarded, so none reads past it.
+    // Deviation: bounds-checked where the reference indexes unguarded, because that way none reads
+    // past it.
     TOKENS.get(inventory_type as usize).copied().unwrap_or("")
 }
 
@@ -809,7 +810,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 Value::String(lua.create_string(str_or_empty(&info.item_sub_type))?),
                 Value::Integer(i64::from(info.stackable)),
                 Value::String(lua.create_string(equip_loc_token(inventory_type))?),
-                // Deviation: nil for a display row with no icon, where the reference answers the
+                // Deviation: nil for a display row with no icon, because the reference answers the
                 // unloadable `Interface\Icons\`, on which `SetTexture` keeps the previous image
                 // (`0x7702ac`), so a reused button would show its old icon.
                 match &icon {

@@ -229,7 +229,8 @@ fn max(vm: &mut Vm, nargs: usize) -> R<usize> {
 /// `RAND_MAX` is 32767. The client's state is the main thread's, seeded with the millisecond
 /// clock before `WinMain` (`0x5b800b` → `0x5d1c70`, `srand` at `0x5d1c8b`). Deviation: the
 /// client's one process-wide stream is shared with its engine draws; here each VM holds its own,
-/// seeded from the wall clock when it is built, so a fork or a clone draws its own sequence.
+/// seeded from the wall clock when it is built, because that way a fork or a clone draws its own
+/// sequence.
 #[derive(Clone)]
 pub(crate) struct CrtRand(u32);
 

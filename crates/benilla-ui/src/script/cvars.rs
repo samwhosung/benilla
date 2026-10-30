@@ -894,8 +894,8 @@ const VIDEO_DEFAULT_GX: usize = 6;
 ///
 /// Deviation: the reference (`0x48dad0` into `0x639a20`) writes hardware-recommended values from
 /// its matched `VideoHardware.dbc` row and the `CGxFormat` preset it names (`[0xc4e6ac]`): twelve
-/// `gx*` CVars, a synchronous `RestartGx`, then sixteen more. benilla has no such matching, so its
-/// registered defaults are its recommended configuration.
+/// `gx*` CVars, a synchronous `RestartGx`, then sixteen more. its registered defaults are its
+/// recommended configuration because benilla has no such matching.
 pub const VIDEO_DEFAULT_CVARS: &[&str] = &[
     // Of the twelve `gx*` the device record writes (`0x639c40`), the six benilla registers.
     "gxWindow",

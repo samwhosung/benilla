@@ -1166,7 +1166,7 @@ fn decode_objects(first_pass: bool, objects: Vec<Object>) -> Vec<SessionEvent> {
             // Deviation: the flagged pass reads a movement block's guid as 8 raw bytes
             // (`0x467140`, `0x46714d`) where the wire packs it, so unless the packed guid happens
             // to be 8 bytes the reference misreads the rest of that pass; benilla reads the block
-            // once, packed, as pass 0 does (`0x467080`).
+            // once, packed, as pass 0 does (`0x467080`), because of the misreading just described.
             Object::Movement { guid, movement } => {
                 if let Some((position, orientation)) = movement.position {
                     second.push(SessionEvent::ObjectMove {

@@ -213,9 +213,9 @@ impl Loader<'_> {
             .find(|(t, _)| is(t))
             {
                 // Each colour element (`0x6f23d0`) is its font's text colour. Deviation:
-                // `<HighlightColor>` and `<DisabledColor>` colour their own fonts; 1.12.1 sends
-                // both to the normal colour setter (`0x778aa4`, `0x778ada` call `0x778e20`), so
-                // neither could reach its state.
+                // `<HighlightColor>` and `<DisabledColor>` colour their own fonts because 1.12.1
+                // sends both to the normal colour setter (`0x778aa4`, `0x778ada` call `0x778e20`),
+                // so neither could reach its state.
                 self.call(wrapper, method, color_of(child).fractions(), dbg);
             } else if is("PushedTextOffset") {
                 // `0x778aec`: the dimension read (`0x6f1eb0`), stored as `SetPushedTextOffset`

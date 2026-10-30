@@ -198,7 +198,7 @@ pub(in crate::script) struct BuilderFlags {
 
 /// The deepest product build a recipe line nests. Deviation: the reference recurses without a
 /// bound (`0x52dbce` builds the product whatever the depth), so a product that teaches a recipe
-/// for itself would recurse until the stack overflows; benilla stops here, so a cyclic
+/// for itself would recurse until the stack overflows; benilla stops here because that way a cyclic
 /// `Spell.dbc` chain cannot crash the client.
 const MAX_PRODUCT_DEPTH: u8 = 4;
 
@@ -572,7 +572,7 @@ pub(super) fn render_view_flagged(
         }
         // Stats in the display order of `0x808e88` (4,3,7,5,6,1,0, then 8,9,2,10 and zero padding;
         // `0x52c6b0..0x52c801`), not wire order. Deviation: the reference's padding repeats a mana
-        // stat once per zero entry; not emulated, since only the internal test ring 6674 has one.
+        // stat once per zero entry; not emulated, because only the internal test ring 6674 has one.
         const STAT_DISPLAY_ORDER: [u32; 7] = [4, 3, 7, 5, 6, 1, 0];
         for &want in &STAT_DISPLAY_ORDER {
             for &(t, val) in &v.stats {

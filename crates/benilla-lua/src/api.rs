@@ -30,8 +30,8 @@ pub fn c_int(n: f64) -> i32 {
 
 /// The longest string the libraries build, `INT32_MAX` bytes: more than the 1.12 client's 32-bit
 /// address space could hold. Deviation: the C build grows a string while `realloc` succeeds, and
-/// a failure is the catchable `not enough memory`; Rust's allocator aborts the process instead,
-/// and Linux grants far more than it can fill, so past this bound the libraries raise C's message.
+/// a failure is the catchable `not enough memory`; past this bound the libraries raise C's message
+/// because Rust's allocator aborts the process instead, and Linux grants far more than it can fill.
 pub const MAX_STRING: usize = i32::MAX as usize;
 
 /// 5.1's `LUAI_MAXCSTACK`: the most values a native's frame may hold.

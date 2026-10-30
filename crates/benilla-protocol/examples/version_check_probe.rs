@@ -6,7 +6,7 @@
 //!
 //! With an install directory it also derives that install's own digest the way the 1.12 client
 //! does, HMAC-SHA1 keyed by the challenge over five binaries, and says whether it is the stock
-//! one. Deviation: benilla always sends the published constant instead, since an install without
+//! one. Deviation: benilla always sends the published constant instead, because an install without
 //! those binaries could never answer for itself.
 //!
 //! Usage: `cargo run -p benilla-protocol --example version_check_probe -- <host[:port]> <user>

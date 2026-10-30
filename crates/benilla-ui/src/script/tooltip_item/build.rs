@@ -201,9 +201,9 @@ impl ItemBuild {
     /// and the durability. A name the build lacked is read as it is now.
     ///
     /// Deviation: an object no longer held rebuilds from the instance the build read, where the
-    /// reference's lookup finds no object and builds from the record and the block alone;
-    /// benilla's views carry no object to read once it is gone, and the kept instance is what the
-    /// plate showed.
+    /// reference's lookup finds no object and builds from the record and the block alone; benilla
+    /// rebuilds from the kept instance because its views carry no object to read once it is gone,
+    /// and the kept instance is what the plate showed.
     fn refreshed(mut self, lua: &Lua, model: &Model) -> Self {
         let Some(kept) = self.inst.take() else {
             return self;

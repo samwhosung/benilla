@@ -54,8 +54,8 @@ pub(crate) enum CollisionLayer {
 }
 
 /// The camera probe's radius (yd) against the solid world. Deviation: the reference's camera
-/// trace is a bare ray (`0x672170`); the sphere keeps the near plane out of a wall. Nothing may
-/// hardcode it: a fixture sweeping another radius tests another client.
+/// trace is a bare ray (`0x672170`); here it is a sphere because that keeps the near plane out of a
+/// wall. Nothing may hardcode it: a fixture sweeping another radius tests another client.
 pub const CAMERA_PROBE_RADIUS: f32 = 0.3;
 
 /// `CollisionLayers` for a WMO's walking collider, which the camera query never hits.

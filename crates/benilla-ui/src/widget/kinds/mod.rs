@@ -963,7 +963,7 @@ pub const MINIMAP_INDOOR_RADII: [f32; 6] = [150.0, 120.0, 90.0, 60.0, 40.0, 25.0
 /// The minimap's radius in yards (`0x6da9b0`): with the indoor byte set the indoor table at the
 /// indoor index (`0x6da9bf`), else the outdoor chunk count times 0.5 and 33.333332 (`0x6da9e9`,
 /// `0x6da9ef`). The ping, the blips and the dots all use it. Deviation: an index past 5 reads the
-/// last entry, where 1.12.1 reads past both six-entry tables (`0x6da9d5`, `0x6da9c4`), a client
+/// last entry, because 1.12.1 reads past both six-entry tables (`0x6da9d5`, `0x6da9c4`), a client
 /// fault a hand-edited CVar reaches.
 pub fn minimap_radius_yd(zoom: u32, inside_zoom: u32, inside: bool) -> f32 {
     let at = |z: u32| z.min(u32::from(MINIMAP_ZOOM_LEVELS - 1)) as usize;
@@ -1065,7 +1065,8 @@ pub struct ButtonState {
     /// and drag edges skip the button, and an `Enable`/`Disable` that runs (`0x779160`) clears it.
     pub locked: bool,
     /// [`FrameKind::LootButton`]'s 0-based slot (`+0x4dc`) from `SetSlot`. Deviation: `None`
-    /// until then, not the ctor's 0, so that an unset row takes nothing rather than slot 0.
+    /// until then, not the ctor's 0, because that way an unset row takes nothing rather than slot
+    /// 0.
     pub loot_slot: Option<u32>,
     /// A CheckButton's checked flag (`+0x4dc`, XML `checked`).
     pub checked: bool,

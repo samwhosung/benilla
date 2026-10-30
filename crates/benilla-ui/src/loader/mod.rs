@@ -435,8 +435,9 @@ impl Loader<'_> {
                     }
                 }
                 TopLevel::Script(ScriptRef::Inline { body, line }) => {
-                    // Deviation: padded to the block's line, so a raise reports a line a reader can
-                    // find in the file; the reference counts from the body's first line.
+                    // Deviation: padded to the block's line, because that way a raise reports a
+                    // line a reader can find in the file; the reference counts from the body's
+                    // first line.
                     let mut chunk = "\n".repeat(line.saturating_sub(1) as usize).into_bytes();
                     chunk.extend_from_slice(body.as_bytes());
                     // The reference names an inline body `"%s:<Scripts>"` (`0x871074`, formatted at
@@ -544,7 +545,7 @@ impl Loader<'_> {
     /// `0x76fe60`).
     ///
     /// Deviation: a cycle (`A` inherits `B`, `B` inherits `A`) stops at the repeated name with a
-    /// warning. The reference has no guard: its `parent=` walk (`0x6ee390`-`0x6ee3c2`) spins
+    /// warning because the reference has no guard: its `parent=` walk (`0x6ee390`-`0x6ee3c2`) spins
     /// forever round a cycle with no `parent=` on it, and where one stops that walk, the level
     /// recursion (`0x76985c`, and `0x76a092` for the `<Frames>`) overflows the stack.
     pub(super) fn levels<'a>(&mut self, raw: &'a Element) -> Levels<'a> {
@@ -721,8 +722,8 @@ impl Loader<'_> {
     }
 
     /// Link font `id` to `to` for an XML attribute. Deviation: a link that would close a loop is
-    /// refused and reported; the reference's XML legs (`0x783ce6`, `0x783d22`) check nothing, and
-    /// the next push down such a loop would never end.
+    /// refused and reported because the reference's XML legs (`0x783ce6`, `0x783d22`) check
+    /// nothing, and the next push down such a loop would never end.
     fn link_font_node(
         &mut self,
         id: crate::script::font::FontId,

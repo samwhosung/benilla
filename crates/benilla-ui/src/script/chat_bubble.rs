@@ -480,8 +480,8 @@ fn drive(
 
     // The seat (`0x4b14a0`): the text's BOTTOM on the `WorldFrame`'s BOTTOMLEFT, re-anchored only
     // when the snapped point moved. Deviation: the frame's bottom-left origin is snapped onto the
-    // device grid so the border art blits 1:1; the reference ceils the anchor point itself onto
-    // it (`0x7666a0`, `0x766750`).
+    // device grid because that way the border art blits 1:1; the reference ceils the anchor point
+    // itself onto it (`0x7666a0`, `0x766750`).
     let width = model
         .region_data
         .get(&text)

@@ -431,7 +431,7 @@ impl ViewFocus {
     /// live paced body and for a cinematic's camera; through entry, a teleport and a world swap
     /// the loading cover or the settle hold waits instead.
     ///
-    /// Deviation: the debug free-fly eye holds nothing: it is benilla's own tool with no
+    /// Deviation: the debug free-fly eye holds nothing because it is benilla's own tool with no
     /// reference counterpart, and a stall there only slows the developer.
     pub(crate) fn holds_inner(&self) -> bool {
         (self.follows_body() && self.paced) || self.cinematic
@@ -869,7 +869,7 @@ struct InnerWaitCap(Duration);
 ///
 /// Deviation: a read still loading after [`INNER_WAIT_CAP`] is given up on with a warning, once
 /// per request, and its tile then streams on unwaited like the outer ring, where the reference
-/// waits for ever: a hung read costs one capped stall, not one every frame.
+/// waits for ever, because that way a hung read costs one capped stall, not one every frame.
 fn await_inner_tiles(world: &mut World) {
     let pending: Vec<((i32, i32), Handle<AdtTile>)> = {
         let state = world.resource::<TerrainStreamer>();

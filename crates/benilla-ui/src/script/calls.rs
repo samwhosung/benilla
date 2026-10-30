@@ -729,7 +729,7 @@ fn run_held(lua: &Lua, held: Held) {
 /// such a chain always ends inside its frame.
 ///
 /// Deviation: the reference's only bound is `luaD_call`'s count of 200 nested calls (`0x6f65ae`),
-/// past which it raises `C stack overflow` (`0x6f65bf`); eight here, as each level keeps an
+/// past which it raises `C stack overflow` (`0x6f65bf`); eight here, because each level keeps an
 /// apply's frame on the Rust stack.
 pub(crate) const MAX_NESTING: u8 = 8;
 

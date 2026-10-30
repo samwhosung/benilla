@@ -95,8 +95,8 @@ fn upper(vm: &mut Vm, nargs: usize) -> R<usize> {
 /// `str_lower`'s loop: decode a code point, map it, encode it, advance by the bytes the decoder
 /// read (`0x7fbe8a`). A string of ASCII without a NUL maps byte by byte, as the loop would.
 ///
-/// Deviation: the decoder reads a NUL as no bytes (`0x7fbeda`), so the client's loop never
-/// passes one and the call never returns; here the result ends there.
+/// Deviation: here the result ends there, because the decoder reads a NUL as no bytes (`0x7fbeda`),
+/// so the client's loop never passes one and the call never returns.
 fn case_map(vm: &mut Vm, nargs: usize, map: fn(u32) -> u32) -> R<usize> {
     let s = vm.check_str(nargs, 1)?;
     let r = vm.heap.intern_with(|h, b| {
@@ -233,8 +233,8 @@ fn byte(vm: &mut Vm, nargs: usize) -> R<usize> {
 /// function with no upvalues (`0x6f4383`, `0x6f438a`), else `unable to dump given function`
 /// (`0x882284`). Deviation: the
 /// client writes 5.0 bytecode (`luaU_dump`, `0x6fb600`); benilla writes 5.1's header and the
-/// function's source name. The client loads no binary chunk (`0x6f6a15`), so the bytes are only
-/// data, and matching them would need 5.0's code generator.
+/// function's source name because the client loads no binary chunk (`0x6f6a15`), so the bytes are
+/// only data, and matching them would need 5.0's code generator.
 fn dump(vm: &mut Vm, nargs: usize) -> R<usize> {
     vm.check_function(nargs, 1)?;
     let source = match vm.arg(nargs, nargs - 1).unpack() {

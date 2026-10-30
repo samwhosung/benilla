@@ -20,7 +20,8 @@ use super::{recv_packet, send_packet, LinkTraffic};
 const HANDSHAKE_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Read timeout in the login queue, where updates can be minutes apart. Deviation: the reference
-/// waits forever; a bound tells a server that died mid-queue from a long wait.
+/// waits forever; here the wait is bounded because that tells a server that died mid-queue from a
+/// long wait.
 const QUEUE_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// The world server refused the session. Its code is from `messages`' `AUTH_*` block, not
@@ -63,7 +64,7 @@ pub(super) struct LinkFacts {
     /// Roster guid to race, so [`WorldSession::player_login`] can pick the chat language.
     roster_races: std::collections::HashMap<u64, u8>,
     /// The billing group the last `SMSG_AUTH_RESPONSE` to carry one gave. Deviation: zeros until
-    /// one does, where the reference's words are never initialised (the session is allocated
+    /// one does, because the reference's words are never initialised (the session is allocated
     /// without zero-fill, `ui/billing` in benilla-re).
     billing: messages::Billing,
     /// `SMSG_ADDON_INFO`'s per-record status bytes in order; `None` until the server answers.

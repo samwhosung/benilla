@@ -111,7 +111,7 @@ impl EmoteTextCatalog {
 }
 
 /// `SStrPrintf` (`0x64a7f0`) reduced to the `%s` these templates use. Deviation: a surplus `%s`
-/// stays verbatim, where the reference would print stack garbage; no shipped row has one.
+/// stays verbatim, because the reference would print stack garbage; no shipped row has one.
 fn fill(template: &str, args: &[&str]) -> String {
     let mut out = String::with_capacity(template.len() + 16);
     let mut rest = template;

@@ -130,8 +130,8 @@ fn put_item(lua: &Lua, model: &mut Model, dest: Dest, vendor: VendorAtCall) -> b
         Some(CursorPayload::Item(held)) => place_held(lua, model, dest, held),
         // Mode 5 with a vendor open: one of the row's item into the bag, slot `0xFF`, count 1
         // (`0x4c7e6f`-`0x4c7eaa`), the item the row names now. Deviation: a row index the list no
-        // longer holds buys nothing and drops, where this site reads through a null row
-        // (`0x4c7e9a`, `0x4c7ea5`).
+        // longer holds buys nothing and drops, because this site reads through a null row in the
+        // reference (`0x4c7e9a`, `0x4c7ea5`).
         Some(CursorPayload::Merchant(_)) => {
             if let Some(entry) = vendor.held_entry {
                 model.merchant_call_in_verb(crate::script::MerchantCall::BuyIntoBag {

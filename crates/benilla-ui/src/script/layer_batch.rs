@@ -6,13 +6,14 @@
 //! share ([`super::texel`]). The sort is not stable, so a batch of one texture comes out in the
 //! CRT's own order, two quads reversed.
 //!
-//! Deviation: the handle's value is the address of a `CGxTex` (`SMemAlloc(0x54)`, `0x594a96`),
-//! which benilla cannot reproduce; each texture ranks instead by a creation stamp, one global
-//! sequence number taken when its cache key is first created and taken anew once its last region
-//! has let go of it ([`super::texel::Texels`]). On a heap that grows as it allocates, a later
-//! device texture sits at a higher address, so the stamp orders textures as their addresses do,
-//! as far as anything deterministic can: it parts from them where the heap reuses a freed block
-//! or the device recycles a pooled texture of the same size (`0x448531`).
+//! Deviation: each texture ranks by a creation stamp, not by the handle's value, because the
+//! handle's value is the address of a `CGxTex` (`SMemAlloc(0x54)`, `0x594a96`), which benilla
+//! cannot reproduce. The stamp is one global sequence number taken when its cache key is first
+//! created and taken anew once its last region has let go of it ([`super::texel::Texels`]). On a
+//! heap that grows as it allocates, a later device texture sits at a higher address, so the stamp
+//! orders textures as their addresses do, as far as anything deterministic can: it parts from them
+//! where the heap reuses a freed block or the device recycles a pooled texture of the same size
+//! (`0x448531`).
 
 /// One texture quad of the extract: its index in the list, its batch and its texture's rank.
 pub(super) struct BatchQuad {

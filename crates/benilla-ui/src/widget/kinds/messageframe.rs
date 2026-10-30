@@ -118,8 +118,9 @@ impl Default for ScrollingMessageState {
 /// which stops one byte short of the size (`0x64a5cf`, `0x64a5e0`), so N - 1 bytes; 0 is the
 /// buffer that grows (`0x771e16`), and -1 a buffer of no bytes, so an empty line.
 /// Deviation: the cut backs up to a character start, where the reference cuts at the byte,
-/// because a Rust string holds whole characters. Deviation: N of -2 or less is an empty line too,
-/// where the reference asks `SMemAlloc` for about 4 GB and fails.
+/// because a Rust string holds whole characters.
+/// Deviation: N of -2 or less is an empty line too, because the reference asks `SMemAlloc` for
+/// about 4 GB and fails.
 fn clip_line(mut text: String, bytes: LineBytes) -> String {
     match bytes {
         LineBytes::Whole => {}

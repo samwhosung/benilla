@@ -3,9 +3,9 @@
 //!
 //! Deviation: string reads are unbounded. The reference `0x4191b0` caps each field, counting the
 //! NUL (roster name `0x30`, notes `0x80`, MOTD `0x200`, info `0x7d0`, guild name `0x60`, rank name
-//! `0x40`), and on overflow empties it and no-ops every later read in the packet. Unbounded reads
-//! cannot poison a packet, and every cap is far above the server's own length limits, so a
-//! legitimate packet reads the same.
+//! `0x40`), and on overflow empties it and no-ops every later read in the packet. Reads stay
+//! unbounded because unbounded reads cannot poison a packet, and every cap is far above the
+//! server's own length limits, so a legitimate packet reads the same.
 
 use std::io::{self, Read};
 

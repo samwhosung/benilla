@@ -923,9 +923,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // table at `0x84d0f4`, the global the stock window labels its button with
     // (`Blizzard_CraftUI.lua:106`). A close zeroes the type, so a closed window answers `USE`.
     // Type 4 reads the zero word after the table, which pushes nil.
-    // Deviation: the reference reads past the table unbounded (`0x4f6c90`), so type 5 would answer
-    // "CloseCraft"; no shipped opener carries a type past 3, and benilla answers nil rather than
-    // read past it.
+    // Deviation: benilla answers nil rather than read past the table, because the reference reads
+    // past it unbounded (`0x4f6c90`), so type 5 would answer "CloseCraft"; no shipped opener
+    // carries a type past 3.
     g.set(
         "GetCraftButtonToken",
         lua.create_function(|lua, ()| {

@@ -380,7 +380,8 @@ pub struct TextureStage {
 /// A flat ground-plane quad: four vertices on one horizontal plane at or just above z = 0 (hover
 /// ≤ [`GROUND_HOVER_MAX`]), an axis-aligned XY rectangle wholly on one bone, as ground-ring spells
 /// author them (Battle Shout's crescents). The reference draws them as geometry slopes bury.
-/// Deviation: the fx lane redraws them as projected decals (`ground_fx`) so they drape the terrain.
+/// Deviation: the fx lane redraws them as projected decals (`ground_fx`) because that way they
+/// drape the terrain.
 #[derive(Debug, Clone, Copy)]
 pub struct GroundQuad {
     /// Posed through the joint's matrix × the bone's inverse bind pose, as a skinned vertex.

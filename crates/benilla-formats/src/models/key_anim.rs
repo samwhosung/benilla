@@ -127,8 +127,9 @@ impl<V: Lerp> KeyAnim<V> {
 /// The reference's track read at `t_ms` over the key window `[lo, hi]` (`0x713d50`, interp
 /// dispatch `0x71af20`): `keys[lo]` for a collapsed window (`lo >= hi`), else the last window key
 /// at or before `t_ms`, held for a step track or past the last key, else lerped toward the next.
-/// Deviation: the fraction is clamped to `[0, 1]`; the reference extrapolates, which for a window
-/// whose brackets miss the band can push a fix16 factor negative and cull the batch on a quirk.
+/// Deviation: the fraction is clamped to `[0, 1]` because the reference extrapolates, which for a
+/// window whose brackets miss the band can push a fix16 factor negative and cull the batch on a
+/// quirk.
 pub(super) fn sample_window<V: Lerp>(
     keys: &[(u32, V)],
     step: bool,

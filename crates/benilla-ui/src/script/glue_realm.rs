@@ -193,8 +193,8 @@ impl GlueRealmList {
     /// The categories: the Region's rows, or one that holds every realm when there are none.
     ///
     /// Deviation: with no Region rows the reference reads a NULL category (`0x46e5b8`,
-    /// `0x46f26a`) and faults; benilla lists every realm under one category, so a client whose
-    /// `Wow.ini` names another Region still reaches a realm.
+    /// `0x46f26a`) and faults; benilla lists every realm under one category, because that way a
+    /// client whose `Wow.ini` names another Region still reaches a realm.
     fn categories(&self) -> Vec<Category> {
         if self.rows.is_empty() {
             return vec![Category {

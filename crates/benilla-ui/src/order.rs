@@ -541,10 +541,10 @@ fn emit_frame(
 /// The scroll child `sf`'s callback draws when it is shown (`0x787267`): a ScrollFrame's live
 /// child still in the scroll draw.
 ///
-/// Deviation: a child that left the scroll draw is drawn once, by the flat pass, where the client's
-/// callback, which reads only the child's visibility, draws it a second time, clipped, at the
-/// ScrollFrame's place. A `SetParent` of the child, of the ScrollFrame or of any ancestor of the
-/// child to an unflagged parent clears `0x2000` on the whole moved subtree (`0x76abcb` →
+/// Deviation: a child that left the scroll draw is drawn once, by the flat pass, because the
+/// client's callback, which reads only the child's visibility, draws it a second time, clipped, at
+/// the ScrollFrame's place. A `SetParent` of the child, of the ScrollFrame or of any ancestor of
+/// the child to an unflagged parent clears `0x2000` on the whole moved subtree (`0x76abcb` →
 /// `0x76a400`), so each of those reaches it.
 fn scroll_child(arena: &WidgetArena, sf: FrameHandle) -> Option<FrameHandle> {
     let KindState::Scroll(s) = &arena.frame(sf)?.kind_state else {

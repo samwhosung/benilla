@@ -8,7 +8,8 @@
 //! word and a `CMSG_PET_ACTION` instead.
 //!
 //! Deviation: `BOOKTYPE_SPELL`/`BOOKTYPE_PET` are engine globals here, where the reference defines
-//! them in `SpellBookFrame.lua:5-6`, so this module's tests run without the stock file.
+//! them in `SpellBookFrame.lua:5-6`, because that way this module's tests run without the stock
+//! file.
 
 use std::borrow::Cow;
 

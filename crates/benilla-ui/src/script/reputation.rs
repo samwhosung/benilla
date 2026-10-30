@@ -628,9 +628,9 @@ fn slot_of(lua: &Lua, model: &Model, faction: i64) -> Option<u32> {
 /// (`0x4d6476`). A header key no header object holds changes nothing and sorts nothing
 /// (`0x4d6489`); `false` then.
 ///
-/// Deviation: the folds are keyed by header, not by the reference's mask positions, whose rebuild
-/// folds bit N-1 by registration index before the sort (`0x4d5d49`-`0x4d5d68`) and whose fold
-/// verbs search `0xb736c0` before `0x4d5c40` sorts it (`0x4d6400`), so Inactive opens at login
+/// Deviation: the folds are keyed by header, not by the reference's mask positions, because their
+/// rebuild folds bit N-1 by registration index before the sort (`0x4d5d49`-`0x4d5d68`) and their
+/// fold verbs search `0xb736c0` before `0x4d5c40` sorts it (`0x4d6400`), so Inactive opens at login
 /// whenever a childless header exists and inactivating a header's last child shows it expanded;
 /// that is a reference bug, and the folds follow the header the player clicked.
 fn set_collapsed(model: &mut Model, index: usize, collapse: bool) -> bool {

@@ -98,9 +98,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 /// counter's delta over `trunc(1000 / scale) / 1000` (`0x7028a6`-`0x7028c4`), `scale` being the
 /// millisecond clock's (`0x8332c8`). That is milliseconds only once the clock has moved onto the
 /// counter; on a multi-core processor it never does (`0x42b8be`), the scale stays 1.0, and the
-/// answer is a raw cycle count. Deviation: ours answers milliseconds, since a cycle count of unknown
-/// rate is no use to an addon timing its code. Both read a live monotonic clock at the call, as the
-/// counter is read, not the per-frame `GetTime()` clock, so a span inside one frame measures.
+/// answer is a raw cycle count. Deviation: ours answers milliseconds, because a cycle count of
+/// unknown rate is no use to an addon timing its code. Both read a live monotonic clock at the
+/// call, as the counter is read, not the per-frame `GetTime()` clock, so a span inside one frame
+/// measures.
 fn install_profile(lua: &Lua) -> mlua::Result<()> {
     use std::sync::atomic::{AtomicU64, Ordering};
     // The latch as nanoseconds past this VM's origin; 0 until a start, as `[0xceeb58]` is.

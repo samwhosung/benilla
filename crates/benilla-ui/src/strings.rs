@@ -43,8 +43,8 @@ pub fn string_to_bool(s: &str) -> bool {
 /// that is not doubled (`||` skips its second) and is followed by a number that `SStrToInt`
 /// (`0x64ac60`) reads as 1 or 2, then rewrites every escape of that kind in the text
 /// ([`korean_particles`] for `|1`, [`french_articles`] for `|2`), and starts over on the result
-/// until neither is left. Deviation: a pass that changes nothing (`|01`, `|02`) ends the scan, where
-/// the reference loops on it for ever. Text with no `|` is returned as it came.
+/// until neither is left. Deviation: a pass that changes nothing (`|01`, `|02`) ends the scan,
+/// because the reference loops on it for ever. Text with no `|` is returned as it came.
 pub fn expand_grammar_escapes(text: &str) -> std::borrow::Cow<'_, str> {
     use std::borrow::Cow;
     let mut cur = Cow::Borrowed(text);

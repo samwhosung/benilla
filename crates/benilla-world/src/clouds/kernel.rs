@@ -91,8 +91,8 @@ impl Default for CloudKernel {
             accum: vec![0.0; COLS * COLS],
             deriv: vec![[0.0; 2]; COLS * COLS],
             prevrow: vec![0.0; COLS],
-            // Deviation: the reference starts this buffer at 0xFFFFFFFF; alpha 0 keeps a dome
-            // drawn before the first build from flashing white.
+            // Deviation: the reference starts this buffer at 0xFFFFFFFF; here it starts at alpha 0
+            // because that keeps a dome drawn before the first build from flashing white.
             rgba: vec![[255, 255, 255, 0]; COLS * COLS],
             scroll: 0,
             phase: 0,
@@ -305,7 +305,7 @@ impl CloudKernel {
             return f32::from(self.tile[(COLS / 2) * COLS + COLS / 2]) / 255.0;
         };
         let (col, row) = (u as i32, v as i32);
-        // Deviation: the index wraps where the reference reads past the tile, only at `u == 1.0`.
+        // Deviation: the index wraps because the reference reads past the tile, only at `u == 1.0`.
         let cell = ((row as usize & (COLS - 1)) << SHIFT) + (col as usize & (COLS - 1));
         f32::from(self.tile[cell]) / 255.0
     }
@@ -335,7 +335,8 @@ fn project_cells(d: Vec3) -> Option<(f32, f32)> {
     }
     let quarter_pi = f64::from(std::f32::consts::FRAC_PI_4);
     let c = f64::from(d.y) + f64::from(std::f32::consts::FRAC_PI_4.cos());
-    // Deviation: clamped; the reference NaNs above about 70° elevation, where its bodies never go.
+    // Deviation: clamped because the reference NaNs above about 70° elevation, where its bodies
+    // never go.
     let theta = (c / len).clamp(-1.0, 1.0).acos();
     let phase = theta.min(quarter_pi) / quarter_pi * 0.5;
     let hyp = (f64::from(d.x) * f64::from(d.x) + f64::from(d.z) * f64::from(d.z)).sqrt();

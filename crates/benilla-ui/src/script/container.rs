@@ -751,7 +751,7 @@ fn pickup_container_item(
         // `[0xb4d900] == 5`): `CMSG_BUY_ITEM_IN_SLOT` (0x1a3) with count 1, and the cursor clears
         // either way, the item the row names now; with no vendor open the row stays held
         // (`0x4f9f0f`). Deviation: a row index the list no longer holds buys nothing and drops,
-        // where this path reads through a null row (`0x4f9f35`).
+        // because this path reads through a null row in the reference (`0x4f9f35`).
         Some(CursorPayload::Merchant(_)) if !vendor.open => ContainerClick::Done,
         Some(CursorPayload::Merchant(_)) => {
             if let Some(entry) = vendor.held_entry {

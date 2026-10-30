@@ -322,7 +322,7 @@ fn fragment(in: GxVsOut) -> @location(0) vec4<f32> {
     } else {
         // ---- exterior ADT doodads and exterior MODD props ----
         // Model2.bls order-2 SH sun lobe at intensity 0.5 Shaded (MCSH), 1.0 Matte, 2.5 Lit.
-        // Deviation: the `min(I, 1)` cap, as in wow_model.wgsl, since lifting it takes sun-facing
+        // Deviation: the `min(I, 1)` cap, as in wow_model.wgsl, because lifting it takes sun-facing
         // surfaces past 1.0; Matte keeps its own bit so it stays 1.0 if the cap goes.
         let shade_t = select(1.0, 0.0, (in.word & WORD_SHADE_LIT) != 0u);
         let intensity = min(

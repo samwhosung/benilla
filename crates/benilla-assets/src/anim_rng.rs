@@ -37,7 +37,7 @@ impl AnimRng {
     }
 
     /// The reference's `srand(GetTickCount())`: a wall-clock seed, once per process. Deviation: a
-    /// capture run (`deterministic`) keeps the default seed, so its frames reproduce.
+    /// capture run (`deterministic`) keeps the default seed, because that way its frames reproduce.
     pub fn seed_for_session(&mut self, deterministic: bool) {
         if deterministic {
             return;

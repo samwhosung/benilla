@@ -156,8 +156,8 @@ fn ascii_ci_cmp(a: &str, b: &str) -> Ordering {
 fn dbc_name_cmp(a: Option<&str>, b: Option<&str>) -> Ordering {
     match (a, b) {
         (None, None) => Ordering::Equal,
-        // Deviation: the reference ties a miss against a hit (`0x5adab6`); no total order can, and
-        // `sort_by` may panic on one that is not, so the miss goes last.
+        // Deviation: the reference ties a miss against a hit (`0x5adab6`); here the miss goes last
+        // because no total order can, and `sort_by` may panic on one that is not.
         (None, Some(_)) => Ordering::Greater,
         (Some(_), None) => Ordering::Less,
         (Some(a), Some(b)) => ascii_ci_cmp(a, b),

@@ -222,7 +222,8 @@ impl KeybindState {
     ///
     /// Deviation: a key rebound to the command it already has keeps a duplicate index in 1.12.1
     /// (`0x4b7786` lowers the other keys' indices before `0x4b77ac` returns on the same name), so
-    /// both getters there answer one key too few; that client fault is not reproduced.
+    /// both getters there answer one key too few; it is not reproduced because it is a client
+    /// fault.
     fn keys_of<'a>(&'a self, command: &'a str) -> impl Iterator<Item = &'a String> + 'a {
         self.live
             .iter()

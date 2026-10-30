@@ -244,11 +244,11 @@ impl EditBoxState {
     /// One UP (`older`) or DOWN step, returning the text to show: the first UP stashes the draft,
     /// and DOWN past the newest entry restores it.
     ///
-    /// Deviation: the history browses as a shell's does, a small everyday gain: the first UP
-    /// stashes the line being typed and DOWN past the newest line brings it back, UP holds at the
-    /// oldest, DOWN does nothing when not browsing, typing or a focus gain ends the browse, and an
-    /// empty line is not kept. The reference's history is a ring of `historyLines` slots that
-    /// keeps any line (`0x77cf40`); UP scans back for the previous filled slot, wrapping
+    /// Deviation: the history browses as a shell's does because it is a small everyday gain: the
+    /// first UP stashes the line being typed and DOWN past the newest line brings it back, UP holds
+    /// at the oldest, DOWN does nothing when not browsing, typing or a focus gain ends the browse,
+    /// and an empty line is not kept. The reference's history is a ring of `historyLines` slots
+    /// that keeps any line (`0x77cf40`); UP scans back for the previous filled slot, wrapping
     /// (`0x77d030`), DOWN forward with `idiv` (`0x77cfd0`), each a `SetText` (`0x77be00`), with no
     /// draft and no stop at either end.
     pub fn history_step(&mut self, older: bool) -> Option<String> {
@@ -816,8 +816,8 @@ impl EditBoxState {
             self.extend_to(target);
         } else if self.sel_start != self.sel_end {
             // Deviation: a plain Left or Right (or Ctrl+B or F) with a selection collapses it to
-            // that edge, as every OS's own text fields do; the reference clears the selection and
-            // steps once from the caret (`0x77c6b0` from `0x77c70b`).
+            // that edge, because every OS's own text fields do; the reference clears the selection
+            // and steps once from the caret (`0x77c6b0` from `0x77c70b`).
             self.cursor = if right { self.sel_end } else { self.sel_start };
             self.collapse();
         } else {
@@ -835,7 +835,7 @@ impl EditBoxState {
     /// (`0x77c8c0`) steps back over the spaces before the caret, then over the non-spaces.
     ///
     /// Deviation: Left reads the whole character before the caret, not the lone byte `caret - 1`
-    /// the client reads (`0x77c8da`), which takes a multi-byte space for a non-space.
+    /// the client reads (`0x77c8da`), because that takes a multi-byte space for a non-space.
     pub fn move_by_word(&mut self, right: bool, extend: bool) {
         // Right crosses non-spaces, then spaces; left spaces, then non-spaces.
         let first_is_space = !right;
@@ -998,12 +998,12 @@ impl EditBoxState {
     /// click (`0x77b800`) and the drag (`0x77a860`). Bit 2 rises only when the caret moved; a
     /// click raises it on its own.
     ///
-    /// Deviation: the drag selects from its anchor, as every OS's own text fields do, where the
-    /// reference's applies `0x77cd10` to each mouse move's whole delta (`0x77a8a1`). The two part
-    /// in two cases. One move that carries the caret across the anchor keeps the far end selected
-    /// too in the reference. And a drag that starts with the caret inside a selection, as after a
-    /// focus that selects all, gives `(0, t)` here dragging right to `t`, where the reference
-    /// gives `(t, len)`.
+    /// Deviation: the drag selects from its anchor, because every OS's own text fields do, where
+    /// the reference's applies `0x77cd10` to each mouse move's whole delta (`0x77a8a1`). The two
+    /// part in two cases. One move that carries the caret across the anchor keeps the far end
+    /// selected too in the reference. And a drag that starts with the caret inside a selection, as
+    /// after a focus that selects all, gives `(0, t)` here dragging right to `t`, where the
+    /// reference gives `(t, len)`.
     pub fn move_caret_to(&mut self, target: usize, extend: bool) {
         let from = self.cursor;
         let target = snap_down(&self.text, target.min(self.text.len()));
@@ -1128,7 +1128,7 @@ fn colour_carry(display: &str, from: usize) -> Option<&str> {
 /// spaces. From U+0100 it is the system's `GetStringTypeW` space type: the Unicode spaces, but not
 /// the zero-width ones.
 ///
-/// Deviation: a code point past U+FFFF is no space, where the client tests its low 16 bits, so
+/// Deviation: a code point past U+FFFF is no space, because the client tests its low 16 bits, so
 /// U+10020 counts as a space there.
 fn is_space(c: char) -> bool {
     matches!(

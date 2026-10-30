@@ -26,8 +26,8 @@
 //! Terrain is tagged per 33.333 yd MCNK cell: a 533 yd tile around the camera reaches every
 //! window's side of the view. The far band keeps its whole-tile box, the reference's far tier.
 //!
-//! Deviation: the reference tests one AABB per object, but a doodad placement has no root entity
-//! here, so its submeshes are tested one by one, and a submesh outside a doorway's window drops
+//! Deviation: the reference tests one AABB per object, but its submeshes are tested one by one here
+//! because a doodad placement has no root entity, and a submesh outside a doorway's window drops
 //! where the reference draws the doodad whole. A body has a root and is tested once.
 
 use bevy::camera::primitives::{Aabb, Frustum};

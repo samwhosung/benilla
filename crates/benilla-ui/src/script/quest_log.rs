@@ -1650,7 +1650,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // The reference counts the reward ids to the first unset one (`0x4e0a34`-`0x4e0a40`), so
     // `[A, 0, B, 0]` counts 1, and `GetQuestLogRewardInfo` indexes the raw array (`0x4e0b98`);
     // the choices count the same way (`0x4e0ac4`-`0x4e0ad0`).
-    // Deviation: four set ids count 4, where the loop's exit `jmp 0x4e0a4c` (`0x4e0a42`) skips
+    // Deviation: four set ids count 4, because the loop's exit `jmp 0x4e0a4c` (`0x4e0a42`) skips
     // the store at `0x4e0a49` and answers 0, a client bug.
     install_detail_count(lua, "GetNumQuestLogRewards", |r| {
         count_to_first_unset(&r.rewards)

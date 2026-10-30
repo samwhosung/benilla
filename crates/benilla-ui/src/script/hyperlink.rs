@@ -164,9 +164,9 @@ pub(super) fn set_spans(lua: &Lua, spans: Vec<(FrameHandle, Rect, String, String
 /// size moved. A ScrollingMessageFrame compares its lines' box (`0x788394`, `0x7883b2`); a
 /// SimpleHTML's layout callback (`0x78a320`) raises the flag when the frame's width or height
 /// changed by [`HTML_RESIZE`] or more, or is NaN (`0x78a340`-`0x78a369`).
-/// Deviation: a span count that no longer matches the live set always rebuilds, so a state this
-/// model does not flag (a ring wiped by `SetMaxLines`, a hidden frame, a frame not yet laid out,
-/// which the reference's rebuild skips at `0x78af7b`) leaves no stale button.
+/// Deviation: a span count that no longer matches the live set always rebuilds, because that way a
+/// state this model does not flag (a ring wiped by `SetMaxLines`, a hidden frame, a frame not yet
+/// laid out, which the reference's rebuild skips at `0x78af7b`) leaves no stale button.
 fn due(lua: &Lua, owner: FrameHandle, list: &[Span]) -> bool {
     let mut model = lua.app_data_mut::<Model>().expect("model");
     let model = &mut *model;

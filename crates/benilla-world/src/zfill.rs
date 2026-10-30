@@ -7,10 +7,11 @@
 //! part while its `MeshTag` alpha is translucent.
 //!
 //! Deviation: the reference twins every translucent command, authored-blend glass included; here
-//! twins exist only during an instance alpha episode, so every steady-state look is untouched.
+//! twins exist only during an instance alpha episode, because that way every steady-state look is
+//! untouched.
 //!
-//! Deviation: Bevy sorts per entity, so twins lead by a fixed −8 yd sort bias
-//! ([`crate::model_render::ZFILL_SORT_BIAS`]) instead of by the instance's sort-key tie;
+//! Deviation: twins lead by a fixed −8 yd sort bias ([`crate::model_render::ZFILL_SORT_BIAS`])
+//! instead of by the instance's sort-key tie because Bevy sorts per entity;
 //! transparent content within that window behind a fading body is depth-clipped where the body
 //! covers it, for the episode.
 

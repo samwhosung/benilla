@@ -84,7 +84,7 @@ pub(super) fn foam_params(
 }
 
 /// A record's size at `now`. Deviation: the first draw is `size0`, where the reference first ages
-/// the record one `dt·growth` step, a difference too small to see at our frame rates.
+/// the record one `dt·growth` step, because the difference is too small to see at our frame rates.
 pub(super) fn record_size(size0: f32, growth: f32, born: f32, now: f32) -> f32 {
     size0 + growth * (now - born)
 }

@@ -565,9 +565,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // pushes the buffer), and the miss asks the name cache with its callback (`0x55f080`,
     // `0x5fb840`) as `UnitName`'s does.
     //
-    // Deviation: a token resolving to guid 0 answers nil too. The reference jumps from the guid
-    // test (`0x5172f6`) to `return 1` (`0x517343`) with nothing pushed, so the one value is its
-    // top argument, the token it read (`0x5172e6`); that is a stack quirk, not an answer.
+    // Deviation: a token resolving to guid 0 answers nil too because the reference jumps from the
+    // guid test (`0x5172f6`) to `return 1` (`0x517343`) with nothing pushed, so the one value is
+    // its top argument, the token it read (`0x5172e6`); that is a stack quirk, not an answer.
     //
     // Deviation: with `UNIT_PVP_NAME` or the title missing from `_G` (no install) this answers
     // the plain name, where the reference would format an empty string, because the decoration

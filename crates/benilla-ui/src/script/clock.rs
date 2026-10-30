@@ -62,8 +62,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
     // GetTime() (`0x515ea0`): one number, `GetTickCount` times the f64 0.001 at `0x801608`.
     // Deviation: the reference reads the clock live at each call (`0x42c010`); ours is the session
-    // clock the tick advances by the paced frame step, one value per frame, so `GetTime()` deltas
-    // and the `elapsed` handed to OnUpdate agree, as FrameXML (CastingBarFrame and kin) assumes.
+    // clock the tick advances by the paced frame step, one value per frame, because that way
+    // `GetTime()` deltas and the `elapsed` handed to OnUpdate agree, as FrameXML (CastingBarFrame
+    // and kin) assumes.
     g.set("GetTime", lua.create_function(|lua, ()| Ok(now(lua)))?)?;
     // GetGameTime() (`0x515ee0`): two numbers, the hour `[0xce853c]` then the minute `[0xce8538]`,
     // the clock the server's time messages set, read at the call through the host; minute

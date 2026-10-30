@@ -687,9 +687,9 @@ pub fn substitute_parts(
         };
         match token_value(letter, slot, target, ctx, scale, at) {
             Some((sub, val)) => {
-                // Deviation: every token keys the `$l` plural. The reference's `$a`, `$d`, `$t`,
-                // `$e`, `$c`, `$p`, `$f`, `$F` and `$z` arms never write `[0xbe0b84]`, so its `$l`
-                // keys on the number before them, and Blizzard's "$s1 … every $t1
+                // Deviation: every token keys the `$l` plural because the reference's `$a`, `$d`,
+                // `$t`, `$e`, `$c`, `$p`, `$f`, `$F` and `$z` arms never write `[0xbe0b84]`, so its
+                // `$l` keys on the number before them, and Blizzard's "$s1 … every $t1
                 // $lsecond:seconds;" reads "every 1 seconds" in 1.12.1. We print the grammar the
                 // text means.
                 last_value = val;

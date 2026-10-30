@@ -205,8 +205,8 @@ fn rebuild_index(model: &mut Model) {
 /// check, whose answer 3 makes it SECURE (`0x51dbfb`).
 ///
 /// Deviation: the files the handler writes beside the install (`<Name>.pub` with the key,
-/// `<Name>.url`; `0x51dce0`, `0x51dde0`) are not written, as the install is read-only; the key is
-/// never read either, as there is no signature to verify with it.
+/// `<Name>.url`; `0x51dce0`, `0x51dde0`) are not written, because the install is read-only; the key
+/// is never read either, because there is no signature to verify with it.
 fn apply_reply(addons: &mut [AddOnInfo], reply: &[AddonReply]) {
     for record in reply {
         let Some(a) = addons
@@ -784,8 +784,8 @@ fn load_saved_variables(lua: &Lua, i: usize) {
             Err(e) => {
                 // The reference runs the file under the Lua error handler (`0x704ae0`,
                 // `[0x8722c8]`, `0x704b68`), which stock sets to show the error
-                // (`BasicControls.xml:16`). Deviation: holding the file, so the shutdown write
-                // keeps it.
+                // (`BasicControls.xml:16`). Deviation: holding the file, because that way the
+                // shutdown write keeps it.
                 log_error(lua, &format!("{}: {e}", path.display()));
                 hold(path);
             }

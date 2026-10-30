@@ -124,8 +124,8 @@ pub(super) fn cut_bytes(s: &str, max: usize) -> &str {
 }
 
 /// A name as `SStrCopy` keeps it (`0x4f11fc`): its first [`MAX_MACRO_NAME`] bytes, not trimmed.
-/// Deviation: the reference's byte copy can end inside a character and keep the stray bytes; a
-/// `String` must stay UTF-8, so the cut stops at the character boundary.
+/// Deviation: the reference's byte copy can end inside a character and keep the stray bytes; here
+/// the cut stops at the character boundary because a `String` must stay UTF-8.
 fn cut_name(name: &str) -> String {
     cut_bytes(name, MAX_MACRO_NAME).to_string()
 }
@@ -549,7 +549,7 @@ fn pickup_macro(lua: &Lua, index: usize) -> bool {
 
 /// Build the icon list if it is empty, as the three verbs do before they read it (`0x4f0090`
 /// behind a zero count). The source runs with no borrow of the model held. Deviation: a listing
-/// that finds no icon stays empty, to be listed again on the next ask, where the reference's
+/// that finds no icon stays empty, to be listed again on the next ask, because the reference's
 /// dedup then reads below its null list (`0x4f0134`-`0x4f0145`) and faults.
 fn ensure_macro_icons(lua: &Lua) {
     let source = {

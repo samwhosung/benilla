@@ -19,14 +19,15 @@ use mlua::{Lua, Table, Value};
 use super::{binding_abi, Model};
 
 /// Deviation: nesting stops at 32 where the reference recurses uncapped (its indent saturates at
-/// `0x80`), so a hostile structure cannot exhaust the stack.
+/// `0x80`), because that way a hostile structure cannot exhaust the stack.
 const MAX_DEPTH: usize = 32;
 
 impl super::UiScript {
     /// Hold a saved-variables file that failed to load, so the shutdown write leaves it alone.
     /// Deviation: the reference rewrites it from the live defaults (`0x51f865`–`0x51f970`) after
     /// renaming the old file to `.bak` (`0x51f794`, `0x51f8eb`, `.bak` at `0x8431e4`), so a hand
-    /// edit with one typo survives only until the next logout.
+    /// edit with one typo survives only until the next logout; benilla holds the file instead,
+    /// because that way the shutdown write leaves it alone.
     pub fn hold_saved_file(&self, path: &std::path::Path) {
         let mut model = self.model_mut();
         if !model.held_saved_files.iter().any(|p| p == path) {
@@ -194,7 +195,7 @@ fn flat_line(line: &[u8]) -> Option<(Vec<u8>, Option<FlatValue>)> {
 
 /// A quoted value cut at its last `"` above index 1 (`0x4914c3`-`0x4914e0`), so `""` and an
 /// unterminated `"abc` are empty, which `0x704300` sets as nil (`0x70430f`).
-/// Deviation: the writer's escapes are undone ([`unescape`]), where the reference sets the bytes
+/// Deviation: the writer's escapes are undone ([`unescape`]), because the reference sets the bytes
 /// between the quotes raw, so a string holding a quote or a backslash would grow every session.
 fn flat_string(value: &[u8]) -> Option<Vec<u8>> {
     let close = (2..value.len())

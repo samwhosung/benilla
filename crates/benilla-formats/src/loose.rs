@@ -30,8 +30,9 @@ pub enum LooseOpen {
 ///
 /// Deviation: a folder is listed the first time a key reaches it, where the reference lists every
 /// folder at the first open (`0x646ea0`), so a file added to a folder no key has reached is found
-/// before the index empties; the whole walk takes minutes and gigabytes where the install folder
-/// holds or links a large tree, as a Wine prefix's `z:` drive links `/`.
+/// before the index empties; folders are listed lazily because the whole walk takes minutes and
+/// gigabytes where the install folder holds or links a large tree, as a Wine prefix's `z:` drive
+/// links `/`.
 #[derive(Debug, Default)]
 pub struct LooseIndex {
     /// The base folder's walk, then `Data\`'s.

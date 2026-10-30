@@ -232,7 +232,7 @@ const LISTFILE_LINE_MAX: usize = 0x103;
 /// `EnumerateArchiveListfile` (`0x648fb0`) over one listfile, with `0x4014f0`'s prefix test: a line
 /// ends at a CR or LF (`0x649022`, `0x649026`); an empty one, and one whose text from its last dot
 /// is `.md5` without case (`0x865bd8`, `0x64905f`), is passed over. Deviation: a last line with no
-/// CR or LF after it is passed too, where `0x648fb0` ends at the buffer's end without a flush
+/// CR or LF after it is passed too, because `0x648fb0` ends at the buffer's end without a flush
 /// (`0x64907f`) and drops it, a bug that loses a listfile's last name when it lacks a newline.
 fn listfile_lines(listfile: &[u8], prefix: &str, out: &mut Vec<String>) {
     let mut line: Vec<u8> = Vec::with_capacity(LISTFILE_LINE_MAX);

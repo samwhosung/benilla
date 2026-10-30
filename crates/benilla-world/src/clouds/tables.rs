@@ -44,8 +44,8 @@ pub(crate) const CURVE: [u8; 256] = [
 ];
 
 /// The gradient table (`0xce92d8`, built by `0x6d0c90` loop 1): `1 − 2·rand()/32767` on MSVC's
-/// `rand`. Deviation: seed 1, the CRT default, for determinism; the reference's is the process
-/// `srand` state, and any uniform table looks the same.
+/// `rand`. Deviation: seed 1, the CRT default, because that makes the table deterministic; the
+/// reference's is the process `srand` state, and any uniform table looks the same.
 pub(crate) fn gradient_table() -> [f32; 256] {
     let mut seed: u32 = 1;
     std::array::from_fn(|_| {

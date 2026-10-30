@@ -8,8 +8,8 @@
 //!
 //! Deviation: benilla gates on terrain alone, which is more permissive; the settle hold covers a
 //! building or doodad arriving after a teleport. And an authored tile whose ADT failed to load
-//! counts as resident, where the reference would have loaded it: a permanent wall over a bad file
-//! is worse for a player than walking on without its ground.
+//! counts as resident, where the reference would have loaded it, because a permanent wall over a
+//! bad file is worse for a player than walking on without its ground.
 
 use bevy::prelude::*;
 

@@ -947,10 +947,10 @@ impl super::UiScript {
     /// The unlock-all (`0x495460`), on the revive edge (`0x5fefae`): the player array's items
     /// unlock, then one `ITEM_LOCK_CHANGED` (`0x49557d`).
     ///
-    /// Deviation: every lock lifts here, bag contents included. The reference's walk of a bag's
-    /// contents indexes the bag by its own player-array index (`0x495528`, `0x495535`), at least
-    /// 19, past a bag's slots in every case but the biggest bags, so it normally unlocks none of
-    /// them; a lock it strands lasts until the item's seat or stack moves, which this does not
+    /// Deviation: every lock lifts here, bag contents included, because the reference's walk of a
+    /// bag's contents indexes the bag by its own player-array index (`0x495528`, `0x495535`), at
+    /// least 19, past a bag's slots in every case but the biggest bags, so it normally unlocks none
+    /// of them; a lock it strands lasts until the item's seat or stack moves, which this does not
     /// copy.
     pub fn unlock_all_items(&mut self) {
         for guid in self.item_locks() {
@@ -1251,9 +1251,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(flag(matches!(model.cursor, Some(CursorPayload::Spell(_)))))
         })?,
     )?;
-    // Deviation: returns nothing. The handler ends `mov eax,1` with nothing pushed (`0x4895bc`), so
-    // Lua 5.0 hands back the stack top, the last argument or the function itself: an accident of
-    // the handler, not an API, and copying a stack-top leak would copy a bug.
+    // Deviation: returns nothing because the handler ends `mov eax,1` with nothing pushed
+    // (`0x4895bc`), so Lua 5.0 hands back the stack top, the last argument or the function itself:
+    // an accident of the handler, not an API, and copying a stack-top leak would copy a bug.
     g.set(
         "ClearCursor",
         lua.create_function(|lua, ()| {

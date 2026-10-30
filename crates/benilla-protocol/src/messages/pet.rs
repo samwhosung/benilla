@@ -69,7 +69,7 @@ impl PetActionEntry {
         ((self.packed >> 24) & 0x3F) as u8
     }
     /// Client types 1-5 take the spell branch. Deviation: a type outside 1-7 reads as nothing
-    /// rather than the reference's default arm, which under-pushes its returns.
+    /// rather than the reference's default arm, because that arm under-pushes its returns.
     pub fn is_spell(self) -> bool {
         (PET_TYPE_SPELL_FIRST..=PET_TYPE_SPELL_LAST).contains(&self.kind())
     }
@@ -189,7 +189,7 @@ pub(super) fn read_pet_spells(r: &mut &[u8]) -> io::Result<PetSpells> {
 /// The trailing cooldown block. The client reads `u8 count` then 12-byte entries
 /// `{u16 spell, u16 category, u32, u32}` (`0x4bda58`); vmangos writes `u16 count` then 14-byte
 /// entries with a `u32` spell (`Unit.cpp:11245-11278`). Deviation: both are read, told apart
-/// exactly by the tail length (`12n` vs `1 + 14n`), since the 1.12 client mis-parses vmangos's.
+/// exactly by the tail length (`12n` vs `1 + 14n`), because the 1.12 client mis-parses vmangos's.
 fn read_cooldown_block(r: &mut &[u8]) -> io::Result<Vec<PetSpellCooldown>> {
     let count = usize::from(read_u8(r)?);
     // At `count == 0` vmangos still leaves its `u16` count's high byte; it is consumed so the

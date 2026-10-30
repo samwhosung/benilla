@@ -421,9 +421,9 @@ const LAUNCH_HOSTS: [&str; 10] = [
 /// reference works on a C string, so the verb cuts its argument at a NUL before asking; a URL with
 /// a NUL in it is refused here.
 ///
-/// Deviation: a host of 0x80 bytes or more is refused. The reference copies the host into a 0x80-byte
-/// buffer (`0x5abc7c`-`0x5abc9c`) and writes its terminator one byte past the end, and the cut
-/// host could end in a whitelisted suffix the real one does not; this takes the safe side.
+/// Deviation: a host of 0x80 bytes or more is refused because the reference copies the host into a
+/// 0x80-byte buffer (`0x5abc7c`-`0x5abc9c`) and writes its terminator one byte past the end, and
+/// the cut host could end in a whitelisted suffix the real one does not; this takes the safe side.
 pub fn launch_url_allowed(url: &str) -> bool {
     if url.len() >= 0x400 || url.contains('\0') {
         return false;

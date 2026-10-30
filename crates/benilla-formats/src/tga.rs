@@ -6,21 +6,22 @@
 //! Deviation: grayscale types 3 and 11 decode where the reference refuses them, because no shipped
 //! or addon file is one and removing working code would buy nothing.
 //!
-//! Deviation: colour maps of 15, 16 and 32 bits decode at the entry width the file declares, where
-//! the reference has no defined result to copy for 15 and 16 bits and only a garble for 32. It
-//! sizes an entry as `(min(bits / 3, 8) · 3) >> 3` bytes (`0x5a3b40`): 3 for 24 and 32 bits, 1 for
-//! 15 and 16. A 16-bit map is read short and copied one byte a pixel (`0x5a3890`-`0x5a38fa`) into
-//! the three-byte-a-pixel buffer `0x5a3820` allocates and never zeroes, so the rest of the colours
-//! are heap garbage; a 32-bit map is read a byte an entry short and the pixels start inside it.
+//! Deviation: colour maps of 15, 16 and 32 bits decode at the entry width the file declares,
+//! because the reference has no defined result to copy for 15 and 16 bits and only a garble for 32.
+//! It sizes an entry as `(min(bits / 3, 8) · 3) >> 3` bytes (`0x5a3b40`): 3 for 24 and 32 bits, 1
+//! for 15 and 16. A 16-bit map is read short and copied one byte a pixel (`0x5a3890`-`0x5a38fa`)
+//! into the three-byte-a-pixel buffer `0x5a3820` allocates and never zeroes, so the rest of the
+//! colours are heap garbage; a 32-bit map is read a byte an entry short and the pixels start inside
+//! it.
 //!
-//! Deviation: a colour-mapped image whose descriptor has alpha bits decodes as its picture, where
+//! Deviation: a colour-mapped image whose descriptor has alpha bits decodes as its picture, because
 //! the reference has no defined result to copy. `0x5a3820` sizes each pixel as 24 plus the alpha
 //! bits (`0x5a382b`-`0x5a383d`, stored at `0x5a3973`) but copies 3-byte entries (`0x5a38f3`), then
 //! `0x5a3b80` moves `(bpp + 7) >> 3` bytes a pixel (`0x5a3c00`-`0x5a3c13`): each pixel after the
 //! first takes its bytes from its neighbours, and the last read heap that was never written.
 //!
 //! Deviation: a truecolour image whose depth less its alpha bits is 24, but whose depth is not 24
-//! or 32, is refused where the reference crashes. The check `0x5a37e0` admits it (25 to 31 bits
+//! or 32, is refused because the reference crashes. The check `0x5a37e0` admits it (25 to 31 bits
 //! with 1 to 7 alpha bits, 33 to 39 with 9 to 15), then `0x5a41f0` returns 0 for a depth that is
 //! not 32, and the copy at `0x4492c4` reads through that null pointer: there is no result to match.
 //!

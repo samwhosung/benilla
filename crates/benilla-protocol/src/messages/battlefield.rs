@@ -185,7 +185,7 @@ pub struct BattlefieldPositions {
     pub carrier: Option<BattlefieldPosition>,
 }
 
-/// The client's 40-entry store. Deviation: a larger count keeps the first 40, where the
+/// The client's 40-entry store. Deviation: a larger count keeps the first 40, because the
 /// reference's handler writes past the store.
 pub const BATTLEFIELD_POSITIONS_MAX: usize = 40;
 
