@@ -704,17 +704,16 @@ fn bind_target_unit(
 /// range." or "Target too close") and binds nothing; otherwise the emptied word commits (`SendCast
 /// 0x6e54f0`).
 ///
-/// Deviation: a range failure leaves targeting armed and working because, for a cast in
-/// flight, the reference's report cancels it (`0x6e2218` → `0x6e4940`): its line, `SPELLCAST_FAILED` and the
-/// tradeskill disarm,
-/// which benilla keeps; with the word the bind emptied it also sends `CMSG_CANCEL_CAST` for the
-/// unsent spell (`0x6e4970`) and clears the caster, then restores the pre-click word (`0x6e6096`),
-/// so every later click fails the caster test (`0x6e5b93`) and the cursor is stranded until a
-/// cancel. That is a defect: benilla's cancel finds the cursor up, so it drops the word, with its
-/// signal (`0x6e495c`), instead of sending, and the cursor is re-armed as its attempt left it,
-/// its caster and its hold on the slot included, which is what a player can use. A record never
-/// pushed is not in flight, and its report cancels nothing: the word and the caster stand, as in
-/// the reference.
+/// Deviation: a range failure leaves targeting armed and working because, for a cast in flight, the
+/// reference's report cancels it (`0x6e2218` → `0x6e4940`): its line, `SPELLCAST_FAILED` and the
+/// tradeskill disarm, which benilla keeps; with the word the bind emptied it also sends
+/// `CMSG_CANCEL_CAST` for the unsent spell (`0x6e4970`) and clears the caster, then restores the
+/// pre-click word (`0x6e6096`), so every later click fails the caster test (`0x6e5b93`) and the
+/// cursor is stranded until a cancel. That is a defect: benilla's cancel finds the cursor up, so it
+/// drops the word, with its signal (`0x6e495c`), instead of sending, and the cursor is re-armed as
+/// its attempt left it, its caster and its hold on the slot included, which is what a player can
+/// use. A record never pushed is not in flight, and its report cancels nothing: the word and the
+/// caster stand, as in the reference.
 fn merge(
     ladder: &mut crate::spell::CastLadder,
     spell_id: u32,
