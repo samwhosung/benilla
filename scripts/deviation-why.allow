@@ -33,7 +33,6 @@ crates/benilla-lua/src/vm.rs	these are benilla's own needs, past what the
 crates/benilla-lua/src/vm.rs	benilla's scratch registers above a frame's `c_maxstack` (`Proto::maxstack`)
 crates/benilla-protocol/src/events/decode.rs	an out-of-range list past the first block reads
 crates/benilla-protocol/src/world/session.rs	checked per queue packet where the reference checks
-crates/benilla-protocol/src/world/session.rs	benilla runs no Warden module and answers nothing,
 crates/benilla-ui/src/civil.rs	the zone database's offset for the date, where
 crates/benilla-ui/src/loader/mod.rs	a `<Script file=>` value with a separator joins
 crates/benilla-ui/src/script/binding_abi.rs	`pow(10, n)` is the platform's, where the reference's
