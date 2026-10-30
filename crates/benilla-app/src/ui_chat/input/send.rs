@@ -274,12 +274,26 @@ impl ChatSender<'_, '_> {
     /// `0x514e23`): with the mirror set and `autoClearAFK` on, the line (fired inside the call,
     /// `0x5eb878`), the mirror zeroed and the empty AFK packet, ahead of the message's own.
     pub(crate) fn clear_afk(&mut self, script: &mut UiScript) {
+        if self.clear_afk_line(script) {
+            self.finish_clear_afk();
+        }
+    }
+
+    /// [`Self::clear_afk`] up to its line (`0x5eb878`), for a caller that runs the line's
+    /// listeners there before [`Self::finish_clear_afk`]: whether it showed one.
+    pub(crate) fn clear_afk_line(&mut self, script: &mut UiScript) -> bool {
         let strings = |key: &str| super::super::combat::global_string(script, key);
         let Some(line) = away::auto_clear_line(self.afk_mirror(), auto_clear_afk(script), &strings)
         else {
-            return;
+            return false;
         };
         away::show_system(&self.chat_log, script, line);
+        true
+    }
+
+    /// [`Self::clear_afk`] past its line: the mirror zeroed (`0x5eb885`) and the empty AFK packet
+    /// (`0x5eb8d0`).
+    pub(crate) fn finish_clear_afk(&mut self) {
         if let Some(mirror) = self.mirror.as_mut() {
             mirror.0 = 0;
         }

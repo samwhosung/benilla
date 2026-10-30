@@ -121,20 +121,39 @@ impl ClickSelect<'_, '_> {
         self.seam.player_is_charmed()
     }
 
-    /// The left click's select (`0x481f60` action 1): select the press pick's unit or deselect on
-    /// empty world, except on nothing (the sky) with a payload held (`0x492d30`); the terrain leg
-    /// deselects regardless (`0x5e03bb`). With the targeting cursor up, the object it picks binds
-    /// instead and a terrain click its word can bind binds, while the rest still deselect. The press
-    /// pick, since the hover is empty through a camera drag, as in the reference's freelook. What its
-    /// `SetSelection` owes after its signals, which the call signals in place, or `None` when it
-    /// selected nothing.
+    /// The left click's legs ahead of its select (`0x481f60` action 1), the inspect mode's and the
+    /// targeting cursor's ([`cursor_leg`]): the select runs only past a leg that leaves it the
+    /// click, and after a refused bind's listeners.
+    pub(crate) fn cursor_leg(&mut self) -> CursorLeg {
+        cursor_leg(self)
+    }
+
+    /// The left click's select, past [`Self::cursor_leg`]: select the press pick's unit or deselect
+    /// on empty world, except on nothing (the sky) with a payload held (`0x492d30`); the terrain
+    /// leg deselects regardless (`0x5e03bb`). With the targeting cursor up, the object it picks
+    /// binds instead and a terrain click its word can bind binds, both taken by the cursor's leg,
+    /// while the rest still deselect. The press pick, since the hover is empty through a camera
+    /// drag, as in the reference's freelook. What its `SetSelection` owes after its signals, which
+    /// the call signals in place, or `None` when it selected nothing.
     pub(crate) fn select(
         &mut self,
         script: &benilla_ui::script::UiScript,
     ) -> Option<super::SelectDebt> {
         let payload_held = script.cursor_payload().is_some();
-        click_select(self, payload_held).map(|select| select.owed)
+        select_past_cursor(self, payload_held).map(|select| select.owed)
     }
+}
+
+/// What the targeting cursor makes of a left click ([`cursor_leg`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CursorLeg {
+    /// The click is the cursor's (an object it picks, a location it binds) or nobody's: no select.
+    Takes,
+    /// `BindLocation` refused the word and signalled (`0x6e615d`): the select follows its
+    /// listeners.
+    Signalled,
+    /// No cursor is up, or it lets the click through untouched.
+    Passes,
 }
 
 /// What the world click's select reads and writes.
@@ -187,15 +206,11 @@ impl Standing {
     }
 }
 
-/// [`ClickSelect::select`]'s commit, `payload_held` whether the cursor holds a payload: what its
-/// `SetSelection` owes after its signals, or `None` when the click selected nothing.
-fn click_select(
-    c: &mut ClickSelect,
-    payload_held: bool,
-) -> Option<crate::script_calls::EngineSelect> {
+/// The click's legs ahead of its select: the inspect mode's, and the targeting cursor's.
+fn cursor_leg(c: &mut ClickSelect) -> CursorLeg {
     let (hovered, occlusion) = (c.press.hovered, c.press.occlusion);
     if c.inspect.enabled {
-        return None;
+        return CursorLeg::Takes;
     }
     // With the cursor up, an object the press picked takes the object leg (`0x4925d0` →
     // `SelectTarget 0x493540`), whose word test (`0x4935ca`) binds it in the select's place; the
@@ -211,20 +226,31 @@ fn click_select(
         let object_click = ground.wants(crate::spell::TargetingWants::GameObject)
             && go_is_nearest(&hovered, &c.press.object);
         if object_click || hovered.corpse.is_some() || hovered.refused {
-            return None;
+            return CursorLeg::Takes;
         }
         if let Some(entity) = hovered.target {
             c.greeting
                 .write(crate::sound::NpcGreetingRequest { npc: entity });
-            return None;
+            return CursorLeg::Takes;
         }
         if occlusion.point.is_some() {
             if ground.wants(crate::spell::TargetingWants::Location) {
-                return None;
+                return CursorLeg::Takes;
             }
             c.seam.slots.core(&c.seam.net).reports.changed();
+            return CursorLeg::Signalled;
         }
     }
+    CursorLeg::Passes
+}
+
+/// [`ClickSelect::select`]'s commit, `payload_held` whether the cursor holds a payload: what its
+/// `SetSelection` owes after its signals, or `None` when the click selected nothing.
+fn select_past_cursor(
+    c: &mut ClickSelect,
+    payload_held: bool,
+) -> Option<crate::script_calls::EngineSelect> {
+    let (hovered, occlusion) = (c.press.hovered, c.press.occlusion);
     let self_guid = c.self_q.single().ok().map(|g| g.0);
     let before = Standing::of(&c.selection, &c.seam);
     let owed = match (hovered.target, hovered.guid) {
@@ -1248,10 +1274,10 @@ pub(super) struct PayloadHeld(pub(super) bool);
 /// paid in place, with nobody to signal.
 #[cfg(test)]
 pub(super) fn select_on_click(mut c: ClickSelect, held: Option<Res<PayloadHeld>>) {
-    if c.charmed() {
+    if c.charmed() || cursor_leg(&mut c) == CursorLeg::Takes {
         return;
     }
-    if let Some(select) = click_select(&mut c, held.is_some_and(|h| h.0)) {
+    if let Some(select) = select_past_cursor(&mut c, held.is_some_and(|h| h.0)) {
         select.owed.pay(&mut c.selection, &mut c.seam);
     }
 }
@@ -2167,8 +2193,8 @@ pub(super) fn clear(selection: &mut Selection, seam: &mut crate::creature_anim::
     }
 }
 
-/// [`clear`], owing its send when the teardown called a possessed unit off, whose
-/// `PET_BAR_UPDATE` (`0x4bd6b4`) listeners run before it ([`scan::OwedSend`]).
+/// [`clear`], owing the rest of the teardown when its stop reported or it called a possessed unit
+/// off, whose listeners run before it ([`scan::OwedSend`]).
 pub(super) fn clear_owing(
     selection: &mut Selection,
     seam: &mut crate::creature_anim::AttackSeam,
@@ -2177,15 +2203,15 @@ pub(super) fn clear_owing(
     selection.target = None;
     selection.lit = None;
     // The teardown `0x493910` closes the old target's loot, then stops our attack
-    // (`0x493a08 call 0x5ecac0`, which also un-queues an on-next-swing strike), calls a
-    // possessed unit off (`0x493a0f`-`0x493a18`), then sends (`0x493a2a`).
+    // (`0x493a08 call 0x5ecac0`, which also un-queues an on-next-swing strike and reports its
+    // stop), calls a possessed unit off (`0x493a0f`-`0x493a18`), then sends (`0x493a2a`).
     seam.close_loot_on(old);
-    seam.stop();
-    if seam.call_pet_off() {
-        return Some(scan::OwedSend::Deselect);
+    let reported = seam.release_stop();
+    let owed = scan::release_owing(seam, reported, scan::OwedTo::Deselect);
+    if owed.is_none() {
+        let _ = seam.net.0.send(ClientCommand::SetSelection { guid: 0 });
     }
-    let _ = seam.net.0.send(ClientCommand::SetSelection { guid: 0 });
-    None
+    owed
 }
 
 #[cfg(test)]

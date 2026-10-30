@@ -108,7 +108,7 @@ pub(crate) use ring::{selection_variant, Factions, RingVariant};
 pub use click::Interact;
 pub(crate) use click::{
     clear_selection_on_world_teardown, clear_with_no_world, deselect_on_ui_shutdown,
-    signal_ui_shutdown_deselect,
+    signal_ui_shutdown_deselect, CursorLeg,
 };
 
 /// Our target, set the instant we click, as the 1.12 client does without waiting for the server.

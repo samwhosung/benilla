@@ -213,6 +213,26 @@ fn opening_an_unread_mail_marks_it_inside_the_call() {
     assert!(world.resource_mut::<MailPending>().take_refresh());
 }
 
+/// The mark's `MAIL_INBOX_UPDATE` (`0x4add9d`) runs its listeners before the open arms the
+/// close's re-query (`0x4adda6`): a close one of them makes finds nothing armed and sends no
+/// query, and the arm stands for the next close.
+#[test]
+fn a_marks_listener_closes_before_the_open_arms_the_refresh() {
+    let mut h = Mailbox::new(vec![entry(1, 9)]);
+    h.run(
+        r#"local g = CreateFrame("Frame") g:RegisterEvent("MAIL_INBOX_UPDATE")
+        g:SetScript("OnEvent", function() if not CLOSED then CLOSED = 1 CloseMail() end end)"#,
+    );
+    let _ = h.sent();
+    h.run("GetInboxText(1)");
+    assert!(!h.sent().iter().any(|s| s.starts_with("QueryNextMailTime")));
+    assert!(h
+        .app
+        .world_mut()
+        .resource_mut::<MailPending>()
+        .take_refresh());
+}
+
 /// A mail already read is not marked again (`0x4adcee`): no packet, no event and no refresh. Its
 /// body is still asked for in the call.
 #[test]

@@ -494,6 +494,43 @@ fn a_pitch_edge_ends_the_follow_then_closes_the_loot_inside_its_call() {
     }
 }
 
+/// `StopAutoMove` signals the follow's end (`0x60fb84`) and its listeners run there, before the
+/// move stops (`0x60e7f0`) and the guard ends the loot window (`0x60e9dd`): a listener's packet
+/// goes out ahead of the window's release.
+#[test]
+fn a_follows_end_listener_sends_ahead_of_the_loot_release() {
+    let mut l = client();
+    let world = l.app.world_mut();
+    let me = world.resource::<crate::net::GuidIndex>().0[&ME];
+    world.entity_mut(me).insert(crate::net::Embodied);
+    world.init_resource::<crate::player::CameraControl>();
+    world.insert_resource(crate::player::Player::with_move_flags(
+        crate::creature_anim::move_flags::SWIMMING,
+    ));
+    world.resource_mut::<crate::player::Player>().active = true;
+    run(
+        &mut l,
+        r#"local g = CreateFrame("Frame") g:RegisterEvent("AUTOFOLLOW_END")
+        g:SetScript("OnEvent", function() RandomRoll(1, 2) end)"#,
+    );
+    l.app
+        .world_mut()
+        .resource_mut::<crate::player::FollowState>()
+        .start(0x77, "Bob".into());
+    open(&mut l, CORPSE, 1, 0, vec![row(0, LINEN)]);
+    let _ = l.rx.try_iter().count();
+    bound(&mut l, "PitchDownStart()");
+    let wire: Vec<&str> =
+        l.rx.try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::RandomRoll { .. } => Some("roll"),
+                ClientCommand::LootRelease { .. } => Some("release"),
+                _ => None,
+            })
+            .collect();
+    assert_eq!(wire, ["roll", "release"]);
+}
+
 /// The verbs apply in call order. `GiveMasterLoot` after `CloseLoot` finds no source
 /// (`0x4c2946`-`0x4c2953`); `LootSlot` after it still answers the pending row, which the close
 /// keeps (`0x48f200` and `0x4c1cb0(0)` leave `0x847cec` and the rows alone), and sends after the

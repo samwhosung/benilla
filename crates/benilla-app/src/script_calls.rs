@@ -585,8 +585,23 @@ impl ScriptCallHost<'_, '_> {
         let before = self.appliers.look().bits_before(input);
         let called = self.appliers.commands().call(input);
         let looked = self.appliers.look().bound(input, before);
-        freelook_edges(script, looked);
+        self.freelook_edges_here(script, mark, looked);
         self.run_called(script, mark, called)
+    }
+
+    /// The world frame's half of a freelook a call entered or left ([`freelook_edges`]), whose
+    /// handlers run there, ahead of the call's cast cancel and tick (`0x51491f` inside `0x514840`,
+    /// then `0x51512a`, `0x5151a0`) or its look-session work (`0x493070`, then `0x514231`).
+    fn freelook_edges_here(
+        &mut self,
+        script: &mut UiScript,
+        mark: &mut crate::ui_cast::ReportMark,
+        looked: crate::player::Looked,
+    ) {
+        freelook_edges(script, looked);
+        if looked.entered || looked.left {
+            self.at_point(script, mark);
+        }
     }
 
     /// A look-session call inside its verb ([`benilla_ui::script::ScriptCall::Look`]): the world
@@ -600,7 +615,7 @@ impl ScriptCallHost<'_, '_> {
         call: benilla_ui::script::LookCall,
     ) -> Option<CallTail> {
         let looked = self.appliers.look().call(call);
-        freelook_edges(script, looked);
+        self.freelook_edges_here(script, mark, looked);
         let benilla_ui::script::LookCall::Mouselook(on) = call else {
             return None;
         };
@@ -622,14 +637,21 @@ impl ScriptCallHost<'_, '_> {
         if legs == crate::player::TickLegs::default() {
             return None;
         }
-        // The cancel's stop goes ahead of the tick's lines (`0x51512a` before `0x5151a0`).
-        self.signal_reports(script, mark);
-        if legs.clear_afk {
-            self.appliers.chat().clear_afk(script);
+        // The cancel's stop goes ahead of the tick's lines (`0x51512a` before `0x5151a0`), its
+        // listeners running there, before the tick writes.
+        self.at_point(script, mark);
+        // The away clear's line (`0x5eb878`) runs its listeners before the mirror's zero and the
+        // AFK packet (`0x5eb885`, `0x5eb8d0`).
+        if legs.clear_afk && self.appliers.chat().clear_afk_line(script) {
+            self.at_point(script, mark);
+            self.appliers.chat().finish_clear_afk();
         }
+        // `StopAutoMove` signals a follow's end before it stops the move (`0x60fb84`, then
+        // `0x60e7f0`), and the loot close comes after.
         if legs.stop_auto_move {
             if self.appliers.commands().following() {
                 script.fire_event("AUTOFOLLOW_END", vec![]);
+                self.at_point(script, mark);
             }
             self.appliers.commands().stop_auto_move();
         }
@@ -676,8 +698,9 @@ impl ScriptCallHost<'_, '_> {
     }
 
     /// A selection's `SetSelection` from its signals on, `owed` being what its commit owes after
-    /// them: the teardown's `PET_BAR_UPDATE` (`0x4bd6b4`) runs its listeners before the store and
-    /// the send (`0x4936e2`, `0x493871`), the change's signals run theirs before the re-swing
+    /// them: the teardown's stop report (`0x493a08`) runs its listeners before the pet leg
+    /// (`0x493a0f`), whose `PET_BAR_UPDATE` (`0x4bd6b4`) runs its own before the store and the
+    /// send (`0x4936e2`, `0x493871`), the change's signals run theirs before the re-swing
     /// (`0x4938c8`), and a payment that selects again (StartAttack's own select, `0x5eccaa`)
     /// signals in turn before what it owes. A selection a listener makes at a point signals
     /// itself, nested, so each point moves the mark to the selection as the listeners left it.
@@ -688,14 +711,20 @@ impl ScriptCallHost<'_, '_> {
         mut owed: crate::target::SelectDebt,
     ) {
         loop {
-            if let Some(send) = owed.take_send() {
-                // The teardown's StopAttack reported first (`0x493a08`); `PetStopAttack` lowered
-                // the latch and signals with the selection zeroed (`0x4bd6ae`, `0x4939d3`).
+            if let Some(mut send) = owed.take_send() {
+                // The teardown's StopAttack reports first (`0x493a08`), with the selection zeroed
+                // (`0x4939d3`), and its listeners run there, before the pet leg.
                 self.signal_reports(script, &mut at.mark);
-                script.fire_event("PET_BAR_UPDATE", vec![]);
-                at.latched = false;
                 script.seat_selection(self.appliers.select().seated());
-                self.at_point(script, &mut at.mark);
+                if send.owes_pet_leg() {
+                    self.at_point(script, &mut at.mark);
+                }
+                // `PetStopAttack` lowered the latch and signals (`0x4bd6ae`, `0x4bd6b4`).
+                if self.appliers.select().run_pet_leg(&mut send) {
+                    script.fire_event("PET_BAR_UPDATE", vec![]);
+                    at.latched = false;
+                    self.at_point(script, &mut at.mark);
+                }
                 // The store over a listener's pick (`0x4936e2`), or for a clear the send of the
                 // listener's pick, and either signals after (`0x49389c`, `0x493a73`), so the
                 // mark stays the selection the call found.
@@ -1068,6 +1097,13 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::Gossip(GossipCall::Close) => self.close_gossip(script, &mut at.mark),
             ScriptCall::Gossip(call) => appliers.gossip().apply(script, call),
             ScriptCall::Mail(MailCall::Close) => self.close_mail(script, &mut at.mark),
+            // An unread mail's mark signals (`0x4add9d`) and its listeners run before the open
+            // arms the close's re-query (`0x4adda6`).
+            ScriptCall::Mail(call @ MailCall::Open { unread: true, .. }) => {
+                appliers.mail().apply(script, call);
+                self.at_point(script, &mut at.mark);
+                self.appliers.mail().arm_close_refresh();
+            }
             ScriptCall::Mail(call) => appliers.mail().apply(script, call),
             // The partner's slot 7 is the trade's, the bind the targeting cursor's.
             ScriptCall::Trade(

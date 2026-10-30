@@ -1069,6 +1069,81 @@ fn a_teardowns_strike_cancel_reports_before_the_target_change() {
     assert_eq!(seen(&mut f), "SPELLCAST_STOP,PLAYER_TARGET_CHANGED");
 }
 
+/// The teardown's strike cancel reports its stop inside StopAttack (`0x493a08`), after the pair
+/// is zeroed (`0x4939d3`) and before `CMSG_SET_SELECTION` (`0x493a64` for a clear; `0x49388d` for
+/// a switch, behind the store `0x4936e2`): its listeners read no target, and their packets go out
+/// ahead of the selection's.
+#[test]
+fn a_teardowns_strike_cancel_listeners_run_ahead_of_the_store_and_the_send() {
+    for (lua, wire) in [
+        (
+            "ClearTarget()",
+            vec!["AttackStop", "RandomRoll", "SetSelection 0x0"],
+        ),
+        (
+            r#"TargetUnit("party1")"#,
+            vec![
+                "AttackStop",
+                "RandomRoll",
+                "SetSelection 0x22",
+                "AttackSwing 0x22",
+            ],
+        ),
+    ] {
+        let mut f = frame(true);
+        swinging_at_old(&mut f);
+        queue_strike(&mut f);
+        run(
+            &mut f,
+            r#"local r = CreateFrame("Frame")
+            r:RegisterEvent("SPELLCAST_STOP")
+            r:SetScript("OnEvent", function()
+                SEEN = UnitExists("target") and "target" or "none"
+                RandomRoll(1, 2)
+            end)"#,
+        );
+        run(&mut f, lua);
+        assert_eq!(attack_wire(&f), wire, "{lua}");
+        assert_eq!(seen(&mut f), "none", "{lua}");
+    }
+}
+
+/// The release's pet leg (`0x493a0f`-`0x493a18`) runs after its StopAttack (`0x493a08`) returned,
+/// so the strike cancel's listeners send ahead of `PetStopAttack`'s packet.
+#[test]
+fn a_teardowns_strike_cancel_listeners_send_ahead_of_the_pet_stop() {
+    let mut f = frame(true);
+    with_pet_attacking(&mut f, true);
+    swinging_at_old(&mut f);
+    queue_strike(&mut f);
+    run(
+        &mut f,
+        r#"local r = CreateFrame("Frame")
+        r:RegisterEvent("SPELLCAST_STOP")
+        r:SetScript("OnEvent", function() RandomRoll(1, 2) end)"#,
+    );
+    run(&mut f, "ClearTarget()");
+    let wire: Vec<String> =
+        f.rx.try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::AttackStop => Some("AttackStop".to_string()),
+                ClientCommand::PetStopAttack { .. } => Some("PetStopAttack".to_string()),
+                ClientCommand::SetSelection { guid } => Some(format!("SetSelection {guid:#x}")),
+                ClientCommand::RandomRoll { .. } => Some("RandomRoll".to_string()),
+                _ => None,
+            })
+            .collect();
+    assert_eq!(
+        wire,
+        [
+            "AttackStop",
+            "RandomRoll",
+            "PetStopAttack",
+            "SetSelection 0x0"
+        ]
+    );
+}
+
 /// `UnitCreatureFamily("target")` (`0x51a310`) reads the held unit's cached creature record
 /// (`0x6055e0`: `[[unit+0xb30]+0x1c]`) through `CreatureFamily.dbc` inside its call, though no
 /// snapshot carries the word; a unit whose record the cache lacks answers nil.

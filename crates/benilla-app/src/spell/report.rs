@@ -322,6 +322,11 @@ impl CastSlots<'_> {
     pub(crate) fn tutorials(&self) -> Option<&crate::tutorial::Tutorials> {
         self.tutorials.as_deref()
     }
+
+    /// How many cast reports are queued, for a step that asks whether it reported.
+    pub(crate) fn reports_queued(&self) -> usize {
+        self.reports.len()
+    }
 }
 
 /// The reporters' state for an item's deactivate, whose release or destroy runs in an object

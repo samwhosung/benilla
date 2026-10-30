@@ -794,6 +794,24 @@ fn a_right_click_cancels_the_pending_target() {
     );
 }
 
+/// The right click's payload leg clears the cursor and signals in place (`0x492c90`, `0x492d30`
+/// → `0x495190`), so its listeners run before the router's leg goes on: nothing the click writes
+/// after the payload leg follows them ([`crate::script_calls::census::writes_after`]).
+#[test]
+fn a_right_clicks_payload_clear_runs_ahead_of_the_rest_of_its_leg() {
+    let mut app = client("CAMERAORSELECTORMOVE");
+    aim(&mut app);
+    arm_ground_cast(&mut app);
+    let _watch = benilla_ui::script::census::watch_writes();
+    benilla_ui::script::census::take_writes();
+    right_click_at(&mut app, BESIDE_MOB);
+    app.update();
+    assert_eq!(
+        crate::script_calls::census::writes_after(),
+        Vec::<String>::new()
+    );
+}
+
 /// Over the world's ground, away from the mob and the button.
 const ON_GROUND: Vec2 = Vec2::new(800.0, 700.0);
 

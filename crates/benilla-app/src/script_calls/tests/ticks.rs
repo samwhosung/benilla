@@ -160,6 +160,20 @@ fn a_movement_call_in_the_air_clears_away_inside_it() {
     assert_eq!(sent(&rx), ["afk ''"]);
 }
 
+/// `ClearAFK`'s line runs its listeners where it is added (`0x5eb878`), before the mirror's zero
+/// and the empty AFK packet (`0x5eb885`, `0x5eb8d0`): a listener's roll goes out first.
+#[test]
+fn an_away_lines_listener_sends_ahead_of_the_afk_packet() {
+    let (mut app, rx) = client();
+    drive(&mut app, &[]);
+    flags(&mut app, crate::creature_anim::move_flags::FALLING);
+    app.world_mut()
+        .insert_resource(crate::ui_chat::AfkMirror(1));
+    listen(&mut app, &["CHAT_MSG_SYSTEM"], "RandomRoll(1, 2)");
+    pressed(&mut app, "MoveForwardStart()");
+    assert_eq!(sent(&rx), ["roll 1", "afk ''"]);
+}
+
 /// A release can start a direction: with W and S held the forward total is 0, and S's release
 /// makes it 1, a start (`0x514e6e` → `0x60dc60` → `0x60e990`), so the follow ends inside the
 /// call. A swimmer's pitch key starts the pitch emitter (`0x60dda0`), and its release stops it

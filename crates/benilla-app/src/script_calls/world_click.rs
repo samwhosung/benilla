@@ -218,11 +218,24 @@ impl ScriptCallHost<'_, '_> {
         }
         // What the offers signalled runs ahead of the select.
         self.at_point(script, &mut at.mark);
-        let owed = self
+        let leg = self
             .appliers
             .click()
             .select()
-            .and_then(|mut select| select.select(script));
+            .map(|mut select| select.cursor_leg());
+        // A bind the cursor's word refused signals (`0x6e615d`) and its listeners run before the
+        // click falls to `OnWorldClick`'s deselect (`0x5e03cf`).
+        if leg == Some(crate::target::CursorLeg::Signalled) {
+            self.at_point(script, &mut at.mark);
+        }
+        let owed = match leg {
+            Some(crate::target::CursorLeg::Takes) | None => None,
+            Some(_) => self
+                .appliers
+                .click()
+                .select()
+                .and_then(|mut select| select.select(script)),
+        };
         if let Some(owed) = owed {
             self.settle_selection(script, at, owed);
         }
@@ -236,10 +249,13 @@ impl ScriptCallHost<'_, '_> {
     /// (`0x492870`), signalled in place and bound to a standing cursor's cast by `SelectTarget`
     /// (`0x4935d5`), and its dispatcher (`0x492881`); for the ground or the sky, the walk.
     fn action_click(&mut self, script: &mut UiScript, at: &mut Signalled) {
-        let mut legs = self.appliers.click();
-        if let Some(payload) = legs.payload() {
+        if let Some(payload) = self.appliers.click().payload() {
             payload.right_click(script);
         }
+        // The payload leg's `ClearCursor` signals in place (`0x495190` from `0x492ce0`,
+        // `0x492c90`, `0x492d30`), its listeners running ahead of the interact or the walk.
+        self.at_point(script, &mut at.mark);
+        let mut legs = self.appliers.click();
         let Some(mut dispatch) = legs.dispatch() else {
             return;
         };

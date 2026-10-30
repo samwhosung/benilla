@@ -459,26 +459,95 @@ pub(super) struct CommitOutcome {
     pub(super) swung: bool,
 }
 
-/// The `CMSG_SET_SELECTION` a selection's teardown owes when it called a possessed unit off
-/// (`0x493a18`): `PetStopAttack` signals `PET_BAR_UPDATE` (`0x4bd6b4`) with the pair zeroed
-/// (`0x4939d3`), and its listeners run before the store (`0x4936e2`) and the send (`0x493871`), or
-/// a clear's send (`0x493a2a`).
+/// The rest of a selection's release (`0x493910`) once it signalled, with the pair zeroed
+/// (`0x4939d3`): its `StopAttack`'s next-swing cancel reported a stop (`0x493a08`, `0x5ecb63` →
+/// `0x6e6f30`), whose listeners run before the pet leg, or the pet leg called a possessed unit off
+/// (`0x493a18`), whose `PET_BAR_UPDATE` (`0x4bd6b4`) listeners run before the store (`0x4936e2`)
+/// and the send (`0x493871`), or a clear's send (`0x493a2a`).
 #[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum OwedSend {
+pub(crate) struct OwedSend {
+    to: OwedTo,
+    pet: PetLeg,
+}
+
+/// What an [`OwedSend`] stores and sends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum OwedTo {
     /// A switch to `guid`, whose object is `entity`.
     Select { entity: Option<Entity>, guid: u64 },
     /// A clear, whose send names the selection as the listeners left it.
     Deselect,
 }
 
+/// The release's pet leg (`0x493a0f`-`0x493a18`), `0x5ee5a0` then `PetStopAttack 0x4bd650`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PetLeg {
+    /// Still to run, behind the listeners of the stop's report.
+    Owed,
+    /// It called a possessed unit off: its `PET_BAR_UPDATE` is owed.
+    CalledOff,
+    /// It ran and called nothing off.
+    Ran,
+}
+
+/// What a release whose `StopAttack` ran owes after its signals, `reported` whether the stop
+/// reported: the pet leg behind the report's listeners, else the leg now, owing the store and the
+/// send of `to` when it called a unit off. `None` when nothing signalled, for the caller to pay
+/// `to` at once.
+pub(super) fn release_owing(
+    seam: &mut crate::creature_anim::AttackSeam,
+    reported: bool,
+    to: OwedTo,
+) -> Option<OwedSend> {
+    let pet = if reported {
+        PetLeg::Owed
+    } else if seam.call_pet_off() {
+        PetLeg::CalledOff
+    } else {
+        return None;
+    };
+    Some(OwedSend { to, pet })
+}
+
 impl OwedSend {
-    /// The store and the light (`0x4936e2`, `0x493701`), over whatever a listener selected, the
-    /// lit unit's tutorial ladder (`0x493789`-`0x49383c`, [`crate::tutorial::select_tutorial`]),
-    /// and the send.
-    pub(crate) fn pay(self, selection: &mut Selection, seam: &crate::creature_anim::AttackSeam) {
-        let guid = match self {
-            OwedSend::Select { entity, guid } => {
+    /// `to`, with nothing signalled ahead of it.
+    pub(super) fn now(to: OwedTo) -> Self {
+        Self {
+            to,
+            pet: PetLeg::Ran,
+        }
+    }
+
+    /// Whether the pet leg waits behind the stop's report.
+    pub(crate) fn owes_pet_leg(&self) -> bool {
+        self.pet == PetLeg::Owed
+    }
+
+    /// Run the pet leg if it waits: whether the release called a unit off, so its
+    /// `PET_BAR_UPDATE` (`0x4bd6b4`) is owed.
+    pub(crate) fn run_pet_leg(&mut self, seam: &mut crate::creature_anim::AttackSeam) -> bool {
+        if self.pet == PetLeg::Owed {
+            self.pet = if seam.call_pet_off() {
+                PetLeg::CalledOff
+            } else {
+                PetLeg::Ran
+            };
+        }
+        self.pet == PetLeg::CalledOff
+    }
+
+    /// The pet leg if it waits, then the store and the light (`0x4936e2`, `0x493701`), over
+    /// whatever a listener selected, the lit unit's tutorial ladder (`0x493789`-`0x49383c`,
+    /// [`crate::tutorial::select_tutorial`]), and the send.
+    pub(crate) fn pay(
+        mut self,
+        selection: &mut Selection,
+        seam: &mut crate::creature_anim::AttackSeam,
+    ) {
+        self.run_pet_leg(seam);
+        let guid = match self.to {
+            OwedTo::Select { entity, guid } => {
                 selection.target = entity;
                 selection.guid = Some(guid);
                 selection.lit = entity;
@@ -489,15 +558,15 @@ impl OwedSend {
             }
             // The clear's send reads the selection as it stands (`0x493a49`-`0x493a4f`): a
             // listener's pick, or none.
-            OwedSend::Deselect => selection.guid.unwrap_or(0),
+            OwedTo::Deselect => selection.guid.unwrap_or(0),
         };
         let _ = seam.net.0.send(ClientCommand::SetSelection { guid });
     }
 }
 
 /// What a [`commit_owing`] owes after its signals, for a caller that runs their listeners in place
-/// first: the send after the teardown's `PET_BAR_UPDATE`, then the re-swing after
-/// `PLAYER_TARGET_CHANGED`.
+/// first: the release's rest after its stop's report and its `PET_BAR_UPDATE`, then the re-swing
+/// after `PLAYER_TARGET_CHANGED`.
 #[must_use]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Owed {
@@ -603,23 +672,25 @@ pub(super) fn commit_owing(
     }
     // The latch's `0x60ecb0` leg, read before the store (`0x49367d`).
     let stop_and_repoint = seam.engaged() && had_old;
-    if stop_and_repoint {
-        // `0x493a08`: the real StopAttack, which also un-queues a next-swing strike (`0x6e6f30`).
-        seam.stop();
-    }
+    // `0x493a08`: the real StopAttack, which also un-queues a next-swing strike (`0x6e6f30`) and
+    // reports its stop there.
+    let reported = stop_and_repoint && seam.release_stop();
     // `0x493a0f`-`0x493a18`: the release calls a possessed unit off after its StopAttack, with the
-    // pair zeroed (`0x4939d3`); the store and the send wait for its signal's listeners.
-    let called_off = had_old && seam.call_pet_off();
-    let send = OwedSend::Select { entity, guid };
-    let send = if called_off {
+    // pair zeroed (`0x4939d3`); the store and the send wait for the listeners of what either
+    // signalled.
+    let to = OwedTo::Select { entity, guid };
+    let send = if had_old {
+        release_owing(seam, reported, to)
+    } else {
+        None
+    };
+    if send.is_some() {
         selection.target = None;
         selection.guid = None;
         selection.lit = None;
-        Some(send)
     } else {
-        send.pay(selection, seam);
-        None
-    };
+        OwedSend::now(to).pay(selection, seam);
+    }
     // The latch `[ebp-1]` was read before the store (`0x4936ac`); the rest of the test reads the
     // selection after the signal (`0x4938ae`).
     // `CanAttack` refuses the player itself (`0x4936a3`), whatever the writer knows of the rest.

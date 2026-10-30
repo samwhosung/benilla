@@ -141,10 +141,16 @@ impl ScriptSelect<'_, '_> {
         })
     }
 
-    /// Store and send the selection a call's teardown held back, now that its signal's listeners
-    /// have run.
+    /// The rest of a call's teardown its signals held back, now that their listeners have run
+    /// ([`SelectCommit::pay_send`]).
     pub(crate) fn pay_send(&mut self, send: super::scan::OwedSend) {
         self.commit.pay_send(send);
+    }
+
+    /// The teardown's pet leg, if it waits behind its stop's report, now that the report's
+    /// listeners have run: whether it called a unit off ([`SelectCommit::run_pet_leg`]).
+    pub(crate) fn run_pet_leg(&mut self, send: &mut super::scan::OwedSend) -> bool {
+        self.commit.run_pet_leg(send)
     }
 
     /// Pay what a selecting call still owes, now that its signals' listeners have run, up to a

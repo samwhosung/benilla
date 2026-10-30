@@ -153,7 +153,7 @@ impl CastReports {
         self.0.drain(..).map(|(_, r)| r).collect()
     }
 
-    #[cfg(test)]
+    /// How many reports are queued.
     pub(crate) fn len(&self) -> usize {
         self.0.len()
     }

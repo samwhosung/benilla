@@ -573,6 +573,45 @@ fn a_click_the_cursor_cannot_bind_deselects() {
     }
 }
 
+/// `BindLocation`'s signal for a word with no location bit (`0x6e615d`) runs its listeners before
+/// the click falls to `OnWorldClick`'s deselect (`0x5e03cf`): a listener's packet goes out ahead
+/// of the deselect's `CMSG_SET_SELECTION`.
+#[test]
+fn a_refused_binds_listener_sends_ahead_of_the_clicks_deselect() {
+    let mut f = fix(false);
+    let world = f.app.world_mut();
+    world.resource_mut::<crate::spell::SpellTargeting>().enter(
+        HEAL,
+        crate::spell::CastCommit::Spell,
+        0x0002,
+    );
+    world.resource_mut::<PressPick>().occlusion = super::PickOcclusion {
+        distance: 5.0,
+        point: Some(Vec3::new(1.0, 2.0, 3.0)),
+        ray: None,
+    };
+    world.resource_mut::<crate::ui_cast::CastReports>().clear();
+    crate::script_calls::insert_test_vm(world);
+    world
+        .non_send_resource::<benilla_ui::script::UiScript>()
+        .run(
+            r#"local r = CreateFrame("Frame")
+            r:RegisterEvent("CURRENT_SPELL_CAST_CHANGED")
+            r:SetScript("OnEvent", function() RandomRoll(1, 2) end)"#,
+        )
+        .expect("the listener installs");
+    f.click(Hovered::default());
+    let wire: Vec<String> =
+        f.rx.try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::SetSelection { guid } => Some(format!("select {guid:#x}")),
+                ClientCommand::RandomRoll { .. } => Some("roll".to_string()),
+                _ => None,
+            })
+            .collect();
+    assert_eq!(wire, ["roll", "select 0x0"]);
+}
+
 /// The greeter (`PlayGreetingSound`, `0x60c270`) runs at `0x4927fd` for every unit a body click
 /// names, ahead of `SelectTarget`, with nothing in between that tests targeting: a click the
 /// cursor binds greets too. The click router returns for a charmed player first (`0x481f98`), so

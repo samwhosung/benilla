@@ -266,7 +266,8 @@ mod tests {
 
     /// A unit word's terrain click binds nothing here: it sends nothing and keeps the cursor, and
     /// its `BindLocation` signal (`0x6e615d`) and the deselect it falls to are the select's
-    /// ([`crate::target::click::ClickSelect::select`]), so the commit adds no pair; a sky click (the
+    /// ([`crate::target::click::ClickSelect::cursor_leg`], then
+    /// [`crate::target::click::ClickSelect::select`]), so the commit adds no pair; a sky click (the
     /// nothing leg) and a click on a unit the press picked (the object leg) never reach it.
     #[test]
     fn a_terrain_click_that_binds_nothing_leaves_the_rest_to_the_select() {

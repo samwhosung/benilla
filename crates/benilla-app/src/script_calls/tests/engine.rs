@@ -140,6 +140,39 @@ fn follow_unit_begins_inside_its_call() {
     );
 }
 
+/// The arm's stop signals the running follow's end (`0x61113e` → `0x60fb60`, `0x60fb84`) before
+/// that move stops and the arm stores the new followee (`0x611130`): a movement start in the
+/// end's listener stops the running follow, and the new one is stored after it.
+#[test]
+fn a_replaced_follows_end_runs_before_the_arm_stores_the_new_followee() {
+    let (mut app, _rx) = client();
+    follow_world(&mut app);
+    let world = app.world_mut();
+    let me = world.resource::<GuidIndex>().0[&ME];
+    world.entity_mut(me).insert(crate::net::Embodied);
+    world.init_resource::<crate::player::CameraControl>();
+    world.init_resource::<crate::player::FarSight>();
+    world.init_resource::<crate::player::Player>();
+    world.resource_mut::<crate::player::Player>().active = true;
+    world
+        .resource_mut::<crate::player::FollowState>()
+        .start(0x99, "Old".into());
+    listen(&mut app, &["AUTOFOLLOW_END"], "MoveForwardStart()");
+    crate::script_calls::with_hosted_vm(app.world_mut(), |vm| {
+        vm.expect("a VM").run_binding(r#"FollowUnit("target")"#)
+    })
+    .expect("the chunk runs");
+    assert_eq!(
+        eval::<i64>(&mut app, "return N"),
+        2,
+        "the listener's start ends it, nested"
+    );
+    assert_eq!(
+        app.world().resource::<crate::player::FollowState>().guid,
+        Some(THEM)
+    );
+}
+
 /// A follow the gate refuses shows its line inside the call (`0x489e8f`, `0x496720`), before the
 /// chunk's next verb, and arms nothing.
 #[test]

@@ -431,3 +431,27 @@ fn freelook_walks_no_hover_at_its_records_but_a_shown_frame_re_picks() {
     super::tick_once(world);
     assert_eq!(log(world), "enter;leave;over;", "the shown frame re-picked");
 }
+
+/// `MouselookStart`'s press enters freelook inside `0x514840` (`0x51491f` → `0x493070`, whose
+/// focus move runs the hovered button's `OnLeave` there, `0x764dc0`), before `SetCommands` goes
+/// on to its cancel and its tick (`0x51512a`, `0x5151a0`): no write of theirs follows the leave's
+/// listener ([`crate::script_calls::census::writes_after`]).
+#[test]
+fn freelooks_entry_leave_runs_ahead_of_its_press_tick() {
+    let mut c = client(
+        r#"WorldFrame = CreateFrame("WorldFrame", "WorldFrame") WorldFrame:SetAllPoints()
+        b:SetScript("OnEnter", function() LOG = LOG .. "enter;" end)
+        b:SetScript("OnLeave", function() LOG = LOG .. "leave;" end)"#,
+    );
+    let world = c.app.world_mut();
+    super::feed_input_once(world);
+    let _watch = benilla_ui::script::census::watch_writes();
+    benilla_ui::script::census::take_writes();
+    crate::script_calls::with_hosted_vm(world, |s| s.expect("a VM").run("MouselookStart()"))
+        .expect("the chunk runs");
+    assert_eq!(log(world), "enter;leave;");
+    assert_eq!(
+        crate::script_calls::census::writes_after(),
+        Vec::<String>::new()
+    );
+}

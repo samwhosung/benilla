@@ -493,10 +493,14 @@ pub(crate) enum FollowStart {
     Refused(&'static str),
     /// The gate's silent return (`0x60ff8a`): the mover itself.
     Silent,
-    /// Armed (`0x611130`): the followee's name, `AUTOFOLLOW_BEGIN`'s argument (`0x610061`), and
-    /// whether the arm's stop (`0x61113e` → `0x60fb60`) ended a follow, which owes
-    /// `AUTOFOLLOW_END` (`0x60fb84`) first.
-    Started { name: String, replaced: bool },
+    /// Passed, for the arm (`0x611130`, [`FollowSteps::arm`]): the followee, its name,
+    /// `AUTOFOLLOW_BEGIN`'s argument (`0x610061`), and whether a follow runs, which the arm's stop
+    /// (`0x61113e` → `0x60fb60`) ends with `AUTOFOLLOW_END` (`0x60fb84`) first.
+    Started {
+        guid: u64,
+        name: String,
+        replaced: bool,
+    },
 }
 
 /// The follow's start, from `FollowUnit` and `FollowByName`, the stock `/follow`'s, inside their
@@ -513,7 +517,7 @@ pub(crate) struct FollowSteps<'w, 's> {
 }
 
 impl FollowSteps<'_, '_> {
-    /// `request` through the start gate, and the follow armed when it passes.
+    /// `request` through the start gate, which writes nothing: what the arm takes when it passes.
     pub(crate) fn start(&mut self, request: &crate::player::FollowRequest) -> FollowStart {
         use crate::player::FollowRequest;
         let scan_params = &self.scan_params;
@@ -572,18 +576,26 @@ impl FollowSteps<'_, '_> {
                     .resolve_unit(guid, None, Ask::Read)
                     .unwrap_or_default()
                     .to_string();
-                info!("follow: now following \"{name}\" guid {guid:#x}");
-                // The arm `0x611130` cancels what runs first: one auto-move cell.
-                if let Some(approach) = self.approach.as_deref_mut() {
-                    approach.stop();
+                let replaced = self.follow.as_deref().is_some_and(|f| f.guid.is_some());
+                FollowStart::Started {
+                    guid,
+                    name,
+                    replaced,
                 }
-                let replaced = self.follow.as_deref_mut().is_some_and(|follow| {
-                    let replaced = follow.stop();
-                    follow.start(guid, name.clone());
-                    replaced
-                });
-                FollowStart::Started { name, replaced }
             }
+        }
+    }
+
+    /// The arm `0x611130` past its stop's signal: what runs is cancelled first, one auto-move
+    /// cell (`0x61113e`), then `guid` is stored as the followee.
+    pub(crate) fn arm(&mut self, guid: u64, name: String) {
+        info!("follow: now following \"{name}\" guid {guid:#x}");
+        if let Some(approach) = self.approach.as_deref_mut() {
+            approach.stop();
+        }
+        if let Some(follow) = self.follow.as_deref_mut() {
+            follow.stop();
+            follow.start(guid, name);
         }
     }
 }
@@ -731,9 +743,16 @@ impl SelectCommit<'_, '_> {
         }
     }
 
-    /// Store and send the selection the teardown's signal held back.
+    /// The rest of the teardown its signals held back: the pet leg if it still waits, then the
+    /// store and the send ([`scan::OwedSend::pay`]).
     pub(crate) fn pay_send(&mut self, send: scan::OwedSend) {
-        send.pay(&mut self.selection, &self.seam);
+        send.pay(&mut self.selection, &mut self.seam);
+    }
+
+    /// The teardown's pet leg, if it waits behind its stop's report
+    /// ([`scan::OwedSend::run_pet_leg`]): whether it called a unit off.
+    pub(crate) fn run_pet_leg(&mut self, send: &mut scan::OwedSend) -> bool {
+        send.run_pet_leg(&mut self.seam)
     }
 
     /// Pay what `debt` still owes, in order, now that the signals' listeners have run, up to a
@@ -1246,13 +1265,16 @@ mod tests {
         request: crate::player::FollowRequest,
     ) -> (Vec<&'static str>, Option<u64>) {
         use bevy::ecs::system::RunSystemOnce;
-        let start = world
-            .run_system_once(move |mut steps: FollowSteps| steps.start(&request))
+        let keys = world
+            .run_system_once(move |mut steps: FollowSteps| match steps.start(&request) {
+                FollowStart::Refused(key) => vec![key],
+                FollowStart::Started { guid, name, .. } => {
+                    steps.arm(guid, name);
+                    Vec::new()
+                }
+                FollowStart::Silent => Vec::new(),
+            })
             .expect("the start runs");
-        let keys = match start {
-            FollowStart::Refused(key) => vec![key],
-            _ => Vec::new(),
-        };
         (keys, world.resource::<crate::player::FollowState>().guid)
     }
 

@@ -1,13 +1,12 @@
 //! The census of the sends and the writes a call makes while a handler it signalled is held
 //! ([`benilla_ui::script::census`]). `SignalEvent` (`0x703e50`) runs every listener before the
 //! verb goes on, so such a send goes out ahead of what the handler sends in 1.12.1, and such a
-//! write is read by the handler as it stands later. The kinds that still do are listed, each with
-//! the test that shows it; a kind made faithful leaves the list, and none joins it. No send
-//! goes ahead of a handler the reference runs first, so the list of those is empty.
+//! write is read by the handler as it stands later. No send goes ahead of a handler the reference
+//! runs first, and no write follows one the reference runs ahead of it.
 
 use super::selection::{queue_strike, swinging_at_old};
 use super::*;
-use crate::script_calls::census::{shows_no_send, shows_writes_only, writes_after};
+use crate::script_calls::census::{shows_no_send, writes_after};
 
 /// A frame noting every event, so each signal a call makes is held for a listener, and the
 /// census watching the writes while the guard lives.
@@ -56,23 +55,23 @@ fn a_bar_equip_signals_its_cursor_set_ahead_of_its_send() {
 }
 
 /// A deselect while swinging reports the queued strike's stop first (`StopAttack`, `0x493a08`),
-/// ahead of the release's usable refresh (`0x493a69`) and `PLAYER_TARGET_CHANGED` (`0x493a73`).
-/// The report waits for the point and the bar's states are written before it: see
-/// [`WRITES_AFTER`](crate::script_calls::census::WRITES_AFTER).
+/// ahead of the release's usable refresh (`0x493a69`) and `PLAYER_TARGET_CHANGED` (`0x493a73`):
+/// its listeners run there, so no write of the bar's states follows them.
 #[test]
-fn a_teardowns_strike_cancel_report_waits_behind_the_bars_usable_refresh() {
+fn a_teardowns_strike_cancel_report_runs_ahead_of_the_bars_usable_refresh() {
     let mut f = frame(true);
     swinging_at_old(&mut f);
     queue_strike(&mut f);
     let _watch = listening(&mut f);
     run(&mut f, "ClearTarget()");
-    shows_writes_only("ClearTarget:action_states");
+    shows_no_send();
+    assert_eq!(writes_after(), Vec::<String>::new());
 }
 
 /// An engine writer's deselect (`SelectTarget(0)`, `0x490927`) is the same teardown as an engine
-/// turn: its strike cancel's report waits behind the bar's usable refresh.
+/// turn: its strike cancel's report runs ahead of the bar's usable refresh.
 #[test]
-fn an_engine_deselects_strike_cancel_report_waits_behind_the_bars_usable_refresh() {
+fn an_engine_deselects_strike_cancel_report_runs_ahead_of_the_bars_usable_refresh() {
     let mut f = frame(true);
     swinging_at_old(&mut f);
     queue_strike(&mut f);
@@ -81,7 +80,8 @@ fn an_engine_deselects_strike_cancel_report_waits_behind_the_bars_usable_refresh
         .world_mut()
         .run_system_once(|mut vm: VmWith<()>| vm.engine_clear_target(crate::lanes::mark()))
         .expect("the turn runs");
-    shows_writes_only("turn@script_calls.rs:action_states");
+    shows_no_send();
+    assert_eq!(writes_after(), Vec::<String>::new());
 }
 
 /// The selection, cast, attack and chat verbs send and write nothing after a handler they

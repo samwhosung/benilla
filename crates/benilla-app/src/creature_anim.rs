@@ -541,6 +541,15 @@ impl AttackSeam<'_, '_> {
         );
     }
 
+    /// StopAttack in a selection's release (`0x493a08`): whether its next-swing cancel reported a
+    /// stop (`0x5ecb63` → `0x6e6f30` → `0x6e4940`), whose listeners run there, ahead of the rest
+    /// of the release.
+    pub(crate) fn release_stop(&mut self) -> bool {
+        let queued = self.slots.reports_queued();
+        self.stop();
+        self.slots.reports_queued() > queued
+    }
+
     /// `unit`'s stop in flight cleared, as its death zeroes it (`0x6058a8`).
     pub(crate) fn clear_stop_word(&mut self, unit: Entity) {
         self.stop_word.clear(unit);

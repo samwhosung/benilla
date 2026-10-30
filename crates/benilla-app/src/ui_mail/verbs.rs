@@ -51,14 +51,26 @@ impl MailVerbs<'_> {
         }
     }
 
-    /// Apply one mail call; the close is the host's ([`MailCall::Close`]).
+    /// An unread mail's open arms the close's re-query (`0x4adda6`), after its mark's
+    /// `MAIL_INBOX_UPDATE` (`0x4add9d`) ran its listeners.
+    pub(crate) fn arm_close_refresh(&mut self) {
+        if self.mail.is_none() {
+            return;
+        }
+        if let Some(pending) = self.pending.as_deref_mut() {
+            pending.arm_refresh();
+        }
+    }
+
+    /// Apply one mail call; the close is the host's ([`MailCall::Close`]), and so is an unread
+    /// mail's arm after its open ([`Self::arm_close_refresh`]).
     pub(crate) fn apply(&mut self, script: &mut UiScript, call: MailCall) {
         let Self {
             mail,
-            pending,
             commands,
             filter,
             switches,
+            ..
         } = self;
         let Some(mail) = mail.as_deref_mut() else {
             debug!("ui_mail: no mail session in this world; {call:?} dropped");
@@ -77,11 +89,9 @@ impl MailVerbs<'_> {
                         .0
                         .send(ClientCommand::MailMarkAsRead { mailbox, mail_id });
                     mail.mark_read(mail_id);
+                    // Its listeners run before the open arms the close's re-query, which the host
+                    // does after them ([`Self::arm_close_refresh`]).
                     script.mark_mail_read(index);
-                    // Only an unread mail arms the close's re-query (`0x4adda6`).
-                    if let Some(pending) = pending.as_deref_mut() {
-                        pending.arm_refresh();
-                    }
                 }
                 return;
             }

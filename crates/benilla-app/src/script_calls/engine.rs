@@ -13,8 +13,9 @@ impl ScriptCallHost<'_, '_> {
     /// `FollowUnit(unit)` (`0x489e00`) or `FollowByName(name, exact)` (`0x489ec0`), then
     /// `StartAutoMoveToObject(guid, 3)` (`0x60fed0`): the gate's line shown in place
     /// (`0x496720`), or the arm, whose stop of the auto-move it replaces signals `AUTOFOLLOW_END`
-    /// for a follow (`0x61113e` → `0x60fb84`), then `AUTOFOLLOW_BEGIN` with the followee's name
-    /// (`0x610071`), each running its listeners where it fires.
+    /// for a follow (`0x61113e` → `0x60fb84`) before that move stops and the new one is stored
+    /// (`0x611130`), then `AUTOFOLLOW_BEGIN` with the followee's name (`0x610071`), each running
+    /// its listeners where it fires.
     pub(super) fn follow(
         &mut self,
         script: &mut UiScript,
@@ -27,15 +28,20 @@ impl ScriptCallHost<'_, '_> {
                 crate::player::FollowRequest::Name { name, exact }
             }
         };
-        let (name, replaced) = match self.appliers.follow().start(&request) {
+        let (guid, name, replaced) = match self.appliers.follow().start(&request) {
             FollowStart::Refused(key) => return self.appliers.chat().display_error(script, key),
             FollowStart::Silent => return,
-            FollowStart::Started { name, replaced } => (name, replaced),
+            FollowStart::Started {
+                guid,
+                name,
+                replaced,
+            } => (guid, name, replaced),
         };
         if replaced {
             script.fire_event("AUTOFOLLOW_END", vec![]);
             self.at_point(script, mark);
         }
+        self.appliers.follow().arm(guid, name.clone());
         script.fire_event("AUTOFOLLOW_BEGIN", vec![ScriptValue::Str(name)]);
         self.at_point(script, mark);
     }
