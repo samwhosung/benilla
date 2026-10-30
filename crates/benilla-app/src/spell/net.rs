@@ -567,8 +567,23 @@ struct GoAttackStart(Option<(u64, bool, crate::lanes::Mark)>);
 /// the player's Attack at the hit unit, whose validator (`0x612df0`, `0x6131aa`) refuses on the
 /// actor's state or the target with its line and no swing, selects the hit whatever is selected
 /// and signals in place, behind the GO's reports, then swings at the selection it re-read
-/// (`0x6130c1`) ([`crate::script_calls::ScriptCallHost::engine_attack`]).
-fn on_go_attack_start(
+/// (`0x6130c1`) ([`crate::script_calls::ScriptCallHost::engine_attack`]). Its signals fire in
+/// place, so what the GO's earlier legs raised fires first, as each fired inside its call: the
+/// lanes flush ahead of the start ([`crate::lanes::flush`]), the precast end's `LOOT_CLOSED`
+/// (`0x6e7fc5` → `0x4c1dac`) among them.
+fn on_go_attack_start(In(ev): In<SessionEvent>, world: &mut World) {
+    if !matches!(ev, SessionEvent::SpellGo { .. }) || world.resource::<GoAttackStart>().0.is_none()
+    {
+        return;
+    }
+    crate::lanes::flush(world);
+    if let Err(e) = world.run_system_cached_with(go_attack_start, ev) {
+        debug!("net: the GO's attack start did not run: {e}");
+    }
+}
+
+/// [`on_go_attack_start`]'s start, past the flush.
+fn go_attack_start(
     In(ev): In<SessionEvent>,
     mut start: ResMut<GoAttackStart>,
     mut set: crate::script_calls::VmWith<

@@ -995,12 +995,10 @@ const MARK: u64 = 0xF130_0000_0000_00AD;
 /// Cheap Shot, whose GO starts the swing (`AttributesEx2 & 0x100000`, `0x6e83c0`).
 const CHEAP_SHOT: u32 = 1833;
 
-/// The GO's precast end releases our loot at `0x6e7fc5`, ahead of its deferred attack start
-/// (`0x6e8402` → `0x6131a0`), whose validator selects the hit (`0x613100`), so the release goes out
-/// before the start's sends. The window is a chest's, which the select's teardown does not close
-/// (`0x493959`).
-#[test]
-fn a_gos_release_goes_out_before_its_deferred_attack_starts_sends() {
+/// The chest's window open, a living [`MARK`] beside it, and our precast of [`CHEAP_SHOT`], whose
+/// GO starts the swing at what it hits; what the frames heard and sent taken. The window is a
+/// chest's, which the start's select teardown does not close (`0x493959`).
+fn cheap_shot_beside_the_open_chest() -> Client {
     use benilla_protocol::messages::ObjectType;
     /// `UNIT_FIELD_MAXHEALTH`.
     const MAXHEALTH: u16 = 28;
@@ -1047,6 +1045,15 @@ fn a_gos_release_goes_out_before_its_deferred_attack_starts_sends() {
     });
     c.seen();
     c.sent();
+    c
+}
+
+/// The GO's precast end releases our loot at `0x6e7fc5`, ahead of its deferred attack start
+/// (`0x6e8402` → `0x6131a0`), whose validator selects the hit (`0x613100`), so the release goes out
+/// before the start's sends.
+#[test]
+fn a_gos_release_goes_out_before_its_deferred_attack_starts_sends() {
+    let mut c = cheap_shot_beside_the_open_chest();
     c.frame(vec![vec![our_go(CHEAP_SHOT, vec![MARK])]]);
     let sent = c.sent();
     let release = sent_at(&sent, "LootRelease");
@@ -1058,6 +1065,26 @@ fn a_gos_release_goes_out_before_its_deferred_attack_starts_sends() {
     if let Some(swing) = sent_at(&sent, "AttackSwing") {
         assert!(release < Some(swing), "{sent:?}");
     }
+}
+
+/// The GO's precast end signals `LOOT_CLOSED` inside its close (`0x6e7fc5` → `0x4c1dac`), ahead of
+/// its deferred attack start's select (`0x6e8402` → `0x6131a0` → `0x613100`), whose
+/// `PLAYER_TARGET_CHANGED` (`0x49389c`) a listener hears after it.
+#[test]
+fn a_gos_loot_close_signals_before_its_deferred_attack_starts_select() {
+    let mut c = cheap_shot_beside_the_open_chest();
+    c.eval::<()>(
+        false,
+        r#"local g = CreateFrame("Frame")
+        g:RegisterEvent("PLAYER_TARGET_CHANGED")
+        g:SetScript("OnEvent", function() table.insert(Seen, event) end)"#,
+    );
+    c.frame(vec![vec![our_go(CHEAP_SHOT, vec![MARK])]]);
+    let seen = c.seen();
+    let closed = seen.iter().position(|s| s == "LOOT_CLOSED:nil");
+    let selected = seen.iter().position(|s| s == "PLAYER_TARGET_CHANGED");
+    assert!(closed.is_some() && selected.is_some(), "{seen:?}");
+    assert!(closed < selected, "{seen:?}");
 }
 
 /// A sting whose column 38 names the next spell (`modalNextSpell`).
