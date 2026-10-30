@@ -75,8 +75,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### bindings
 
 - A press with Super (Cmd) held runs no binding, so a system chord such as Cmd+Tab or Cmd+Q never acts in game. ([`src/bindings.rs:19`](../crates/benilla-app/src/bindings.rs#L19))
-- A trackpad's `Pixel` deltas are carried until they make a line, and step at most once per event (`crate::ui_script::Record::Wheel`). ([`src/bindings.rs:578`](../crates/benilla-app/src/bindings.rs#L578))
-- Latches die with the VM that made them, because a latch names a command of that VM's table and releasing it against a new one would run another load's up-half. ([`src/bindings.rs:623`](../crates/benilla-app/src/bindings.rs#L623))
+- A trackpad's `Pixel` deltas are carried until they make a line, and step at most once per event (`crate::ui_script::Record::Wheel`). ([`src/bindings.rs:637`](../crates/benilla-app/src/bindings.rs#L637))
+- Latches die with the VM that made them, because a latch names a command of that VM's table and releasing it against a new one would run another load's up-half. ([`src/bindings.rs:682`](../crates/benilla-app/src/bindings.rs#L682))
 - The Windows key table stops at `VK_F12` and drops later F-keys; they are named here so a stored `F13`-`F24` can be pressed. ([`src/bindings/chord.rs:165`](../crates/benilla-app/src/bindings/chord.rs#L165))
 - On the Mac and Linux a key its platform reports no character for keeps its US name too, where the Mac reference drops it (`0x8a4aa`), and a Linux dead key not yet pressed bare stays bindable. ([`src/bindings/layout.rs:116`](../crates/benilla-app/src/bindings/layout.rs#L116))
 - A character above U+00FF names the key by itself. The reference's `MapVirtualKeyA` returns an ANSI code-page byte, which `0x42da4b` drops past `0xff` and the namer's UTF-8 encoder (`0x41abb0`) otherwise reads as Latin-1, so such a key is mislabelled or dropped; named by what it types, it stays bindable and readable. ([`src/bindings/layout.rs:216`](../crates/benilla-app/src/bindings/layout.rs#L216))
@@ -374,7 +374,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### ui_layout
 
 - A debounced autosave (`save_layout`) also writes a quiet second after a drag, because the reference has no crash-path write and a crash would lose the session's windows. ([`src/ui_layout.rs:13`](../crates/benilla-app/src/ui_layout.rs#L13))
-- A record's fields start empty. The reference's parser clears X, Y, W and the level at each `Frame:` (`ebx`, `edi`, `esi`, `[ebp-0x4]` at `0x49045b`–`0x490469`) but not H (`[ebp-0xc]`), so a record with no `H:` takes the one before's; benilla writes `H:` whenever it writes `W:`, so only a hand-edited file reaches the slip, which would size a window from another window's row. ([`src/ui_layout.rs:86`](../crates/benilla-app/src/ui_layout.rs#L86))
+- A record's fields start empty. The reference's parser clears X, Y, W and the level at each `Frame:` (`ebx`, `edi`, `esi`, `[ebp-0x4]` at `0x49045b`–`0x490469`) but not H (`[ebp-0xc]`), so a record with no `H:` takes the one before's; benilla writes `H:` whenever it writes `W:`, so only a hand-edited file reaches the slip, which would size a window from another window's row. ([`src/ui_layout.rs:89`](../crates/benilla-app/src/ui_layout.rs#L89))
 
 #### ui_loot
 
