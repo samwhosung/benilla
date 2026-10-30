@@ -13,6 +13,33 @@ use benilla_ui::strings::Arg;
 use crate::field_watch::{FieldNotice, NoticeLane};
 use crate::lanes::Until;
 
+/// The units' token flags a dying VM left for the next ([`benilla_ui::script::TokenFlagsCarry`]).
+#[derive(Resource)]
+pub(crate) struct TokenFlagsCarried(benilla_ui::script::TokenFlagsCarry);
+
+/// Take the dying VM's token flags and their links out, after its last signal, the shutdown's
+/// deselect (`0x490bdf`).
+pub(crate) fn fold_dying_vm_token_flags(world: &mut World) {
+    let Some(carry) = world
+        .get_non_send_resource_mut::<UiScript>()
+        .map(|mut s| s.take_token_flags())
+    else {
+        return;
+    };
+    world.insert_resource(TokenFlagsCarried(carry));
+}
+
+/// Seat a new in-game VM's token flags before its files run: a `/reload`'s the dying VM's, which
+/// the unit objects keep; a world entry's none, as its units are created after it, each reading
+/// its own (`0x5fbb21`).
+pub(crate) fn seed_vm_token_flags(world: &mut World, script: &mut UiScript, reload: bool) {
+    if let Some(TokenFlagsCarried(carry)) = world.remove_resource::<TokenFlagsCarried>() {
+        if reload {
+            script.seat_token_flags(carry);
+        }
+    }
+}
+
 /// What a field notice's firing reads.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct NoticeFiring<'w, 's> {

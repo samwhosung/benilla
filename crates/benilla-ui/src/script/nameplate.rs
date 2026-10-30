@@ -467,18 +467,6 @@ impl UiScript {
     /// moves inside the packets, at its callbacks ([`Self::nameplate_health`] and the rest). An
     /// unchanged `geometry` costs nothing.
     pub fn sync_nameplates(&mut self, geometry: PlateGeometry, states: &[PlateState]) {
-        // Each bind links its bar watch behind the unit's bridge as it stands.
-        let binding: Vec<u64> = {
-            let model = self.model_ref();
-            states
-                .iter()
-                .map(|s| s.key)
-                .filter(|key| !model.nameplates.assigned.contains_key(key))
-                .collect()
-        };
-        for key in binding {
-            self.observe_bridge(key);
-        }
         let lua = self.lua();
         // The constructor's two lookups (`0x7cb3f9`, `0x7cb49b`), for each plate about to be built
         // and none for a built one. Done before the Model is borrowed: a lookup honours an `_G`
@@ -630,8 +618,6 @@ impl UiScript {
             self.release_nameplate(guid);
             return;
         };
-        // A bind links its bar watch behind the unit's bridge as it stands.
-        self.observe_bridge(guid);
         let lua = self.lua();
         let built = {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");

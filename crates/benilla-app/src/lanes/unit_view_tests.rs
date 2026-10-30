@@ -185,6 +185,11 @@ pub(super) fn client() -> App {
         guid: Some(WOLF),
         ..Default::default()
     };
+    // The store's token flag on the wolf, as `SetSelection` reports it (`0x49372a`).
+    world.non_send_resource_mut::<UiScript>().unit_token_flags(
+        WOLF,
+        benilla_ui::script::TokenChange::Add(benilla_ui::script::TOKEN_TARGET),
+    );
     seat(&mut app, 0);
     frame(&mut app, vec![]);
     app

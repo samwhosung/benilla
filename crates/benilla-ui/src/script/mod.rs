@@ -523,8 +523,8 @@ pub use unit::{
     UnitTokenParse,
 };
 pub use unit_watch::{
-    HealthWatch, TokenChange, TOKEN_PARTY, TOKEN_PARTY_PET, TOKEN_PET, TOKEN_PLAYER, TOKEN_RAID,
-    TOKEN_RAID_PET, TOKEN_TARGET,
+    HealthWatch, TokenChange, TokenFlagsCarry, TOKEN_PARTY, TOKEN_PARTY_PET, TOKEN_PET,
+    TOKEN_PLAYER, TOKEN_RAID, TOKEN_RAID_PET, TOKEN_TARGET,
 };
 pub use use_gates::{ControlBypassQuery, FarSightOnQuery};
 pub use weapon_enchant::{WeaponEnchant, WeaponEnchantQuery};

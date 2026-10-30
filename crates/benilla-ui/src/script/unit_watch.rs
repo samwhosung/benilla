@@ -34,11 +34,6 @@ pub enum TokenChange {
     Update,
 }
 
-/// Bit set on a unit whose tokens were found set with no writer's report, which links its watchers
-/// there and keeps its flags nonzero until a writer's add accounts for them or a read of its
-/// tokens finds them gone.
-const UNREPORTED: u32 = 0x8000_0000;
-
 /// The link order and the token flags the writers left.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct UnitWatches {
@@ -104,6 +99,21 @@ impl UnitWatches {
     }
 }
 
+/// The units' token flags and their unit-field watchers' links, as a VM leaves them for the next:
+/// the reference keeps both on the unit objects (`+0xc90`, the lists `0x467f00` links onto), which
+/// a `/reload` keeps. Its one token write is its deselect's (`0x490bdf` → `0x4939cc`); the group
+/// writers run only in the group packets' handlers (`0x5e6a40`, `0x5e6850`, `0x5e6880`,
+/// `0x5e68b0`). The plate bars' and the tooltips' links stay behind: the reload releases every
+/// plate (`0x490c3a` → `0x60f890`) and each bind after it links its bar's watchers at the tail
+/// again (`0x7cc3e2` → `0x7cc5d0`, `0x7cc416` → `0x7cc510`), and it destroys the tooltips, whose
+/// destructor unlinks their watcher (`0x490c9b`, `0x529480` → `0x5294d5`).
+#[derive(Clone, Debug, Default)]
+pub struct TokenFlagsCarry {
+    links: u64,
+    flags: HashMap<u64, u32>,
+    bridges: HashMap<u64, u64>,
+}
+
 /// What one health field's watchers write: the plate bars' range and value
 /// (`0x7cc570`), absent for a unit no longer held; the tooltip's, on the health field alone
 /// (`0x529560`, watching `+0x40`).
@@ -121,6 +131,27 @@ enum Watcher {
 }
 
 impl super::UiScript {
+    /// The units' token flags and their unit-field watchers' links, taken from a VM that ends for a
+    /// `/reload` ([`TokenFlagsCarry`]).
+    pub fn take_token_flags(&mut self) -> TokenFlagsCarry {
+        let mut model = self.model_mut();
+        let watches = &mut model.unit_watches;
+        TokenFlagsCarry {
+            links: watches.links,
+            flags: std::mem::take(&mut watches.flags),
+            bridges: std::mem::take(&mut watches.bridges),
+        }
+    }
+
+    /// Seat `carry` in a new VM before anything of it links: its own links follow the carried.
+    pub fn seat_token_flags(&mut self, carry: TokenFlagsCarry) {
+        let mut model = self.model_mut();
+        let watches = &mut model.unit_watches;
+        watches.links = watches.links.max(carry.links);
+        watches.flags = carry.flags;
+        watches.bridges = carry.bridges;
+    }
+
     /// A writer's change of `guid`'s token flags, at its place.
     pub fn unit_token_flags(&mut self, guid: u64, change: TokenChange) {
         if guid == 0 {
@@ -131,7 +162,7 @@ impl super::UiScript {
         let watches = &mut model.unit_watches;
         let old = watches.flags.get(&guid).copied().unwrap_or(0);
         let new = match change {
-            TokenChange::Add(bits) => (old & !UNREPORTED) | bits,
+            TokenChange::Add(bits) => old | bits,
             TokenChange::Remove(bits) => old & !bits,
             TokenChange::Update => now.unwrap_or(0),
         };
@@ -147,19 +178,6 @@ impl super::UiScript {
             super::unit::token_flags_in(&globals, o, guid)
         })
         .unwrap_or_else(|| super::unit::token_flags_in(guids, guids, guid))
-    }
-
-    /// `guid`'s watchers as the tokens read now, for a unit no writer reported: linked at the
-    /// tail when its tokens read set with none linked, gone when they read none.
-    pub(crate) fn observe_bridge(&mut self, guid: u64) {
-        let watched = self.unit_has_field_watchers(guid);
-        let mut model = self.model_mut();
-        let watches = &mut model.unit_watches;
-        match (watched, watches.bridges.contains_key(&guid)) {
-            (true, false) => watches.set_flags(guid, UNREPORTED),
-            (false, true) => watches.set_flags(guid, 0),
-            _ => {}
-        }
     }
 
     /// The watchers on one of `guid`'s health fields, in the order they were linked onto its list:
@@ -182,7 +200,6 @@ impl super::UiScript {
             bridge(self);
             return;
         }
-        self.observe_bridge(guid);
         let (linked, last) = {
             let model = self.model_ref();
             let watches = &model.unit_watches;
