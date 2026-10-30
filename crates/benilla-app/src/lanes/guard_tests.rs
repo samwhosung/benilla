@@ -56,10 +56,9 @@ pub(super) const NOT_YET_ON_A_LANE: &[(Row, &str, &str)] = &[
         "::items::Items",
         "the record answers' callbacks still run off the frame's records rather than in the \
          answer's list (`ItemCacheReceive` `0x55bdb0`, `0x55bf12`-`0x55bf39`): the \
-         dress-up's (`0x504ba0`), the equipment display's (`0x5ed880`), and the lock-key \
-         tooltip's (`0x52ad10`), which `drive_mouseover_tooltip` rebuilds each frame; and the \
-         combat log's (`0x6294b0`) and the auction lists' (`0x4cca10`, `0x4ccc60`, `0x4cceb0`), \
-         which `run_answer_tail` runs after the answer's list rather than in it",
+         dress-up's (`0x504ba0`) and the equipment display's (`0x5ed880`); and the combat log's \
+         (`0x6294b0`) and the auction lists' (`0x4cca10`, `0x4ccc60`, `0x4cceb0`), which \
+         `run_answer_tail` runs after the answer's list rather than in it",
     ),
 ];
 
@@ -327,21 +326,6 @@ pub(super) const HOST_HELD_UNREAD: &[&str] = &[
 /// a row whose feed or inputs moved fails until it matches.
 #[rustfmt::skip]
 pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
-    // The hover's pick runs outside every packet (`0x481790` → `0x4828d0` → `0x482090` →
-    // `0x492e70` → `0x492890`), but its plate is rebuilt inside them, each rebuild the whole
-    // builder over every input here: the unit's by the name-query callback `0x5fb840`, the
-    // creature cache callback `0x604660` and `OnEntryChanged` `0x604600` (each through `0x491a00`,
-    // `0x4919d0` → `0x529fe0`) and the unit-flags watcher (`0x5ff7be`); the game object's by its
-    // lock key's cache callback `0x52ad10`; the corpse's by its owner's name callback `0x52afe0`.
-    ("::ui_tooltip::drive_mouseover_tooltip", &["go_anim::GoAnim",
-        "go_templates::GameObjectTemplates", "items::Countdowns", "items::Items",
-        "names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
-        "net::reputations::Reputations", "spell::group_relation::GroupRoster",
-        "ui_action::PlayerActions", "ui_guild::GuildState",
-        // `widescreen`, which seats the object plate on the interface's screen: a listener's
-        // `SetCVar` moves it inside its call, and the build reads it as the frame left it.
-        "video::Widescreen"]),
-
     // The account-data readers (#2448): each reruns off the sections a download stored through
     // `&self`, read as the frame left them, where the reference runs each inside the settle that
     // its section's digest or download handler makes (`0x5afaca`, `0x5afd19`): the bindings
@@ -421,11 +405,22 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
 
 /// The view pushes [`READS_FRAME_FINAL`]'s test finds whose build the reference too makes outside
 /// every packet, held to their inputs the same way, with why: a hover's build that runs at a mouse
-/// move (`0x7660d0`) or the paint pass's repeat pick (`CSimpleTop::OnLayerUpdate` `0x765650`) and
-/// that no cache callback rebuilds inside a handler, so a listener fired inside the dispatch reads
-/// what the last build left, as 1.12.1's does. They stay after the flip.
+/// move (`0x7660d0`), the paint pass's repeat pick (`CSimpleTop::OnLayerUpdate` `0x765650`) or a
+/// frame's own update in the frame pass, after the packets (`0x420d6a` after `0x420d55`), and whose
+/// rebuilds inside a handler, if any, run there at their callbacks, so a listener fired inside the
+/// dispatch reads what the last build left, as 1.12.1's does. They stay after the flip.
 #[rustfmt::skip]
 pub(super) const BUILT_OUTSIDE_THE_PACKETS_IN_THE_REFERENCE: &[(&str, &[&str], &str)] = &[
+    // With `widescreen`, which seats the cursor-anchored plate on the interface's screen.
+    ("::ui_tooltip::drive_mouseover_tooltip", &["go_templates::GameObjectTemplates",
+        "names::NameCache", "net::GuidIndex", "net::ObjectStore", "net::SelfGuid",
+        "net::reputations::Reputations", "spell::group_relation::GroupRoster",
+        "ui_guild::GuildState", "video::Widescreen"],
+        "the WorldFrame's own update `0x481790` (its table's slot at `0x804420`), which picks and, \
+         on a change of the mouseover alone (`0x482090` → `0x492e70` → `0x492890`), builds the \
+         plate by kind; its rebuilds under the same hover run inside their packets: the unit's \
+         (`0x4919d0`, from `0x491a00` and the flags watcher's `0x5ff7be`), the lock key's record \
+         callback (`0x52ad10`) and the corpse owner's name callback (`0x52afe0`)"),
     ("::minimap::blips::drive_blip_tooltip", &["items::Countdowns", "names::NameCache",
         "net::GuidIndex", "net::ObjectStore"],
         "the minimap's probe `0x4eb0c0`, its slot `0x3c`, which the hover pick calls at a mouse \

@@ -99,8 +99,14 @@ pub(crate) fn record_notices(
     let pet = new.pet_guid.unwrap_or(0);
     if pet != 0 {
         let power = u16::from(new.pet_power_type.unwrap_or(0));
+        // `0x491a00` on the pet (`0x5e5873`): the tooltip's refresh, for a held pet alone, then
+        // `UNIT_NAME_UPDATE`.
         if mask & 0x1000 != 0 {
-            signal(pet, id::UNIT_NAME_UPDATE);
+            out.push(FieldNotice::TooltipUnit { guid: pet });
+            out.push(FieldNotice::Signal {
+                guid: pet,
+                id: id::UNIT_NAME_UPDATE,
+            });
         }
         // 0x2000, the display, marks the pet's portrait (`0x5e587f`).
         if mask & 0x2000 != 0 {
@@ -611,7 +617,8 @@ mod tests {
             ..old.clone()
         };
         // Focus, power type 2: `UNIT_FOCUS` 19.
-        let mut want = signals(&[(PET, 183)]);
+        let mut want = vec![FieldNotice::TooltipUnit { guid: PET }];
+        want.extend(signals(&[(PET, 183)]));
         want.push(FieldNotice::PortraitMark { guid: PET });
         want.extend(signals(&[(PET, 16), (PET, 30), (PET, 19), (PET, 41)]));
         assert_eq!(record_notices(MEMBER, &old, &pet_moved), want);

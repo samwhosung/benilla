@@ -487,8 +487,20 @@ fn a_world_objects_tooltip_tints_its_backdrop_and_a_corpses_does_not() {
         let q = |c: f32| (c * 255.0).round() as u8;
         (q(r), q(g), q(b))
     };
+    /// The corpse builder's read, its owner named.
+    struct Owner;
+    impl CallHost for Owner {
+        fn apply(&mut self, _: &mut UiScript, _: ScriptCall) -> Option<CallTail> {
+            None
+        }
+
+        fn read_live(&mut self, ask: &mut live::LiveAsk<'_>) -> bool {
+            ask.answer(|_: &CorpsePlateQuery| Some(Some(Some("Bob".to_string()))))
+        }
+    }
+    s.run(r#"CORPSE_TOOLTIP = "Corpse of %s""#).unwrap();
     s.publish_world_mouseover(Some(1));
-    assert!(s.world_tooltip_corpse("Corpse of Bob"));
+    assert!(s.hosted(&mut Owner, |s| s.world_tooltip_corpse(1)));
     assert_eq!(
         backdrop(&s),
         (23, 23, 48),

@@ -217,7 +217,10 @@ mod ui_errors;
 mod ui_scale;
 mod update_walk;
 pub use tooltip_studied::{PetAbility, StudiedCreature};
-pub use tooltip_unit::{OwnerTitle, OwnerTitleKind, PartyRecord, TooltipTint, UnitTooltipFacts};
+pub use tooltip_unit::{
+    CorpsePlateQuery, ObjectPlate, ObjectPlateQuery, OwnerTitle, OwnerTitleKind, PartyRecord,
+    TooltipTint, UnitTooltipFacts,
+};
 mod trade;
 mod tradeskill;
 mod trainer;

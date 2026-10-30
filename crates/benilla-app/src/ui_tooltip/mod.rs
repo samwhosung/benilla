@@ -1,7 +1,9 @@
-//! The world-mouseover tooltip and the spell tooltip views. The world tooltip rebuilds once per
+//! The world-mouseover tooltip and the spell tooltip views. The world tooltip is built once per
 //! hover-target change, published through the VM ([`UiScript::publish_world_mouseover`]), whose
-//! change requests the fade; the pick is [`Hovered`] or [`HoveredObject`], arbitrated by
-//! [`go_is_nearest`] as the click router does. The pick stands for the WorldFrame's own update
+//! change requests the fade, and built again under the same hover only inside the packets, by the
+//! callbacks its subject's lookups and watchers run there ([`plate`],
+//! [`crate::field_watch::FieldNotice::TooltipUnit`]); the pick is [`Hovered`] or
+//! [`HoveredObject`], arbitrated by [`go_is_nearest`] as the click router does. The pick stands for the WorldFrame's own update
 //! (`0x481790`), which picks only while the WorldFrame holds the hover (`0x4817ae`); the loss when
 //! the cursor moves onto a window is published by the WorldFrame's leave in the UI's walk, before
 //! the window's `OnEnter`. The spell views are built at the setter's call ([`live`]).
@@ -9,21 +11,19 @@
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
-use benilla_ui::script::{TooltipTint, UnitState};
-use benilla_ui::strings::Arg;
-
-use crate::go_templates::MeetingStoneTemplate;
 use crate::names::NameCache;
 use crate::net::{NetCommands, ObjectStore, SelfPlayer};
 use crate::query_cache::Ask;
-use crate::target::{go_is_nearest, Hovered, HoveredObject, GO_FLAG_LOCKED, GO_TYPE_GENERIC};
+use crate::target::{go_is_nearest, Hovered, HoveredObject, GO_TYPE_GENERIC};
 use crate::ui_unit::{
     enrich_unit, player_reaction, snapshot, unit_reaction, SnapshotTables, UnitFeed,
 };
 
 mod live;
+mod plate;
 mod spell_view;
 pub(crate) use live::TooltipLive;
+pub(crate) use plate::PlateLive;
 pub(crate) use spell_view::tooltip_text;
 
 pub struct UiTooltipPlugin;
@@ -44,155 +44,23 @@ impl Plugin for UiTooltipPlugin {
     }
 }
 
-/// Fill a key's template from the VM's `GlobalStrings.lua`; no string shows nothing.
-fn keyed(get: &dyn Fn(&str) -> Option<String>, key: &str, args: &[Arg<'_>]) -> Option<String> {
-    let text = benilla_ui::strings::fill(&get(key)?, args);
-    (!text.is_empty()).then_some(text)
-}
-
 /// The world-hover driver's memory, one `SystemParam` because the driver is at Bevy's 16-param
 /// ceiling. What it last published is the VM's ([`UiScript::world_mouseover`]), which a hover
 /// leave in the UI's walk also writes.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct HoverMemo<'s> {
-    /// The line-affecting fields the current unit plate was built from, so a late-arriving name or
-    /// creature-info rebuilds it under the same hover.
-    last_lines: Local<'s, crate::ui_script::VmMemo<Option<UnitState>>>,
     /// The hover probe's last trace line, so a stationary probe logs it once.
     trace: Local<'s, String>,
     /// Whether the VM holds a `"mouseover"` unit, so the clear is pushed once.
     published: Local<'s, crate::ui_script::VmMemo<bool>>,
     /// What the last frame hovered, unit, corpse and object: a hover onto anything else is the
-    /// build, whose lookups pass a callback (`GetUnitName` `0x609210` from `0x529fe0`, the corpse's
-    /// owner `0x52af77`, a lock's key `0x52aca6`); the frames under the same hover read.
+    /// build, whose name lookup passes a callback (`GetUnitName` `0x609210` from `0x529fe0`); the
+    /// frames under the same hover read.
     hovering: Local<'s, Option<HoverKey>>,
 }
 
 /// What the pointer is over: the picked unit, corpse and object guids.
 type HoverKey = (Option<u64>, Option<u64>, Option<u64>);
-
-fn lines_view(s: &UnitState) -> UnitState {
-    UnitState {
-        health: 0,
-        max_health: 0,
-        power: 0,
-        max_power: 0,
-        ..s.clone()
-    }
-}
-
-/// The "Locked" line's colour (`0x52ab03`-`0x52ab43`): red `0xc0d3a8` when the resolver finds no
-/// opener; else green `0xc0d420` for a key (`0x52ab29`) or no requirement (`0x52ab22`), and the
-/// difficulty ramp `0x529fa0` of the opening spell's value against the requirement (`0x52ab31`).
-/// `None`, a flag-locked object with no `Lock.dbc` row, is no requirement.
-fn locked_line_tint(
-    outcome: Option<crate::target::lock::LockOutcome>,
-    matched: Option<crate::target::lock::LockMatch>,
-) -> TooltipTint {
-    use crate::target::lock::LockOutcome;
-    match (outcome, matched) {
-        (Some(LockOutcome::Unmet), _) => TooltipTint::Red,
-        (Some(LockOutcome::OpenBySpell(_)), Some(m)) => TooltipTint::Skill {
-            required: m.required,
-            value: m.points,
-        },
-        _ => TooltipTint::LockOpen,
-    }
-}
-
-/// What the GameObject builder's lock lines read of the hovered object.
-struct GoLock<'a> {
-    /// Its `Lock.dbc` row, `None` without one.
-    slots: Option<&'a [benilla_formats::LockSlot; benilla_formats::MAX_LOCK_SLOTS]>,
-    /// The stored `GAMEOBJECT_STATE`, which the slot's Action gate reads.
-    state: u32,
-    flag_locked: bool,
-    /// The resolver's verdict and the opener it last matched (`0x5f83d0`).
-    outcome: Option<crate::target::lock::LockOutcome>,
-    matched: Option<crate::target::lock::LockMatch>,
-}
-
-/// The type handler's lines, slot 33 of its table (`[vtbl+0x84]`, called at `0x52aad4`) after
-/// the name and before the lock lines; the base slot adds none (`0x5f9f10`). A meeting stone's
-/// (`0x5f6b10`) adds its area's `AreaTable` name when the row exists (`0x5f6b3d`-`0x5f6b68`),
-/// then `MEETINGSTONE_LEVEL` of its minimum and maximum levels (`0x5f6b6d`-`0x5f6bdf`), both in
-/// gold (`0x530380`).
-fn go_handler_lines(
-    stone: Option<MeetingStoneTemplate>,
-    area_name: &dyn Fn(u32) -> Option<String>,
-    get: &dyn Fn(&str) -> Option<String>,
-) -> Vec<(String, TooltipTint)> {
-    let Some(stone) = stone else {
-        return Vec::new();
-    };
-    let mut lines = Vec::new();
-    lines.extend(area_name(stone.area).map(|name| (name, TooltipTint::Gold)));
-    let levels = [
-        Arg::D(i64::from(stone.min_level)),
-        Arg::D(i64::from(stone.max_level)),
-    ];
-    lines.extend(keyed(get, "MEETINGSTONE_LEVEL", &levels).map(|l| (l, TooltipTint::Gold)));
-    lines
-}
-
-/// The builder's lock lines (`0x52aa20`): "Locked" iff `GO_FLAG_LOCKED` (`0x52aae5`), then one line
-/// from `Lock.dbc` slot 0 only, if it passes the Action gate (`0x52ab7e`): a key in white
-/// (`0x52acd9`), named by its item, which waits for the template (`0x52aca6`); a skill, named by
-/// its `LockType.dbc` row or the literal `UNKNOWN` (`0x838044`), as `LOCKED_WITH_SPELL_KNOWN` in the
-/// margin ramp's colour when a known spell opens its lock type, sufficient or not
-/// (`0x52abcb`-`0x52abe2`), else as `LOCKED_WITH_SPELL` in red, and on a flag-locked object not at
-/// all (`0x52abe9`-`0x52ac04`), so a locked door names its key, never a lockpicking the player
-/// lacks. The keys all read "Requires %s" in enUS; only the binary tells them apart.
-fn go_lock_lines(
-    lock: GoLock<'_>,
-    key_name: &dyn Fn(u32) -> Option<String>,
-    lock_type_name: &dyn Fn(u32) -> Option<String>,
-    get: &dyn Fn(&str) -> Option<String>,
-) -> Vec<(String, TooltipTint)> {
-    let mut lines = Vec::new();
-    if lock.flag_locked {
-        if let Some(text) = keyed(get, "LOCKED", &[]) {
-            lines.push((text, locked_line_tint(lock.outcome, lock.matched)));
-        }
-    }
-    let Some(slot0) = lock
-        .slots
-        .map(|s| s[0])
-        .filter(|s| s.available(lock.state, lock.flag_locked))
-    else {
-        return lines;
-    };
-    match slot0.key_type {
-        benilla_formats::LOCK_KEY_ITEM => {
-            if let Some(name) = key_name(slot0.index) {
-                if let Some(text) = keyed(get, "LOCKED_WITH_ITEM", &[Arg::S(&name)]) {
-                    lines.push((text, TooltipTint::White));
-                }
-            }
-        }
-        benilla_formats::LOCK_KEY_SKILL => {
-            let line = match lock.matched {
-                Some(m) => Some((
-                    "LOCKED_WITH_SPELL_KNOWN",
-                    TooltipTint::Skill {
-                        required: m.required,
-                        value: m.points,
-                    },
-                )),
-                None if lock.flag_locked => None,
-                None => Some(("LOCKED_WITH_SPELL", TooltipTint::Red)),
-            };
-            if let Some((key, tint)) = line {
-                let word = lock_type_name(slot0.index).unwrap_or_else(|| "UNKNOWN".into());
-                if let Some(text) = keyed(get, key, &[Arg::S(&word)]) {
-                    lines.push((text, tint));
-                }
-            }
-        }
-        _ => {}
-    }
-    lines
-}
 
 /// A fresh hover's unit, seated where it is published: the publisher writes the mouseover pair
 /// (`0x492890`) before it signals (`0x4929b3`), and `CanInspect` (`0x48a1b0`),
@@ -237,24 +105,17 @@ pub(crate) fn drive_mouseover_tooltip(
     hovered_go: Res<HoveredObject>,
     window: Query<&Window, With<PrimaryWindow>>,
     stores: Query<&ObjectStore>,
-    // The stored GAMEOBJECT_STATE the lock lines' Action gate reads.
-    anims: Query<&crate::go_anim::GoAnim>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     names: Res<NameCache>,
     commands: Res<NetCommands>,
-    // The lock chain's data, shared with the click router (`target::lock`) so hover and click
-    // agree on whether a lock can be opened.
-    go_inputs: crate::target::lock::GoLockInputs,
-    // The known-spell set the resolver's SKILL arm scans.
-    player_actions: Res<crate::ui_action::PlayerActions>,
+    // The game object records, whose floating-tooltip column seats the plate (`0x5f8630`).
+    templates: Res<crate::go_templates::GameObjectTemplates>,
     mut memo: HoverMemo,
     // `ChrClasses.dbc` field 16, `UnitHasRelicSlot`'s input, and the form table the creature type
     // reads.
     tables: SnapshotTables,
     // The guild cache, the hovered player's guild leg.
     guild: Res<crate::ui_guild::GuildState>,
-    // The meeting stone's area name (`0x5f6b49`).
-    areas: Option<Res<crate::area::AreaTableRes>>,
 ) {
     let (hover_relations, widescreen) = {
         let (relations, widescreen) = vm.own();
@@ -292,8 +153,7 @@ pub(crate) fn drive_mouseover_tooltip(
         } else {
             (*hovered, *hovered_go)
         };
-        let (last_lines, trace) = (&mut memo.last_lines, &mut *memo.trace);
-        let last_lines = last_lines.get(script);
+        let trace = &mut *memo.trace;
         // The publisher's change check (`0x482090`) compares against the VM's last publish.
         let last = script.world_mouseover();
         let published = memo.published.get(script);
@@ -357,19 +217,17 @@ pub(crate) fn drive_mouseover_tooltip(
 
         if let Some((guid, state)) = unit {
             // Publish, which tears the old hover down, then push: the builder reads the token.
-            // Rebuild on a new target or a late name or creature answer, which rebuilds under the
-            // same hover with no teardown; health and power stay out of the key, since the watcher
-            // drives the bar.
-            let key = lines_view(&state);
+            // The plate is built on a change of the mouseover alone (`0x482090`); under the same
+            // hover it is rebuilt inside the packets, by the unit's callbacks
+            // ([`crate::field_watch::FieldNotice::TooltipUnit`]), and its bar by its health watcher.
             let changed = script.publish_world_mouseover(Some(guid));
             if let Some((entity, _)) = hovered.mouseover(&hovered_go).filter(|_| changed) {
                 seat_fresh_hover(script, guid, entity, &stores);
             }
             script.set_unit("mouseover", Some(state));
             *published = true;
-            if changed || last_lines.as_ref() != Some(&key) {
+            if changed {
                 script.world_tooltip_unit("mouseover");
-                *last_lines = Some(key);
             }
             return;
         }
@@ -382,8 +240,10 @@ pub(crate) fn drive_mouseover_tooltip(
             script.set_unit("mouseover", None);
         }
         // The corpse plate, "Corpse of <owner>" (`0x52aef0`): a name and nothing else,
-        // corner-seated. The publisher fires no event for a corpse, so `UnitName("mouseover")` on
-        // one stays nil.
+        // corner-seated, built on a change of the mouseover alone (`0x482090`); an owner's name the
+        // cache lacks builds it again at the name's answer
+        // ([`crate::field_watch::FieldNotice::CorpsePlate`]). The publisher fires no event for a
+        // corpse, so `UnitName("mouseover")` on one stays nil.
         if let Some((entity, guid)) = hovered
             .corpse
             .zip(hovered.corpse_guid)
@@ -397,27 +257,9 @@ pub(crate) fn drive_mouseover_tooltip(
                 script.publish_world_mouseover(None);
                 return;
             }
-            if last == Some(guid) {
-                return; // already up; a corner plate never re-seats
+            if script.publish_world_mouseover(Some(guid)) {
+                script.world_tooltip_corpse(guid);
             }
-            // A corpse carries `CORPSE_FIELD_OWNER`, not a name; the plate waits for the name
-            // query.
-            let Some(owner) = store.0.corpse_owner() else {
-                return;
-            };
-            let Some(name) = names.resolve_player(owner, ask).map(str::to_string) else {
-                return;
-            };
-            // `CORPSE_TOOLTIP`, the builder's key; no string, no plate.
-            let Some(plate) = keyed(
-                &|key: &str| benilla_ui::strings::global(script.lua(), key),
-                "CORPSE_TOOLTIP",
-                &[Arg::S(&name)],
-            ) else {
-                return;
-            };
-            script.publish_world_mouseover(Some(guid));
-            script.world_tooltip_corpse(&plate);
             return;
         }
         if let Some((entity, guid)) = go {
@@ -427,7 +269,7 @@ pub(crate) fn drive_mouseover_tooltip(
             let go_fields = stores.get(entity).ok().map(|s| &s.0);
             let cursor_seated = go_fields.map(|f| f.gameobject_type_id()) == Some(GO_TYPE_GENERIC)
                 && go_fields
-                    .and_then(|f| go_inputs.templates.of(f))
+                    .and_then(|f| templates.of(f))
                     .is_some_and(|t| t.floating_tooltip);
             // Window px to the VM's y-up root units, as the input seam converts.
             let cursor_ui = cursor_seated
@@ -466,82 +308,19 @@ pub(crate) fn drive_mouseover_tooltip(
                     "hover probe/tooltip: guid {guid:#x} cursor_seated {cursor_seated} cursor_ui \
                  {cursor_ui:?} template {:?}",
                     go_fields
-                        .and_then(|f| go_inputs.templates.of(f))
+                        .and_then(|f| templates.of(f))
                         .map(|t| t.name.clone()),
                 );
             }
-            let Some(fields) = go_fields else {
+            if go_fields.is_none() {
                 return; // not streamed: no descriptor, no entry
-            };
-            // The builder reads the record its create asked for (`0x5f7d81`, `0x5f8100`): an object
-            // whose template has not landed shows when it does.
-            let Some(template) = go_inputs.templates.of(fields).cloned() else {
-                return;
-            };
-            // The type handler's lines ([`go_handler_lines`]), then the lock lines
-            // ([`go_lock_lines`]).
-            let go_store = stores.get(entity).ok();
-            let flags = go_store.map_or(0, |s| s.0.gameobject_flags());
-            let flag_locked = flags & GO_FLAG_LOCKED != 0;
-            let state = go_store.map_or(benilla_formats::GO_STATE_ACTIVE, |s| {
-                crate::go_anim::go_state(anims.get(entity).ok(), s)
-            });
-            let slots = go_inputs
-                .locks
-                .as_ref()
-                .filter(|_| template.lock_id != 0)
-                .and_then(|l| l.0.slots(template.lock_id));
-            // The resolver the click uses (`0x5f83d0`), which the builder asks for both lines
-            // (`0x52ab14`, `0x52abc6`): its verdict and the opener it last matched.
-            let facts = crate::target::lock::go_facts(go_store.map(|s| (s, state)));
-            let mut matched = None;
-            let outcome = slots.map(|slots| {
-                crate::target::lock::resolve_lock(
-                    slots,
-                    &player_actions.openers,
-                    go_inputs.spells.as_deref(),
-                    go_inputs.skill_lines.as_ref().map(|s| &s.catalog),
-                    self_store,
-                    &go_inputs.objects,
-                    facts,
-                    &mut matched,
-                )
-            });
-            let mut lines = go_handler_lines(
-                template.meeting_stone,
-                &|id| {
-                    areas
-                        .as_deref()
-                        .and_then(|a| a.0.name(id))
-                        .map(str::to_string)
-                },
-                &|key: &str| benilla_ui::strings::global(script.lua(), key),
-            );
-            lines.extend(go_lock_lines(
-                GoLock {
-                    slots,
-                    state,
-                    flag_locked,
-                    outcome,
-                    matched,
-                },
-                &|entry| {
-                    go_inputs
-                        .items
-                        .template(entry, 0, ask)
-                        .map(|t| t.name.clone())
-                },
-                &|index| {
-                    go_inputs
-                        .lock_types
-                        .as_deref()
-                        .and_then(|c| c.0.row_name(index))
-                        .map(str::to_string)
-                },
-                &|key: &str| benilla_ui::strings::global(script.lua(), key),
-            ));
+            }
+            // The builder reads the object, its record and its lock chain as it runs
+            // ([`PlateLive`]): a record not yet landed names nothing (`0x5f8100`), and a key the
+            // cache lacks builds the plate again at the key's answer
+            // ([`crate::item_watch::ItemNotice::LockKeyRecord`]).
             script.publish_world_mouseover(Some(guid));
-            script.world_tooltip_gameobject(&template.name, &lines, cursor_seated);
+            script.world_tooltip_object(guid, cursor_seated);
             return;
         }
         // Hover lost: the same teardown, with no plate after it.

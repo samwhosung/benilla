@@ -1,11 +1,13 @@
 //! The spell-view cell tests, against the real 5875 data, and the world mouseover's.
 
+use super::plate::locked_line_tint;
 use super::spell_view::{build_aura_view, build_view, ViewCaster, ViewCtx};
 use super::*;
 use crate::items::Items;
 use crate::net::{NetCommands, ObjectStore, Objects, SelfPlayer};
 use crate::ui_action::{real_spells, PlayerActions, Spells};
-use benilla_ui::script::UiScript;
+use benilla_ui::script::{TooltipTint, UiScript, UnitState};
+use benilla_ui::strings::Arg;
 
 /// The view, read through the shipped strings, for the cell tests.
 fn spell_tooltip_view(spell_id: u32, spells: &Spells, vctx: &ViewCtx) -> Option<Shown> {

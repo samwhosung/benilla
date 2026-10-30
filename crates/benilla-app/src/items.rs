@@ -578,6 +578,9 @@ pub(crate) enum RecordCallback {
     /// The action bar's, asked by an item slot's icon, count and spell lookups (`0x4e6b10`,
     /// `0x4e6d69`, `0x4e5b30` with `0x4e5b80`), deduped.
     ActionSlots,
+    /// A game object plate's key line whose item was not cached (`0x52aca6` with
+    /// `CGTooltip::OnLockKeyItem` `0x52ad10`), deduped (`0x52ac8b`).
+    LockKey,
     /// A refused cast's reagent or tool line whose item was not cached (`0x6e1ea4` with
     /// `ShowItemCastFailure 0x6e29b0` and the reason), one per refusal; the spell picks the
     /// line's message as its first pass would.

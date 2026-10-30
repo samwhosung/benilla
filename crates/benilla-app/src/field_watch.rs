@@ -37,6 +37,17 @@ pub(crate) enum FieldNotice {
     /// Any other callback's own `0x515e50(guid, id)`: a type watcher's, a packet handler's or a
     /// cache answer's. It reaches every token naming `guid`, with no watcher of the unit's own.
     Signal { guid: u64, id: u16 },
+    /// `RefreshTooltipForUnit` (`0x4919d0`) on a held unit: `GameTooltip`'s unit plate built
+    /// again while it still shows `guid`. `NotifyUnitNameUpdate` (`0x491a00`) runs it for a unit the
+    /// object manager holds (`0x491a1a`-`0x491a27`) ahead of its `UNIT_NAME_UPDATE`, from the name
+    /// and creature callbacks (`0x5fb875`, `0x6046d1`), the entry watcher (`0x604651`), the
+    /// `PLAYER_BYTES_3` watchers (`0x5e2a36`, `0x5e2a56`) and the party record's pet name
+    /// (`0x5e5873`); the unit-flags watcher runs it on the skinnable bit (`0x5ff7be`).
+    TooltipUnit { guid: u64 },
+    /// `CGTooltip::OnCorpseOwnerName` (`0x52afe0`), which the corpse plate's name lookup registered
+    /// (`0x52af77`), on a found name: `GameTooltip`'s corpse plate built again while it keeps a
+    /// corpse (`0x52b004`-`0x52b022`).
+    CorpsePlate,
     /// A callback's `FrameScript_SignalEvent2(id, "%s", "player")`: `0x5de4b0` on the active
     /// player, the event its registration pushes as the argument (`0x5de4b3`, `0x5de4c1`); the
     /// ammunition watch's, the item slot path's and the ammo getters' record callback's
@@ -520,6 +531,9 @@ const WEAPON_SLOTS: [u8; 3] = [15, 16, 17];
 /// (`0x60441a`, `0x604b30` → `0x600440`); and in the object section `OBJECT_FIELD_ENTRY`
 /// (`0x60427d`, `0x604600`).
 const UNIT_FLAGS: (u16, u16) = (0xa0, 4);
+/// `UNIT_FLAG_SKINNABLE`, `UNIT_FIELD_FLAGS` bit 26, which the unit tooltip's `UNIT_SKINNABLE` line
+/// reads (`0x52a914`).
+const UNIT_FLAG_SKINNABLE: u32 = 0x0400_0000;
 const FACTION_TEMPLATE: (u16, u16) = (0x74, 4);
 const OWNERS: (u16, u16) = (0x10, 0x10);
 const PERSUADED: (u16, u16) = (0x30, 8);
@@ -729,6 +743,15 @@ impl Pass {
         }
     }
 
+    /// `NotifyUnitNameUpdate` (`0x491a00`) on the watched unit: the tooltip's refresh, then
+    /// `UNIT_NAME_UPDATE` (`0x491a3c`).
+    fn name_update(&mut self, at: Place, guid: u64) {
+        if guid != 0 {
+            self.push(at, FieldNotice::TooltipUnit { guid });
+        }
+        self.signal(at, guid, id::UNIT_NAME_UPDATE);
+    }
+
     /// `CGUnit_C::RefreshReaction` (`0x606e20`) on `guid`: `UNIT_FACTION` for it (`0x606e57`),
     /// for its `SUMMON` (`0x606e9d`) and its `CHARM` (`0x606edf`) when set, then, for the active
     /// player, for every other unit not its own (`0x606efb`).
@@ -858,7 +881,7 @@ pub(crate) fn placed_values(
     if let Some(at) = at(OBJECT_SECTION, ENTRY, List::Type) {
         // `0x604600`: a cached record names the unit at once (`0x604651`); a miss asks.
         if (around.creature_lookup)(fields.object_entry().unwrap_or(0)) {
-            pass.signal(at, guid, id::UNIT_NAME_UPDATE);
+            pass.name_update(at, guid);
         }
     }
     for range in [OWNERS, PERSUADED, FACTION_TEMPLATE] {
@@ -922,6 +945,10 @@ pub(crate) fn placed_values(
                 id::PET_ATTACK_STOP
             };
             pass.push(at, FieldNotice::Global { id });
+        }
+        // The tooltip's refresh on the skinnable bit 0x4000000 (`0x5ff7a4`-`0x5ff7be`).
+        if flipped & UNIT_FLAG_SKINNABLE != 0 {
+            pass.push(at, FieldNotice::TooltipUnit { guid });
         }
         // `UNIT_AURA` on 0x8000000 (`0x5ff7e2`).
         if flipped & 0x0800_0000 != 0 {
@@ -1057,10 +1084,10 @@ pub(crate) fn placed_values(
             pass.push(at, FieldNotice::Global { id });
         }
         if let Some(at) = at(PLAYER_SECTION, BYTES_3_BYTE_2, List::Type) {
-            pass.signal(at, guid, id::UNIT_NAME_UPDATE);
+            pass.name_update(at, guid);
         }
         if let Some(at) = at(PLAYER_SECTION, BYTES_3_BYTE_3, List::Type) {
-            pass.signal(at, guid, id::UNIT_NAME_UPDATE);
+            pass.name_update(at, guid);
             pass.reaction(at, guid, fields, around);
         }
         if let Some(at) = at(PLAYER_SECTION, BYTES_3_BYTE_1, List::Type) {
@@ -1562,7 +1589,9 @@ mod tests {
         assert_eq!(
             block(&mut other, Some(ME), OTHER, &[(bytes_3, 0x0102_0001)]),
             [
+                tooltip(OTHER),
                 signal(OTHER, id::UNIT_NAME_UPDATE),
+                tooltip(OTHER),
                 signal(OTHER, id::UNIT_NAME_UPDATE),
                 signal(OTHER, id::UNIT_FACTION),
                 FieldNotice::Drunk {
@@ -1855,6 +1884,11 @@ mod tests {
         FieldNotice::Signal { guid, id }
     }
 
+    /// `0x4919d0` on `guid`, the tooltip's refresh ahead of a name signal.
+    fn tooltip(guid: u64) -> FieldNotice {
+        FieldNotice::TooltipUnit { guid }
+    }
+
     fn bridge(guid: u64, id: u16) -> FieldNotice {
         FieldNotice::Unit { guid, id }
     }
@@ -2041,12 +2075,16 @@ mod tests {
         );
         assert_eq!(
             block(&mut other, Some(ME), OTHER, &[(195, 0x0100_0000)]),
-            [signal(OTHER, 183), signal(OTHER, 29)]
+            [tooltip(OTHER), signal(OTHER, 183), signal(OTHER, 29)]
         );
         let mut me = player();
         assert_eq!(
             block(&mut me, Some(ME), ME, &[(195, 0x0001_0000)]),
-            [signal(ME, 183), FieldNotice::Player { id: 524 }]
+            [
+                tooltip(ME),
+                signal(ME, 183),
+                FieldNotice::Player { id: 524 }
+            ]
         );
         // The duel team.
         assert_eq!(
@@ -2153,7 +2191,7 @@ mod tests {
         };
         assert_eq!(
             block_around(&mut mob, &cached, MOB, &[(3, 299)]),
-            [signal(MOB, 183)]
+            [tooltip(MOB), signal(MOB, 183)]
         );
         assert!(block_around(&mut mob, &cached, MOB, &[(3, 300)]).is_empty());
     }

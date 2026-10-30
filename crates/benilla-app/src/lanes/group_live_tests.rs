@@ -489,3 +489,72 @@ fn the_tooltip_reads_a_raid_rows_record_and_none_off_the_roster() {
         "off the roster: {off:?}"
     );
 }
+
+/// [`MATE`]'s name answer.
+fn mate_named() -> SessionEvent {
+    SessionEvent::PlayerName {
+        guid: MATE,
+        name: "Bob".into(),
+        race: 1,
+        class: 1,
+        gender: 0,
+    }
+}
+
+/// The party with [`MATE`] in it, held as `held` says, its name not cached, a `UNIT_NAME_UPDATE`
+/// listener noting the token and the name it reads, and `UnitName("party1")` run twice: the
+/// events [`mate_named`] then signals.
+fn name_update_after_unit_name(held: bool) -> Vec<String> {
+    let mut app = client();
+    frame(&mut app, vec![party_list()]);
+    if held {
+        frame(
+            &mut app,
+            vec![created(
+                MATE,
+                EntityKind::Player,
+                &[(FIELD_UNIT_HEALTH, 100), (FIELD_UNIT_MAXHEALTH, 100)],
+            )],
+        );
+    }
+    app.world_mut()
+        .resource_mut::<crate::names::NameCache>()
+        .invalidate_player(MATE);
+    crate::script_calls::with_hosted_vm(app.world_mut(), |s| {
+        s.expect("a VM").run(
+            r#"
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("UNIT_NAME_UPDATE")
+            f:SetScript("OnEvent", function()
+                table.insert(Seen, event .. " " .. arg1 .. " " .. tostring(UnitName(arg1)))
+            end)
+            UnitName("party1") UnitName("party1")
+            Seen = {}
+            "#,
+        )
+    })
+    .expect("the listener and the reads");
+    frame(&mut app, vec![mate_named()])
+}
+
+/// `UnitName` of a member it holds no unit for keeps its callback on the miss, once (`0x5171f1`,
+/// `0x5171f5` with `0x517290`), and the found name signals `UNIT_NAME_UPDATE` to the tokens naming
+/// the guid though no unit is held: `0x491a00` skips only the refresh without one (`0x491a23`),
+/// never the signal (`0x491a3c`). So a raid frame's member out of view leaves "Unknown".
+#[test]
+fn a_unit_name_miss_signals_its_name_for_a_member_out_of_view() {
+    assert_eq!(
+        name_update_after_unit_name(false),
+        ["UNIT_NAME_UPDATE party1 Bob"]
+    );
+}
+
+/// The control: a held member's `UnitName` reads it through `GetUnitName` (`0x609210`), whose
+/// callback is the unit's own (`0x5fb840`), so the answer signals once.
+#[test]
+fn a_held_members_name_answer_signals_once() {
+    assert_eq!(
+        name_update_after_unit_name(true),
+        ["UNIT_NAME_UPDATE party1 Bob"]
+    );
+}

@@ -1,9 +1,10 @@
 //! The GameObject builder's handler lines (`0x52aad4`) and lock lines (`0x52aae2`-`0x52ace7`).
 
 use benilla_formats::{LockSlot, GO_STATE_READY, LOCK_KEY_ITEM, LOCK_KEY_SKILL, MAX_LOCK_SLOTS};
-use benilla_ui::script::TooltipTint;
+use benilla_ui::script::{TooltipText, TooltipTint};
+use benilla_ui::strings::Strings;
 
-use super::{go_handler_lines, go_lock_lines, GoLock};
+use super::plate::{go_handler_lines, go_lock_lines, GoLock};
 use crate::go_templates::MeetingStoneTemplate;
 use crate::target::lock::{LockMatch, LockOutcome};
 
@@ -19,6 +20,21 @@ fn get(key: &str) -> Option<String> {
         }
         .to_string(),
     )
+}
+
+/// Each line as the VM adds it, read through `get`: a template that is missing or fills to
+/// nothing adds none.
+fn read(
+    lines: Vec<(TooltipText, TooltipTint)>,
+    get: &dyn Fn(&str) -> Option<String>,
+) -> Vec<(String, TooltipTint)> {
+    lines
+        .into_iter()
+        .filter_map(|(text, tint)| {
+            let text = text.text(Strings::Host(get));
+            (!text.is_empty()).then_some((text, tint))
+        })
+        .collect()
 }
 
 fn row(slot0: LockSlot) -> [LockSlot; MAX_LOCK_SLOTS] {
@@ -41,16 +57,18 @@ fn lines(
     outcome: LockOutcome,
     matched: Option<LockMatch>,
 ) -> Vec<(String, TooltipTint)> {
-    go_lock_lines(
-        GoLock {
-            slots: Some(slots),
-            state: GO_STATE_READY,
-            flag_locked,
-            outcome: Some(outcome),
-            matched,
-        },
-        &|entry| (entry == 5396).then(|| "Key to Searing Gorge".to_string()),
-        &|index| (index == 2).then(|| "Herbalism".to_string()),
+    read(
+        go_lock_lines(
+            GoLock {
+                slots: Some(slots),
+                state: GO_STATE_READY,
+                flag_locked,
+                outcome: Some(outcome),
+                matched,
+            },
+            &|entry| (entry == 5396).then(|| "Key to Searing Gorge".to_string()),
+            &|index| (index == 2).then(|| "Herbalism".to_string()),
+        ),
         &get,
     )
 }
@@ -164,7 +182,7 @@ fn a_meeting_stones_tooltip_adds_its_area_and_level_range() {
     let area = |id: u32| (id == 1581).then(|| "The Deadmines".to_string());
     let get = |key: &str| (key == "MEETINGSTONE_LEVEL").then(|| "Level %d-%d".to_string());
     assert_eq!(
-        go_handler_lines(Some(stone), &area, &get),
+        read(go_handler_lines(Some(stone), &area), &get),
         [
             ("The Deadmines".to_string(), TooltipTint::Gold),
             ("Level 15-25".to_string(), TooltipTint::Gold),
@@ -175,12 +193,9 @@ fn a_meeting_stones_tooltip_adds_its_area_and_level_range() {
         ..stone
     };
     assert_eq!(
-        go_handler_lines(Some(nowhere), &area, &get),
+        read(go_handler_lines(Some(nowhere), &area), &get),
         [("Level 15-25".to_string(), TooltipTint::Gold)],
         "no area row, no name line"
     );
-    assert!(
-        go_handler_lines(None, &area, &get).is_empty(),
-        "not a stone"
-    );
+    assert!(go_handler_lines(None, &area).is_empty(), "not a stone");
 }

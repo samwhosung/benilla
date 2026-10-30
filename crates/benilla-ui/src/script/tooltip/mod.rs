@@ -207,8 +207,11 @@ fn clear_content(model: &mut Model, h: FrameHandle) {
         t.wrapped[..used].fill(false);
         t.num_lines = 0;
         t.min_width = 0.0;
-        // Clear drops the subject and unregisters its health watcher (`0x5300ad`, `0x53007c`).
+        // Clear drops the subject and unregisters its health watcher (`0x5300ad`, `0x53007c`),
+        // and drops the game object and the corpse it kept (`0x5300b9`, `0x5300d1`).
         t.unit_guid = None;
+        t.object_guid = None;
+        t.corpse_guid = None;
     }
     // New content replaces a spell render still waiting on its view.
     model.spell_tooltip_waits.remove(&h);

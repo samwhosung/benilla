@@ -227,18 +227,35 @@ fn level_line(
     Some(fill(&get(key)?, &args))
 }
 
+/// Whom a unit build describes: the unit a token names at the call (`SetUnit`, the world
+/// publisher's `"mouseover"`), or a guid as the refresh holds it (`0x4919f2`).
+#[derive(Clone, Copy)]
+enum Subject<'a> {
+    Token(&'a str),
+    Guid(u64),
+}
+
 /// Render the unit tooltip for `token`'s current snapshot (`0x529fe0`); returns whether the unit
 /// existed. The clear first (`0x52a003`); no unit hides the tooltip through its own hide, shown bit
 /// then slot (`0x52a050`/`0x52a058`). A unit is held (`0x52a070`), its bar seeded and shown
 /// (`0x52a0e0`–`0x52a146`) before any line, and the lines end in the show (`0x52a711`/`0x52a71b`).
 fn render_unit(lua: &Lua, this: &Table, token: &str) -> mlua::Result<bool> {
+    render_subject(lua, this, Subject::Token(token))
+}
+
+/// [`render_unit`] over `subject`.
+fn render_subject(lua: &Lua, this: &Table, subject: Subject<'_>) -> mlua::Result<bool> {
     let h = frame_handle_of(lua, this)?;
     // A unit is its object, found by guid (`0x52a021`); guid 0 finds none.
     let (unit, viewer, req, me) = {
         let model = lua.app_data_mut::<Model>().expect("model app_data");
         // The unit's state carries the group record by guid, which the build reads for every unit
         // shown (`0x52a02b`).
-        let unit = crate::script::unit::view(lua, &model, token)
+        let unit = match subject {
+            Subject::Token(token) => crate::script::unit::view(lua, &model, token),
+            Subject::Guid(guid) => Some(crate::script::unit::view_of_guid(lua, &model, guid)),
+        };
+        let unit = unit
             .map(std::borrow::Cow::into_owned)
             .filter(|u| u.exists && u.guid != 0);
         let viewer = unit.as_ref().and_then(|u| viewer(lua, &model, u));
@@ -394,6 +411,64 @@ fn set_subject(lua: &Lua, h: FrameHandle, guid: Option<u64>) {
     }
 }
 
+/// `f` on tooltip `h`'s state.
+fn with_tip(lua: &Lua, h: FrameHandle, f: impl FnOnce(&mut crate::widget::TooltipState)) {
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    if let Some(KindState::Tooltip(t)) = model.arena.frame_mut(h).map(|f| &mut f.kind_state) {
+        f(t);
+    }
+}
+
+/// A tooltip with a backdrop takes `SetBackdropColor` of `0xc0d3bc`, the `0xff002e5a` `0x529010`
+/// writes (`0x52aa92`-`0x52aaaa`); `GameTooltip_OnHide` restores the default.
+fn tint_object_backdrop(lua: &Lua, h: FrameHandle) {
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    super::backdrop::set_color(&mut model, h, false, OBJECT_BACKDROP);
+}
+
+/// A game object line's colour as its tint names it.
+fn tint_colour(tint: TooltipTint) -> [f32; 4] {
+    match tint {
+        TooltipTint::White => WHITE,
+        TooltipTint::Red => RED,
+        TooltipTint::LockOpen => LOCK_OPEN,
+        TooltipTint::Skill { required, value } => {
+            super::tooltip_item::names::skill_color(required, value)
+        }
+        TooltipTint::Gold => GOLD,
+    }
+}
+
+/// What the game object builder reads of the object a guid names (`0x52aa20`), asked of the lent
+/// host as the build runs; the answer is `None` for no game object held under the guid
+/// (`0x52aa5e`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ObjectPlateQuery(pub u64);
+
+impl super::live::LiveQuery for ObjectPlateQuery {
+    type Answer = Option<ObjectPlate>;
+}
+
+/// A game object plate's content: the record's name (`0x5f8100`, empty without a record), then
+/// the type handler's lines (`0x52aad4`) and the lock lines (`0x52aae2`-`0x52ace7`), each read
+/// through the VM's strings as it is added.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ObjectPlate {
+    pub name: String,
+    pub lines: Vec<(super::TooltipText, TooltipTint)>,
+}
+
+/// What the corpse builder reads of the corpse a guid names (`0x52aef0`), asked of the lent host
+/// as the build runs: the answer is `None` for no corpse held under the guid (`0x52af1b`), else
+/// its owner's name from the name cache, `None` while the lookup waits on its callback
+/// (`0x52af77`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CorpsePlateQuery(pub u64);
+
+impl super::live::LiveQuery for CorpsePlateQuery {
+    type Answer = Option<Option<String>>;
+}
+
 /// Drive the `<name>StatusBar` child from a unit snapshot, as the builder (`0x52a0eb` range,
 /// `0x52a12e` value) and the health watcher (`0x529560`) do: the raw maximum and health through
 /// [`super::statusbar::set_health`], firing each `OnValueChanged` it makes; FrameXML's
@@ -456,6 +531,37 @@ impl super::UiScript {
         }
     }
 
+    /// `RefreshTooltipForUnit` (`0x4919d0`): while `GameTooltip` (`[0xb4b3c4]`) still shows
+    /// `guid`, its remembered unit (`+0x368`/`+0x36c`, `0x4919dc`-`0x4919ec`), which every clear
+    /// zeroes, the unit builder runs again over that guid (`0x4919f2` → `0x529fe0`): the clear,
+    /// the lines read as the call runs, the show. No anchor script and no event: those are the
+    /// publisher's alone (`0x49299a`, `0x4929b3`). Whether it rebuilt.
+    pub fn tooltip_unit_refresh(&mut self, guid: u64) -> bool {
+        let id = {
+            let mut model = self.model_mut();
+            let Some(h) = model.arena.lookup("GameTooltip") else {
+                return false;
+            };
+            let shows = matches!(
+                model.arena.frame(h).map(|f| &f.kind_state),
+                Some(KindState::Tooltip(t)) if guid != 0 && t.unit_guid == Some(guid)
+            );
+            if !shows {
+                return false;
+            }
+            model.frame_id(h)
+        };
+        let rebuilt = super::object::frame_wrapper(&self.lua, id)
+            .and_then(|wrapper| render_subject(&self.lua, &wrapper, Subject::Guid(guid)));
+        match rebuilt {
+            Ok(shown) => shown,
+            Err(e) => {
+                self.push_error(e);
+                false
+            }
+        }
+    }
+
     /// Show the world-mouseover unit tooltip: fire `OnTooltipSetDefaultAnchor`, render `token`,
     /// fire `UPDATE_MOUSEOVER_UNIT`. Call on a hover-target change; the render's show returns a
     /// fading plate to full alpha. `false` when there is no tooltip frame or no such unit.
@@ -492,66 +598,135 @@ impl super::UiScript {
         shown
     }
 
-    /// Show the world-mouseover GameObject tooltip (builder `0x52aa20`): the backdrop tinted, the
-    /// name in gold, then the caller's handler and lock lines. The anchor forks on the object's
-    /// `[vtbl+0x5c]`: true (`0x492a01`) owns it by `UIParent` in mode 6, `ANCHOR_CURSOR`
-    /// (`0x52ffe0(UIParent, 6, 0, 0)` at `0x492a1e`), which the tooltip's own update then keeps on
-    /// the cursor; false (`0x492a42`) fires `OnTooltipSetDefaultAnchor` for the default corner, as
-    /// units (`0x492983`) always do. `cursor` is that verdict.
+    /// Show the world-mouseover GameObject tooltip from given content: the backdrop tinted, the
+    /// name in gold, then `lines`, seated by `cursor` as [`Self::world_tooltip_object`] seats it.
     pub fn world_tooltip_gameobject(
         &mut self,
         name: &str,
         lines: &[(String, TooltipTint)],
         cursor: bool,
     ) -> bool {
-        self.world_plate(cursor, |lua, this, h| {
-            // A tooltip with a backdrop takes `SetBackdropColor` of `0xc0d3bc`, the `0xff002e5a`
-            // `0x529010` writes (`0x52aa92`-`0x52aaaa`); `GameTooltip_OnHide` restores the
-            // default.
-            {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                super::backdrop::set_color(&mut model, h, false, OBJECT_BACKDROP);
-            }
+        let Some((h, id)) = self.seat_world_plate(cursor) else {
+            return false;
+        };
+        self.build_plate(h, id, |lua, this, h| {
+            tint_object_backdrop(lua, h);
             append_line(lua, this, (name.to_string(), GOLD), None, false)?;
             for (text, tint) in lines {
-                let colour = match *tint {
-                    TooltipTint::White => WHITE,
-                    TooltipTint::Red => RED,
-                    TooltipTint::LockOpen => LOCK_OPEN,
-                    TooltipTint::Skill { required, value } => {
-                        super::tooltip_item::names::skill_color(required, value)
-                    }
-                    TooltipTint::Gold => GOLD,
-                };
-                append_line(lua, this, (text.clone(), colour), None, false)?;
+                append_line(lua, this, (text.clone(), tint_colour(*tint)), None, false)?;
             }
-            Ok(())
+            Ok(Some(true))
         })
     }
 
-    /// Show the world-mouseover corpse tooltip (builder `0x52aef0`): its one line, white
-    /// (`0x52afa7`), at the default corner (`0x492a7d`).
-    pub fn world_tooltip_corpse(&mut self, text: &str) -> bool {
-        self.world_plate(false, |lua, this, _| {
-            append_line(lua, this, (text.to_string(), WHITE), None, false)
+    /// The publisher's game object arm (`0x4929f6`) over `guid`: the anchor forks on the object's
+    /// `[vtbl+0x5c]`, true (`0x492a01`) owning it by `UIParent` in mode 6, `ANCHOR_CURSOR`
+    /// (`0x52ffe0(UIParent, 6, 0, 0)` at `0x492a1e`), which the tooltip's own update then keeps on
+    /// the cursor, false (`0x492a42`) firing `OnTooltipSetDefaultAnchor` for the default corner,
+    /// as units (`0x492983`) always do; `cursor` is that verdict. Then the builder `0x52aa20`
+    /// ([`Self::build_object`]).
+    pub fn world_tooltip_object(&mut self, guid: u64, cursor: bool) -> bool {
+        let Some((h, id)) = self.seat_world_plate(cursor) else {
+            return false;
+        };
+        self.build_object(h, id, guid)
+    }
+
+    /// `CGTooltip::OnLockKeyItem` (`0x52ad10`) on a found key record: while `GameTooltip` keeps a
+    /// game object (`+0x370`, `0x52ad34`-`0x52ad44`), the builder again over it (`0x52ad52`), with
+    /// no anchor. Whether it rebuilt.
+    pub fn tooltip_object_refresh(&mut self) -> bool {
+        match self.game_tooltip(|t| t.object_guid) {
+            Some((h, id, Some(guid))) => self.build_object(h, id, guid),
+            _ => false,
+        }
+    }
+
+    /// The publisher's corpse arm (`0x492a7d`) over `guid`: `OnTooltipSetDefaultAnchor`
+    /// (`0x492a94`), then the builder `0x52aef0` ([`Self::build_corpse`]).
+    pub fn world_tooltip_corpse(&mut self, guid: u64) -> bool {
+        let Some((h, id)) = self.seat_world_plate(false) else {
+            return false;
+        };
+        self.build_corpse(h, id, guid)
+    }
+
+    /// `CGTooltip::OnCorpseOwnerName` (`0x52afe0`) on a found name: while `GameTooltip` keeps a
+    /// corpse (`+0x388`, `0x52b004`-`0x52b014`), the builder again over it (`0x52b022`), with no
+    /// anchor. Whether it rebuilt.
+    pub fn tooltip_corpse_refresh(&mut self) -> bool {
+        match self.game_tooltip(|t| t.corpse_guid) {
+            Some((h, id, Some(guid))) => self.build_corpse(h, id, guid),
+            _ => false,
+        }
+    }
+
+    /// `CGTooltip::BuildGameObject` (`0x52aa20`) over `guid`, as the host reads it at the call
+    /// ([`ObjectPlateQuery`]): the clear (`0x52aa40`); no game object hides the tooltip
+    /// (`0x52aa6c`, `0x52aa76`); else the guid kept (`0x52aa8c`), the backdrop tinted, the record's
+    /// name in gold (`0x52aac0`), the handler's and the lock lines, and the show (`0x52acfa`).
+    fn build_object(&mut self, h: FrameHandle, id: u32, guid: u64) -> bool {
+        self.build_plate(h, id, |lua, this, h| {
+            let plate = super::live::ask(lua, &ObjectPlateQuery(guid)).flatten();
+            let Some(plate) = plate else {
+                return Ok(Some(false));
+            };
+            with_tip(lua, h, |t| t.object_guid = Some(guid));
+            tint_object_backdrop(lua, h);
+            append_line(lua, this, (plate.name, GOLD), None, false)?;
+            for (text, tint) in &plate.lines {
+                if let Some(line) = text.line(lua) {
+                    append_line(lua, this, (line, tint_colour(*tint)), None, false)?;
+                }
+            }
+            Ok(Some(true))
         })
     }
 
-    /// Seat `GameTooltip` as a world plate (the cursor, else the default-anchor script), clear it
-    /// (`0x530050`), let `fill` add the lines, and show what it holds.
-    fn world_plate(
+    /// `CGTooltip::BuildCorpse` (`0x52aef0`) over `guid`, as the host reads it at the call
+    /// ([`CorpsePlateQuery`]): the clear (`0x52aefd`); no corpse hides the tooltip (`0x52af2e`);
+    /// else the guid kept (`0x52af3e`) and, with the owner's name, `CORPSE_TOOLTIP` in white
+    /// (`0x52afb5`) and the show (`0x52afc8`). A name the cache lacks leaves it there, unshown
+    /// (`0x52af7e`), for the name's callback.
+    fn build_corpse(&mut self, h: FrameHandle, id: u32, guid: u64) -> bool {
+        self.build_plate(h, id, |lua, this, h| {
+            let owner = super::live::ask(lua, &CorpsePlateQuery(guid)).flatten();
+            let Some(owner) = owner else {
+                return Ok(Some(false));
+            };
+            with_tip(lua, h, |t| t.corpse_guid = Some(guid));
+            let Some(name) = owner else {
+                return Ok(None);
+            };
+            if let Some(template) = crate::strings::global(lua, "CORPSE_TOOLTIP") {
+                let line = fill(&template, &[Arg::S(&name)]);
+                append_line(lua, this, (line, WHITE), None, false)?;
+            }
+            Ok(Some(true))
+        })
+    }
+
+    /// `GameTooltip`, its id and what `f` reads of its state.
+    fn game_tooltip<T>(
         &mut self,
-        cursor: bool,
-        fill: impl FnOnce(&Lua, &Table, FrameHandle) -> mlua::Result<()>,
-    ) -> bool {
+        f: impl FnOnce(&crate::widget::TooltipState) -> T,
+    ) -> Option<(FrameHandle, u32, T)> {
+        let mut model = self.model_mut();
+        let h = model.arena.lookup("GameTooltip")?;
+        let read = match model.arena.frame(h).map(|f| &f.kind_state) {
+            Some(KindState::Tooltip(t)) => f(t),
+            _ => return None,
+        };
+        Some((h, model.frame_id(h), read))
+    }
+
+    /// Seat `GameTooltip` as a world plate, the cursor or the default-anchor script; `None` without
+    /// `GameTooltip` or `UIParent`.
+    fn seat_world_plate(&mut self, cursor: bool) -> Option<(FrameHandle, u32)> {
         let (h, id, root) = {
             let mut model = self.model_mut();
-            let Some(h) = model.arena.lookup("GameTooltip") else {
-                return false;
-            };
-            let Some(root) = model.arena.lookup("UIParent") else {
-                return false;
-            };
+            let h = model.arena.lookup("GameTooltip")?;
+            let root = model.arena.lookup("UIParent")?;
             (h, model.frame_id(h), model.frame_id(root))
         };
         if cursor {
@@ -561,6 +736,18 @@ impl super::UiScript {
         {
             self.push_error(e);
         }
+        Some((h, id))
+    }
+
+    /// A world builder's run on the tooltip `h`: the clear (`0x530050`), then `fill`, whose
+    /// `Some(true)` ends in the show of what it holds, `Some(false)` in the hide of a builder that
+    /// found no object (slot `0x84`), and `None` in neither. Whether it shows.
+    fn build_plate(
+        &mut self,
+        h: FrameHandle,
+        id: u32,
+        fill: impl FnOnce(&Lua, &Table, FrameHandle) -> mlua::Result<Option<bool>>,
+    ) -> bool {
         let wrapper = match super::object::frame_wrapper(&self.lua, id) {
             Ok(w) => w,
             Err(e) => {
@@ -569,14 +756,22 @@ impl super::UiScript {
             }
         };
         clear(&self.lua, h);
-        if let Err(e) = fill(&self.lua, &wrapper, h) {
-            self.push_error(e);
-            return false;
+        match fill(&self.lua, &wrapper, h) {
+            Ok(Some(true)) => {
+                show_or_hide_empty(&self.lua, h);
+                true
+            }
+            Ok(Some(false)) => {
+                super::visibility::set_shown(&self.lua, h, false);
+                false
+            }
+            Ok(None) => false,
+            Err(e) => {
+                self.push_error(e);
+                false
+            }
         }
-        show_or_hide_empty(&self.lua, h);
-        true
     }
-
     /// Show the minimap blip tooltip, from `Minimap`'s own hover probe `0x4eb0c0`: owned by
     /// `Minimap` itself (`0x4eb19c` keeps `this + 0x24`, pushed at `0x4eb57d`) in mode 6,
     /// `ANCHOR_CURSOR` (`0x4eb587`), so the tooltip's own update keeps it on the cursor; `text`, the

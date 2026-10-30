@@ -328,6 +328,12 @@ pub struct TooltipState {
     /// health watcher (`0x467e70`, registered at `0x52a0a8`) drives the bar; a `set_unit` push of
     /// that unit, under any token, re-drives it.
     pub unit_guid: Option<u64>,
+    /// The game object this tooltip shows (`+0x370`/`+0x374`, stored at `0x52aa8c`), which the lock
+    /// key's record callback builds again (`0x52ad34`); every clear zeroes it (`0x5300b9`).
+    pub object_guid: Option<u64>,
+    /// The corpse this tooltip shows (`+0x388`/`+0x38c`, stored at `0x52af3e`), which the owner's
+    /// name callback builds again (`0x52b004`); every clear zeroes it (`0x5300d1`).
+    pub corpse_guid: Option<u64>,
     /// The unit's health as the bar was last driven with it: the watcher's copy of the field
     /// (`0x4667a0`), which a values update compares before calling it (`0x4655bb`).
     pub unit_health: u32,

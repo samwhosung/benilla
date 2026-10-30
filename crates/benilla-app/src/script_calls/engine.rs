@@ -73,7 +73,15 @@ impl RecordAsks<'_, '_> {
     pub(crate) fn apply(&mut self, ask: RecordAsk) {
         use crate::query_cache::Ask;
         match ask {
-            RecordAsk::PlayerName(guid) | RecordAsk::ItemBuildName(guid) => {
+            // `UnitName`'s miss keeps its callback (`0x5171f5`, `0x517290`), once (`0x5171f1`).
+            RecordAsk::PlayerName(guid) => {
+                if let Some(names) = self.names.as_deref() {
+                    if names.resolve_player(guid, Ask::Event(&self.net)).is_none() {
+                        names.wait_for_player(guid, crate::names::NameCallback::UnitName);
+                    }
+                }
+            }
+            RecordAsk::ItemBuildName(guid) => {
                 if let Some(names) = self.names.as_deref() {
                     let _ = names.resolve_player(guid, Ask::Event(&self.net));
                 }

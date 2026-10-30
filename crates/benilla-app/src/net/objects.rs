@@ -427,6 +427,12 @@ fn run_record_callback(
             ..Default::default()
         }),
         Cb::ActionSlots => {}
+        // The game object plate's rebuild, for a found record only (`0x52ad2f`).
+        Cb::LockKey if answered => sc.item_lane.push(crate::item_watch::Run {
+            notice: Some(crate::item_watch::ItemNotice::LockKeyRecord),
+            ..Default::default()
+        }),
+        Cb::LockKey => {}
         Cb::Swap
         | Cb::AutoEquip
         | Cb::ItemCooldown

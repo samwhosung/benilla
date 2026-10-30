@@ -266,6 +266,7 @@ fn rebuild_at(notice: &ItemNotice) -> Option<Rebuild> {
         | ItemNotice::Enchantment { .. }
         | ItemNotice::TradeRecord { .. }
         | ItemNotice::TooltipRecord { .. }
+        | ItemNotice::LockKeyRecord
         | ItemNotice::ActionRecord { .. } => None,
     }
 }
@@ -284,8 +285,8 @@ fn rebuild_lists(script: &mut UiScript) {
 /// (`0x5d85d9`, `0x5d85e8`, `0x5d8606`) and the destroy (`0x5d87b2` before `0x5d87c1`), and behind
 /// both in the stack count's (`0x5d94ff`, `0x5d950e`, `0x5d9519`); the spell charges'
 /// `BAG_UPDATE_COOLDOWN` (`0x4f93d0`); a trade getter's record callback's `TRADE_UPDATE`
-/// (`0x4c034f`); the tooltips' record callbacks (`0x52e530`, `0x52f820`); and every other run's
-/// bag events, then its signals.
+/// (`0x4c034f`); the tooltips' record callbacks (`0x52e530`, `0x52f820`, `0x52ad10`); and every
+/// other run's bag events, then its signals.
 fn fire_tail(
     vm: &mut RunVm,
     sink: &mut crate::ui_action::MessageSink,
@@ -317,6 +318,11 @@ fn fire_tail(
         }
         ItemNotice::TooltipRecord { entry } => {
             on_vm(vm, |script| script.answer_item_tooltips(entry));
+        }
+        ItemNotice::LockKeyRecord => {
+            on_vm(vm, |script| {
+                script.tooltip_object_refresh();
+            });
         }
         _ => {
             if rebuild == Some(Rebuild::BeforeBags) {

@@ -85,6 +85,10 @@ pub(crate) enum ItemNotice {
     /// recounts the entry (`0x4e5b8a` → `0x4e5c70`), for a found record only (`0x4e5b86`). It
     /// concerns no item of ours.
     ActionRecord { entry: u32 },
+    /// The key record a game object plate's lock line waited on landed: its callback `0x52ad10`
+    /// builds `GameTooltip`'s game object plate again while it keeps one (`0x52ad34`-`0x52ad52`),
+    /// for a found record only (`0x52ad2f`). It concerns no item of ours.
+    LockKeyRecord,
 }
 
 /// What a notice asks of the trade's own column (`0x4bfb10`, `0x4bfb60`).
@@ -360,9 +364,10 @@ impl ItemNotice {
             Self::Seat { old, new } => old.iter().chain(new.iter()).copied().collect(),
             Self::Bag { entries } => entries.clone(),
             Self::Visible { old, new } => vec![*old, *new],
-            Self::TradeRecord { .. } | Self::TooltipRecord { .. } | Self::ForeignVisible => {
-                Vec::new()
-            }
+            Self::TradeRecord { .. }
+            | Self::TooltipRecord { .. }
+            | Self::LockKeyRecord
+            | Self::ForeignVisible => Vec::new(),
         }
     }
 

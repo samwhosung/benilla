@@ -89,6 +89,16 @@ impl NoticeFiring<'_, '_> {
             drunk(script, &mut self.sink, guid, old, new);
             return false;
         }
+        if let FieldNotice::TooltipUnit { guid } = notice {
+            if self.holds_unit(guid) {
+                script.tooltip_unit_refresh(guid);
+            }
+            return false;
+        }
+        if notice == FieldNotice::CorpsePlate {
+            script.tooltip_corpse_refresh();
+            return false;
+        }
         if notice == FieldNotice::ExploredZones {
             // The bytes as the watcher's packet left them, as the shapeshift offset reads the
             // form byte.
@@ -161,6 +171,16 @@ impl NoticeFiring<'_, '_> {
 }
 
 impl NoticeFiring<'_, '_> {
+    /// Whether the object manager holds `guid` as a unit as of the notice's place (`0x468460` with
+    /// mask 8, `0x491a1a`).
+    fn holds_unit(&self, guid: u64) -> bool {
+        self.index
+            .as_ref()
+            .and_then(|i| i.0.get(&guid))
+            .and_then(|&e| self.views.get(e).ok())
+            .is_some_and(crate::net::ObjectStore::is_unit)
+    }
+
     /// The unit tooltip's own watcher on the health of the unit it shows (`0x529560`, which the
     /// render registers on the object, `0x52a0a8`), after the bridge's: `guid`'s health as its
     /// packet left it.
@@ -623,7 +643,9 @@ pub(crate) fn fire(
         | FieldNotice::Professions
         | FieldNotice::PortraitMark { .. }
         | FieldNotice::PetMacros
-        | FieldNotice::PetGuidSet { .. } => {}
+        | FieldNotice::PetGuidSet { .. }
+        | FieldNotice::TooltipUnit { .. }
+        | FieldNotice::CorpsePlate => {}
         // Put on the trainer lane by the packet's handler ([`crate::ui_trainer::TrainerPasses`]).
         FieldNotice::TrainerPass
         | FieldNotice::AutoMoveStop
