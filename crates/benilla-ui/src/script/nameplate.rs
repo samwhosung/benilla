@@ -593,8 +593,9 @@ impl UiScript {
     /// The gate `0x60f600` on `guid` inside its packet, from `InvalidateNameDesc` (`0x607050` at
     /// `0x60706a`), as the lent host judges it ([`PlateGateQuery`]): a unit it gives a plate and
     /// has none is bound (`0x6086e0`) and shown, its seat left for the frame's layout
-    /// (`0x608ce0`); one it refuses has its plate released (`0x60f742`). With no host to ask,
-    /// nothing moves.
+    /// (`0x608ce0`); one it keeps a plate on has its level and skull refreshed while the latch is
+    /// set (`0x60875f` → `0x7cbb40`), as the frame's gate does; one it refuses has its plate
+    /// released (`0x60f742`). With no host to ask, nothing moves.
     pub fn gate_nameplate(&mut self, guid: u64) {
         let lua = self.lua();
         let Some(verdict) = super::live::ask(lua, &PlateGateQuery(guid)) else {
@@ -606,11 +607,14 @@ impl UiScript {
         };
         let lua = self.lua();
         let built = {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            if model.arena.lookup("WorldFrame").is_none()
-                || model.nameplates.geometry.is_none()
-                || model.nameplates.assigned.contains_key(&guid)
-            {
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            if model.arena.lookup("WorldFrame").is_none() || model.nameplates.geometry.is_none() {
+                return;
+            }
+            if model.nameplates.assigned.contains_key(&guid) {
+                if let Some(i) = bound_slot(&model, guid).filter(|_| model.nameplates.levels_due) {
+                    Plate::level(&mut model, i, &unit);
+                }
                 return;
             }
             usize::from(free_slot(&model).is_none())

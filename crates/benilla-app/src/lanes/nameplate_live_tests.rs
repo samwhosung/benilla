@@ -331,6 +331,42 @@ fn a_drunk_player_reads_a_lower_level_on_the_plate_of_a_unit_it_can_attack() {
     );
 }
 
+/// `InvalidateNameDesc`'s gate on a unit that keeps its plate refreshes its level while the latch
+/// is set (`0x60706a` → `0x6086e0`, `0x60875f` → `0x7cbb40`): our level moves to the boar's,
+/// setting the latch (`0x5edb93`), and the boar's name update in the same frame (`0x604651` →
+/// `0x491a2e`) recolours its level yellow at once, where the frame's gate would only after the
+/// packets.
+#[test]
+fn a_packets_gate_on_a_kept_plate_refreshes_its_level_on_the_latch() {
+    let mut app = plated_client(
+        r#"local r, g, b = Level():GetTextColor()
+        return Byte(r) .. "," .. Byte(g) .. "," .. Byte(b)"#,
+    );
+    record(&mut app, BOAR_ENTRY, "Boar");
+    assert_eq!(
+        frame(
+            &mut app,
+            vec![
+                values(BOAR, &[(FIELD_UNIT_LEVEL, 20)]),
+                values(WOLF, &health(70))
+            ]
+        ),
+        ["UNIT_HEALTH:target:255,25,25"],
+        "a level 1 player sees level 20 red"
+    );
+    assert_eq!(
+        frame(
+            &mut app,
+            vec![
+                values(ME, &[(FIELD_UNIT_LEVEL, 20)]),
+                values(BOAR, &[(OBJECT_ENTRY, BOAR_ENTRY)]),
+                values(WOLF, &health(60)),
+            ]
+        ),
+        ["UNIT_HEALTH:target:255,255,0"]
+    );
+}
+
 /// A creature record cached for `entry`.
 fn record(app: &mut App, entry: u32, name: &str) {
     app.world_mut()
