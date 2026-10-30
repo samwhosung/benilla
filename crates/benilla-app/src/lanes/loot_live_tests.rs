@@ -758,3 +758,86 @@ fn a_monster_move_closes_our_loot_inside_its_packet() {
         },
     );
 }
+
+/// A chest, `GAMEOBJECT_TYPE_ID` 3.
+const CHEST: u64 = 0xF110_0000_0000_00AE;
+/// Opening, an `OPEN_LOCK` spell.
+const OPENING: u32 = 3365;
+
+/// Our Opening's GO on the chest whose window we hold: the precast end's close takes that window
+/// and its latch as the go's legs return (`0x6e7fc5`), then the player tail arms the chest as the
+/// loot target (`0x6e831b` → `SetLootTarget 0x5ed5f0`), so the latch the GO arms is the one that
+/// stands for the response it asks.
+#[test]
+fn a_go_on_the_chest_we_loot_keeps_the_latch_it_arms() {
+    use benilla_protocol::messages::ObjectType;
+    let mut c = client();
+    c.frame(vec![vec![SessionEvent::ObjectCreate {
+        guid: CHEST,
+        kind: EntityKind::GameObject,
+        display_id: None,
+        position: [0.0; 3],
+        orientation: 0.0,
+        scale: 1.0,
+        speeds: None,
+        mover: None,
+        transport_progress: None,
+        transport: None,
+        spline: None,
+        fields: benilla_protocol::ObjectFields::from_pairs(&[(2, 0x21), (21, 3)])
+            .into_created(ObjectType::GameObject),
+    }]]);
+    c.ask_loot(CHEST);
+    c.frame(vec![vec![response(CHEST, 0, &[LINEN])]]);
+    assert_eq!(c.seen(), ["LOOT_OPENED:nil"]);
+    let world = c.app.world_mut();
+    world.insert_resource(crate::ui_action::Spells {
+        catalog: benilla_formats::SpellCatalog::from_displays(std::collections::HashMap::from([(
+            OPENING,
+            benilla_formats::SpellDisplay {
+                open_lock: Some(benilla_formats::OpenLock {
+                    lock_type: 1,
+                    effect: 0,
+                }),
+                ..Default::default()
+            },
+        )])),
+        ..crate::ui_action::Spells::empty_for_tests()
+    });
+    let me = world.resource::<crate::net::GuidIndex>().0[&ME];
+    world.entity_mut(me).insert(crate::creature_anim::Precast {
+        spell_id: OPENING,
+        busy: true,
+    });
+    c.sent();
+    c.frame(vec![vec![SessionEvent::SpellGo {
+        caster: ME,
+        spell_id: OPENING,
+        cast_flags: 0x100,
+        hits: vec![],
+        misses: vec![],
+        target: None,
+        go_target: Some(CHEST),
+        target_mask: 0,
+        source: None,
+        dest: None,
+        ammo_display_id: None,
+        item_caster: None,
+        unit_caster: ME,
+    }]]);
+    assert_eq!(c.seen(), ["LOOT_CLOSED:nil"]);
+    let sent = c.sent();
+    assert_eq!(
+        sent.iter()
+            .filter(|s| s.starts_with("LootRelease") && s.contains(&format!("{CHEST}")))
+            .count(),
+        1,
+        "the window released at the GO: {sent:?}"
+    );
+    assert_eq!(c.app.world().resource::<LootState>().source(), None);
+    assert_eq!(
+        c.app.world().resource::<LootLatch>().0,
+        Some(CHEST),
+        "the chest stays the loot target"
+    );
+}

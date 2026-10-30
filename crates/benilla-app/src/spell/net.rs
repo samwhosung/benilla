@@ -38,9 +38,11 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::CastResult, on_cast_result)
         .net_handler(K::SpellStart, on_spell_start)
         .net_handler(K::SpellGo, on_spell_go)
-        // `HandleSpellGo`'s tail in its order: the repeat hook (`0x6e81e7`), then the cooldown
-        // inserts (`0x6e8425`-`0x6e8570`).
+        // `HandleSpellGo`'s tail in its order, each after the edits the one before it queued have
+        // applied, the precast end's loot close among them: the repeat hook (`0x6e81e7`), the
+        // chest's loot target (`0x6e831b`), then the cooldown inserts (`0x6e8425`-`0x6e8570`).
         .net_handler(K::SpellGo, on_go_repeat)
+        .net_handler(K::SpellGo, on_go_loot_target)
         .net_handler(K::SpellGo, on_go_cooldowns)
         .net_handler(K::SpellChainTargets, on_spell_chain_targets)
         .net_handler(K::SpellFailedOther, on_spell_failed_other)
@@ -503,7 +505,6 @@ fn on_spell_go(
                 &l.self_guid,
                 &sc.stores,
                 &mut sc.go_lid,
-                &mut sc.loot_latch,
                 l.spells.as_deref(),
                 (&sc.edits, engaged),
                 l.play_seq.next(),
@@ -532,14 +533,37 @@ fn on_spell_go(
 }
 
 /// The go's tradeskill repeat hook ([`crate::ui_tradeskill::repeat_hook_at_go`]), between its
-/// legs and its cooldown inserts.
+/// legs and its chest's loot target.
 fn on_go_repeat(In(ev): In<SessionEvent>, world: &mut World) {
     if let ev @ SessionEvent::SpellGo { .. } = ev {
         crate::ui_tradeskill::repeat_hook_at_go(ev, world);
     }
 }
 
-/// The go's cooldown inserts ([`go_cooldown_inserts`]), after its repeat hook.
+/// The go's chest loot target ([`arm_chest_loot_target`]), after its repeat hook and the precast
+/// end's loot close, which the legs' edits made as they returned.
+fn on_go_loot_target(In(ev): In<SessionEvent>, l: Lifecycle, mut sc: Scene) {
+    if let SessionEvent::SpellGo {
+        caster,
+        spell_id,
+        go_target,
+        ..
+    } = ev
+    {
+        arm_chest_loot_target(
+            caster,
+            spell_id,
+            go_target,
+            &l.self_guid,
+            &l.index,
+            &sc.stores,
+            l.spells.as_deref(),
+            &mut sc.loot_latch,
+        );
+    }
+}
+
+/// The go's cooldown inserts ([`go_cooldown_inserts`]), after its chest's loot target.
 fn on_go_cooldowns(In(ev): In<SessionEvent>, mut l: Lifecycle, mut sc: Scene) {
     if let SessionEvent::SpellGo {
         caster,
@@ -1376,6 +1400,43 @@ fn spell_start(
 /// loot-target latch (`0x6e830c`).
 const GO_TYPE_CHEST: i32 = 3;
 
+/// The GO's player tail arms a chest as the loot target, at this packet, not at the loot response:
+/// `HandleSpellGo 0x6e7a70` reaches `0x6e831b call SetLootTarget 0x5ed5f0`, which writes
+/// `[player+0x1d28]` and plays Loot 50. Gates: a spell with a record (`0x6e7cf7`), the local player
+/// cast it (`0x6e81b6`), the spell has `OPEN_LOCK` (0x21) or `OPEN_LOCK_ITEM` (0x3b)
+/// (`0x6e81f9`/`0x6e8202`), and the target is a CHEST (`0x6e82df`–`0x6e830c`). The reference reads
+/// the target off a one-entry hit list (`0x6e82c1`); vmangos sends a GameObject target in
+/// `SpellCastTargets`, so this reads `go_target`, a single guid: the same condition. It comes after
+/// the precast end's loot close (`0x6e7fc5`) and the repeat hook (`0x6e81e7`), so a close of the
+/// chest's own window leaves the latch this arms. The pose needs no kick:
+/// [`crate::ui_loot::LootKneel`] recomputes every frame.
+fn arm_chest_loot_target(
+    caster: u64,
+    spell_id: u32,
+    go_target: Option<u64>,
+    self_guid: &SelfGuid,
+    index: &GuidIndex,
+    stores: &Query<&mut ObjectStore>,
+    spells: Option<&Spells>,
+    loot_latch: &mut crate::ui_loot::LootLatch,
+) {
+    let (Some(go_guid), true) = (go_target, self_guid.0 == Some(caster)) else {
+        return;
+    };
+    let is_open_lock = spells
+        .and_then(|s| s.catalog.get(spell_id))
+        .is_some_and(|display| display.open_lock.is_some());
+    let is_chest = index
+        .0
+        .get(&go_guid)
+        .and_then(|&e| stores.get(e).ok())
+        .is_some_and(|store| store.0.gameobject_type_id() == GO_TYPE_CHEST);
+    if is_open_lock && is_chest {
+        debug!("net: spell go — chest {go_guid:#x} becomes the loot target (kneel arm)");
+        loot_latch.0 = Some(go_guid);
+    }
+}
+
 /// `SMSG_SPELL_GO`: the cast launched. The server schedules damage off `Spell.dbc` Speed; the
 /// packet carries the hit and miss lists and the ammo display id, and the flight is rebuilt from
 /// the same Speed column ([`SpellGoTargets`]).
@@ -1400,8 +1461,6 @@ fn spell_go(
     self_guid: &SelfGuid,
     stores: &Query<&mut ObjectStore>,
     go_lid: &mut MessageWriter<crate::go_anim::GoLidOpen>,
-    // The loot-target latch, armed here for a chest (`0x6e831b`).
-    loot_latch: &mut crate::ui_loot::LootLatch,
     spells: Option<&Spells>,
     // The precast edits, the attack lock the GO-deferred auto-attack start gates on (`Engaged`,
     // the reference's `[player+0xc48]`, `0x6e83e7`), and the cast core.
@@ -1442,28 +1501,6 @@ fn spell_go(
     let (edits, engaged) = attack_ctx;
     // The guid the GO-deferred auto-attack starts at, for the caller to run StartAttack at.
     let mut deferred = None;
-    // A chest becomes the loot target at this packet, not at the loot response: `HandleSpellGo
-    // 0x6e7a70` reaches `0x6e831b call SetLootTarget 0x5ed5f0`, which writes `[player+0x1d28]` and
-    // plays Loot 50. Gates: the local player cast it (`0x6e81b6`), the spell has `OPEN_LOCK`
-    // (0x21) or `OPEN_LOCK_ITEM` (0x3b) (`0x6e81f9`/`0x6e8202`), and the target is a CHEST
-    // (`0x6e82df`–`0x6e830c`). The reference reads the target off a one-entry hit list
-    // (`0x6e82c1`); vmangos sends a GameObject target in `SpellCastTargets`, so this reads
-    // `go_target`, a single guid: the same condition. The pose needs no kick:
-    // [`crate::ui_loot::LootKneel`] recomputes every frame.
-    if self_guid.0 == Some(caster) {
-        if let Some(go_guid) = go_target {
-            let is_open_lock = display.open_lock.is_some();
-            let is_chest = index
-                .0
-                .get(&go_guid)
-                .and_then(|&e| stores.get(e).ok())
-                .is_some_and(|store| store.0.gameobject_type_id() == GO_TYPE_CHEST);
-            if is_open_lock && is_chest {
-                debug!("net: spell go — chest {go_guid:#x} becomes the loot target (kneel arm)");
-                loot_latch.0 = Some(go_guid);
-            }
-        }
-    }
     // Our own launch. The bar's STOP is not fired here: `0x6e7a70` reaches neither 0x152 site,
     // and the cast result ahead of the GO fired it ([`cast_result`]).
     if self_guid.0 == Some(caster) {
@@ -2532,7 +2569,6 @@ mod tests {
                             &self_guid,
                             &stores,
                             &mut go_lid,
-                            &mut crate::ui_loot::LootLatch::default(),
                             spells.as_deref(),
                             (&edits, false),
                             1,
@@ -3479,7 +3515,6 @@ mod tests {
                         &self_guid,
                         &stores,
                         &mut go_lid,
-                        &mut crate::ui_loot::LootLatch::default(),
                         Some(&spells),
                         (&edits, false),
                         1,
@@ -3674,7 +3709,6 @@ mod tests {
                         &self_guid,
                         &stores,
                         &mut go_lid,
-                        &mut crate::ui_loot::LootLatch::default(),
                         Some(&spells),
                         (&edits, false),
                         1,
@@ -4042,7 +4076,6 @@ mod tests {
                             &self_guid,
                             &stores,
                             &mut go_lid,
-                            &mut crate::ui_loot::LootLatch::default(),
                             Some(&spells),
                             (&edits, engaged),
                             1,

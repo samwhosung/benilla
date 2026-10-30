@@ -122,7 +122,6 @@ impl GoRig {
                         &self_guid,
                         &stores,
                         &mut go_lid,
-                        &mut crate::ui_loot::LootLatch::default(),
                         Some(&*spells),
                         (&edits, false),
                         1,
