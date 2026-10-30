@@ -78,9 +78,6 @@ pub(crate) enum SpellKitSound {
         entity: Entity,
         spell_id: u32,
         kit_sound: u32,
-        /// A stage-2 play (`0x60f383`), the kind a display rebuild plays again for the channel
-        /// (`0x612b2b`) and each aura slot (`0x5ff130`).
-        state: bool,
         /// Its packet's place ([`SpellKitFx::at`]), which a hold loop keeps for
         /// [`Self::Rebuilt`].
         at: Option<crate::lanes::Stamp>,
@@ -98,11 +95,19 @@ pub(crate) enum SpellKitSound {
     /// Stop this kit's sound on the unit as its aura leaves (`0x614150`, 0.15 s fade).
     StopKit { entity: Entity, kit_sound: u32 },
     /// A display rebuild at `at` (`0x60abe0`): its loop `0x60ac10` stops each of the unit's
-    /// effects, fading each one's sound (`0x6203e0`, 0.15 s at `0x6204af`). The unit's hold loop
-    /// goes if it rang before `at`, unless the rebuild rings its kit again: the channel's
-    /// (`0x612a30`) or an aura slot's (`0x5ff130`).
+    /// effects, fading each one's sound over 0.15 s (`0x6203e0`, `0x6204b6` → `0x7a5a10`), so the
+    /// unit's hold loop fades if it rang before `at`.
     Rebuilt {
         entity: Entity,
+        at: crate::lanes::Stamp,
+    },
+    /// The rebuild's replay at its place `at` of a kit it plays again, an aura slot's state kit
+    /// (`0x5ff130` at `0x60ada6`) or the channel's (`0x612a30` at `0x60adad`): the unit's sound
+    /// on that kit fades as the rebuild stopped its effect, and the kit rings afresh.
+    Replay {
+        entity: Entity,
+        spell_id: u32,
+        kit_sound: u32,
         at: crate::lanes::Stamp,
     },
 }
@@ -625,7 +630,6 @@ fn play_kit(
             entity,
             spell_id,
             kit_sound,
-            state: play.stage_2,
             at: out.at,
         });
     }
@@ -930,7 +934,6 @@ pub(super) fn route_cast_visuals(
                             entity: ev.entity,
                             spell_id: ev.spell_id,
                             kit_sound,
-                            state: false,
                             at: ev.at,
                         });
                     }
@@ -1224,7 +1227,6 @@ pub(super) fn route_cast_visuals(
                         entity,
                         spell_id: cur,
                         kit_sound,
-                        state: true,
                         at: None,
                     });
                 }
@@ -1415,7 +1417,6 @@ pub(crate) fn arm_aura_state_fx(
                     entity,
                     spell_id,
                     kit_sound,
-                    state: true,
                     at: aura_at.get(&entity).copied(),
                 });
             }
@@ -1660,6 +1661,53 @@ pub(super) fn arm_morph_latch(
     }
     // The latch dies with a despawned unit.
     latch.0.retain(|e, _| units.contains(*e));
+}
+
+/// The sound half of the rebuild's replay (`0x60abe0`): the aura slots' state kits (`0x5ff130` at
+/// `0x60ada6`), then the channel's kit (`0x612a30` at `0x60adad`), played again as kind 2, ring
+/// afresh at the rebuild's place over the sounds its loop faded. Their models re-arm in
+/// `crate::entities::spell_fx`.
+pub(crate) fn replay_rebuilt_kit_sounds(
+    mut swaps: MessageReader<crate::entities::DisplaySwapped>,
+    units: Query<&ObjectStore>,
+    visuals: Option<Res<SpellVisuals>>,
+    spells: Option<Res<crate::ui_action::Spells>>,
+    mut sounds: MessageWriter<SpellKitSound>,
+) {
+    for swap in swaps.read() {
+        let (Some(at), Ok(store)) = (swap.at, units.get(swap.entity)) else {
+            continue; // a game object's or corpse's new id, or a unit gone
+        };
+        let (Some(visuals), Some(spells)) = (visuals.as_deref(), spells.as_deref()) else {
+            continue; // no client data
+        };
+        let mut auras: Vec<u32> = Vec::new();
+        for spell_id in store.0.unit_aura_ids().filter(|&s| s != 0) {
+            if !auras.contains(&spell_id) {
+                auras.push(spell_id);
+            }
+        }
+        let state = auras.into_iter().map(|spell_id| {
+            let kit = resolve_kit(spells, &visuals.0, spell_id, |s| s.state, || None);
+            (spell_id, kit)
+        });
+        let channel = Some(store.0.unit_channel_spell())
+            .filter(|&c| c != 0)
+            .map(|spell_id| {
+                let kit = resolve_kit(spells, &visuals.0, spell_id, |s| s.channel, || None);
+                (spell_id, kit)
+            });
+        for (spell_id, kit) in state.chain(channel) {
+            if let Some(kit_sound) = kit.and_then(|k| k.sound) {
+                sounds.write(SpellKitSound::Replay {
+                    entity: swap.entity,
+                    spell_id,
+                    kit_sound,
+                    at,
+                });
+            }
+        }
+    }
 }
 
 /// The rebuild's impact-kit replay (the tail of `0x60abe0`): a display swap with the latch armed

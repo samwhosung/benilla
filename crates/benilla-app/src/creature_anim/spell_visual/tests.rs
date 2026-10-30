@@ -680,6 +680,120 @@ fn a_pushed_kit_carries_its_packets_place() {
     assert_eq!(places, [(unit, Some(at))]);
 }
 
+/// The rebuild replays the aura slots' state kits (`0x5ff130` at `0x60ada6`), then the channel's
+/// (`0x612a30` at `0x60adad`), as kind 2: each sound rings afresh at the rebuild's place, an aura
+/// in two slots once. A game object's new id replays nothing.
+#[test]
+fn a_rebuild_rings_the_aura_and_channel_kits_again() {
+    use benilla_protocol::field::{FIELD_UNIT_AURA, FIELD_UNIT_CHANNEL_SPELL};
+    const AURA: u32 = 1459; // Arcane Intellect
+    const AURA_VISUAL: u32 = 150;
+    const AURA_KIT: u32 = 401;
+    const AURA_SOUND: u32 = 4001;
+    const CHANNEL: u32 = 5143; // Arcane Missiles
+    const CHANNEL_VISUAL: u32 = 151;
+    const CHANNEL_KIT: u32 = 402;
+    const AM_HUM: u32 = 3136;
+    let mut app = App::new();
+    app.add_message::<crate::entities::DisplaySwapped>()
+        .add_message::<SpellKitSound>()
+        .insert_resource(SpellVisuals(SpellVisualCatalog::from_tables(
+            HashMap::from([
+                (
+                    AURA_VISUAL,
+                    VisualStages {
+                        state: AURA_KIT,
+                        ..Default::default()
+                    },
+                ),
+                (
+                    CHANNEL_VISUAL,
+                    VisualStages {
+                        channel: CHANNEL_KIT,
+                        ..Default::default()
+                    },
+                ),
+            ]),
+            HashMap::from([
+                (
+                    AURA_KIT,
+                    VisualKit {
+                        sound: Some(AURA_SOUND),
+                        ..Default::default()
+                    },
+                ),
+                (
+                    CHANNEL_KIT,
+                    VisualKit {
+                        sound: Some(AM_HUM),
+                        ..Default::default()
+                    },
+                ),
+            ]),
+        )))
+        .insert_resource(crate::ui_action::Spells {
+            catalog: SpellCatalog::from_displays(HashMap::from([
+                (
+                    AURA,
+                    SpellDisplay {
+                        visual: AURA_VISUAL,
+                        ..Default::default()
+                    },
+                ),
+                (
+                    CHANNEL,
+                    SpellDisplay {
+                        visual: CHANNEL_VISUAL,
+                        ..Default::default()
+                    },
+                ),
+            ])),
+            ..crate::ui_action::Spells::empty_for_tests()
+        })
+        .add_systems(Update, super::replay_rebuilt_kit_sounds);
+    let unit = app
+        .world_mut()
+        .spawn(crate::net::ObjectStore(
+            benilla_protocol::ObjectFields::from_pairs(&[
+                (FIELD_UNIT_AURA, AURA),
+                (FIELD_UNIT_AURA + 1, AURA),
+                (FIELD_UNIT_CHANNEL_SPELL, CHANNEL),
+            ]),
+        ))
+        .id();
+    let at = crate::lanes::stamp();
+    let mut swaps = app
+        .world_mut()
+        .resource_mut::<Messages<crate::entities::DisplaySwapped>>();
+    swaps.write(crate::entities::DisplaySwapped {
+        entity: unit,
+        at: Some(at),
+    });
+    swaps.write(crate::entities::DisplaySwapped {
+        entity: unit,
+        at: None,
+    });
+    app.update();
+    let replays: Vec<_> = app
+        .world_mut()
+        .resource_mut::<Messages<SpellKitSound>>()
+        .drain()
+        .filter_map(|ev| match ev {
+            SpellKitSound::Replay {
+                entity,
+                spell_id,
+                kit_sound,
+                at,
+            } => Some((entity, spell_id, kit_sound, at)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        replays,
+        [(unit, AURA, AURA_SOUND, at), (unit, CHANNEL, AM_HUM, at)]
+    );
+}
+
 /// The ranged weapon-visual merge (`0x60d450`): a spell with `Attributes & 0x2` fills every zero
 /// slot of its own row from the caster's weapon visual; a non-ranged spell never looks.
 #[test]
@@ -2630,9 +2744,8 @@ fn esc_with_a_cursor_up_leaves_the_running_channels_hold_and_loop() {
                 entity,
                 spell_id,
                 kit_sound: AM_HUM,
-                state,
                 at,
-            } => loops.rang(entity, (spell_id, AM_HUM), state, at),
+            } => loops.rang(entity, (spell_id, AM_HUM), at),
             SpellKitSound::StopHold { entity, spell_id } => {
                 loops.stop_hold(entity, spell_id);
             }
@@ -2678,9 +2791,8 @@ fn a_go_stops_the_running_auto_repeat_spells_hold_and_loop_on_its_caster() {
                     entity,
                     spell_id,
                     kit_sound: AUTO_SHOT_LOOP,
-                    state,
                     at,
-                } => loops.rang(entity, (spell_id, AUTO_SHOT_LOOP), state, at),
+                } => loops.rang(entity, (spell_id, AUTO_SHOT_LOOP), at),
                 SpellKitSound::StopHold { entity, spell_id } => {
                     loops.stop_hold(entity, spell_id);
                 }

@@ -651,11 +651,15 @@ fn publish_world_units(
 /// A display swap and a rig heal, then the frame's kit starts. A swap or heal ends what the unit
 /// held before its visual goes, so none of this frame's starts spawns on the body it takes; the
 /// starts then go in wire order, and those the packets put before the rebuild end at its place
-/// ([`spell_fx::resolve_spell_fx`]).
+/// ([`spell_fx::resolve_spell_fx`]). The rebuild's replayed kits ring in the same frame, after the
+/// stop it raised ([`crate::creature_anim::replay_rebuilt_kit_sounds`]).
 fn rebuild_then_start_kits() -> ScheduleConfigs<ScheduleSystem> {
     (
         (refresh_live_display, live_display::heal_rig_starved).chain(),
-        resolve_spell_fx,
+        (
+            resolve_spell_fx,
+            crate::creature_anim::replay_rebuilt_kit_sounds,
+        ),
     )
         .chain()
 }

@@ -962,8 +962,9 @@ use spell_visual::{
 #[cfg(test)]
 pub(crate) use spell_visual::arm_aura_state_fx as arm_aura_state_fx_for_test;
 pub(crate) use spell_visual::{
-    held_strike_sound, ChainProcPlay, FxClass, FxStage, GroundList, KitPush, MissileSpawn,
-    PrecastTables, PrecastVisuals, SpellKitFx, SpellKitShake, SpellKitSound, SpellVisuals,
+    held_strike_sound, replay_rebuilt_kit_sounds, ChainProcPlay, FxClass, FxStage, GroundList,
+    KitPush, MissileSpawn, PrecastTables, PrecastVisuals, SpellKitFx, SpellKitShake, SpellKitSound,
+    SpellVisuals,
 };
 
 /// The per-unit animation state machine; `Transform` is required, its scale divides the rate, and
