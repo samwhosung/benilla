@@ -649,6 +649,50 @@ fn end_root(
     commands.entity(root).despawn();
 }
 
+/// Which rebuild of a unit's visual ends its instances, and so which come back on the new body.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Rebuild {
+    /// The reference's display rebuild `0x60abe0`. It stops every effect on the unit's list through
+    /// `0x6203e0` (`0x60ac10`), a world plant too, which `0x61fcf0` links on the same list
+    /// (`0x61fdbf`), then plays kind 2 again and nothing else that lives on: the aura slots' state
+    /// kits (`0x5ff130` at `0x60ada6`) and the channel kit (`0x612a30` at `0x60adad`, kind 2 at
+    /// `0x612b2b`). A [`FxStage::State`] instance re-arms; a precast loop, the loot sparkle (hung
+    /// again only by `0x6005d0`'s own callers), a one-shot or a decaying one is dropped.
+    Display,
+    /// benilla's rig heal, a rebuild the reference never runs: what the unit had comes back, every
+    /// persistent instance that is not decaying.
+    Heal,
+}
+
+/// End `instances` for `rebuild`: each spawned root goes through the teardown, and only what the
+/// rebuild brings back stays, pending its new body.
+fn end_for_rebuild(
+    instances: &mut Vec<FxInstance>,
+    rebuild: Rebuild,
+    unit: Entity,
+    commands: &mut Commands,
+    emitters: &mut Query<&mut benilla_world::particles::ParticleEmitter>,
+) {
+    instances.retain_mut(|inst| {
+        if let Some(root) = inst.root.take() {
+            end_root(commands, emitters, root);
+        }
+        let re_arm = inst.persistent
+            && !inst.decaying
+            && (rebuild == Rebuild::Heal || inst.stage == FxStage::State);
+        if benilla_assets::trace::enabled() {
+            benilla_assets::trace::line(
+                "fx",
+                &format!(
+                    "kit rebuild end unit={unit} path={} {rebuild:?} re_arm={re_arm}",
+                    inst.path
+                ),
+            );
+        }
+        re_arm
+    });
+}
+
 /// What a rebuild of a unit's visual needs to end the unit's instances first ([`Self::end_all`]).
 #[derive(bevy::ecs::system::SystemParam)]
 pub(super) struct RebuildFx<'w, 's> {
@@ -657,34 +701,19 @@ pub(super) struct RebuildFx<'w, 's> {
 }
 
 impl RebuildFx<'_, '_> {
-    /// The rebuild `0x60abe0` (a display swap, or the rig heal that takes its shape) stops every
-    /// effect on the unit's list through `0x6203e0` before the old model goes (`0x60ac10`), a world
-    /// plant too, which `0x61fcf0` links on the same list (`0x61fdbf`). It then plays kind 2 again
-    /// and nothing else that lives on: the aura slots' state kits (`0x5ff130` at `0x60ada6`) and
-    /// the channel kit (`0x612a30` at `0x60adad`, kind 2 at `0x612b2b`). So a [`FxStage::State`]
-    /// instance re-arms for the new body, and a precast loop, the loot sparkle (hung again only by
-    /// `0x6005d0`'s own callers), a one-shot or a decaying one is dropped. Called before the
-    /// visual's despawn, so each root goes first and no later teardown meets a dead one.
-    pub(super) fn end_all(&mut self, commands: &mut Commands, unit: Entity) {
+    /// End `unit`'s instances for `rebuild` ([`end_for_rebuild`]). Called before the visual's
+    /// despawn, so each root goes first and no later teardown meets a dead one.
+    pub(super) fn end_all(&mut self, commands: &mut Commands, unit: Entity, rebuild: Rebuild) {
         let Ok(mut att) = self.lists.get_mut(unit) else {
             return;
         };
-        att.instances.retain_mut(|inst| {
-            if let Some(root) = inst.root.take() {
-                end_root(commands, &mut self.emitters, root);
-            }
-            let re_arm = inst.persistent && !inst.decaying && inst.stage == FxStage::State;
-            if benilla_assets::trace::enabled() {
-                benilla_assets::trace::line(
-                    "fx",
-                    &format!(
-                        "kit rebuild end unit={unit} path={} re_arm={re_arm}",
-                        inst.path
-                    ),
-                );
-            }
-            re_arm
-        });
+        end_for_rebuild(
+            &mut att.instances,
+            rebuild,
+            unit,
+            commands,
+            &mut self.emitters,
+        );
     }
 }
 
@@ -1281,6 +1310,42 @@ mod tests {
         let (mut app, unit) = wearing(vec![sparkle]);
         swap_then_build(&mut app, unit);
         assert_eq!(instances_of(&app, unit), vec![]);
+    }
+
+    /// The rig heal is benilla's own: the reference never rebuilds there, so everything the unit
+    /// had comes back on the healed body, the precast loop and the loot sparkle too, which the
+    /// loot router hangs only on its rising edge and so would never hang again.
+    #[test]
+    fn a_rig_heal_brings_back_every_persistent_effect() {
+        let precast = held(116, FxStage::Relive, 10, "Spells\\Precast_Hand.mdx"); // Frostbolt
+        let sparkle = FxInstance {
+            spell_id: u32::MAX, // the router's loot key
+            tag: 0x13,
+            ..held(0, FxStage::Relive, 11, "Spells\\LootSparkle.mdx")
+        };
+        let (mut app, unit) = wearing(vec![instance(Entity::PLACEHOLDER, true), precast, sparkle]);
+        let before = roots_of(&app, unit);
+        app.world_mut()
+            .entity_mut(unit)
+            .insert(benilla_world::rig_palette::RigStarved);
+        app.update();
+        assert_names_no_dead_root(&app, unit);
+        app.world_mut()
+            .entity_mut(unit)
+            .insert(crate::entities::VisualAttached);
+        app.update();
+        let after = roots_of(&app, unit);
+        assert_eq!(
+            after.iter().map(|&(spell, _)| spell).collect::<Vec<_>>(),
+            [13033, 116, u32::MAX],
+            "the aura, the precast loop and the sparkle all come back"
+        );
+        for ((_, old), (spell, new)) in before.into_iter().zip(after) {
+            assert!(
+                new.is_some() && new != old,
+                "spell {spell} spawns afresh on the healed body"
+            );
+        }
     }
 
     /// Write `starts` as this frame's kit edges, beside a display swap from the same update.

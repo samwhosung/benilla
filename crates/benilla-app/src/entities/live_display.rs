@@ -102,7 +102,7 @@ pub(super) fn refresh_live_display(
                 );
                 net.display_id = Some(live);
                 swapped.write(DisplaySwapped { entity });
-                fx.end_all(&mut commands, entity);
+                fx.end_all(&mut commands, entity, super::spell_fx::Rebuild::Display);
                 // `attach_entity_visuals` rebuilds from scratch, fade-skipped by `Reattached`.
                 commands
                     .entity(entity)
@@ -230,7 +230,7 @@ pub(super) fn heal_rig_starved(
             "rig heal: guid {:016x} was denied a palette rig at attach — rebuilding (0x60abe0 shape)",
             guid.0
         );
-        fx.end_all(&mut commands, entity);
+        fx.end_all(&mut commands, entity, super::spell_fx::Rebuild::Heal);
         commands
             .entity(entity)
             .despawn_related::<Children>()
