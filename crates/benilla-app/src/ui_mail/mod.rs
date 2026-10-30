@@ -124,6 +124,9 @@ pub(crate) struct MailOpen {
     /// Each auction notice's subject cell (`[rec+0x14]`) as the list parse left it, by mail id; the
     /// row keeps the raw triplet, the copy (`[rec+0x150]`) every parse reads.
     pub(crate) auction_subjects: HashMap<u32, ListedSubject>,
+    /// A mailbox a click's or an engine turn's use opens (`0x5f6820` → `0x4acd10`), which the
+    /// call host opens before the use goes on ([`crate::ui_mail::MailVerbs::take_used`]).
+    used: Option<u64>,
 }
 
 /// An auction notice's shown subject after the list parse (`0x4ad580`-`0x4ad5b2`): rewritten
@@ -152,6 +155,17 @@ impl MailOpen {
     /// came from. [`open_mailbox`] registers on the latch first.
     pub(crate) fn click(&mut self, mailbox: u64) {
         self.mailbox = Some(mailbox);
+    }
+
+    /// A use of `mailbox` (`0x5f6820`), for the call host to open in its place.
+    pub(crate) fn use_mailbox(&mut self, mailbox: u64) {
+        self.used = Some(mailbox);
+    }
+
+    /// The mailbox a use asked to open, which no host has opened yet.
+    #[cfg(test)]
+    pub(crate) fn used(&self) -> Option<u64> {
+        self.used
     }
 
     /// A getter's lookup of `key` missed: its callback waits for the answer.

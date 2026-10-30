@@ -1,26 +1,36 @@
-//! The reader's legs of the interaction dispatchers through the whole client's host. A text
-//! object's use opens the reader locally (`0x5f58c0` → `0x4e32e0`), inside whatever reaches its
-//! dispatcher: a world click, an interaction, an arrival. Its `ITEM_TEXT_BEGIN` and
-//! `ITEM_TEXT_READY` are heard there, and nothing is left for a later click to open.
+//! The local windows of the interaction dispatchers through the whole client's host. A text
+//! object's use opens the reader (`0x5f58c0` → `0x4e32e0`) and a mailbox's its window
+//! (`0x5f6820` → `0x4acd10`), inside whatever reaches the dispatcher: a world click, an
+//! interaction, an arrival. Their signals are heard there, and nothing is left for a later click
+//! to open.
 
 use benilla_protocol::messages::ObjectFields;
 use benilla_protocol::EntityKind;
 use bevy::ecs::system::RunSystemOnce;
 
 use super::*;
-use crate::net::{ActiveMover, NetCommands, NetEntity, ObjectStore, SelfGuid};
+use crate::net::{ActiveMover, ClientCommand, NetCommands, NetEntity, ObjectStore, SelfGuid};
 
 const ME: u64 = 0x10;
 /// A TEXT object (type 9) in reach, whose template's first page is [`PAGE`].
 const PLAQUE: u64 = 0xF110_0000_4321_0001;
 const ENTRY: u32 = 4321;
 const PAGE: u32 = 358;
+/// A mailbox (type 19) in reach.
+const MAILBOX: u64 = 0xF110_0000_0BAD_0001;
+const MAILBOX_ENTRY: u32 = 2989;
 
-/// The whole client, headless: our player beside the plaque, its page cached, with a VM noting
-/// the reader's events in `SEEN`.
-fn client() -> (App, Entity) {
+/// The whole client, headless: our player beside the plaque, its page cached, and a mailbox, with
+/// a VM noting the reader's and the mailbox's events in `SEEN`; the plaque, the mailbox and the
+/// sends.
+fn client() -> (
+    App,
+    Entity,
+    Entity,
+    crossbeam_channel::Receiver<ClientCommand>,
+) {
     let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
-    let (tx, _rx) = crossbeam_channel::unbounded();
+    let (tx, rx) = crossbeam_channel::unbounded();
     app.insert_resource(NetCommands(tx));
     // What the dispatchers and the cursor read that a headless build leaves to its plugins.
     app.init_resource::<PressPick>()
@@ -69,11 +79,18 @@ fn client() -> (App, Entity) {
         Vec3::new(0.0, 0.0, 2.0),
         &[(2, 0x21), (3, ENTRY), (21, 9)],
     );
+    let mailbox = spawn(
+        world,
+        MAILBOX,
+        EntityKind::GameObject,
+        Vec3::new(0.0, 0.0, -2.0),
+        &[(2, 0x21), (3, MAILBOX_ENTRY), (21, 19)],
+    );
     let mut data = [0; 24];
     data[0] = PAGE as i32;
-    world
-        .resource_mut::<crate::go_templates::GameObjectTemplates>()
-        .insert(ENTRY, 9, "Plaque".into(), &data);
+    let mut templates = world.resource_mut::<crate::go_templates::GameObjectTemplates>();
+    templates.insert(ENTRY, 9, "Plaque".into(), &data);
+    templates.insert(MAILBOX_ENTRY, 19, "Mailbox".into(), &[0; 24]);
     world
         .resource_mut::<crate::ui_item_text::PageTexts>()
         .insert(PAGE, "Page one.".into(), 0);
@@ -83,11 +100,28 @@ fn client() -> (App, Entity) {
             r#"SEEN = {}
             local f = CreateFrame("Frame")
             f:RegisterEvent("ITEM_TEXT_BEGIN") f:RegisterEvent("ITEM_TEXT_READY")
+            f:RegisterEvent("MAIL_SHOW")
             f:SetScript("OnEvent", function() tinsert(SEEN, event) end)"#,
         )
         .expect("the recorder installs");
     world.insert_non_send_resource(script);
-    (app, plaque)
+    (app, plaque, mailbox, rx)
+}
+
+/// The press pick over `object`, its interact cursor lit.
+fn over(world: &mut World, object: Entity, guid: u64) {
+    *world.resource_mut::<PressPick>() = PressPick {
+        object: HoveredObject {
+            target: Some(object),
+            guid: Some(guid),
+            distance: 2.0,
+        },
+        cursor: WorldCursor {
+            kind: cursor_mode::CursorKind::Interact,
+            unable: false,
+        },
+        ..PressPick::default()
+    };
 }
 
 /// The reader as the turn left it: its object, and the events heard.
@@ -108,20 +142,9 @@ const OPENED: [&str; 2] = ["ITEM_TEXT_BEGIN", "ITEM_TEXT_READY"];
 /// A right-click on the plaque opens the reader inside the click.
 #[test]
 fn a_text_objects_read_opens_inside_the_click() {
-    let (mut app, plaque) = client();
+    let (mut app, plaque, ..) = client();
     let world = app.world_mut();
-    *world.resource_mut::<PressPick>() = PressPick {
-        object: HoveredObject {
-            target: Some(plaque),
-            guid: Some(PLAQUE),
-            distance: 2.0,
-        },
-        cursor: WorldCursor {
-            kind: cursor_mode::CursorKind::Interact,
-            unable: false,
-        },
-        ..PressPick::default()
-    };
+    over(world, plaque, PLAQUE);
     super::release_click(world, benilla_ui::script::ClickMode::Action);
     let (object, seen) = read(&app);
     assert_eq!(object, Some(PLAQUE));
@@ -132,7 +155,7 @@ fn a_text_objects_read_opens_inside_the_click() {
 /// click after it.
 #[test]
 fn a_text_objects_read_opens_inside_an_interaction() {
-    let (mut app, plaque) = client();
+    let (mut app, plaque, ..) = client();
     let world = app.world_mut();
     world
         .resource_mut::<Messages<Interact>>()
@@ -147,7 +170,7 @@ fn a_text_objects_read_opens_inside_an_interaction() {
 /// the reader inside its turn.
 #[test]
 fn a_text_objects_read_opens_inside_an_arrival() {
-    let (mut app, _plaque) = client();
+    let (mut app, ..) = client();
     let world = app.world_mut();
     world.resource_mut::<crate::player::Approach>().arrived =
         Some((crate::player::ApproachVerb::Use, PLAQUE));
@@ -155,4 +178,29 @@ fn a_text_objects_read_opens_inside_an_arrival() {
     let (object, seen) = read(&app);
     assert_eq!(object, Some(PLAQUE));
     assert_eq!(seen, OPENED);
+}
+
+/// A right-click on the mailbox opens it inside the click (`0x5f6820` → `0x4acd10`): `MAIL_SHOW`
+/// is heard there, and the click's next line finds it open, as `CheckInbox()` asks its list.
+#[test]
+fn a_mailbox_opens_inside_the_click() {
+    let (mut app, _plaque, mailbox, rx) = client();
+    let world = app.world_mut();
+    over(world, mailbox, MAILBOX);
+    let now = world.resource::<Time>().elapsed_secs();
+    world
+        .resource_mut::<crate::target::ClickArm>()
+        .arm_at(benilla_ui::script::ClickMode::Action, now);
+    crate::script_calls::with_hosted_vm(world, |script| {
+        let script = script.expect("a VM");
+        script.submit_click(benilla_ui::script::ClickCall::Release);
+        script.run("CheckInbox()").expect("runs");
+    });
+    assert!(
+        rx.try_iter()
+            .any(|c| matches!(c, ClientCommand::GetMailList { mailbox: MAILBOX })),
+        "the click's next line finds the mailbox open"
+    );
+    let (_, seen) = read(&app);
+    assert_eq!(seen, ["MAIL_SHOW"]);
 }

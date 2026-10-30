@@ -262,15 +262,11 @@ impl ScriptCallHost<'_, '_> {
         script.hosted(self, |_| ());
     }
 
-    /// The reads an engine turn's dispatcher asked for outside any call (an interaction's or an
-    /// arrival's text object, `0x5f58c0` → `0x4e32e0`), each run in place as the dispatcher's
-    /// read runs it ([`Self::read_item_texts`]), its signals' listeners running there with the
-    /// host lent, behind the cast reports made since `mark`.
-    pub(crate) fn engine_item_text_reads(
-        &mut self,
-        script: &mut UiScript,
-        mark: crate::lanes::Mark,
-    ) {
+    /// What an engine turn's use opened locally outside any call (an interaction's or an
+    /// arrival's mailbox, `0x5f6820`, or text object, `0x5f58c0`), run in place as the use runs
+    /// it ([`Self::open_used`]), its signals' listeners running there with the host lent, behind
+    /// the cast reports made since `mark`.
+    pub(crate) fn engine_open_used(&mut self, script: &mut UiScript, mark: crate::lanes::Mark) {
         #[cfg(test)]
         self.census_probe();
         script.host_out(|script| {
@@ -279,7 +275,7 @@ impl ScriptCallHost<'_, '_> {
                 latched: self.appliers.pet().attack_latched(),
                 mark: self.appliers.reports().mark_at(mark),
             };
-            self.read_item_texts(script, &mut at);
+            self.open_used(script, &mut at);
             self.commit_views(script);
             #[cfg(test)]
             self.census_done();
@@ -1107,7 +1103,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
                     tail = appliers.loot().open_item(script, open);
                 }
                 // A book's or a letter's read opens inside the call (`0x4e32e0`).
-                self.read_item_texts(script, &mut at);
+                self.open_used(script, &mut at);
             }
             ScriptCall::UseInventoryItem { slot, on_self, .. } => appliers
                 .item_use()
@@ -1571,12 +1567,12 @@ impl<P: SystemParam + 'static> VmWith<'_, '_, P> {
         pay(self.set.p0(), select.owed);
     }
 
-    /// An engine turn's reads in place with the host ([`ScriptCallHost::engine_item_text_reads`]);
-    /// with no VM or no host, nothing opens them.
-    pub(crate) fn engine_item_text_reads(&mut self, mark: crate::lanes::Mark) {
+    /// What an engine turn's use opened, in place with the host
+    /// ([`ScriptCallHost::engine_open_used`]); with no VM or no host, nothing opens it.
+    pub(crate) fn engine_open_used(&mut self, mark: crate::lanes::Mark) {
         if let Some(script) = self.script.as_deref_mut() {
             if let Some(host) = self.set.p1().as_mut() {
-                host.engine_item_text_reads(script, mark);
+                host.engine_open_used(script, mark);
             }
         }
     }

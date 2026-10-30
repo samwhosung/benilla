@@ -31,6 +31,18 @@ impl MailVerbs<'_> {
         self.mail.as_deref().and_then(|m| m.mailbox)
     }
 
+    /// The mailbox a use asked to open ([`super::MailOpen::use_mailbox`]), taken.
+    pub(crate) fn take_used(&mut self) -> Option<u64> {
+        self.mail.as_deref_mut().and_then(|m| m.used.take())
+    }
+
+    /// The open's cell (`0x4acd27`).
+    pub(crate) fn open(&mut self, mailbox: u64) {
+        if let Some(mail) = self.mail.as_deref_mut() {
+            mail.click(mailbox);
+        }
+    }
+
     /// The close core's clear of the cell (`0x4acd8f`), the VM's verbs finding none from here.
     pub(crate) fn clear_mailbox(&mut self, script: &mut UiScript) {
         if let Some(mail) = self.mail.as_deref_mut() {

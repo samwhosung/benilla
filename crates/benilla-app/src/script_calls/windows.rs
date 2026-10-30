@@ -249,12 +249,29 @@ impl ScriptCallHost<'_, '_> {
         self.signalled(script, at);
     }
 
-    /// The reads the click or the call just asked for (`0x5f58c0`, the bag use's `0x4e32e0`), each
-    /// run inside it, in order ([`Self::read_item_text`]).
-    pub(super) fn read_item_texts(&mut self, script: &mut UiScript, at: &mut super::Signalled) {
+    /// What a use just asked to open locally, inside the click, the call or the engine turn that
+    /// used it: a mailbox's window ([`Self::open_mailbox`]), and the reads (`0x5f58c0`, the bag
+    /// use's `0x4e32e0`) in order ([`Self::read_item_text`]).
+    pub(super) fn open_used(&mut self, script: &mut UiScript, at: &mut super::Signalled) {
+        if let Some(mailbox) = self.appliers.mail().take_used() {
+            self.open_mailbox(script, at, mailbox);
+        }
         while let Some(read) = self.appliers.item_text().next_read() {
             self.read_item_text(script, at, read);
         }
+    }
+
+    /// The mailbox's open `0x4acd10`, which its use handler runs (`0x5f6820` → `0x5f682d`): the
+    /// register, whose holder closes first (`0x4acd1c` → `0x4930d0`), the cell (`0x4acd27`), the
+    /// compose tab's reset (`0x4acd38` → `0x4acdc0(1)`), then `MAIL_SHOW` (`0x4acd42`), each
+    /// signal's listeners running where it is raised.
+    fn open_mailbox(&mut self, script: &mut UiScript, at: &mut super::Signalled, mailbox: u64) {
+        self.register_latch(script, at, mailbox);
+        self.appliers.mail().open(mailbox);
+        script.reset_compose_tab();
+        self.signalled(script, at);
+        script.fire_event("MAIL_SHOW", vec![]);
+        self.signalled(script, at);
     }
 
     /// `0x4e32e0(guid, 0)` inside the click or the call that reads. The open object again
