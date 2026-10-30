@@ -747,3 +747,58 @@ fn a_waiting_line_outlasts_its_frames_and_a_refusal_frees_it_unwritten() {
         "the refusal freed the entry"
     );
 }
+
+/// The item's callback runs the tradeskill writer again from the entry's guids (`0x629556` →
+/// `0x629610`), which names the caster there (`0x6264e0`): a caster whose name arrives between
+/// the packet and the item's answer is written by that name.
+#[test]
+fn a_waiting_tradeskill_line_names_its_caster_at_the_answer() {
+    use benilla_protocol::messages::{ExecuteLog, SpellLogExecute};
+    const PELT: u32 = 900;
+    const CRAFTER: u64 = 0x0000_0000_0000_0042;
+    let mut app = client();
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(
+            r#"
+            TRADESKILL_LOG_THIRDPERSON = "%s creates %s."
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("CHAT_MSG_SPELL_TRADESKILLS")
+            f:SetScript("OnEvent", function() table.insert(Seen, arg1) end)
+            "#,
+        )
+        .unwrap();
+    frame(
+        &mut app,
+        vec![super::unit_view_tests::created(
+            CRAFTER,
+            benilla_protocol::EntityKind::Player,
+            &[],
+        )],
+    );
+    let craft = SessionEvent::SpellLogExecute(SpellLogExecute {
+        caster: CRAFTER,
+        spell_id: 1,
+        effects: vec![(24, vec![ExecuteLog::CreateItem { item_entry: PELT }])],
+    });
+    frame(&mut app, vec![craft]);
+    frame(
+        &mut app,
+        vec![SessionEvent::PlayerName {
+            guid: CRAFTER,
+            name: "Crafter".into(),
+            race: 1,
+            gender: 0,
+            class: 1,
+        }],
+    );
+    hosted(&mut app, "Seen = {}");
+    let answer = SessionEvent::ItemTemplate {
+        entry: PELT,
+        info: Some(Box::new(crate::items::test_template("Wolf Pelt"))),
+    };
+    assert_eq!(
+        frame(&mut app, vec![answer]),
+        ["Crafter creates Wolf Pelt."]
+    );
+}
