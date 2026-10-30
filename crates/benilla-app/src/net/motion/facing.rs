@@ -4,8 +4,9 @@
 //! A unit has a raw wire facing (`CMovement+0x1c`) and a display facing (`CGUnit+0xc94`) that the
 //! client turns every frame toward a goal from an ordered chain; two goals are local and never
 //! sent: squaring up on `UNIT_FIELD_TARGET`, and an NPC facing you while its window is open.
-//! `Transform.rotation` is the display facing; [`DisplayFacing::wire`] keeps the raw one, the
-//! chain's fallback goal, which swings an NPC back when its window closes.
+//! `Transform.rotation` is the display facing; the raw one, the chain's fallback goal, which swings
+//! an NPC back when its window closes, is the mover's own ([`RemoteMotion::orientation`], read at
+//! `unit+0x9c4`, the embedded mover's `+0x1c`, by `0x600ce3`).
 //! Deviation: the reference places collision and culling by the raw facing, ours follow the
 //! display facing, because a capsule and a sphere barely change under rotation.
 
@@ -42,7 +43,8 @@ const EMOTE_PERMITS_FACING: u32 = benilla_formats::EMOTE_FLAG_INTERACTION;
 /// `+0xc9c..+0xca8` delta ring; present only while [`drive_display_facing`] governs the unit.
 #[derive(Component)]
 pub(crate) struct DisplayFacing {
-    /// The raw wire yaw (`CMovement+0x1c`), never written client-side.
+    /// The raw facing of a unit with no mover state; one with it reads its mover's
+    /// ([`RemoteMotion::orientation`]).
     wire: f32,
     /// A zero head means the next pump takes the ring-fill leg.
     hist: [f32; 4],
@@ -231,8 +233,10 @@ pub(crate) fn drive_display_facing(
     let interact_npc = interact.and_then(|r| r.0);
 
     // Collect goals first, then apply, so no transform is borrowed mutably while another is read.
-    let mut goals: Vec<(Entity, Option<f32>, GoalSource)> = Vec::new();
+    // Each with its raw facing, the mover's (`0x600ce3`), when it has one.
+    let mut goals: Vec<(Entity, Option<f32>, GoalSource, Option<f32>)> = Vec::new();
     for (e, net, store, motion) in &candidates {
+        let raw = motion.map(|m| m.orientation);
         if !smoothed(Some(net.kind), false) {
             continue; // a GameObject sits at its authored facing; a player is row 6's
         }
@@ -247,7 +251,7 @@ pub(crate) fn drive_display_facing(
                 emotes.as_ref().and_then(|c| c.emote_flags(id))
             })
         {
-            goals.push((e, None, GoalSource::Raw));
+            goals.push((e, None, GoalSource::Raw, raw));
             continue;
         }
         let Ok(unit_t) = transforms.get(e) else {
@@ -261,7 +265,7 @@ pub(crate) fn drive_display_facing(
             .and_then(|te| transforms.get(te).ok())
             .and_then(|t| bearing(unit_pos, bevy_to_wow(t.translation)));
         if let Some(goal) = target {
-            goals.push((e, Some(goal), GoalSource::Target));
+            goals.push((e, Some(goal), GoalSource::Target, raw));
             continue;
         }
         // Row 9: `InteractNpc` stands for the client's global `[0xb4e2d0]`, the open NPC window.
@@ -270,28 +274,29 @@ pub(crate) fn drive_display_facing(
             .flatten()
             .and_then(|p| bearing(unit_pos, p));
         match facing_me {
-            Some(goal) => goals.push((e, Some(goal), GoalSource::Interact)),
-            None => goals.push((e, None, GoalSource::Raw)),
+            Some(goal) => goals.push((e, Some(goal), GoalSource::Interact, raw)),
+            None => goals.push((e, None, GoalSource::Raw, raw)),
         }
     }
 
     let mut stepping: bevy::ecs::entity::EntityHashSet = default();
-    for (e, goal, source) in goals {
+    for (e, goal, source, raw) in goals {
         let Ok(mut tf) = transforms.get_mut(e) else {
             continue;
         };
         let cur = yaw_of(tf.rotation).rem_euclid(std::f32::consts::TAU);
         let Ok(mut state) = facings.get_mut(e) else {
-            // First frame governed: the transform still holds the wire's facing, so seed from it
-            // with a clean ring (`0x601020`).
+            // First frame governed: a clean ring (`0x601020`), the raw facing the mover's, else
+            // the facing the transform still holds.
             commands.entity(e).insert(DisplayFacing {
-                wire: cur,
+                wire: raw.unwrap_or(cur),
                 hist: [0.0; 4],
             });
             continue;
         };
-        // The raw facing is a goal, not a freeze: it swings an NPC back when its window closes.
-        let goal = goal.unwrap_or(state.wire);
+        // The raw facing is a goal, not a freeze: it swings an NPC back when its window closes,
+        // and turns a standing unit to a relayed or placed facing.
+        let goal = goal.or(raw).unwrap_or(state.wire);
         let new = filter_step(cur, goal, &mut state.hist);
         // Write only on change: a settled unit's `new` is bitwise the goal, so a standing crowd
         // stops tripping every downstream `Changed<Transform>` gate.
@@ -765,6 +770,10 @@ mod tests {
         app.world_mut()
             .entity_mut(unit)
             .insert(DisplayFacing::seeded(FRAC_PI_2));
+        app.world_mut()
+            .get_mut::<RemoteMotion>(unit)
+            .unwrap()
+            .orientation = FRAC_PI_2;
         app.update();
         let first = yaw_of(
             app.world()
@@ -790,6 +799,33 @@ mod tests {
         assert!(
             crate::creature_anim::wrap_pi(yaw - FRAC_PI_2).abs() <= DEAD_BAND,
             "and settles on it: {yaw}"
+        );
+    }
+
+    /// A standing creature's display turns to its mover's facing, which a relayed or placed pose
+    /// writes (`0x7c6420`) and the chain's raw goal reads (`0x600ce3`, `unit+0x9c4`), whatever it
+    /// was seeded with.
+    #[test]
+    fn a_standing_creature_turns_to_its_movers_new_facing() {
+        let (mut app, unit) = creature_with_a_mover(&[], 0.0);
+        app.update(); // the seeding frame
+        app.world_mut()
+            .get_mut::<RemoteMotion>(unit)
+            .unwrap()
+            .orientation = FRAC_PI_2;
+        for _ in 0..24 {
+            app.update();
+        }
+        let yaw = yaw_of(
+            app.world()
+                .entity(unit)
+                .get::<Transform>()
+                .unwrap()
+                .rotation,
+        );
+        assert!(
+            crate::creature_anim::wrap_pi(yaw - FRAC_PI_2).abs() <= DEAD_BAND,
+            "the creature turns to its mover's facing (+pi/2): {yaw}"
         );
     }
 
