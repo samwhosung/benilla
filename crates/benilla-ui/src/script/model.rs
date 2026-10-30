@@ -1109,6 +1109,8 @@ pub(crate) struct Model {
     pub(crate) worldmap: super::worldmap::WorldMapState,
     /// Nameplate `Button`s under `WorldFrame`, never shrunk, visible to `GetChildren()`.
     pub(crate) nameplates: super::nameplate::NamePlates,
+    /// The units' watch lists in link order ([`super::unit_watch`]).
+    pub(crate) unit_watches: super::unit_watch::UnitWatches,
     /// Chat bubble `Frame`s under `WorldFrame`, pooled the same way.
     pub(crate) chat_bubbles: super::chat_bubble::ChatBubbles,
     /// The world-state readout's rows, gated and resolved by the app.
@@ -1676,6 +1678,7 @@ impl Model {
             shown_chat_lines: Vec::new(),
             worldmap: super::worldmap::WorldMapState::default(),
             nameplates: super::nameplate::NamePlates::default(),
+            unit_watches: Default::default(),
             chat_bubbles: super::chat_bubble::ChatBubbles::default(),
             worldstate: super::worldstate::WorldStateUiState::default(),
             pending_events: Vec::new(),

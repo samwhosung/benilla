@@ -181,9 +181,10 @@ impl RosterTeardown<'_, '_> {
             log.close();
         }
         // The slot writers' token flags and refreshes, each on a member the object manager holds
-        // as the packet left it: as a player for a seat or an arrival (`0x4e838d`, `0x4bab18`),
-        // its pet as a unit (`0x4e83c9`, `0x4bab55`), as a unit for a clear (`0x4e84d7`).
-        let adds = group.take_token_adds();
+        // as the packet left it: as a player for a seat, an arrival or a departure (`0x4e838d`,
+        // `0x4bab18`, `0x4baa18`), as a unit for a clear (`0x4e84d7`), and its pet as a unit
+        // (`0x4e83c9`, `0x4e8523`, `0x4bab55`, `0x4baa64`).
+        let moves = group.take_token_moves();
         let colours = group.take_roster_colours();
         let unit = |guid: u64| {
             self.index
@@ -198,14 +199,26 @@ impl RosterTeardown<'_, '_> {
             })
         };
         let mut placed = Vec::new();
-        for add in adds {
-            let Some(member) = player(add.guid) else {
+        for moved in moves {
+            let member = if moved.as_player {
+                player(moved.guid)
+            } else {
+                unit(moved.guid)
+            };
+            let Some(member) = member else {
                 continue;
             };
-            let source = add.source;
-            placed.push((add.at, add.guid, source));
+            let change = |bits| {
+                if moved.add {
+                    benilla_ui::script::TokenChange::Add(bits)
+                } else {
+                    benilla_ui::script::TokenChange::Remove(bits)
+                }
+            };
+            placed.push((moved.at, moved.guid, change(moved.bits)));
+            // `CHARM`, else `SUMMON` (`0x4e83a3`-`0x4e83b0`, `0x4e84e6`-`0x4e84f3`).
             if let Some(pet) = member.0.unit_pet_guid().filter(|&g| unit(g).is_some()) {
-                placed.push((add.pet_at, pet, source));
+                placed.push((moved.pet_at, pet, change(moved.bits << 1)));
             }
         }
         let colours: Vec<_> = colours
@@ -219,10 +232,10 @@ impl RosterTeardown<'_, '_> {
             })
             .collect();
         if let Some(notices) = self.notices.as_deref_mut() {
-            for (at, guid, source) in placed {
+            for (at, guid, change) in placed {
                 notices.write_at(
                     at,
-                    crate::field_watch::FieldNotice::TokensAdded { guid, source },
+                    crate::field_watch::FieldNotice::TokenFlags { guid, change },
                 );
             }
             for colour in colours {

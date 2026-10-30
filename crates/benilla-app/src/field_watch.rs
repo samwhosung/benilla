@@ -241,12 +241,11 @@ pub(crate) enum FieldNotice {
         guid: u64,
         call: crate::vplates::PlateCall,
     },
-    /// The unit `guid` took token flags from `source` at the notice's place: a party seat's
-    /// (`0x4e839e`, its pet's `0x4e83d6`) or a raid arrival's (`0x4bab2a`, `0x4bab65`), which
-    /// link its unit-field watchers when it held none besides (`0x60c4b0`).
-    TokensAdded {
+    /// A writer's change of the unit `guid`'s token flags at the notice's place
+    /// ([`benilla_ui::script::TokenChange`]), which links or unlinks its unit-field watchers.
+    TokenFlags {
         guid: u64,
-        source: benilla_ui::script::TokenSource,
+        change: benilla_ui::script::TokenChange,
     },
     /// The far-sight field's change to `object`, 0 for none (`0x5de0d0`): with the object held the
     /// start (`0x5de144` → `0x5ee270`), whose update while far sight is off sends

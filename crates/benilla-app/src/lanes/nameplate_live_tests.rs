@@ -671,3 +671,77 @@ fn the_party_seat_and_clear_recolour_the_members_plate() {
         "the health watcher's, out of the party"
     );
 }
+
+/// A party that becomes a raid: the list's emptier takes a party-only member's pet's flag back to
+/// 0 (`0x4e8530` → `0x60c50c`), the seat links its unit-field watchers again at the tail
+/// (`0x4e83d6`), and the raid rows the same list rebuilds after it (`0x5e6eb4`) add to flags
+/// already set (`0x4bab65`). So the pet's plate, bound between the two lists, now runs ahead of its
+/// bridge, and each `UNIT_HEALTH` listener reads the packet's value on the bar.
+#[test]
+fn a_party_turned_raid_links_a_members_pets_watchers_behind_its_plate() {
+    use benilla_protocol::messages::{member_status, GroupMemberEntry};
+    const MATE: u64 = 0x22;
+    const PET: u64 = 0xF140_0000_0046_0003;
+    let list = |group_type| SessionEvent::GroupList {
+        group_type,
+        own_flags: 0,
+        members: vec![GroupMemberEntry {
+            name: String::new(),
+            guid: MATE,
+            status: member_status::ONLINE,
+            flags: 0,
+        }],
+        leader: ME,
+        loot: None,
+    };
+    let mut app = client();
+    let _ = frame(
+        &mut app,
+        vec![
+            created(
+                PET,
+                EntityKind::Unit,
+                &[(FIELD_UNIT_HEALTH, 100), (FIELD_UNIT_MAXHEALTH, 100)],
+            ),
+            created(
+                MATE,
+                EntityKind::Player,
+                &[
+                    (FIELD_UNIT_HEALTH, 100),
+                    (FIELD_UNIT_MAXHEALTH, 100),
+                    (SUMMON, PET as u32),
+                    (SUMMON + 1, (PET >> 32) as u32),
+                ],
+            ),
+            list(0),
+        ],
+    );
+    let world = app.world_mut();
+    world
+        .resource_mut::<crate::vplates::PlateSpots>()
+        .0
+        .insert(PET);
+    let mut script = world.non_send_resource_mut::<UiScript>();
+    // The tokens as the frame's push leaves them for the bind, which runs with no host lent here.
+    script.set_unit_guids(&benilla_ui::script::UnitGuids {
+        player: ME,
+        target: WOLF,
+        party: [MATE, 0, 0, 0],
+        party_pets: [PET, 0, 0, 0],
+        held: [(ME, 0), (WOLF, 0), (BOAR, 0), (MATE, 0), (PET, 0)]
+            .into_iter()
+            .collect(),
+        ..Default::default()
+    });
+    crate::vplates::plates_for_test(&mut script, &[PET]);
+    helpers(&script, "return Bar():GetValue()");
+    let _ = frame(&mut app, vec![list(crate::ui_party::GROUPTYPE_RAID)]);
+    let seen = frame(&mut app, vec![values(PET, &[(FIELD_UNIT_HEALTH, 25)])]);
+    assert!(
+        !seen.is_empty() && seen.iter().all(|s| s.ends_with(":25")),
+        "{seen:?}"
+    );
+}
+
+/// `UNIT_FIELD_SUMMON`, a unit's summoned pet.
+const SUMMON: u16 = 8;

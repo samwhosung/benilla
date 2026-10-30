@@ -195,8 +195,8 @@ struct Plate {
     /// follows its last unit until a bind moves it (`0x7cc3e2` → `0x7cc5d0`) or the unit's
     /// object, which holds the watch list, goes; 0 for none.
     bar_unit: u64,
-    /// The bind that registered the bar's watchers, which orders two plates' watches on one unit:
-    /// each object list runs its watchers in the order they were linked (`0x467f65`-`0x467f76`).
+    /// The link of the bar's watchers on its unit's list ([`super::unit_watch`]), which orders
+    /// them among the unit's other watchers (`0x467f65`-`0x467f76`).
     bar_watched_at: u64,
     /// The geometry its anchors were written under, `None` before the first lay-out. Kept per
     /// plate, so a plate the pool grows later is laid out too.
@@ -229,14 +229,6 @@ pub(crate) struct NamePlates {
     geometry: Option<PlateGeometry>,
     /// The fills of the lit plates, which draw boosted ([`lit_fill_boost`]).
     lit_fills: std::collections::HashSet<RegionHandle>,
-    /// The links so far onto the units' own watch lists, each at its list's tail (`0x467f00`),
-    /// whose order on one unit is the order its watchers run: each bind's bar watch
-    /// ([`Plate::bar_watched_at`]) and each unit's bridge ([`Self::bridges`]).
-    links: u64,
-    /// Each unit's unit-field watchers (`0x51bbb0`), by the link that registered them: when its
-    /// token flags left 0 (`0x60c4b0`, `0x60c65c`), and gone when they returned to it (`0x60c50c`,
-    /// `0x60c679`).
-    bridges: std::collections::HashMap<u64, u64>,
     /// Bit `0x4` of `[0xc4da34]` (`0x605550`): the next sync refreshes the level and skull of each
     /// plate it keeps (`0x60875f` → `0x7cbb40`), then the latch clears (`0x48362e`).
     levels_due: bool,
@@ -520,102 +512,20 @@ impl UiScript {
         self.model_mut().nameplates.levels_due = true;
     }
 
-    /// The unit `guid` took token flags from `source`: when it held none besides (`0x60c4ae`), its
-    /// unit-field watchers link at its list's tail (`0x60c4b0` → `0x51bbb0`), behind every plate's
-    /// bar watch already on it ([`Self::nameplate_health_around`]).
-    pub fn unit_tokens_added(&mut self, guid: u64, source: super::TokenSource) {
-        if guid == 0 {
-            return;
-        }
-        let others = self.unit_has_field_watchers_besides(guid, source);
-        let mut model = self.model_mut();
-        let plates = &mut model.nameplates;
-        if !others || !plates.bridges.contains_key(&guid) {
-            plates.links += 1;
-            let at = plates.links;
-            plates.bridges.insert(guid, at);
-        }
-    }
-
-    /// `guid`'s bridge as its token flags stand now: dropped once they read 0, linked at the tail
-    /// when they read set with no link kept, which a flag no writer reported gave it
-    /// (`UpdateUnitTokenFlags` `0x60c520`, on a create or a pet's move).
-    fn observe_bridge(&mut self, guid: u64) {
-        let watched = self.unit_has_field_watchers(guid);
-        let mut model = self.model_mut();
-        let plates = &mut model.nameplates;
-        match (watched, plates.bridges.contains_key(&guid)) {
-            (false, true) => {
-                plates.bridges.remove(&guid);
-            }
-            (true, false) => {
-                plates.links += 1;
-                let at = plates.links;
-                plates.bridges.insert(guid, at);
-            }
-            _ => {}
-        }
-    }
-
     /// The bar's watcher `0x7cc570` on a change of `guid`'s `UNIT_FIELD_HEALTH` or
-    /// `UNIT_FIELD_MAXHEALTH`, inside its packet, with no bridge among them
-    /// ([`Self::nameplate_health_around`]).
+    /// `UNIT_FIELD_MAXHEALTH`, inside its packet, on each plate whose bar watches the unit, in the
+    /// order their watches were linked, with no other watcher among them
+    /// ([`Self::unit_health_watchers`]).
     pub fn nameplate_health(&mut self, guid: u64, health: f32, max: f32) {
-        self.nameplate_health_around(guid, health, max, |_| {});
-    }
-
-    /// The watchers on one of `guid`'s two health fields, in the order they were linked onto its
-    /// list (`0x467f65`-`0x467f76`): `bridge`, the unit-field watcher's run (`0x51bd50`), at its
-    /// link, and on each plate whose bar watches the unit, a retired one's included
-    /// ([`Plate::bar_unit`]), the bar's watcher `0x7cc570`: the range 0 to `max` (`0x7cc5a8` →
-    /// `0x783270`), which re-applies the held value, then the value (`0x7cc5be`), each firing
-    /// `OnValueChanged` where it moves. A unit with no bridge runs `bridge` first, which signals
-    /// nothing there.
-    pub fn nameplate_health_around(
-        &mut self,
-        guid: u64,
-        health: f32,
-        max: f32,
-        bridge: impl FnOnce(&mut Self),
-    ) {
-        if guid == 0 {
-            bridge(self);
-            return;
-        }
-        self.observe_bridge(guid);
-        let lua = self.lua();
-        let (bridge_at, bars) = {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let mut watching: Vec<(u64, FrameHandle)> = model
-                .nameplates
-                .plates
-                .iter()
-                .filter(|p| p.bar_unit == guid)
-                .map(|p| (p.bar_watched_at, p.bar))
-                .collect();
-            watching.sort_by_key(|&(at, _)| at);
-            (model.nameplates.bridges.get(&guid).copied(), watching)
+        let watch = super::HealthWatch {
+            bar: Some((health, max)),
         };
-        let ahead = bars
-            .iter()
-            .take_while(|&&(at, _)| bridge_at.is_some_and(|b| at < b))
-            .count();
-        let mut bridge = Some(bridge);
-        for (n, &(_, bar)) in bars.iter().enumerate() {
-            if n == ahead {
-                if let Some(bridge) = bridge.take() {
-                    bridge(self);
-                }
-            }
-            self.bar_watch(bar, health, max);
-        }
-        if let Some(bridge) = bridge {
-            bridge(self);
-        }
+        self.unit_health_watchers(guid, watch, |_| {});
     }
 
-    /// One plate bar's watcher `0x7cc570`: the range, then the value.
-    fn bar_watch(&mut self, bar: FrameHandle, health: f32, max: f32) {
+    /// One plate bar's watcher `0x7cc570`: the range (`0x7cc5a8` → `0x783270`), which re-applies
+    /// the held value, then the value (`0x7cc5be`), each firing `OnValueChanged` where it moves.
+    pub(super) fn bar_watch(&mut self, bar: FrameHandle, health: f32, max: f32) {
         let lua = self.lua();
         for write in [BarWrite::Range(max), BarWrite::Value(health)] {
             let fired = {
@@ -781,7 +691,7 @@ impl UiScript {
     pub fn nameplate_unit_gone(&mut self, guid: u64) {
         self.release_nameplate(guid);
         let mut model = self.model_mut();
-        model.nameplates.bridges.remove(&guid);
+        model.unit_watches.gone(guid);
         for plate in &mut model.nameplates.plates {
             if plate.bar_unit == guid {
                 plate.bar_unit = 0;
@@ -883,6 +793,17 @@ impl UiScript {
 enum BarWrite {
     Range(f32),
     Value(f32),
+}
+
+/// Each plate bar watching `guid` ([`Plate::bar_unit`]), a retired one's included, by its link.
+pub(super) fn bars_watching(model: &Model, guid: u64) -> Vec<(u64, FrameHandle)> {
+    model
+        .nameplates
+        .plates
+        .iter()
+        .filter(|p| p.bar_unit == guid)
+        .map(|p| (p.bar_watched_at, p.bar))
+        .collect()
 }
 
 /// The slot of the plate bound to `guid` (`[unit+0xe60]`), if it has one.
@@ -1271,8 +1192,7 @@ impl Plate {
         name: String,
         effects: &mut SyncEffects,
     ) {
-        model.nameplates.links += 1;
-        let binds = model.nameplates.links;
+        let binds = model.unit_watches.link();
         let p = &mut model.nameplates.plates[i];
         p.guid = key;
         p.flash_ms = 0;

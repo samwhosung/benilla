@@ -704,10 +704,15 @@ impl ScriptCallHost<'_, '_> {
         if at.latched && !appliers.pet().attack_latched() {
             script.fire_event("PET_BAR_UPDATE", vec![]);
         }
-        // The store's token flag on the new selection (`0x493540` → `0x60c4a0`), which links its
-        // unit-field watchers when it held none besides.
+        // The teardown's token flag off the old selection (`0x493910` → `0x60c4f0`), then the
+        // store's on the new (`0x493540` → `0x60c4a0`), each linking or unlinking its unit-field
+        // watchers where the flags leave or reach 0.
+        use benilla_ui::script::{TokenChange, TOKEN_TARGET};
+        if let Some(old) = at.selected {
+            script.unit_token_flags(old, TokenChange::Remove(TOKEN_TARGET));
+        }
         if let Some(guid) = selected {
-            script.unit_tokens_added(guid, benilla_ui::script::TokenSource::Target);
+            script.unit_token_flags(guid, TokenChange::Add(TOKEN_TARGET));
         }
         if let Some(states) = appliers.action_states().as_mut() {
             states.usable_refresh(script).fire(script);

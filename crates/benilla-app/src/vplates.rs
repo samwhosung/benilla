@@ -738,7 +738,7 @@ pub(crate) fn fire_plate_call(
 
 /// The bars' watchers on `guid` (`0x7cc570`) and `bridge`, the unit's own watchers on the same
 /// field, in the order they were linked
-/// ([`benilla_ui::script::UiScript::nameplate_health_around`]), with the unit's health and maximum
+/// ([`benilla_ui::script::UiScript::unit_health_watchers`]), with the unit's health and maximum
 /// as `store` holds them where they run. A unit the object manager no longer holds has the bars
 /// write nothing (`0x7cc588`, `0x7cc591`).
 pub(crate) fn health_watch(
@@ -747,12 +747,10 @@ pub(crate) fn health_watch(
     store: Option<&ObjectStore>,
     bridge: impl FnOnce(&mut benilla_ui::script::UiScript),
 ) {
-    let Some(store) = store else {
-        bridge(script);
-        return;
+    let watch = benilla_ui::script::HealthWatch {
+        bar: store.map(gate::bar_of),
     };
-    let (health, max) = gate::bar_of(store);
-    script.nameplate_health_around(guid, health, max, bridge);
+    script.unit_health_watchers(guid, watch, bridge);
 }
 
 /// [`drive_vplates`] as a one-shot, for a test over the whole client.

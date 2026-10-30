@@ -101,8 +101,11 @@ impl NoticeFiring<'_, '_> {
             crate::vplates::fire_plate_call(script, guid, call);
             return false;
         }
-        if let FieldNotice::TokensAdded { guid, source } = notice {
-            script.unit_tokens_added(guid, source);
+        // Each writer acts on the unit its lookup finds (`0x468460` with mask 8 or 0x10).
+        if let FieldNotice::TokenFlags { guid, change } = notice {
+            if self.holds_unit(guid) {
+                script.unit_token_flags(guid, change);
+            }
             return false;
         }
         // The two health fields' watchers on the unit's own list, the bridge's and each plate
@@ -695,7 +698,7 @@ pub(crate) fn fire(
         | FieldNotice::PetGuidSet { .. }
         | FieldNotice::TooltipUnit { .. }
         | FieldNotice::Plate { .. }
-        | FieldNotice::TokensAdded { .. }
+        | FieldNotice::TokenFlags { .. }
         | FieldNotice::CorpsePlate
         | FieldNotice::RecruitmentCascade => {}
         // Put on the trainer lane by the packet's handler ([`crate::ui_trainer::TrainerPasses`]).
@@ -798,6 +801,7 @@ pub(crate) fn fire_unit_notice(script: &mut UiScript, notice: FieldNotice) {
             }
         }
         FieldNotice::Signal { guid, id } => signal_unit(script, guid, id),
+        FieldNotice::TokenFlags { guid, change } => script.unit_token_flags(guid, change),
         other => panic!("not a unit notice: {other:?}"),
     }
 }
