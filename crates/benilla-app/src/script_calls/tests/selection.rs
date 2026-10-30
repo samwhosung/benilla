@@ -624,17 +624,6 @@ fn a_selections_ladder_listener_sends_ahead_of_its_send() {
     }
 }
 
-/// The keys of the refusals a handler queued for the action feed's lines.
-fn error_keys(f: &Frame) -> Vec<String> {
-    f.app
-        .world()
-        .resource::<crate::ui_action::UiErrorKeys>()
-        .snapshot()
-        .into_iter()
-        .map(|e| e.key.to_string())
-        .collect()
-}
-
 /// Backstab's `SMSG_SPELL_GO` from us at [`MOB`], whose start of the swing it defers
 /// (`AttributesEx2` bit 20, `0x6e83c0`), with us not swinging (`[+0xc48]`, `0x6e83e7`).
 fn backstab_lands(f: &mut Frame) {
@@ -708,7 +697,7 @@ fn a_go_with_no_hit_and_a_friendly_target_starts_nothing() {
     backstab_lands_at(&mut f, vec![], Some(OLD));
     assert_eq!(attack_wire(&f), Vec::<String>::new());
     assert_eq!(selected(&f), Some(OLD));
-    assert!(error_keys(&f).is_empty());
+    assert!(errors(&f).is_empty());
 }
 
 /// The GO's deferred start is the player's Attack at its first hit (`0x6e8402` → `0x6131a0`),
@@ -735,9 +724,6 @@ fn a_go_deferred_attack_selects_its_hit_before_it_swings() {
 #[test]
 fn a_lines_listeners_run_ahead_of_the_next_packets_in_place_signal() {
     let mut f = frame(true);
-    f.app.insert_resource(bevy::prelude::State::new(
-        crate::client_state::ClientState::InWorld,
-    ));
     spawn_mob(&mut f, &[]);
     swinging_at_old(&mut f);
     run(
@@ -783,7 +769,7 @@ fn a_stunned_casters_go_shows_its_line_and_does_not_swing() {
         flags | 0x0004_0000,
     )]));
     backstab_lands(&mut f);
-    assert_eq!(error_keys(&f), ["ERR_ATTACK_STUNNED"]);
+    assert_eq!(errors(&f), ["ERR_ATTACK_STUNNED"]);
     assert_eq!(attack_wire(&f), Vec::<String>::new());
     assert_eq!(selected(&f), Some(OLD));
 }
@@ -830,7 +816,7 @@ fn a_go_deferred_attack_the_cursor_took_with_nothing_selected_shows_no_target() 
     swinging_at_old(&mut f);
     with_the_cursor_up(&mut f);
     backstab_lands(&mut f);
-    assert_eq!(error_keys(&f), ["ERR_NO_ATTACK_TARGET"]);
+    assert_eq!(errors(&f), ["ERR_NO_ATTACK_TARGET"]);
     let sent: Vec<_> = f.rx.try_iter().collect();
     assert!(
         sent.iter().any(|c| matches!(

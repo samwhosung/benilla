@@ -364,9 +364,9 @@ mod tests {
         assert_eq!(s.eval::<String>("return SEEN").unwrap(), "E0");
     }
 
-    /// The feeds' own events read this frame's bags, whatever the lanes owe: the world-enter
-    /// cascade and a `BAG_UPDATE_COOLDOWN` fired after the packets read the key the frame seated,
-    /// while the refusal the key followed reads the bags before the key.
+    /// The feeds' own events read this frame's bags: the refusal the key followed fires in its
+    /// packet and reads the bags before the key, then the world-enter cascade and a
+    /// `BAG_UPDATE_COOLDOWN` fired after the packets read the key the frame seated.
     #[test]
     fn the_feeds_events_read_this_frames_bags() {
         let mut app = keyring_client();
@@ -375,7 +375,7 @@ mod tests {
             s.fire_event("BAG_UPDATE_COOLDOWN", vec![]);
         });
         let seen: String = hosted_eval(&mut app, "return SEEN");
-        assert_eq!(seen, "W1C1E0");
+        assert_eq!(seen, "E0W1C1");
     }
 
     /// A refusal that lands while no in-game interface is up is dropped by the frame, line and

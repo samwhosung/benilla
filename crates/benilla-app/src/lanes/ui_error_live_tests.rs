@@ -376,6 +376,10 @@ fn a_ready_check_answer_prints_its_lines_at_its_packet() {
 #[test]
 fn a_session_that_ends_before_the_world_leaves_no_line_for_the_next() {
     let mut app = crate::game_plugins::schedule_tests::headless_client();
+    // Before the world entry: the login screen, not the world.
+    app.insert_resource(bevy::prelude::State::new(
+        crate::client_state::ClientState::Login,
+    ));
     app.insert_resource(bevy::ecs::error::DefaultErrorHandler(
         bevy::ecs::error::ignore,
     ));

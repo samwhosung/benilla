@@ -99,7 +99,8 @@ fn losing_control_drops_the_cursor_and_the_cast_in_its_packet() {
     control(&mut c, 0x99, false);
     assert_eq!((c.seen(), c.sent()), (vec![], vec![]), "another unit's");
     control(&mut c, ME, false);
-    assert_eq!(c.seen(), ["CURSOR_UPDATE 0"]);
+    // The drop (`0x495901` → `0x495920`) runs ahead of the signal (`0x49590b`), both in the packet.
+    assert_eq!(c.seen(), ["CURSOR_UPDATE 0", "PLAYER_CONTROL_LOST 0"]);
     assert_eq!(c.sent(), [format!("CancelCast {{ spell_id: {FIREBALL} }}")]);
     assert_eq!(c.world().resource::<PendingCast>().current(), None);
 
@@ -112,8 +113,8 @@ fn losing_control_drops_the_cursor_and_the_cast_in_its_packet() {
     control(&mut c, ME, true);
     assert_eq!(
         (c.seen(), c.sent()),
-        (vec![], vec![]),
-        "regaining drops nothing"
+        (vec!["PLAYER_CONTROL_GAINED 0".to_string()], vec![]),
+        "regaining drops nothing, and signals"
     );
     assert_eq!(
         c.world().resource::<PendingCast>().current(),

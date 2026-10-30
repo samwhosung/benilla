@@ -367,7 +367,7 @@ mod tests {
     /// (`0x5ecf39`) it shows `0xb5`, `ERR_TAXINOPATHS`, inside the handler (`0x5ecf44` →
     /// `0x496720`), then closes the gossip menu (`0x4e1fa0` with a zero guid, `0x5ecf55`), whose
     /// `GOSSIP_CLOSED` follows the line, and returns before the builder (`0x5ecf6f`): no
-    /// `TAXIMAP_OPENED`. Both sit on the taxi lane at the handler's place. Two open it.
+    /// `TAXIMAP_OPENED`. Both fire inside the handler's packet. Two open it.
     #[test]
     fn a_mask_with_fewer_than_two_known_nodes_opens_no_map() {
         use benilla_protocol::SessionEvent;
@@ -394,8 +394,8 @@ mod tests {
         app.world_mut()
             .resource_mut::<crate::ui_gossip::GossipState>()
             .npc = Some(MASTER);
+        // What the packet's listeners heard, inside the packet: the lane fires at its end.
         let shown = |app: &mut App, known: [u32; 8]| {
-            let before = crate::lanes::stamp();
             crate::net::handlers::dispatch(
                 app.world_mut(),
                 vec![SessionEvent::TaxiNodesShown {
@@ -405,29 +405,16 @@ mod tests {
                 }],
             );
             app.world_mut().flush();
-            let after = crate::lanes::stamp();
-            let stamped = app.world().resource::<TaxiLane>().stamped();
             assert!(
-                stamped.iter().all(|(at, _)| before < *at && *at < after),
-                "stamped inside the handler"
+                app.world().resource::<TaxiLane>().stamped().is_empty(),
+                "the lane fired inside the packet"
             );
-            let script = app.world_mut().non_send_resource_mut::<UiScript>();
-            assert_eq!(
-                script.eval::<String>("return HEARD").unwrap(),
-                "",
-                "on the lane"
-            );
-            crate::lanes::fire_in_order(app.world_mut());
             let script = app.world_mut().non_send_resource_mut::<UiScript>();
             let heard = script.eval::<String>("return HEARD").unwrap();
             script.run("HEARD = ''").unwrap();
-            (stamped.len(), heard)
+            heard
         };
-        let (items, heard) = shown(&mut app, [0b10, 0, 0, 0, 0, 0, 0, 0]);
-        assert_eq!(
-            items, 1,
-            "the line, with the close's signals parked on the gossip lane"
-        );
+        let heard = shown(&mut app, [0b10, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(heard, "UI_ERROR_MESSAGE(no paths) GOSSIP_CLOSED(nil) ");
         assert_eq!(app.world().resource::<TaxiState>().cell(), None);
         assert_eq!(
@@ -441,7 +428,7 @@ mod tests {
         let mut chain = benilla_formats::open_chain(&data).expect("open chain");
         app.insert_resource(TaxiCatalogs::load(&mut chain).expect("taxi DBCs"));
         assert_eq!(
-            shown(&mut app, [0b10, 0, 0, 0, 0, 0, 0, 0x8000_0000]).1,
+            shown(&mut app, [0b10, 0, 0, 0, 0, 0, 0, 0x8000_0000]),
             "TAXIMAP_OPENED(nil) "
         );
         assert_eq!(app.world().resource::<TaxiState>().cell(), Some(MASTER));

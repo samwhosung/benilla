@@ -30,7 +30,7 @@ fn later_packet(
         !me.is_empty(),
         !own.0 && !lock.control_lost && lock.foreign_mover.is_none(),
     ));
-    let _ = net.0.send(ClientCommand::QueryTime);
+    let _ = net.0.send(ClientCommand::PlayedTime);
 }
 
 fn later() -> SessionEvent {
@@ -85,14 +85,14 @@ fn movers(rx: &Receiver<ClientCommand>) -> Vec<String> {
     rx.try_iter()
         .filter_map(|c| match c {
             ClientCommand::SetActiveMover { guid } => Some(format!("SetActiveMover {guid:#x}")),
-            ClientCommand::QueryTime => Some("later packet".into()),
+            ClientCommand::PlayedTime => Some("later packet".into()),
             _ => None,
         })
         .collect()
 }
 
 /// The arrival's writes are its packet's (`0x5dec7b` → `0x5dea50`): a packet after our own
-/// create in the same drain finds our player tagged and in control (`0x5deb56`), its send
+/// create finds our player tagged and in control (`0x5deb56`), its send
 /// goes out after the mover's claim (`0x5deb5b`), and the flag's rise and the class family
 /// (`0x5debcc`) are owed to the arrival's item.
 #[test]
@@ -119,25 +119,15 @@ fn a_packet_after_our_create_finds_us_arrived() {
         world
             .resource::<crate::spell::SpellModifiers>()
             .class_family(),
-        0,
-        "the class family is the arrival item's last step (`0x5debcc`)"
+        3,
+        "the class family is the arrival item's last step (`0x5debcc`), run inside its packet"
     );
-    assert_eq!(
+    assert!(
         world
             .resource::<crate::ui_world_enter::ArrivalLane>()
-            .entries(),
-        [crate::ui_world_enter::Entry::Arrival {
-            control_gained: true
-        }],
-        "one arrival on its lane, the flag's rise owed among its signals"
-    );
-    crate::ui_world_enter::fire_lane(world);
-    assert_eq!(
-        world
-            .resource::<crate::spell::SpellModifiers>()
-            .class_family(),
-        3,
-        "set once the item has run its cascade"
+            .entries()
+            .is_empty(),
+        "the arrival fired at the end of its packet"
     );
 }
 

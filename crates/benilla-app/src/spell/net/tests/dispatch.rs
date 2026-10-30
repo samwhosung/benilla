@@ -114,6 +114,18 @@ fn an_inventory_refusal_pops_the_cast_of_its_item_and_no_other() {
             Some(STONE),
         );
     }
+    // The refusal's `SPELLCAST_FAILED` fires inside its packet; a VM hears it.
+    crate::script_calls::insert_test_vm(app.world_mut());
+    crate::script_calls::with_hosted_vm(app.world_mut(), |s| {
+        s.expect("a VM").run(
+            r#"FAILED = 0 local f = CreateFrame("Frame")
+            f:RegisterEvent("SPELLCAST_FAILED")
+            f:SetScript("OnEvent", function() FAILED = FAILED + 1 end)"#,
+        )
+    })
+    .expect("the chunk runs");
+    let failed =
+        |app: &App| -> i64 { crate::script_calls::eval_in_vm(app.world(), "return FAILED") };
     let refusal = |item_guid| SessionEvent::InventoryFailure {
         reason: 0x16,
         required_level: None,
@@ -128,14 +140,11 @@ fn an_inventory_refusal_pops_the_cast_of_its_item_and_no_other() {
         Some(HEARTH),
         "another item's refusal"
     );
-    assert!(app.world().resource::<CastReports>().edges().is_empty());
+    assert_eq!(failed(&app), 0);
 
     dispatch(app.world_mut(), vec![refusal(STONE)]);
     assert_eq!(app.world().resource::<PendingCast>().current(), None);
-    assert!(matches!(
-        app.world().resource::<CastReports>().edges()[..],
-        [CastBarEdge::Failed]
-    ));
+    assert_eq!(failed(&app), 1, "the bar's failed edge, in its packet");
     assert!(
         !rx.try_iter()
             .any(|c| matches!(c, ClientCommand::CancelCast { .. })),

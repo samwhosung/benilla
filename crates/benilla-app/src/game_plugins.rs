@@ -264,7 +264,16 @@ pub(crate) mod schedule_tests {
     pub(crate) fn headless_client_with(more: impl FnOnce(&mut App)) -> App {
         let mut app = finished_client(more);
         app.cleanup();
+        in_world(&mut app);
         app
+    }
+
+    /// The client in the world with its interface up, as every packet after the world entry meets
+    /// it: [`crate::ui_script::ingame_ui_up_in`] holds, so the dispatch fires each packet's lanes
+    /// at its end ([`crate::lanes::flush`]), the path play takes. A test of the loading screen or
+    /// the world entry sets the state it needs.
+    fn in_world(app: &mut App) {
+        app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
     }
 
     /// The whole client's world, for a fixture that drives it by hand (a one-shot system, a call
@@ -288,6 +297,7 @@ pub(crate) mod schedule_tests {
         unrun(&mut app);
         app.world_mut()
             .remove_resource::<crate::vm_pass::PassOrder>();
+        in_world(&mut app);
         app
     }
 
