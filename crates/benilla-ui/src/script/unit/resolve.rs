@@ -82,8 +82,8 @@ pub fn resolve_unit_in(
         },
         UnitBase::Target => globals.target(),
         UnitBase::Npc => globals.npc(),
-        // Deviation: `0x4e81d0` has no bound and reads past its four-entry table, which is
-        // stale memory, not a mechanism; past it, nobody.
+        // Deviation: `0x4e81d0` has no bound and reads past its four-entry table; past it, nobody,
+        // because what it reads there is stale memory, not a mechanism.
         UnitBase::PartyPet(row) => pet(globals.party(row), &|| globals.party_pet_record(row)),
         // Capped at 4 (`0x4e81b0`).
         UnitBase::Party(row) => globals.party(row),

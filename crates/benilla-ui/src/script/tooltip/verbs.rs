@@ -49,8 +49,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 // hidden tooltip: its `[0]` with no type test, so a texture or a font string
                 // owns it too; a NULL raises `%s:SetOwner(): Couldn't find 'this' in owner
                 // object`, naming the tooltip (`0x5311bb`, `0x855150`). Deviation: the reference
-                // anchors a Font object through its +0x24 with no type test (`0x5313c9`),
-                // undefined; benilla raises the owner line.
+                // anchors a Font object through its +0x24 with no type test (`0x5313c9`); benilla
+                // raises the owner line because the result there is undefined.
                 let owner_h = owner_id(&owner)?
                     .filter(|id| {
                         let model = lua.app_data_ref::<Model>().expect("model app_data");

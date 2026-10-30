@@ -951,8 +951,9 @@ impl UiScript {
     /// runs. The app arms it only for the world-entry load, so a hung load reports instead of
     /// freezing the loading screen, and disarms it ([`Self::clear_instruction_budget`]) before the
     /// session's first frame. Deviation: the client's Lua has no such bound, as nothing sets a
-    /// hook (`lua_sethook`, `0x6fba40`, has no caller and no pointer to it), so a load that
-    /// never ends hangs it.
+    /// hook (`lua_sethook`, `0x6fba40`, has no caller and no pointer to it), so a load that never
+    /// ends hangs it; benilla bounds it because a hung load would otherwise freeze the loading
+    /// screen instead of reporting.
     ///
     /// An abort runs no error handler, so its message waits and is handed to the error function
     /// when the budget is disarmed, as a compile failure is (`0x704b42`), once per arming: the
