@@ -103,6 +103,10 @@ pub struct MacroState {
     list: Vec<Record>,
     /// The last id each scope handed out (`0xbdcbec`), the largest seen when macros load.
     last_id: [u32; 2],
+    /// Each scope's count of non-local macros (`0xbdcd04`): a load and a create add one, a delete
+    /// of a macro whose flag is clear takes one off, an edit moves none. Unsigned and wrapping, as
+    /// the reference's dword is.
+    non_local: [u32; 2],
 }
 
 impl Default for MacroState {
@@ -110,6 +114,7 @@ impl Default for MacroState {
         Self {
             list: Vec::new(),
             last_id: SCOPE_BASE,
+            non_local: [0; 2],
         }
     }
 }
@@ -179,6 +184,8 @@ impl MacroState {
             view.name = cut_name(&view.name);
             view.body = cut_body(&view.body);
             view.local_only = false;
+            // A loaded macro is non-local and counts (`0x4f09ae`-`0x4f09c4`).
+            self.non_local[scope] += 1;
             self.list.push(Record {
                 per_character,
                 view,
@@ -398,7 +405,7 @@ fn create_macro(
     name: &str,
     texture: Option<String>,
     body: &str,
-    (local_only, per_character): (bool, bool),
+    (mut local_only, per_character): (bool, bool),
     (aliases, book, pet_book): Books<'_>,
 ) -> mlua::Result<usize> {
     let state = &mut model.macros;
@@ -408,6 +415,14 @@ fn create_macro(
         )));
     }
     let scope = usize::from(per_character);
+    // A scope at 18 non-local macros, an unsigned compare, forces the new one local, and a macro
+    // that is not local adds one (`0x4f1055`-`0x4f106b`, `0x4f124d`-`0x4f1250`).
+    if state.non_local[scope] >= MAX_MACROS as u32 {
+        local_only = true;
+    }
+    if !local_only {
+        state.non_local[scope] += 1;
+    }
     state.last_id[scope] += 1;
     let id = state.last_id[scope];
     state.list.push(Record {
@@ -516,7 +531,12 @@ fn delete_macro(model: &mut Model, index: usize) -> bool {
     else {
         return false;
     };
-    model.macros.list.remove(at);
+    // A macro whose flag is clear takes one off its scope's count (`0x4f13a5`-`0x4f13af`).
+    let gone = model.macros.list.remove(at);
+    if !gone.view.local_only {
+        let scope = usize::from(gone.per_character);
+        model.macros.non_local[scope] = model.macros.non_local[scope].wrapping_sub(1);
+    }
     model.macro_bindings.remove(&id);
     super::cursor::clear_macro_slots(model, id);
     model.macros_dirty = true;
@@ -1007,6 +1027,48 @@ mod tests {
             0x4100_0008,
             "one past 0x1000007, in the character kind"
         );
+    }
+
+    /// Each scope counts its non-local macros (`0xbdcd04`): a create adds one when the macro is
+    /// not local (`0x4f124d`), a delete takes one off a macro whose flag is clear (`0x4f13a5`), and
+    /// an edit moves none (`0x4f12dc`). A local macro the stock UI edits to non-local and deletes
+    /// takes the count below zero, an unsigned 18 or more (`0x4f105c`), so every later create is
+    /// forced local (`0x4f106b`).
+    #[test]
+    fn the_non_local_count_forces_a_create_local_once_it_wraps() {
+        let s = seeded();
+        s.run(r#"CreateMacro("a", 1, "", 1) EditMacro(1, nil, nil, "x") DeleteMacro(1)"#)
+            .unwrap();
+        let local = s
+            .eval::<Value>(r#"CreateMacro("b", 1, "") local _, _, _, l = GetMacroInfo(1) return l"#)
+            .unwrap();
+        assert_eq!(local, Value::Integer(1));
+        // The other scope has its own count.
+        let other = s
+            .eval::<Value>(
+                r#"CreateMacro("c", 1, "", nil, 1) local _, _, _, l = GetMacroInfo(19) return l"#,
+            )
+            .unwrap();
+        assert_eq!(other, Value::Nil);
+    }
+
+    /// A loaded macro is non-local (`0x4f095c`) and counts (`0x4f09b5`), so deleting it balances.
+    #[test]
+    fn a_loaded_macro_counts_and_its_delete_balances() {
+        let mut s = seeded();
+        s.set_macros(MacroState::from_scopes(
+            vec![MacroView {
+                id: 1,
+                name: "m".into(),
+                ..Default::default()
+            }],
+            vec![],
+        ));
+        s.run(r#"DeleteMacro(1) CreateMacro("b", 1, "")"#).unwrap();
+        let local = s
+            .eval::<Value>(r#"local _, _, _, l = GetMacroInfo(1) return l"#)
+            .unwrap();
+        assert_eq!(local, Value::Nil);
     }
 
     #[test]
