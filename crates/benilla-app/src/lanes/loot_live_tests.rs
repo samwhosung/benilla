@@ -920,6 +920,51 @@ fn sent_at(sent: &[String], head: &str) -> Option<usize> {
     sent.iter().position(|s| s.starts_with(head))
 }
 
+/// An auto-looted body: the copier ends inside the response with the sweep (`0x4c1ed3` →
+/// `AutoLootAll 0x4c1fa0`), its coin and row requests sent there (`0x4c1ffc`, `0x4c2936`), so a
+/// packet behind it in the frame that closes the window finds them sent: a GO that ends our precast
+/// releases after them (`0x60d10b`), and the server's release answer, which vmangos sends whenever
+/// we move (`MovementHandler.cpp:1104-1110`), takes a window already swept.
+#[test]
+fn an_auto_loot_response_sweeps_inside_its_packet_ahead_of_a_later_close() {
+    for (what, later) in [
+        ("a GO", our_go(FIREBALL, vec![])),
+        (
+            "a release answer",
+            SessionEvent::LootReleaseResponse {
+                guid: CORPSE,
+                result: 1,
+            },
+        ),
+    ] {
+        let mut c = client();
+        precasting(&mut c);
+        c.app
+            .world_mut()
+            .resource_mut::<crate::ui_loot::AutoLootByte>()
+            .0 = true;
+        c.ask_loot(CORPSE);
+        c.frame(vec![vec![response(CORPSE, 500, &[LINEN])], vec![later]]);
+        let sent = c.sent();
+        let (money, row) = (
+            sent_at(&sent, "LootMoney"),
+            sent_at(&sent, "AutostoreLootItem"),
+        );
+        assert!(money.is_some() && row.is_some(), "{what}: swept: {sent:?}");
+        if let Some(release) = sent_at(&sent, "LootRelease") {
+            assert!(
+                money < Some(release) && row < Some(release),
+                "{what}: {sent:?}"
+            );
+        }
+        assert_eq!(
+            c.app.world().resource::<LootState>().source(),
+            None,
+            "{what}"
+        );
+    }
+}
+
 /// `SMSG_STANDSTATE_UPDATE` applies in its packet (`0x603e50` → `0x6127b0` → `0x5f0790`): a sit
 /// closes our loot there (`0x5f07d5`), so a later packet's listener in the frame reads the window
 /// shut, and the stand behind it, which closes nothing (`0x5f07a9`), does not hide the sit.
