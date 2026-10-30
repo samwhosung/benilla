@@ -100,6 +100,8 @@ fn client() -> (
             r#"SEEN = {}
             local f = CreateFrame("Frame")
             f:RegisterEvent("ITEM_TEXT_BEGIN") f:RegisterEvent("ITEM_TEXT_READY")
+            f:RegisterEvent("ITEM_TEXT_CLOSED") f:RegisterEvent("SEND_MAIL_MONEY_CHANGED")
+            f:RegisterEvent("SEND_MAIL_COD_CHANGED") f:RegisterEvent("MAIL_SEND_SUCCESS")
             f:RegisterEvent("MAIL_SHOW")
             f:SetScript("OnEvent", function() tinsert(SEEN, event) end)"#,
         )
@@ -180,12 +182,27 @@ fn a_text_objects_read_opens_inside_an_arrival() {
     assert_eq!(seen, OPENED);
 }
 
-/// A right-click on the mailbox opens it inside the click (`0x5f6820` → `0x4acd10`): `MAIL_SHOW`
-/// is heard there, and the click's next line finds it open, as `CheckInbox()` asks its list.
+/// A right-click on the mailbox opens it inside the click (`0x5f6820` → `0x4acd10`), with the
+/// plaque's reader open: the latch closes the reader first (`0x4acd1c` → `0x4930d0`), then the
+/// compose tab's reset signals its three (`0x4ace14`, `0x4ace1e`, `0x4ace28`), then `MAIL_SHOW`
+/// (`0x4acd42`), all heard there; and the click's next line finds the mailbox open, as
+/// `CheckInbox()` asks its list.
 #[test]
 fn a_mailbox_opens_inside_the_click() {
-    let (mut app, _plaque, mailbox, rx) = client();
+    let (mut app, plaque, mailbox, rx) = client();
     let world = app.world_mut();
+    over(world, plaque, PLAQUE);
+    super::release_click(world, benilla_ui::script::ClickMode::Action);
+    let (object, seen) = read(&app);
+    assert_eq!(
+        (object, seen),
+        (Some(PLAQUE), OPENED.map(String::from).to_vec())
+    );
+    let world = app.world_mut();
+    world
+        .non_send_resource_mut::<benilla_ui::script::UiScript>()
+        .run("SEEN = {}")
+        .expect("runs");
     over(world, mailbox, MAILBOX);
     let now = world.resource::<Time>().elapsed_secs();
     world
@@ -201,6 +218,16 @@ fn a_mailbox_opens_inside_the_click() {
             .any(|c| matches!(c, ClientCommand::GetMailList { mailbox: MAILBOX })),
         "the click's next line finds the mailbox open"
     );
-    let (_, seen) = read(&app);
-    assert_eq!(seen, ["MAIL_SHOW"]);
+    let (object, seen) = read(&app);
+    assert_eq!(object, None, "the reader closed at the latch");
+    assert_eq!(
+        seen,
+        [
+            "ITEM_TEXT_CLOSED",
+            "SEND_MAIL_MONEY_CHANGED",
+            "SEND_MAIL_COD_CHANGED",
+            "MAIL_SEND_SUCCESS",
+            "MAIL_SHOW"
+        ]
+    );
 }
