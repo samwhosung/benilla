@@ -2206,8 +2206,8 @@ pub(super) fn clear_owing(
     // (`0x493a08 call 0x5ecac0`, which also un-queues an on-next-swing strike and reports its
     // stop), calls a possessed unit off (`0x493a0f`-`0x493a18`), then sends (`0x493a2a`).
     seam.close_loot_on(old);
-    let reported = seam.release_stop();
-    let owed = scan::release_owing(seam, reported, scan::OwedTo::Deselect);
+    let stop = seam.stop_head();
+    let owed = scan::release_owing(seam, stop, scan::OwedTo::Deselect);
     if owed.is_none() {
         let _ = seam.net.0.send(ClientCommand::SetSelection { guid: 0 });
     }

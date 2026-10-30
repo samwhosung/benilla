@@ -327,11 +327,7 @@ impl ScriptCallHost<'_, '_> {
 
     /// `EditMacro`'s refresh of the bar's usable cache (`0x4f132e` into `0x4e5c00`), inside the
     /// call: `ACTIONBAR_UPDATE_USABLE` at its signal point when a pair changed (`0x4e5c53`).
-    fn refresh_usable_cache(
-        &mut self,
-        script: &mut UiScript,
-        mark: &mut crate::ui_cast::ReportMark,
-    ) {
+    fn refresh_usable_cache(&mut self, script: &mut UiScript, at: &mut Signalled) {
         let changed = self
             .appliers
             .action_states()
@@ -339,7 +335,7 @@ impl ScriptCallHost<'_, '_> {
             .is_some_and(|states| states.cache_refresh(script));
         if changed {
             script.fire_event("ACTIONBAR_UPDATE_USABLE", vec![]);
-            self.at_point(script, mark);
+            self.at_point(script, at);
         }
     }
 
@@ -469,10 +465,22 @@ impl ScriptCallHost<'_, '_> {
     }
 
     /// A signal point inside a call (`SignalEvent`, `0x703e50`, runs every listener before the
-    /// verb goes on): the views the call left are pushed, the reports it made since `mark` are
-    /// signalled behind its signals, as its tail would, and all of it runs here, in place
-    /// ([`UiScript::signal_point`]).
-    fn at_point(&mut self, script: &mut UiScript, mark: &mut crate::ui_cast::ReportMark) {
+    /// verb goes on): the views the call left are pushed, the reports it made since `at`'s mark
+    /// are signalled behind its signals, as its tail would, and all of it runs here, in place
+    /// ([`UiScript::signal_point`]). A selection a listener made there signalled itself, nested,
+    /// so the call's record moves to the selection and the pet latch they left
+    /// ([`Self::listened`]), and the call's own signals tell no change of theirs again. The
+    /// selecting verbs signal their own selection where they commit it, so the record holds no
+    /// change of the call's that a point could swallow.
+    fn at_point(&mut self, script: &mut UiScript, at: &mut Signalled) {
+        self.point(script, &mut at.mark);
+        self.listened(at);
+    }
+
+    /// [`Self::at_point`] that leaves the call's record where it was: for `SetSelection` past its
+    /// dedup, whose store and signals follow its listeners' picks whatever they were (`0x4936e2`,
+    /// `0x49389c`), so a pick of theirs is no change of the call's own.
+    fn point(&mut self, script: &mut UiScript, mark: &mut crate::ui_cast::ReportMark) {
         self.signal_reports(script, mark);
         self.commit_views(script);
         #[cfg(test)]
@@ -483,20 +491,12 @@ impl ScriptCallHost<'_, '_> {
     /// `AcceptAreaSpiritHeal()` (`0x492310`): the scan first (`0x492316` → `0x4923b0`), each healer
     /// change it makes applied as `0x4921c0` does, its out-of-range signal's listeners running
     /// where it fires, then the send with the healer it left.
-    fn accept_area_spirit_heal(
-        &mut self,
-        script: &mut UiScript,
-        mark: &mut crate::ui_cast::ReportMark,
-    ) {
+    fn accept_area_spirit_heal(&mut self, script: &mut UiScript, at: &mut Signalled) {
         let changes = self.appliers.death().rescan_spirit();
         for change in &changes {
             // `0x4921fc` → `0x6e7040(0xa18)`, the whole cancel, then the new healer's query.
             if change.cancel_aura {
-                self.cancel_aura(
-                    script,
-                    mark,
-                    crate::ui_dialog_verbs::AREA_SPIRIT_HEALER_AURA,
-                );
+                self.cancel_aura(script, at, crate::ui_dialog_verbs::AREA_SPIRIT_HEALER_AURA);
             }
             crate::ui_dialog_verbs::send_healer_query(change, self.appliers.death().net());
         }
@@ -509,19 +509,14 @@ impl ScriptCallHost<'_, '_> {
     /// ended (`0x6e7075`, `0x6e707e`), the far-sight gate (`0x6e709e`-`0x6e70b4`), then for spell
     /// 2584 `AREA_SPIRIT_HEALER_OUT_OF_RANGE` (`0x6e70c3`), whose listeners run where it fires,
     /// then `CMSG_CANCEL_AURA` (`0x6e70eb`).
-    fn cancel_aura(
-        &mut self,
-        script: &mut UiScript,
-        mark: &mut crate::ui_cast::ReportMark,
-        spell_id: u32,
-    ) {
+    fn cancel_aura(&mut self, script: &mut UiScript, at: &mut Signalled, spell_id: u32) {
         self.appliers.aura().end_on_player(spell_id);
         if !self.appliers.aura().passes_far_sight(spell_id) {
             return;
         }
         if spell_id == crate::ui_dialog_verbs::AREA_SPIRIT_HEALER_AURA {
             script.fire_event("AREA_SPIRIT_HEALER_OUT_OF_RANGE", vec![]);
-            self.at_point(script, mark);
+            self.at_point(script, at);
         }
         self.appliers.aura().send(spell_id);
     }
@@ -529,7 +524,7 @@ impl ScriptCallHost<'_, '_> {
     /// `SitOrStand()` (`0x48b920`): `SetStandState` (`0x5ed430`) on the active player, whose
     /// change to a state but 0 runs its local apply's leave, the loot close (`0x48f200` at
     /// `0x5f07d5`) then the attack stop (`0x5ecac0` at `0x5f07e7`), before its tail.
-    fn sit_or_stand(&mut self) {
+    fn sit_or_stand(&mut self, script: &mut UiScript, at: &mut Signalled) {
         let Some(state) = self.appliers.stand().sit_or_stand() else {
             return;
         };
@@ -538,9 +533,23 @@ impl ScriptCallHost<'_, '_> {
         };
         if leave {
             self.appliers.loot().close_for_stand();
-            self.appliers.attack().stop_for_stand();
+            self.stop_attack(script, at);
         }
         self.appliers.stand().finish();
+    }
+
+    /// StopAttack (`0x5ecac0`) inside a call, its signals' listeners running where they fire: its
+    /// tutorials' before its `CMSG_ATTACKSTOP` (`0x5ecb17`, `0x5ecb54`, `0x5ecb5b`), its
+    /// next-swing cancel's (`0x6e6f68`) before the save's `CMSG_CANCEL_CAST` (`0x6e6ff3`).
+    fn stop_attack(&mut self, script: &mut UiScript, at: &mut Signalled) {
+        let Some(stop) = self.appliers.attack().stop_head() else {
+            return;
+        };
+        self.at_point(script, at);
+        if self.appliers.attack().stop_send(stop) {
+            self.at_point(script, at);
+        }
+        self.appliers.attack().stop_save();
     }
 
     /// `SetCommands` (`0x515090`) inside a binding call: the bit, then the cast cancel (`0x51512a`
@@ -551,7 +560,7 @@ impl ScriptCallHost<'_, '_> {
     fn set_commands(
         &mut self,
         script: &mut UiScript,
-        mark: &mut crate::ui_cast::ReportMark,
+        at: &mut Signalled,
         input: benilla_ui::script::BindingInput,
     ) -> Option<CallTail> {
         use benilla_ui::script::BindingInput::{Fire, ViewStart, ViewStop};
@@ -585,8 +594,8 @@ impl ScriptCallHost<'_, '_> {
         let before = self.appliers.look().bits_before(input);
         let called = self.appliers.commands().call(input);
         let looked = self.appliers.look().bound(input, before);
-        self.freelook_edges_here(script, mark, looked);
-        self.run_called(script, mark, called)
+        self.freelook_edges_here(script, at, looked);
+        self.run_called(script, at, called)
     }
 
     /// The world frame's half of a freelook a call entered or left ([`freelook_edges`]), whose
@@ -595,12 +604,12 @@ impl ScriptCallHost<'_, '_> {
     fn freelook_edges_here(
         &mut self,
         script: &mut UiScript,
-        mark: &mut crate::ui_cast::ReportMark,
+        at: &mut Signalled,
         looked: crate::player::Looked,
     ) {
         freelook_edges(script, looked);
         if looked.entered || looked.left {
-            self.at_point(script, mark);
+            self.at_point(script, at);
         }
     }
 
@@ -611,39 +620,43 @@ impl ScriptCallHost<'_, '_> {
     fn look(
         &mut self,
         script: &mut UiScript,
-        mark: &mut crate::ui_cast::ReportMark,
+        at: &mut Signalled,
         call: benilla_ui::script::LookCall,
     ) -> Option<CallTail> {
         let looked = self.appliers.look().call(call);
-        self.freelook_edges_here(script, mark, looked);
+        self.freelook_edges_here(script, at, looked);
         let benilla_ui::script::LookCall::Mouselook(on) = call else {
             return None;
         };
         let called = self.appliers.commands().mouselook(on, looked.changed);
-        self.run_called(script, mark, called)
+        self.run_called(script, at, called)
     }
 
     /// What a `SetCommands` call leaves its host ([`crate::player::Called`]), run in its order.
     fn run_called(
         &mut self,
         script: &mut UiScript,
-        mark: &mut crate::ui_cast::ReportMark,
-        called: crate::player::Called,
+        at: &mut Signalled,
+        mut called: crate::player::Called,
     ) -> Option<CallTail> {
+        // The cast cancel's stop (`0x51512a` → `0x6e4940`) runs its listeners before the channel's
+        // `CMSG_CANCEL_CHANNELLING` (`0x515193` → `0x6e9b70`) and the tick (`0x5151a0`), whose
+        // stand-up and pitch latch read the call as they left it (`0x514e0c`, `0x514ef4`).
         if let Some(mover_is_player) = called.cancel {
-            self.appliers.self_cancel().cancel_for_move(mover_is_player);
+            self.appliers.self_cancel().cancel_for_move();
+            self.at_point(script, at);
+            self.appliers
+                .self_cancel()
+                .cancel_channel_for_move(mover_is_player);
         }
-        let legs = called.legs;
+        let legs = self.appliers.commands().tick_called(&mut called);
         if legs == crate::player::TickLegs::default() {
             return None;
         }
-        // The cancel's stop goes ahead of the tick's lines (`0x51512a` before `0x5151a0`), its
-        // listeners running there, before the tick writes.
-        self.at_point(script, mark);
         // The away clear's line (`0x5eb878`) runs its listeners before the mirror's zero and the
         // AFK packet (`0x5eb885`, `0x5eb8d0`).
         if legs.clear_afk && self.appliers.chat().clear_afk_line(script) {
-            self.at_point(script, mark);
+            self.at_point(script, at);
             self.appliers.chat().finish_clear_afk();
         }
         // `StopAutoMove` signals a follow's end before it stops the move (`0x60fb84`, then
@@ -651,7 +664,7 @@ impl ScriptCallHost<'_, '_> {
         if legs.stop_auto_move {
             if self.appliers.commands().following() {
                 script.fire_event("AUTOFOLLOW_END", vec![]);
-                self.at_point(script, mark);
+                self.at_point(script, at);
             }
             self.appliers.commands().stop_auto_move();
         }
@@ -667,6 +680,9 @@ impl ScriptCallHost<'_, '_> {
     /// (`0x493a18`) and the change's `PLAYER_TARGET_CHANGED`; TryCast's cancel reports ahead of
     /// its pick (`0x6e4d71`, `0x6e4efb`).
     fn signal_reports(&mut self, script: &mut UiScript, mark: &mut crate::ui_cast::ReportMark) {
+        // The tutorial triggers its steps queued fire ahead of its reports, as StopAttack's Food
+        // and Drink (`0x5ecb17`) and `NEED_AMMO`'s Ammunition (`0x6e1cc3`) precede theirs.
+        self.appliers.tutorial().fire_since(script, mark.lanes());
         let ready = self.appliers.reports().ready_since(script, *mark);
         crate::ui_cast::fire(script, ready);
         *mark = self.appliers.reports().mark();
@@ -712,21 +728,27 @@ impl ScriptCallHost<'_, '_> {
     ) {
         loop {
             if let Some(mut send) = owed.take_send() {
-                // The teardown's StopAttack reports first (`0x493a08`), with the selection zeroed
-                // (`0x4939d3`), and its listeners run there, before the pet leg.
+                // The teardown's StopAttack runs with the selection zeroed (`0x4939d3`): its
+                // tutorials' listeners before its `CMSG_ATTACKSTOP` (`0x5ecb17`, `0x5ecb54`,
+                // `0x5ecb5b`), its next-swing cancel's (`0x6e6f68`) before the save's
+                // `CMSG_CANCEL_CAST` (`0x6e6ff3`) and the pet leg (`0x493a0f`).
                 self.signal_reports(script, &mut at.mark);
                 script.seat_selection(self.appliers.select().seated());
-                if send.owes_pet_leg() {
-                    self.at_point(script, &mut at.mark);
+                if let Some(stop) = send.take_stop() {
+                    self.point(script, &mut at.mark);
+                    if self.appliers.select().stop_send(stop) {
+                        self.point(script, &mut at.mark);
+                    }
                     // A listener's `PetStopAttack` lowered the latch and signalled there, so the
                     // pet leg and the change find it down and signal nothing (`0x4bd650`).
                     at.latched = self.appliers.pet().attack_latched();
+                    self.appliers.select().stop_save();
                 }
                 // `PetStopAttack` lowered the latch and signals (`0x4bd6ae`, `0x4bd6b4`).
                 if self.appliers.select().run_pet_leg(&mut send) {
                     script.fire_event("PET_BAR_UPDATE", vec![]);
                     at.latched = false;
-                    self.at_point(script, &mut at.mark);
+                    self.point(script, &mut at.mark);
                 }
                 // The store over a listener's pick (`0x4936e2`), or for a clear the send of the
                 // listener's pick, and either signals after (`0x49389c`, `0x493a73`), so the
@@ -740,8 +762,7 @@ impl ScriptCallHost<'_, '_> {
             // `SetSelection` returns, or goes on to its re-swing, once its listeners ran. The
             // re-swing pushes the selection's address (`0x4938c3`), so it goes at a listener's
             // pick; StartAttack reads it after them (`0x5ecbcd`).
-            self.at_point(script, &mut at.mark);
-            self.listened(at);
+            self.at_point(script, at);
             if !owed.owes_swings() {
                 return;
             }
@@ -780,7 +801,12 @@ impl ScriptCallHost<'_, '_> {
         self.settle_selection(script, at, owed.into());
         let target = self.appliers.attack().settle_attack();
         if let Some(guid) = target {
-            self.appliers.attack().start_attack(guid);
+            // The toggle (`0x6131ce`): attacking, the stop signals in place; else the start.
+            if self.appliers.attack().toggles_off() {
+                self.stop_attack(script, at);
+            } else {
+                self.appliers.attack().start_attack(guid);
+            }
         }
     }
 
@@ -810,8 +836,7 @@ impl ScriptCallHost<'_, '_> {
                     // The latch (`0x4bd42e`) signals `PET_BAR_UPDATE` (`0x4bd438`), whose
                     // listeners run before the order goes (`0x4bd4a4`).
                     script.fire_event("PET_BAR_UPDATE", vec![]);
-                    self.at_point(script, &mut at.mark);
-                    self.listened(at);
+                    self.at_point(script, at);
                 }
                 finished.map(|(send, _)| PetStep::Order(send))
             }
@@ -820,8 +845,7 @@ impl ScriptCallHost<'_, '_> {
             // (`0x4bd444`).
             Some(PetStep::Order(send)) if send.signals() => {
                 script.fire_event("PET_BAR_UPDATE", vec![]);
-                self.at_point(script, &mut at.mark);
-                self.listened(at);
+                self.at_point(script, at);
                 Some(PetStep::Order(send))
             }
             step => step,
@@ -1022,7 +1046,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
                     // `SetCursorItem`'s signals (`0x494bb6`, `0x494c54`) run their listeners
                     // before `AutoEquipCursorItem` goes on (`0x5e18d5`), and its send.
                     crate::ui_action::UseOutcome::Equip { picked } => {
-                        self.at_point(script, &mut at.mark);
+                        self.at_point(script, &mut at);
                         self.listened(&mut at);
                         crate::ui_action::finish_equip(&mut self.appliers.action(), script, picked);
                     }
@@ -1039,6 +1063,9 @@ impl CallHost for ScriptCallHost<'_, '_> {
                 .use_inventory_item(script, slot, on_self),
             ScriptCall::Item(benilla_ui::script::ItemCall::BindOnUse { may_cast }) => {
                 appliers.item_use().confirm_bind_on_use(script, may_cast)
+            }
+            ScriptCall::Item(benilla_ui::script::ItemCall::EquipAnswer(answer)) => {
+                self.answer_pending_equip(script, &mut at, answer)
             }
             ScriptCall::Item(call) => appliers.items().apply(script, call),
             ScriptCall::CastPetSpell { spell_id, on_self } => {
@@ -1065,7 +1092,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
                 let step = appliers.pet_press().begin_order(packed);
                 self.pet_step(script, &mut at, step);
             }
-            ScriptCall::SendChat(send) => appliers.chat().send_chat(script, send),
+            ScriptCall::SendChat(send) => self.send_chat(script, &mut at, send),
             ScriptCall::DisplayError(key) => appliers.chat().display_error(script, key),
             ScriptCall::RandomRoll { min, max } => appliers.chat().random_roll(min, max),
             ScriptCall::Channel(cmd) => {
@@ -1073,13 +1100,20 @@ impl CallHost for ScriptCallHost<'_, '_> {
                     // The join's refusal runs its listeners inside the claim (`0x49b9c5`),
                     // before the body sends (`0x49ee02`).
                     if refused {
-                        self.at_point(script, &mut at.mark);
+                        self.at_point(script, &mut at);
                     }
                     self.appliers.chat().send_channel(packet);
                 }
             }
+            // A posture emote's leave stops the attack in place, its listeners running there.
             ScriptCall::DoEmote(request) => {
-                emote_in_order!(appliers, appliers.emote().do_emote(script, request));
+                if let Some(step) = appliers.emote().do_emote(script, request) {
+                    if step.leave {
+                        self.appliers.loot().close_for_stand();
+                        self.stop_attack(script, &mut at);
+                    }
+                    self.appliers.emote().finish(step);
+                }
             }
             ScriptCall::Uninvite(name) => appliers.chat().uninvite(name),
             ScriptCall::Logging { combat } => appliers.chat().logging(script, combat),
@@ -1089,23 +1123,23 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::PickItem(pick) => popup = appliers.cursor().pick_item(pick),
             ScriptCall::EnchantConfirm(answer) => popup = appliers.cursor().confirm_enchant(answer),
             ScriptCall::Loot(call) => tail = appliers.loot().apply(script, call),
-            ScriptCall::Auction(AuctionCall::Close) => self.close_auction(script, &mut at.mark),
+            ScriptCall::Auction(AuctionCall::Close) => self.close_auction(script, &mut at),
             ScriptCall::Auction(call) => appliers.auction().apply(script, call),
             ScriptCall::Social(call) => appliers.social().apply(script, call),
             ScriptCall::Party(request) => appliers.party().apply(script, request),
             ScriptCall::Quest(call) => {
                 if let Some(giver) = appliers.quest().apply(script, call) {
-                    self.finish_quest_teardown(script, &mut at.mark, giver);
+                    self.finish_quest_teardown(script, &mut at, giver);
                 }
             }
-            ScriptCall::Gossip(GossipCall::Close) => self.close_gossip(script, &mut at.mark),
+            ScriptCall::Gossip(GossipCall::Close) => self.close_gossip(script, &mut at),
             ScriptCall::Gossip(call) => appliers.gossip().apply(script, call),
-            ScriptCall::Mail(MailCall::Close) => self.close_mail(script, &mut at.mark),
+            ScriptCall::Mail(MailCall::Close) => self.close_mail(script, &mut at),
             // An unread mail's mark signals (`0x4add9d`) and its listeners run before the open
             // arms the close's re-query (`0x4adda6`).
             ScriptCall::Mail(call @ MailCall::Open { unread: true, .. }) => {
                 appliers.mail().apply(script, call);
-                self.at_point(script, &mut at.mark);
+                self.at_point(script, &mut at);
                 self.appliers.mail().arm_close_refresh();
             }
             ScriptCall::Mail(call) => appliers.mail().apply(script, call),
@@ -1118,24 +1152,24 @@ impl CallHost for ScriptCallHost<'_, '_> {
                 let check = call == benilla_ui::script::TradeCall::TargetEnchant;
                 appliers.cursor().trade_enchant(script, partner, check);
             }
-            ScriptCall::Trade(TradeCall::Close) => self.close_trade(script, &mut at.mark),
+            ScriptCall::Trade(TradeCall::Close) => self.close_trade(script, &mut at),
             ScriptCall::Trade(call) => tail = appliers.trade().apply(call),
             ScriptCall::Trainer(TrainerCall::Buy { trainer, spell_id }) => {
                 appliers.trainer().buy(trainer, spell_id);
             }
             ScriptCall::Trainer(TrainerCall::OpenOwn) => {
-                self.open_own_trainer(script, &mut at.mark);
+                self.open_own_trainer(script, &mut at);
             }
-            ScriptCall::Trainer(TrainerCall::Close) => self.close_trainer(script, &mut at.mark),
-            ScriptCall::Taxi(TaxiCall::Close) => self.close_taxi(script, &mut at.mark),
+            ScriptCall::Trainer(TrainerCall::Close) => self.close_trainer(script, &mut at),
+            ScriptCall::Taxi(TaxiCall::Close) => self.close_taxi(script, &mut at),
             ScriptCall::Taxi(call) => appliers.taxi().apply(call),
             ScriptCall::Merchant(MerchantCall::Close) => {
-                self.close_merchant(script, &mut at.mark);
+                self.close_merchant(script, &mut at);
             }
             ScriptCall::Merchant(call) => appliers.merchant().apply(script, call),
             ScriptCall::Guild(call) => appliers.guild().apply(script, call),
             ScriptCall::Petition(PetitionCall::CloseRegistrar) => tail = self.close_registrar(),
-            ScriptCall::Petition(PetitionCall::Close) => self.close_petition(script, &mut at.mark),
+            ScriptCall::Petition(PetitionCall::Close) => self.close_petition(script, &mut at),
             // The designer's opener, then the registrar's close core (`0x4f5355` → `0x4f5010`).
             ScriptCall::Petition(PetitionCall::TabardInfo) => {
                 appliers.petition().apply(script, PetitionCall::TabardInfo);
@@ -1148,11 +1182,11 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::Skill(call) => appliers.skills().apply(call),
             ScriptCall::Reputation(call) => tail = appliers.reputation().apply(script, call),
             ScriptCall::Pet(call) => appliers.pet().apply(script, call),
-            ScriptCall::Stable(StableCall::Close) => self.close_stable(script, &mut at.mark),
+            ScriptCall::Stable(StableCall::Close) => self.close_stable(script, &mut at),
             ScriptCall::Stable(call) => appliers.stable().apply(call),
             ScriptCall::Session(request) => appliers.session().apply(request),
             ScriptCall::Tutorial(call) => appliers.tutorial().apply(script, call),
-            ScriptCall::Bank(BankCall::Close) => self.close_bank(script, &mut at.mark),
+            ScriptCall::Bank(BankCall::Close) => self.close_bank(script, &mut at),
             ScriptCall::Bank(BankCall::Purchase) => appliers.bank().purchase(script),
             ScriptCall::TradeSkill(TradeSkillCall::Do { spell_id, count }) => {
                 crate::ui_tradeskill::do_trade_skill(&mut appliers.cast(), spell_id, count);
@@ -1164,7 +1198,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::Craft(CraftCall::Close) => appliers.craft().close(),
             ScriptCall::Battlefield(call) => tail = appliers.battlefield().apply(script, call),
             ScriptCall::Death(DeathAction::AcceptAreaSpiritHeal) => {
-                self.accept_area_spirit_heal(script, &mut at.mark);
+                self.accept_area_spirit_heal(script, &mut at);
             }
             ScriptCall::Death(action) => appliers.death().apply(script, action),
             ScriptCall::Duel(DuelRequest::StartByGuid(guid)) => {
@@ -1189,7 +1223,7 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::Pvp(PvpCall::Toggle) => appliers.pvp().toggle(),
             ScriptCall::WornDisplay(set) => appliers.worn().set(set),
             ScriptCall::ActionBar(ActionBarCall::RefreshUsable) => {
-                self.refresh_usable_cache(script, &mut at.mark);
+                self.refresh_usable_cache(script, &mut at);
             }
             ScriptCall::ActionBar(call) => {
                 appliers.action_bar().apply(call);
@@ -1217,11 +1251,11 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::Unserved(send) => appliers.gm_ticket().unserved(send),
             ScriptCall::Inspect(call) => tail = appliers.inspect().apply(script, call),
             ScriptCall::ItemText(ItemTextCall::Turn(delta)) => {
-                self.turn_item_text(script, &mut at.mark, delta);
+                self.turn_item_text(script, &mut at, delta);
             }
-            ScriptCall::ItemText(ItemTextCall::Close) => self.close_item_text(script, &mut at.mark),
+            ScriptCall::ItemText(ItemTextCall::Close) => self.close_item_text(script, &mut at),
             ScriptCall::Aura(AuraCall::Cancel(spell_id)) => {
-                self.cancel_aura(script, &mut at.mark, spell_id);
+                self.cancel_aura(script, &mut at, spell_id);
             }
             ScriptCall::Minimap(MinimapCall::Ping { x, y }) => appliers.minimap().ping(x, y),
             ScriptCall::Minimap(MinimapCall::Ground { x, y }) => {
@@ -1229,10 +1263,10 @@ impl CallHost for ScriptCallHost<'_, '_> {
                     appliers.cursor().bind_location(at);
                 }
             }
-            ScriptCall::Posture(PostureCall::SitOrStand) => self.sit_or_stand(),
+            ScriptCall::Posture(PostureCall::SitOrStand) => self.sit_or_stand(script, &mut at),
             ScriptCall::ConfirmPetUnlearn => appliers.pet_unlearn().confirm(script),
             ScriptCall::Nameplates(write) => appliers.plates().apply(write),
-            ScriptCall::Follow(request) => self.follow(script, &mut at.mark, request),
+            ScriptCall::Follow(request) => self.follow(script, &mut at, request),
             ScriptCall::Console(line) => appliers.console().run(&engine::VmCvars(script), &line),
             ScriptCall::CvarWritten => appliers.cvars().sync(Some(script)),
             ScriptCall::CameraView(request) => {
@@ -1253,14 +1287,14 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::RecordAsk(ask) => appliers.asks().apply(ask),
             ScriptCall::WorldClick(step) => self.world_click(script, &mut at, step),
             ScriptCall::PlateClick(click) => self.plate_click(script, &mut at, click),
-            ScriptCall::Input(input) => tail = self.set_commands(script, &mut at.mark, input),
-            ScriptCall::Look(call) => tail = self.look(script, &mut at.mark, call),
+            ScriptCall::Input(input) => tail = self.set_commands(script, &mut at, input),
+            ScriptCall::Look(call) => tail = self.look(script, &mut at, call),
             ScriptCall::DropItemOnUnit(token) => appliers.drop_item().drop_on(script, &token),
         }
         // A profession opener the call cast toggles its window inside the cast (`0x6e4c22`,
         // `0x6e4c34`), whose signals' listeners run before the call goes on.
         if self.appliers.trade_skill().toggle_opens(script) {
-            self.at_point(script, &mut at.mark);
+            self.at_point(script, &mut at);
         }
         self.settle_selection(script, &mut at, owed);
         // A deselect the call's own steps raised, a dead unit's loot close's (`0x48f369`), signals

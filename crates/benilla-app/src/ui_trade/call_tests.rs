@@ -1442,3 +1442,51 @@ fn a_cached_initiate_prints_its_line_inside_the_call() {
         "CHAT_MSG_SYSTEM(Requested to trade with Bob.) next"
     );
 }
+
+/// Two traded items' destroys still queued at a close: each watcher run signals in its own
+/// handler (`0x4bfa70` per item: the clear `0x5d4480`, then `TRADE_PLAYER_ITEM_CHANGED`), so the
+/// first slot's listeners send before the second slot's clear, at the world's close core
+/// (`0x4bf4e0`, inside the destroys' span) and at `CloseTrade()` (`0x4bfdc0`) alike.
+#[test]
+fn each_queued_trade_halfs_listeners_send_before_the_next_clear() {
+    for local in [false, true] {
+        let mut t = client();
+        open_with_bob(&mut t);
+        run(
+            &mut t,
+            r#"PickupContainerItem(0, 1) ClickTradeButton(1)
+            PickupContainerItem(0, 2) ClickTradeButton(2)
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("TRADE_PLAYER_ITEM_CHANGED")
+            f:SetScript("OnEvent", function() RandomRoll(1, 2) end)"#,
+        );
+        let _ = sent(&t);
+        for (guid, entry) in [(CLOTH, 2589), (JERKY, 117)] {
+            t.app
+                .world_mut()
+                .resource_mut::<crate::item_lane::ItemLane>()
+                .push(crate::item_watch::Run {
+                    notice: Some(crate::item_watch::ItemNotice::Destroyed { guid, entry }),
+                    ..Default::default()
+                });
+        }
+        if local {
+            run(&mut t, "CloseTrade()");
+        } else {
+            super::close_core(t.app.world_mut());
+        }
+        let wire: Vec<String> = sent(&t)
+            .into_iter()
+            .filter_map(|c| match c {
+                ClientCommand::ClearTradeItem { trade_slot } => Some(format!("clear {trade_slot}")),
+                ClientCommand::RandomRoll { .. } => Some("roll".to_string()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            wire,
+            ["clear 0", "roll", "clear 1", "roll"],
+            "local {local}"
+        );
+    }
+}

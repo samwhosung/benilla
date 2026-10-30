@@ -325,6 +325,12 @@ pub(crate) struct TutorialState {
 impl TutorialState {
     /// Queue `ask` on the lane, stamped now, behind everything stamped before it.
     fn push(&mut self, ask: TutorialAsk) {
+        // A trigger a call queued fires at its host's next point ([`TutorialSteps::fire_since`]):
+        // the census counts a send made before then.
+        #[cfg(test)]
+        if matches!(ask, TutorialAsk::Trigger { .. } | TutorialAsk::Fire { .. }) {
+            benilla_ui::script::census::queued();
+        }
         let stamp = crate::lanes::stamp();
         let at = self.lane.partition_point(|(s, _)| *s < stamp);
         self.lane.insert(at, (stamp, ask));
@@ -332,6 +338,22 @@ impl TutorialState {
 
     fn head(&self) -> Option<Stamp> {
         self.lane.front().map(|(s, _)| *s)
+    }
+
+    /// The asks stamped since `mark` up to the first selection's, taken in order: a call's own,
+    /// for its host to apply at its point. A selection's ladder needs the world's reads, and it and
+    /// everything behind it stay for the lane.
+    fn take_since(&mut self, mark: crate::lanes::Mark) -> Vec<TutorialAsk> {
+        let Some(from) = self.lane.iter().position(|(s, _)| s.since(mark)) else {
+            return Vec::new();
+        };
+        let to = self
+            .lane
+            .iter()
+            .skip(from)
+            .position(|(_, ask)| matches!(ask, TutorialAsk::Selected { .. }))
+            .map_or(self.lane.len(), |n| from + n);
+        self.lane.drain(from..to).map(|(_, ask)| ask).collect()
     }
 
     /// The head, taken if `until` admits it.
@@ -716,6 +738,28 @@ pub(crate) struct TutorialSteps<'w> {
 }
 
 impl TutorialSteps<'_> {
+    /// The tutorial asks a call's engine half queued since `mark` ([`Tutorials::trigger_now`]),
+    /// applied at its signal point: a `TriggerTutorial(id, 0)` (`0x4b5390`) runs its fire-once
+    /// test, then the cue and `TUTORIAL_TRIGGER` where the call reached, as the reference fires
+    /// it inside its verb.
+    pub(crate) fn fire_since(&mut self, script: &mut UiScript, mark: crate::lanes::Mark) {
+        let Some(tutorials) = self.tutorials.as_deref() else {
+            return;
+        };
+        let asks = tutorials.lock().take_since(mark);
+        for ask in asks {
+            let published = tutorials.lock().apply(ask, Instant::now(), &self.commands);
+            if let (Some(published), Some(sounds)) = (published, self.sounds.as_deref()) {
+                fire_published(script, sounds, published);
+            } else if let Some(published) = published {
+                script.fire_event(
+                    "TUTORIAL_TRIGGER",
+                    vec![ScriptValue::Int(i64::from(published))],
+                );
+            }
+        }
+    }
+
     /// `FlagTutorial`'s `0x4b54c0` (`0x4b59dc`), `ClearTutorials`'s `0x4b55c0` (`0x4b5a00`) or
     /// `ResetTutorials`'s `0x4b5660` (`0x4b5a10`), its packet sent with any owed before it; or an
     /// engine step's `TriggerTutorial(id, 0)` (`0x4b5390`), its fire-once test, then the cue and

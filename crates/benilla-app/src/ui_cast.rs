@@ -74,6 +74,9 @@ pub(crate) struct CastReports(std::collections::VecDeque<(crate::lanes::Stamp, C
 impl CastReports {
     /// Stamp `report` and queue it behind everything stamped before it.
     fn push(&mut self, report: CastReport) {
+        // A call's host signals it at its next point: the census counts a send made before then.
+        #[cfg(test)]
+        benilla_ui::script::census::queued();
         let stamp = crate::lanes::stamp();
         let at = self.0.partition_point(|(s, _)| *s < stamp);
         self.0.insert(at, (stamp, report));
@@ -154,6 +157,7 @@ impl CastReports {
     }
 
     /// How many reports are queued.
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.0.len()
     }
@@ -436,6 +440,13 @@ pub(crate) struct CallReports<'w, 's> {
 /// after.
 #[derive(Clone, Copy)]
 pub(crate) struct ReportMark(crate::lanes::Mark, crate::lanes::Mark);
+
+impl ReportMark {
+    /// The clock the call's lane items are stamped after: its cast reports, its tutorial triggers.
+    pub(crate) fn lanes(self) -> crate::lanes::Mark {
+        self.1
+    }
+}
 
 impl CallReports<'_, '_> {
     pub(crate) fn mark(&self) -> ReportMark {

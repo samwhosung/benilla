@@ -217,7 +217,7 @@ impl ScriptCallHost<'_, '_> {
             feed.click(script);
         }
         // What the offers signalled runs ahead of the select.
-        self.at_point(script, &mut at.mark);
+        self.at_point(script, at);
         let leg = self
             .appliers
             .click()
@@ -226,7 +226,7 @@ impl ScriptCallHost<'_, '_> {
         // A bind the cursor's word refused signals (`0x6e615d`) and its listeners run before the
         // click falls to `OnWorldClick`'s deselect (`0x5e03cf`).
         if leg == Some(crate::target::CursorLeg::Signalled) {
-            self.at_point(script, &mut at.mark);
+            self.at_point(script, at);
         }
         let owed = match leg {
             Some(crate::target::CursorLeg::Takes) | None => None,
@@ -254,7 +254,7 @@ impl ScriptCallHost<'_, '_> {
         }
         // The payload leg's `ClearCursor` signals in place (`0x495190` from `0x492ce0`,
         // `0x492c90`, `0x492d30`), its listeners running ahead of the interact or the walk.
-        self.at_point(script, &mut at.mark);
+        self.at_point(script, at);
         let mut legs = self.appliers.click();
         let Some(mut dispatch) = legs.dispatch() else {
             return;
@@ -278,7 +278,7 @@ impl ScriptCallHost<'_, '_> {
         };
         // The leg's `SetAutoLoot` is a call of its own, which applies here, ahead of the loot or
         // the use it owes (`0x5d6c78`, `0x60bff7`, `0x5f86a6`).
-        self.at_point(script, &mut at.mark);
+        self.at_point(script, at);
         let owed = self
             .appliers
             .click()
@@ -335,7 +335,7 @@ impl ScriptCallHost<'_, '_> {
         if let Some(mut feed) = legs.feed() {
             feed.click_on(script, click.guid);
         }
-        self.at_point(script, &mut at.mark);
+        self.at_point(script, at);
         let owed = self.appliers.click().plate().and_then(|mut plate| {
             plate.greet(entity);
             plate.select(entity, click.guid)
@@ -382,7 +382,7 @@ impl ScriptCallHost<'_, '_> {
         };
         // The leg's `SetAutoLoot` is a call of its own, which applies here, ahead of the loot or
         // the use it owes (`0x5d6c78`, `0x60bff7`, `0x5f86a6`).
-        self.at_point(script, &mut at.mark);
+        self.at_point(script, at);
         let owed = self
             .appliers
             .click()

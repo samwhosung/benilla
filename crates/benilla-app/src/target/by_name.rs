@@ -749,10 +749,21 @@ impl SelectCommit<'_, '_> {
         send.pay(&mut self.selection, &mut self.seam);
     }
 
-    /// The teardown's pet leg, if it waits behind its stop's report
+    /// The teardown's pet leg, if it waits behind its stop
     /// ([`scan::OwedSend::run_pet_leg`]): whether it called a unit off.
     pub(crate) fn run_pet_leg(&mut self, send: &mut scan::OwedSend) -> bool {
         send.run_pet_leg(&mut self.seam)
+    }
+
+    /// The teardown's StopAttack past its head
+    /// ([`crate::creature_anim::AttackSeam::stop_send`]): whether its next-swing cancel ran.
+    pub(crate) fn stop_send(&mut self, stop: crate::creature_anim::StopTail) -> bool {
+        self.seam.stop_send(stop)
+    }
+
+    /// The teardown's StopAttack's save leg ([`crate::creature_anim::AttackSeam::stop_save`]).
+    pub(crate) fn stop_save(&mut self) {
+        self.seam.stop_save();
     }
 
     /// Pay what `debt` still owes, in order, now that the signals' listeners have run, up to a

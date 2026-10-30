@@ -40,7 +40,7 @@ pub(crate) use equip_error::{equip_error_key, inventory_result_key, EquipError, 
 #[cfg(test)]
 pub(crate) use bags::eval_with_bags;
 pub(crate) use bags::{BagLive, BagReads};
-pub(crate) use calls::ItemSteps;
+pub(crate) use calls::{EquipEnd, ItemSteps};
 pub(crate) use drain::ScriptItemUse;
 pub(crate) use feed::ItemViewLive;
 use feed::{feed_item_stats, feed_random_properties};

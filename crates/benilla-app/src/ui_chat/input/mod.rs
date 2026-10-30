@@ -25,9 +25,9 @@ pub(crate) use emote::EmoteDoer;
 #[cfg(test)]
 pub(super) use parse::lua_quoted_string;
 pub(super) use parse::{parse_line, ParsedChat};
-pub(crate) use send::ChatSender;
 #[cfg(test)]
 pub(crate) use send::{chat_world, run_chat};
+pub(crate) use send::{ChatSender, ChatStep};
 
 use crate::creature_anim::MovementState;
 use crate::net::{ClientCommand, NetCommands, SelfPlayer};

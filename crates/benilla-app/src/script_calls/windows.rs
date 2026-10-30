@@ -14,14 +14,13 @@
 use benilla_ui::script::UiScript;
 
 use super::ScriptCallHost;
-use crate::ui_cast::ReportMark;
 use crate::ui_session::{parked_close as parked, NpcWindow};
 
 impl ScriptCallHost<'_, '_> {
     /// A core's signal point (`SignalEvent`, `0x703e50`): the listeners of what it fired run
     /// here, before the core goes on.
-    fn signalled(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
-        self.at_point(script, mark);
+    fn signalled(&mut self, script: &mut UiScript, at: &mut super::Signalled) {
+        self.at_point(script, at);
     }
 
     /// `0x4931c0(cell, dl = 0)` from a core, and the core's re-entry inside it while its window
@@ -29,28 +28,28 @@ impl ScriptCallHost<'_, '_> {
     fn release_into(
         &mut self,
         script: &mut UiScript,
-        mark: &mut ReportMark,
+        at: &mut super::Signalled,
         cell: u64,
-        core: fn(&mut Self, &mut UiScript, &mut ReportMark),
+        core: fn(&mut Self, &mut UiScript, &mut super::Signalled),
     ) {
         let reenters = self.appliers.latch().release(cell);
         if reenters {
-            core(self, script, mark);
+            core(self, script, at);
         }
     }
 
     /// The bank's close core `0x4f84d0` with a zero guid: `BANKFRAME_CLOSED` first and with no
     /// test of the cell (`0x4f84df`), the release on the cell as the listeners left it
     /// (`0x4f84eb`), then the cell cleared (`0x4f84f2`).
-    pub(super) fn close_bank(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
+    pub(super) fn close_bank(&mut self, script: &mut UiScript, at: &mut super::Signalled) {
         script.fire_event("BANKFRAME_CLOSED", vec![]);
-        self.signalled(script, mark);
+        self.signalled(script, at);
         if parked(NpcWindow::Bank) {
             return;
         }
         let banker = self.appliers.bank().banker();
         if let Some(banker) = banker {
-            self.release_into(script, mark, banker, Self::close_bank);
+            self.release_into(script, at, banker, Self::close_bank);
         }
         self.appliers.bank().clear_banker(script);
     }
@@ -58,20 +57,20 @@ impl ScriptCallHost<'_, '_> {
     /// The trainer's close core `0x4d7440` with a zero guid: nothing with no trainer
     /// (`0x4d7459`), else `TRAINER_CLOSED` first (`0x4d7468`), the release on the cell as the
     /// listeners left it (`0x4d7474`), then the cell cleared (`0x4d747c`).
-    pub(super) fn close_trainer(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
+    pub(super) fn close_trainer(&mut self, script: &mut UiScript, at: &mut super::Signalled) {
         if parked(NpcWindow::Trainer) {
             script.fire_event("TRAINER_CLOSED", vec![]);
-            self.signalled(script, mark);
+            self.signalled(script, at);
             return;
         }
         if self.appliers.trainer().trainer().is_none() {
             return;
         }
         script.fire_event("TRAINER_CLOSED", vec![]);
-        self.signalled(script, mark);
+        self.signalled(script, at);
         let trainer = self.appliers.trainer().trainer();
         if let Some(trainer) = trainer {
-            self.release_into(script, mark, trainer, Self::close_trainer);
+            self.release_into(script, at, trainer, Self::close_trainer);
         }
         self.appliers.trainer().clear_trainer(script);
     }
@@ -79,11 +78,11 @@ impl ScriptCallHost<'_, '_> {
     /// `OpenTrainer()` (`0x4d8cf0`): with the active player (`0x4d8d24`), `TalkToTrainer` on its
     /// own guid (`0x5df680`), which closes the window (`0x5df6bb`) before `CMSG_TRAINER_LIST`
     /// (`0x5df6fc`).
-    pub(super) fn open_own_trainer(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
+    pub(super) fn open_own_trainer(&mut self, script: &mut UiScript, at: &mut super::Signalled) {
         let Some(me) = self.appliers.trainer().own_guid() else {
             return;
         };
-        self.close_trainer(script, mark);
+        self.close_trainer(script, at);
         self.appliers.trainer().ask_own_list(me);
     }
 
@@ -92,50 +91,50 @@ impl ScriptCallHost<'_, '_> {
     /// it (`0x4cd60e`), the auctioneer, house and flags cleared with the lists left standing
     /// (`0x4cd613`-`0x4cd629`), then the sell slot emptied with its unlock (`0x4cd62e` →
     /// `0x4cd640`).
-    pub(super) fn close_auction(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
+    pub(super) fn close_auction(&mut self, script: &mut UiScript, at: &mut super::Signalled) {
         // Inside a parked close's signal, the re-entry of the session it closes.
         if parked(NpcWindow::Auction) {
             crate::ui_auction::reenter_parked_close(script);
-            self.signalled(script, mark);
+            self.signalled(script, at);
             return;
         }
         if self.appliers.auction().auctioneer().is_none() {
             return;
         }
         script.fire_event("AUCTION_HOUSE_CLOSED", vec![]);
-        self.signalled(script, mark);
+        self.signalled(script, at);
         let auctioneer = self.appliers.auction().auctioneer();
         if let Some(auctioneer) = auctioneer {
-            self.release_into(script, mark, auctioneer, Self::close_auction);
+            self.release_into(script, at, auctioneer, Self::close_auction);
         }
         if self.appliers.auction().auctioneer().is_some() {
             self.appliers.auction().clear_auctioneer(script);
         }
         script.clear_auction_sell_item();
-        self.signalled(script, mark);
+        self.signalled(script, at);
     }
 
     /// The gossip menu's close core `0x4e1fa0` with a zero guid: nothing with no menu
     /// (`0x4e1fb8`), else the release (`0x4e1fc5`), the cell zeroed (`0x4e1fcc`) and
     /// `GOSSIP_CLOSED` (`0x4e1fdc`); the slots, the text and its latch stay.
-    pub(super) fn close_gossip(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
+    pub(super) fn close_gossip(&mut self, script: &mut UiScript, at: &mut super::Signalled) {
         if parked(NpcWindow::Gossip) {
             return;
         }
         let Some(npc) = self.appliers.gossip().npc() else {
             return;
         };
-        self.release_into(script, mark, npc, Self::close_gossip);
+        self.release_into(script, at, npc, Self::close_gossip);
         self.appliers.gossip().clear_npc();
         script.fire_event("GOSSIP_CLOSED", vec![]);
-        self.signalled(script, mark);
+        self.signalled(script, at);
     }
 
     /// The mailbox's close core, `0x4acd50` with `cl = 0`: the compose tab's silent reset first
     /// and always (`0x4acd55` → `0x4acdc0(0)`), then, with a mailbox open, the release
     /// (`0x4acd85`), the cell cleared (`0x4acd8f`), `MAIL_CLOSED` (`0x4acda3`) and the tail's
     /// next-mail-time query (`0x4acda8`, `0x4acdb1`).
-    pub(super) fn close_mail(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
+    pub(super) fn close_mail(&mut self, script: &mut UiScript, at: &mut super::Signalled) {
         script.reset_compose_tab_silently();
         if parked(NpcWindow::Mail) {
             return;
@@ -143,29 +142,29 @@ impl ScriptCallHost<'_, '_> {
         let Some(mailbox) = self.appliers.mail().mailbox() else {
             return;
         };
-        self.release_into(script, mark, mailbox, Self::close_mail);
+        self.release_into(script, at, mailbox, Self::close_mail);
         self.appliers.mail().clear_mailbox(script);
         script.fire_event("MAIL_CLOSED", vec![]);
-        self.signalled(script, mark);
+        self.signalled(script, at);
         self.appliers.mail().refresh_after_close();
     }
 
     /// The vendor's close core `0x4fadf0`: with a vendor open, the release (`0x4fae04`), the cell
     /// cleared (`0x4fae0e`), `MERCHANT_CLOSED` (`0x4fae2c`), then a vendor row held on the cursor
     /// dropped (`0x4fae31`-`0x4fae4a`) and a Repair base mode back to Point (`0x4fae4f`-`0x4fae68`).
-    pub(super) fn close_merchant(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
+    pub(super) fn close_merchant(&mut self, script: &mut UiScript, at: &mut super::Signalled) {
         if parked(NpcWindow::Merchant) {
             return;
         }
         let Some(vendor) = self.appliers.merchant().vendor() else {
             return;
         };
-        self.release_into(script, mark, vendor, Self::close_merchant);
+        self.release_into(script, at, vendor, Self::close_merchant);
         self.appliers.merchant().clear_vendor();
         script.fire_event("MERCHANT_CLOSED", vec![]);
-        self.signalled(script, mark);
+        self.signalled(script, at);
         crate::ui_merchant::close_tail(script);
-        self.signalled(script, mark);
+        self.signalled(script, at);
     }
 
     /// The rest of the quest panel's teardown `0x501130` after its cell's zero (`0x501201`),
@@ -174,37 +173,37 @@ impl ScriptCallHost<'_, '_> {
     pub(super) fn finish_quest_teardown(
         &mut self,
         script: &mut UiScript,
-        mark: &mut ReportMark,
+        at: &mut super::Signalled,
         giver: u64,
     ) {
         let _ = self.appliers.latch().release(giver);
         script.fire_event("QUEST_FINISHED", vec![]);
-        self.signalled(script, mark);
+        self.signalled(script, at);
     }
 
     /// The stable's close core `0x4cae10`: with a master stored, the release (`0x4cae24`), the
     /// cell cleared (`0x4cae29`), then `PET_STABLE_CLOSED` (`0x4cae3a`).
-    pub(super) fn close_stable(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
+    pub(super) fn close_stable(&mut self, script: &mut UiScript, at: &mut super::Signalled) {
         if parked(NpcWindow::Stable) {
             return;
         }
         let Some(master) = self.appliers.stable().master() else {
             return;
         };
-        self.release_into(script, mark, master, Self::close_stable);
+        self.release_into(script, at, master, Self::close_stable);
         self.appliers.stable().clear_master();
         script.fire_event("PET_STABLE_CLOSED", vec![]);
-        self.signalled(script, mark);
+        self.signalled(script, at);
     }
 
     /// `ClosePetition()` (`0x4f43c0` → `0x4f3f60(0, 0)`) inside its call: with a petition open,
     /// the decline, the signers freed and the item zeroed, then `PETITION_CLOSED` (`0x4f402c`),
     /// whose listeners run here and still read the record; then, open or not, the record and the
     /// sign latch dropped (`0x4f4078`).
-    pub(super) fn close_petition(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
+    pub(super) fn close_petition(&mut self, script: &mut UiScript, at: &mut super::Signalled) {
         if self.appliers.petition().close_petition() {
             script.fire_event("PETITION_CLOSED", vec![]);
-            self.signalled(script, mark);
+            self.signalled(script, at);
         }
         self.appliers.petition().drop_petition_record();
     }
@@ -213,23 +212,25 @@ impl ScriptCallHost<'_, '_> {
     /// still queued: with a window open, the done flag stored (`0x4bf4fd`), the release
     /// (`0x4bf50a`), the cell cleared and `TRADE_CLOSED` (`0x4bf522`); then `CMSG_CANCEL_TRADE`,
     /// open or not (`0x4bf527`).
-    pub(super) fn close_trade(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
+    pub(super) fn close_trade(&mut self, script: &mut UiScript, at: &mut super::Signalled) {
         // The re-entry finds the partner clear and still sends its cancel (`0x4bf4fb` →
         // `0x4bf527`); a later packet's `CMSG_BEGIN_TRADE` waits behind this close on the lane.
         if parked(NpcWindow::Trade) {
             self.appliers.trade().send_cancel();
             return;
         }
-        if self.appliers.trade().run_trade_touches(script) {
-            self.signalled(script, mark);
+        // Each watcher run signals in its own handler (`0x4bfa70` per item), its listeners there.
+        for touch in self.appliers.trade().take_trade_touches() {
+            self.appliers.trade().touch(script, touch);
+            self.signalled(script, at);
         }
         let partner = self.appliers.trade().partner_cell();
         if let Some(partner) = partner {
             script.set_trade_done(false);
-            self.release_into(script, mark, partner, Self::close_trade);
+            self.release_into(script, at, partner, Self::close_trade);
             self.appliers.trade().close_window(script);
             script.fire_event("TRADE_CLOSED", vec![]);
-            self.signalled(script, mark);
+            self.signalled(script, at);
         }
         self.appliers.trade().send_cancel();
     }
@@ -238,14 +239,14 @@ impl ScriptCallHost<'_, '_> {
     /// object read, the release on the cell (`0x4e3357`), the cell cleared (`0x4e3364`) and
     /// `ITEM_TEXT_CLOSED` (`0x4e33a2`). A listener of a read's signal closes that read alone: one a
     /// later packet opened is not the cell it sees.
-    pub(super) fn close_item_text(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
+    pub(super) fn close_item_text(&mut self, script: &mut UiScript, at: &mut super::Signalled) {
         let Some(object) = self.appliers.item_text().object() else {
             return;
         };
-        self.release_into(script, mark, object, Self::close_item_text);
+        self.release_into(script, at, object, Self::close_item_text);
         self.appliers.item_text().clear();
         script.fire_event("ITEM_TEXT_CLOSED", vec![]);
-        self.signalled(script, mark);
+        self.signalled(script, at);
     }
 
     /// `ItemTextPrevPage()` (`0x4e3b50` → `0x4e3870`) or `ItemTextNextPage()` (`0x4e3b60` →
@@ -254,28 +255,28 @@ impl ScriptCallHost<'_, '_> {
     pub(super) fn turn_item_text(
         &mut self,
         script: &mut UiScript,
-        mark: &mut ReportMark,
+        at: &mut super::Signalled,
         delta: i32,
     ) {
         if self.appliers.item_text().turn(delta) {
             script.fire_event("ITEM_TEXT_READY", vec![]);
-            self.signalled(script, mark);
+            self.signalled(script, at);
         }
     }
 
     /// The taxi map's close core `0x4dc0f0`: with a map open, the release (`0x4dc105`), the cell
     /// cleared (`0x4dc113`) and each slot's route freed (`0x4dc130`-`0x4dc145`), then
     /// `TAXIMAP_CLOSED` (`0x4dc15f`).
-    pub(super) fn close_taxi(&mut self, script: &mut UiScript, mark: &mut ReportMark) {
+    pub(super) fn close_taxi(&mut self, script: &mut UiScript, at: &mut super::Signalled) {
         if parked(NpcWindow::Taxi) {
             return;
         }
         let Some(flightmaster) = self.appliers.taxi().flightmaster() else {
             return;
         };
-        self.release_into(script, mark, flightmaster, Self::close_taxi);
+        self.release_into(script, at, flightmaster, Self::close_taxi);
         self.appliers.taxi().clear_map();
         script.fire_event("TAXIMAP_CLOSED", vec![]);
-        self.signalled(script, mark);
+        self.signalled(script, at);
     }
 }

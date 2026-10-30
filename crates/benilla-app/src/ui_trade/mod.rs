@@ -920,20 +920,21 @@ fn drain_trade_touches(world: &mut World) {
     crate::creature_anim::apply_unit_edits(world);
 }
 
-/// [`touch_trade`] on each of `touches`, in order, as one engine turn.
+/// [`touch_trade`] on each of `touches`, in order, each its own engine turn: every watcher run
+/// signals in its own handler (`0x4bfa70` per item), so one item's listeners run before the next
+/// item's send.
 fn scan_trade_touches(
     In(touches): In<Vec<crate::item_watch::TradeTouch>>,
     mut vm: crate::script_calls::VmWith<ResMut<'static, TradeSession>>,
     reads: TouchReads,
 ) {
-    vm.turn(|script, mut trade| {
-        let Some(script) = script else {
-            return;
-        };
-        for touch in touches {
-            touch_trade(script, &mut trade, touch, &reads);
-        }
-    })
+    for touch in touches {
+        vm.turn(|script, mut trade| {
+            if let Some(script) = script {
+                touch_trade(script, &mut trade, touch, &reads);
+            }
+        });
+    }
 }
 
 /// What the trade scan reads beside the session: the socket its sends go out on, the objects,

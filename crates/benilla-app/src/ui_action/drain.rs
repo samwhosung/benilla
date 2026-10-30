@@ -121,10 +121,31 @@ impl AttackPress<'_, '_> {
         seam.toggle(guid);
     }
 
-    /// A stand state change's attack stop inside its call, `0x5ecac0` at `0x5f07e7` while we
-    /// attack (`0x60ecb0`).
+    /// A stand state change's attack stop, `0x5ecac0` at `0x5f07e7` while we attack (`0x60ecb0`),
+    /// for a probe line's emote, which signals nothing between its steps.
     pub(crate) fn stop_for_stand(&mut self) {
         self.seam.stop();
+    }
+
+    /// Whether the toggle at the validated target stops: we attack, with control (`0x6131ce`).
+    pub(crate) fn toggles_off(&self) -> bool {
+        let seam = &self.seam;
+        seam.me.single().is_ok() && seam.engaged() && seam.start_gate().has_control()
+    }
+
+    /// StopAttack's head ([`crate::creature_anim::AttackSeam::stop_head`]).
+    pub(crate) fn stop_head(&mut self) -> Option<crate::creature_anim::StopTail> {
+        self.seam.stop_head()
+    }
+
+    /// StopAttack's send and next-swing cancel ([`crate::creature_anim::AttackSeam::stop_send`]).
+    pub(crate) fn stop_send(&mut self, stop: crate::creature_anim::StopTail) -> bool {
+        self.seam.stop_send(stop)
+    }
+
+    /// StopAttack's save leg ([`crate::creature_anim::AttackSeam::stop_save`]).
+    pub(crate) fn stop_save(&mut self) {
+        self.seam.stop_save();
     }
 
     /// The validator `0x612df0` up to its selection's re-read, for the call host, which runs the

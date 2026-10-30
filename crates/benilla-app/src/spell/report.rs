@@ -244,14 +244,28 @@ impl CastCore<'_> {
         true
     }
 
-    /// `CancelQueuedCast 0x6e6f30`, StopAttack's tail: a strike in the slot is cancelled as
-    /// `SpellStopCasting` cancels (`0x6e6f68`, `0x6e4940(0, 1, 0x1c)`); then a strike in the save
-    /// goes on the wire by itself and leaves it, unsignalled (`0x6e6f9d`-`0x6e701a`: a strike's
-    /// save holds no item guid, so it sends).
+    /// `CancelQueuedCast 0x6e6f30`, StopAttack's tail, for a test with nobody to signal between
+    /// its legs: [`Self::cancel_queued_slot`], then [`Self::cancel_queued_save`].
+    #[cfg(test)]
     pub(crate) fn cancel_queued(&mut self) {
-        if let Some(Inflight::Strike(_)) = self.slot() {
+        self.cancel_queued_slot();
+        self.cancel_queued_save();
+    }
+
+    /// `0x6e6f30`'s first leg: a strike in the slot is cancelled as `SpellStopCasting` cancels
+    /// (`0x6e6f68`, `0x6e4940(0, 1, 0x1c)`), which signals. Whether it cancelled one.
+    pub(crate) fn cancel_queued_slot(&mut self) -> bool {
+        let strike = matches!(self.slot(), Some(Inflight::Strike(_)));
+        if strike {
             self.cancel(false, true, REASON_ERROR);
         }
+        strike
+    }
+
+    /// `0x6e6f30`'s second leg, the save read past the first leg's listeners (`0x6e6f6d`): a
+    /// strike in it goes on the wire by itself and leaves it, unsignalled (`0x6e6f9d`-`0x6e701a`:
+    /// a strike's save holds no item guid, so it sends, `0x6e6ff3`).
+    pub(crate) fn cancel_queued_save(&mut self) {
         if let Some(spell_id) = self.queued_melee.take_save() {
             let _ = self.net.0.send(ClientCommand::CancelCast { spell_id });
         }
@@ -321,11 +335,6 @@ impl CastSlots<'_> {
     /// The tutorial bank, for the attack seams' other sites (`0x4b5390`).
     pub(crate) fn tutorials(&self) -> Option<&crate::tutorial::Tutorials> {
         self.tutorials.as_deref()
-    }
-
-    /// How many cast reports are queued, for a step that asks whether it reported.
-    pub(crate) fn reports_queued(&self) -> usize {
-        self.reports.len()
     }
 }
 

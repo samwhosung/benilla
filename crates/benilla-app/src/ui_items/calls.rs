@@ -38,6 +38,9 @@ pub(crate) struct ItemSteps<'w, 's> {
 impl ItemSteps<'_, '_> {
     /// Apply one item call.
     pub(crate) fn apply(&mut self, script: &mut UiScript, call: ItemCall) {
+        if let ItemCall::EquipAnswer(answer) = call {
+            return self.answer_unhosted(script, answer);
+        }
         let Self {
             net,
             self_q,
@@ -222,9 +225,9 @@ impl ItemSteps<'_, '_> {
                     count: count.min(u32::from(u8::MAX)) as u8,
                 });
             }
-            ItemCall::EquipAnswer(answer) => {
-                answer_pending_equip(script, gate, objects, store, answer);
-            }
+            // The host runs the answer's steps itself, signalling between them; a host-less
+            // harness runs them here ([`Self::answer_unhosted`]).
+            ItemCall::EquipAnswer(_) => {}
             // The host hands this one to the item use, which holds the cast ladder.
             ItemCall::BindOnUse { .. } => {}
         };
@@ -235,48 +238,118 @@ impl ItemSteps<'_, '_> {
     }
 }
 
-/// `EquipPendingItem`/`CancelPendingEquip` (`0x5e1be0`). An accept re-runs the original sender
-/// with `suppress` set: 1.12 has no confirm opcode, and a slot that changed under the dialog is
-/// judged afresh. A cancel sends nothing, unlocks the items the click locked and frees the record:
-/// a swap's two ends as they sit now (`0x5e1ca5`, `0x5e1d04`), an auto-equip's one item, its
-/// record naming no second container (`0x5e1cd1`). An unfiled index does nothing: `0x5e1be0`
-/// bounds-checks it and returns. An accept's re-issue hands its send over in place.
-fn answer_pending_equip(
-    script: &mut UiScript,
-    gate: &mut crate::ui_bind_confirm::BindGate,
-    objects: &Objects,
-    store: Option<&ObjectStore>,
-    answer: benilla_ui::script::PendingEquipAnswer,
-) {
-    use crate::ui_bind_confirm::PendingEquip;
-    let Some(rec) = gate.equips.take(answer.index) else {
-        debug!(
-            "ui_items: bind answer for index {} — no such pending equip",
-            answer.index
-        );
-        return;
-    };
-    if !answer.accept {
-        debug!("ui_items: pending equip {} cancelled", answer.index);
+/// The end of a pending equip's record a cancel releases (`0x5e1be0`): the first container's slot
+/// (`0x5e1c50`-`0x5e1ca5`), then the second's (`0x5e1caa`-`0x5e1d04`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EquipEnd {
+    First,
+    Second,
+}
+
+/// `EquipPendingItem`/`CancelPendingEquip` (`0x5e1be0`), step by step, for the host to signal
+/// between: an index nobody filed does nothing (`0x5e1bee`); an accept re-runs the original sender
+/// with `suppress` set ([`ItemSteps::replay_pending_equip`]), as 1.12 has no confirm opcode and a
+/// slot that changed under the dialog is judged afresh; a cancel sends nothing and unlocks the
+/// items the click locked, each end as its slot holds it when it is reached
+/// ([`ItemSteps::release_pending_end`]); and the record is freed last (`0x5e1d09`), after every
+/// listener of the answer's signals ran, so one that answers or asks again finds it filed.
+impl ItemSteps<'_, '_> {
+    /// The record filed at `index`, as the table holds it now.
+    pub(crate) fn pending_equip(&self, index: u32) -> Option<crate::ui_bind_confirm::PendingEquip> {
+        self.gate.equips.get(index)
+    }
+
+    /// The cancel's release of `end` of the record at `index`, read from the table as it stands
+    /// (`0x5e1caa` reads it again past the first end's signal): the item the end's slot holds
+    /// unlocked, which signals `ITEM_LOCK_CHANGED` (`0x495420`). An auto-equip's record names one
+    /// item and no second container (`0x5e1cd1`), and a record a listener freed releases nothing.
+    /// Whether it signalled.
+    pub(crate) fn release_pending_end(
+        &mut self,
+        script: &mut UiScript,
+        index: u32,
+        end: EquipEnd,
+    ) -> bool {
+        use crate::ui_bind_confirm::PendingEquip;
+        let store = self.self_q.iter().next();
         let at = |bag: i64, slot: u32| {
             let slot0 = u8::try_from(slot.saturating_sub(1)).unwrap_or(0);
-            store.and_then(|s| slot_guid(&s.0, bag, slot0, objects))
+            store.and_then(|s| slot_guid(&s.0, bag, slot0, &self.objects))
         };
-        let locked = match rec {
-            PendingEquip::Swap {
-                src_bag,
-                src_slot,
-                dst_bag,
-                dst_slot,
-                ..
-            } => [at(src_bag, src_slot), at(dst_bag, dst_slot)],
-            PendingEquip::AutoEquip { guid, .. } => [Some(guid), None],
+        let guid = match (self.gate.equips.get(index), end) {
+            (
+                Some(PendingEquip::Swap {
+                    src_bag, src_slot, ..
+                }),
+                EquipEnd::First,
+            ) => at(src_bag, src_slot),
+            (
+                Some(PendingEquip::Swap {
+                    dst_bag, dst_slot, ..
+                }),
+                EquipEnd::Second,
+            ) => at(dst_bag, dst_slot),
+            (Some(PendingEquip::AutoEquip { guid, .. }), EquipEnd::First) => Some(guid),
+            _ => None,
         };
-        for guid in locked.into_iter().flatten() {
-            script.unlock_item(guid);
-        }
-        return;
+        let Some(guid) = guid.filter(|&g| g != 0) else {
+            return false;
+        };
+        script.unlock_item(guid);
+        true
     }
+
+    /// The accept's replay of `rec`, with the bags read as the host is out.
+    pub(crate) fn replay_pending_equip(
+        &mut self,
+        script: &mut UiScript,
+        rec: crate::ui_bind_confirm::PendingEquip,
+    ) {
+        let on_taxi = self
+            .self_q
+            .iter()
+            .next()
+            .is_some_and(|s| s.0.unit_flags() & crate::player::UNIT_FLAG_TAXI_FLIGHT != 0);
+        let body = |script: &mut UiScript| replay(script, rec, on_taxi);
+        match self.bags.as_mut() {
+            Some(bags) => script.reading(bags, body),
+            None => body(script),
+        }
+    }
+
+    /// The record at `index` freed (`0x5e1d09`-`0x5e1d29`), whatever it holds now.
+    pub(crate) fn free_pending_equip(&mut self, index: u32) {
+        self.gate.equips.take(index);
+    }
+
+    /// The answer's steps in order with nobody to signal between them, for a harness with no host.
+    fn answer_unhosted(
+        &mut self,
+        script: &mut UiScript,
+        answer: benilla_ui::script::PendingEquipAnswer,
+    ) {
+        let Some(rec) = self.pending_equip(answer.index) else {
+            debug!(
+                "ui_items: bind answer for index {} — no such pending equip",
+                answer.index
+            );
+            return;
+        };
+        if answer.accept {
+            self.replay_pending_equip(script, rec);
+        } else {
+            debug!("ui_items: pending equip {} cancelled", answer.index);
+            for end in [EquipEnd::First, EquipEnd::Second] {
+                self.release_pending_end(script, answer.index, end);
+            }
+        }
+        self.free_pending_equip(answer.index);
+    }
+}
+
+/// The accept's re-issue of `rec` (`0x5e1c05`-`0x5e1c46`), `on_taxi` our taxi flag.
+fn replay(script: &mut UiScript, rec: crate::ui_bind_confirm::PendingEquip, on_taxi: bool) {
+    use crate::ui_bind_confirm::PendingEquip;
     match rec {
         // The accept re-issues `SwapItem` confirmed (`0x5e1c46`): it sends, and its clear
         // (`0x5e0fe7`) drops whatever the cursor holds then, keeping the locks.
@@ -305,9 +378,7 @@ fn answer_pending_equip(
         PendingEquip::AutoEquip { bag, slot, .. } => {
             // The setter's control gate reads our taxi flag off the object (`0x494ba6`), here
             // with the host out applying the accept.
-            script.set_on_taxi(
-                store.is_some_and(|s| s.0.unit_flags() & crate::player::UNIT_FLAG_TAXI_FLIGHT != 0),
-            );
+            script.set_on_taxi(on_taxi);
             script.auto_equip_slot(bag, slot, true);
         }
     }

@@ -203,6 +203,12 @@ impl QueuedMeleeSpell {
         self.slot = Some(spell_id);
     }
 
+    /// `slot` in the slot over `save` in the save, as a strike cast over a queued one leaves them.
+    #[cfg(test)]
+    pub(crate) fn hold(&mut self, slot: u32, save: u32) {
+        self.push(Some(save), Some(slot));
+    }
+
     /// The push (`0x6e4adf`-`0x6e4af8`): the save takes the strike the slot `held`, and the slot
     /// `spell`, a strike's id or none for a spell [`PendingCast`] or the cursor holds.
     pub(super) fn push(&mut self, held: Option<u32>, spell: Option<u32>) {
@@ -427,7 +433,8 @@ pub(crate) struct LocalMoveStart {
 /// by the fade.
 pub(crate) fn local_self_cancel(mut moved: ResMut<LocalMoveStart>, mut cancel: SelfCancel) {
     if std::mem::take(&mut moved.pressed) {
-        cancel.cancel(false, true, moved.mover_is_player);
+        cancel.cancel_for_move();
+        cancel.cancel_channel_for_move(moved.mover_is_player);
     }
 }
 
@@ -468,13 +475,41 @@ pub(crate) fn drop_hold<P: bevy::ecs::system::SystemParam + 'static>(
 impl SelfCancel<'_> {
     /// `SpellStopCasting()` (`0x6e6e80`), the ESC chain's cast rung.
     pub(crate) fn stop_casting(&mut self) {
-        self.cancel(true, false, false);
+        self.cancel(true, false);
     }
 
-    /// A movement command's cancel inside its call (`0x51512a`, `0x515193`, `Script::Jump`'s
-    /// `0x513c43`); `mover_is_player` gates the channel's.
-    pub(crate) fn cancel_for_move(&mut self, mover_is_player: bool) {
-        self.cancel(false, true, mover_is_player);
+    /// A movement command's cast cancel (`0x51512a`, `Script::Jump`'s `0x513c43`), which signals
+    /// before the channel's ([`Self::cancel_channel_for_move`]).
+    pub(crate) fn cancel_for_move(&mut self) {
+        self.cancel(false, true);
+    }
+
+    /// A movement command's channel cancel (`0x515193` → `0x6e9b70`), past the cast cancel's
+    /// listeners: with the player as the mover (`0x51517b`-`0x515191`), a running channel whose
+    /// `ChannelInterruptFlags` take movement goes on the wire, the send only.
+    pub(crate) fn cancel_channel_for_move(&mut self, mover_is_player: bool) {
+        if !mover_is_player {
+            return;
+        }
+        let Some(spell_id) = self.channel.current(Instant::now()) else {
+            return;
+        };
+        if !record_flags(
+            &self.spells,
+            |d| d.channel_interrupt_flags & CHANNEL_INTERRUPT_MOVING != 0,
+            spell_id,
+        ) {
+            return;
+        }
+        if *crate::net::CAST_TRACE {
+            info!(
+                "cast-trace: LOCAL channel self-cancel — spell {spell_id}, CMSG_CANCEL_CHANNELLING"
+            );
+        }
+        let _ = self
+            .net
+            .0
+            .send(ClientCommand::CancelChannelling { spell_id });
     }
 
     /// `CancelCast(1, 1, 0x1c)` (`0x6e4940`) as `UseSoulstone`'s item leg calls it (`0x48ae6b`),
@@ -534,8 +569,7 @@ impl SelfCancel<'_> {
         }
     }
 
-    fn cancel(&mut self, esc: bool, moved: bool, mover_is_player: bool) {
-        let now = Instant::now();
+    fn cancel(&mut self, esc: bool, moved: bool) {
         let self_e = self.self_entity();
         // Esc stops one thing, auto-repeat first (`0x6e6e80`).
         let esc = if esc && self.auto_repeat.0.is_some() {
@@ -573,16 +607,6 @@ impl SelfCancel<'_> {
         if !esc && !moved {
             return;
         }
-        let flags_open = |spells: &Option<Res<Spells>>,
-                          pick: fn(&benilla_formats::SpellDisplay) -> bool,
-                          spell_id: u32| {
-            // A spell with no record is spared: both tests leave on a null record (`0x51511a`,
-            // `0x515171`; `Script::Jump`'s `0x513c34`, `0x513c8c`).
-            spells
-                .as_ref()
-                .and_then(|s| s.catalog.get(spell_id))
-                .is_some_and(pick)
-        };
         // `AbortCast` treats a cast and a queued strike alike; only the local teardown differs.
         if let Some(slot) = inflight(&self.pending, &self.queued_melee, &self.ground) {
             let spell_id = slot.spell_id();
@@ -591,7 +615,7 @@ impl SelfCancel<'_> {
             // while the word is up (`0x5150fd`, and `Script::Jump`).
             if esc
                 || (!self.ground.active()
-                    && flags_open(
+                    && record_flags(
                         &self.spells,
                         |d| d.interrupt_flags & SPELL_INTERRUPT_MOVEMENT != 0,
                         spell_id,
@@ -601,26 +625,21 @@ impl SelfCancel<'_> {
                 self.cancel_inflight(false, if esc { "esc" } else { "moved" });
             }
         }
-        // The channel: movement only, with the player as the mover, and the send only
-        // (`0x6e9b70`).
-        if moved && mover_is_player {
-            if let Some(spell_id) = self.channel.current(now) {
-                if flags_open(
-                    &self.spells,
-                    |d| d.channel_interrupt_flags & CHANNEL_INTERRUPT_MOVING != 0,
-                    spell_id,
-                ) {
-                    if *crate::net::CAST_TRACE {
-                        info!("cast-trace: LOCAL channel self-cancel — spell {spell_id}, CMSG_CANCEL_CHANNELLING");
-                    }
-                    let _ = self
-                        .net
-                        .0
-                        .send(ClientCommand::CancelChannelling { spell_id });
-                }
-            }
-        }
     }
+}
+
+/// Whether `spell_id`'s record passes `pick`. A spell with no record is spared: both of the move
+/// cancel's tests leave on a null record (`0x51511a`, `0x515171`; `Script::Jump`'s `0x513c34`,
+/// `0x513c8c`).
+fn record_flags(
+    spells: &Option<Res<Spells>>,
+    pick: fn(&benilla_formats::SpellDisplay) -> bool,
+    spell_id: u32,
+) -> bool {
+    spells
+        .as_ref()
+        .and_then(|s| s.catalog.get(spell_id))
+        .is_some_and(pick)
 }
 
 #[cfg(test)]

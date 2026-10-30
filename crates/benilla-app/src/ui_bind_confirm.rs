@@ -80,6 +80,11 @@ impl PendingEquips {
         u32::try_from(idx).unwrap_or(u32::MAX)
     }
 
+    /// The element as the table holds it now; `None` for an index nobody filed or one freed.
+    pub(crate) fn get(&self, index: u32) -> Option<PendingEquip> {
+        self.slots.get(index as usize).copied().flatten()
+    }
+
     /// Frees the element. An index nobody filed does nothing, as `0x5e1be0` bounds-checks it.
     pub(crate) fn take(&mut self, index: u32) -> Option<PendingEquip> {
         self.slots.get_mut(index as usize)?.take()

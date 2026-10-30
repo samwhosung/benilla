@@ -127,21 +127,20 @@ impl TradeSteps<'_, '_> {
     }
 
     /// The close core's first step here, the trade halves of the item watcher runs still on the
-    /// lane, as the world close core drains them; whether any ran.
-    pub(crate) fn run_trade_touches(&mut self, script: &mut UiScript) -> bool {
-        let touches = self
-            .lane
+    /// lane, as the world close core drains them, for the caller to run one at a time
+    /// ([`Self::touch`]).
+    pub(crate) fn take_trade_touches(&mut self) -> Vec<crate::item_watch::TradeTouch> {
+        self.lane
             .as_deref_mut()
             .map(crate::item_lane::ItemLane::take_trade_touches)
-            .unwrap_or_default();
-        let Some(trade) = self.trade.as_deref_mut() else {
-            return false;
-        };
-        let ran = !touches.is_empty();
-        for touch in touches {
+            .unwrap_or_default()
+    }
+
+    /// One watcher run's trade half ([`super::touch_trade`]).
+    pub(crate) fn touch(&mut self, script: &mut UiScript, touch: crate::item_watch::TradeTouch) {
+        if let Some(trade) = self.trade.as_deref_mut() {
             super::touch_trade(script, trade, touch, &self.touch_reads);
         }
-        ran
     }
 
     /// The partner's cell `[0xb71728]`, set only while the window is open.

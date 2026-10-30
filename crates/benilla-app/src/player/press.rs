@@ -283,13 +283,15 @@ struct TickReads<'w, 's> {
 }
 
 /// What a binding call leaves its host to run inside it, in the reference's order: the cast
-/// cancel, then the tick's legs.
+/// cancel, then the tick ([`CommandSteps::tick_called`]) and its legs.
 #[derive(Default)]
 pub(crate) struct Called {
     /// The cast cancel's verdict: whether the player is the active mover, the one extra test of the
     /// channel's cancel (`0x51517b`-`0x515191`).
     pub(crate) cancel: Option<bool>,
-    pub(crate) legs: TickLegs,
+    /// The tick `SetCommands` runs at its tail (`0x5151a0`), after the cancel: the input and the
+    /// emitters as they stood before the call moved its bit.
+    tick: Option<(BindingInput, Option<Emitters>)>,
 }
 
 /// What the tick's emitters make of the command bits as they stand.
@@ -341,7 +343,16 @@ impl CommandSteps<'_, '_> {
         let cancel = if changed { self.cancel(input) } else { None };
         Called {
             cancel,
-            legs: self.tick(input, before),
+            tick: Some((input, before)),
+        }
+    }
+
+    /// The tick `called` owes, at `SetCommands`' tail (`0x5151a0`), past the cancel's listeners
+    /// ([`Self::tick`]): the stand-up sent now, the rest returned for the host.
+    pub(crate) fn tick_called(&mut self, called: &mut Called) -> TickLegs {
+        match called.tick.take() {
+            Some((input, before)) => self.tick(input, before),
+            None => TickLegs::default(),
         }
     }
 
@@ -366,7 +377,7 @@ impl CommandSteps<'_, '_> {
         };
         Called {
             cancel: if on { self.cancel(input) } else { None },
-            legs: self.tick(input, before),
+            tick: Some((input, before)),
         }
     }
 

@@ -1180,6 +1180,136 @@ fn a_strike_cancel_listeners_pet_stop_signals_the_pet_bar_once() {
     }
 }
 
+/// StopAttack's Drink tutorial (`0x5ecb54`, for a mana user with no maximum) signals before its
+/// `CMSG_ATTACKSTOP` (`0x5ecb5b`), so its listener's packet goes first: in a teardown's stop
+/// (`0x493a08`) and in the Attack toggle's (`0x6131ce`).
+#[test]
+fn a_stop_attacks_tutorial_listener_sends_ahead_of_its_attack_stop() {
+    for lua in ["ClearTarget()", "AttackTarget()"] {
+        let mut f = frame(true);
+        swinging_at_old(&mut f);
+        f.app
+            .world()
+            .resource::<crate::tutorial::Tutorials>()
+            .lock()
+            .apply_flags(&[0u8; 32]);
+        run(
+            &mut f,
+            r#"local r = CreateFrame("Frame")
+            r:RegisterEvent("TUTORIAL_TRIGGER")
+            r:SetScript("OnEvent", function() RandomRoll(1, 2) end)"#,
+        );
+        f.rx.try_iter().for_each(drop);
+        run(&mut f, lua);
+        let wire: Vec<&str> =
+            f.rx.try_iter()
+                .filter_map(|c| match c {
+                    ClientCommand::AttackStop => Some("AttackStop"),
+                    ClientCommand::RandomRoll { .. } => Some("RandomRoll"),
+                    _ => None,
+                })
+                .collect();
+        assert_eq!(wire, ["RandomRoll", "AttackStop"], "{lua}");
+    }
+}
+
+/// The teardown's StopAttack cancels the slot's strike (`0x6e6f68`), whose listeners run before
+/// the save is read and its strike goes on the wire (`0x6e6f6d`, `0x6e6ff3`): Cleave cast over a
+/// queued Heroic Strike holds the slot over the save.
+#[test]
+fn a_teardowns_slot_cancel_listeners_send_ahead_of_the_saves_cancel() {
+    const CLEAVE: u32 = 845;
+    let mut f = frame(true);
+    swinging_at_old(&mut f);
+    queue_strike(&mut f);
+    f.app
+        .world_mut()
+        .resource_mut::<crate::spell::QueuedMeleeSpell>()
+        .hold(CLEAVE, 78);
+    run(
+        &mut f,
+        r#"local r = CreateFrame("Frame")
+        r:RegisterEvent("SPELLCAST_STOP")
+        r:SetScript("OnEvent", function() RandomRoll(1, 2) end)"#,
+    );
+    f.rx.try_iter().for_each(drop);
+    run(&mut f, "ClearTarget()");
+    let wire: Vec<String> =
+        f.rx.try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::AttackStop => Some("AttackStop".to_string()),
+                ClientCommand::CancelCast { spell_id } => Some(format!("CancelCast {spell_id}")),
+                ClientCommand::RandomRoll { .. } => Some("RandomRoll".to_string()),
+                ClientCommand::SetSelection { guid } => Some(format!("SetSelection {guid:#x}")),
+                _ => None,
+            })
+            .collect();
+    assert_eq!(
+        wire,
+        [
+            "AttackStop",
+            "CancelCast 845",
+            "RandomRoll",
+            "CancelCast 78",
+            "SetSelection 0x0"
+        ]
+    );
+}
+
+/// `lua` run with a listener of `event` that selects `party1` the first time it hears it: the
+/// pick signals its change itself, nested (`0x493540` → `0x49389c`), and the call's own end tells
+/// it no more. The `PLAYER_TARGET_CHANGED`s heard.
+fn changes_for_a_pick_at(f: &mut Frame, event: &str, lua: &str) -> i64 {
+    run(
+        f,
+        &format!(
+            r#"CHANGES = 0
+            local p = CreateFrame("Frame")
+            p:RegisterEvent("PLAYER_TARGET_CHANGED")
+            p:SetScript("OnEvent", function() CHANGES = CHANGES + 1 end)
+            local r = CreateFrame("Frame")
+            r:RegisterEvent("{event}")
+            r:SetScript("OnEvent", function()
+                if not PICKED then PICKED = 1 TargetUnit("party1") end
+            end)"#
+        ),
+    );
+    run(f, lua);
+    assert_eq!(selected(f), Some(NEW));
+    eval::<i64>(f, "return CHANGES")
+}
+
+/// A pick at the Attack toggle's StopAttack tutorial (`0x5ecb54`) signals once.
+#[test]
+fn a_pick_at_the_stops_tutorial_signals_its_target_change_once() {
+    let mut f = frame(true);
+    swinging_at_old(&mut f);
+    f.app
+        .world()
+        .resource::<crate::tutorial::Tutorials>()
+        .lock()
+        .apply_flags(&[0u8; 32]);
+    assert_eq!(
+        changes_for_a_pick_at(&mut f, "TUTORIAL_TRIGGER", "AttackTarget()"),
+        1
+    );
+}
+
+/// A pick at a gossip close core's `GOSSIP_CLOSED` (`0x4931c0` → the core's signal) signals once.
+#[test]
+fn a_pick_at_a_close_cores_signal_signals_its_target_change_once() {
+    let mut f = frame(true);
+    crate::ui_session::latch_tests::open(
+        &mut f.app,
+        crate::ui_session::NpcWindow::Gossip,
+        super::systems::NPC,
+    );
+    assert_eq!(
+        changes_for_a_pick_at(&mut f, "GOSSIP_CLOSED", "CloseGossip()"),
+        1
+    );
+}
+
 /// `UnitCreatureFamily("target")` (`0x51a310`) reads the held unit's cached creature record
 /// (`0x6055e0`: `[[unit+0xb30]+0x1c]`) through `CreatureFamily.dbc` inside its call, though no
 /// snapshot carries the word; a unit whose record the cache lacks answers nil.

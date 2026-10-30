@@ -1,5 +1,7 @@
 //! The engine verbs inside their calls: the follow's start (`0x60fed0`), whose arm signals where
-//! it runs, and the getters' lookups with a callback ([`RecordAsks`]).
+//! it runs, the bind question's answer (`0x5e1be0`), which signals before it frees its record, the
+//! chat send's lines (`0x49f1e0`), each heard before the packets after it, and the getters'
+//! lookups with a callback ([`RecordAsks`]).
 
 use bevy::prelude::*;
 
@@ -7,9 +9,74 @@ use benilla_ui::script::{FollowRequest, ItemCallback, RecordAsk, ScriptValue, Ui
 
 use super::ScriptCallHost;
 use crate::target::FollowStart;
-use crate::ui_cast::ReportMark;
 
 impl ScriptCallHost<'_, '_> {
+    /// `SendChatMessage` (`0x49f1e0`) inside its call, each line's listeners running where it
+    /// shows: the AFK arm's echo before its packet (`0x5eb7a9`, `0x5eb801`), the AFK clear's line
+    /// before its packet (`0x5eb878`, `0x5eb8d0`), and the DND echo (`0x49f588`) before the
+    /// tutorial's and the message's packets (`0x49f5fc`, `0x49f72a`).
+    pub(super) fn send_chat(
+        &mut self,
+        script: &mut UiScript,
+        at: &mut super::Signalled,
+        send: benilla_ui::script::ChatSend,
+    ) {
+        use crate::ui_chat::ChatStep;
+        match self.appliers.chat().begin_chat(script, send) {
+            ChatStep::Done => {}
+            ChatStep::Afk(tail) => {
+                if tail.shown {
+                    self.at_point(script, at);
+                }
+                self.appliers.chat().finish_afk(tail);
+            }
+            ChatStep::Go(mut go) => {
+                if self.appliers.chat().clear_afk_line(script) {
+                    self.at_point(script, at);
+                    self.appliers.chat().finish_clear_afk();
+                }
+                if self.appliers.chat().dnd_line(script, &mut go) {
+                    self.at_point(script, at);
+                }
+                self.appliers.chat().finish_chat(script, go);
+            }
+        }
+    }
+
+    /// `EquipPendingItem(index)` or `CancelPendingEquip(index)` (`0x4898f0`, `0x489960` →
+    /// `0x5e1be0`): the accept's replay, or each end's unlock (`0x5e1ca5`, `0x5e1d04`), its
+    /// `ITEM_LOCK_CHANGED` listeners running there, the second end read from the table as they left
+    /// it; then the record freed (`0x5e1d09`).
+    pub(super) fn answer_pending_equip(
+        &mut self,
+        script: &mut UiScript,
+        at: &mut super::Signalled,
+        answer: benilla_ui::script::PendingEquipAnswer,
+    ) {
+        use crate::ui_items::EquipEnd;
+        let index = answer.index;
+        let Some(rec) = self.appliers.items().pending_equip(index) else {
+            debug!("ui_items: bind answer for index {index} — no such pending equip");
+            return;
+        };
+        if answer.accept {
+            self.appliers.items().replay_pending_equip(script, rec);
+            self.at_point(script, at);
+        } else {
+            debug!("ui_items: pending equip {index} cancelled");
+            for end in [EquipEnd::First, EquipEnd::Second] {
+                if self
+                    .appliers
+                    .items()
+                    .release_pending_end(script, index, end)
+                {
+                    self.at_point(script, at);
+                }
+            }
+        }
+        self.appliers.items().free_pending_equip(index);
+    }
+
     /// `FollowUnit(unit)` (`0x489e00`) or `FollowByName(name, exact)` (`0x489ec0`), then
     /// `StartAutoMoveToObject(guid, 3)` (`0x60fed0`): the gate's line shown in place
     /// (`0x496720`), or the arm, whose stop of the auto-move it replaces signals `AUTOFOLLOW_END`
@@ -19,7 +86,7 @@ impl ScriptCallHost<'_, '_> {
     pub(super) fn follow(
         &mut self,
         script: &mut UiScript,
-        mark: &mut ReportMark,
+        at: &mut super::Signalled,
         request: FollowRequest,
     ) {
         let request = match request {
@@ -39,11 +106,11 @@ impl ScriptCallHost<'_, '_> {
         };
         if replaced {
             script.fire_event("AUTOFOLLOW_END", vec![]);
-            self.at_point(script, mark);
+            self.at_point(script, at);
         }
         self.appliers.follow().arm(guid, name.clone());
         script.fire_event("AUTOFOLLOW_BEGIN", vec![ScriptValue::Str(name)]);
-        self.at_point(script, mark);
+        self.at_point(script, at);
     }
 }
 

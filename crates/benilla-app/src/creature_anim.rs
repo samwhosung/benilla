@@ -204,13 +204,13 @@ pub(crate) fn cancel_auto_repeat_local(
     core.reports.auto_repeat(false);
 }
 
-/// The local StopAttack, reference `0x5ecac0`: when attacking, `CMSG_ATTACKSTOP` (`0x624370`),
-/// then `CancelQueuedCast` (`0x6e6f30`, [`crate::spell::CastCore::cancel_queued`]), which cancels
-/// a queued on-next-swing spell with `CMSG_CANCEL_CAST`: in the slot, as Esc does, with its pop's
-/// signal and `SPELLCAST_STOP`; in the save under a cast, by the packet alone, which is why Auto
-/// Shot (`0x6e5976`) darkens a Raptor Strike ring. `Engaged` stays until the `SMSG_ATTACKSTOP` echo
-/// (`0x624e40`), as in the reference. The send marks `me`'s stop in flight in `word`
-/// (`0x6243b2`). Ahead of the send, `low`'s Food and Drink tutorials (`0x5ecb17`, `0x5ecb54`).
+/// The local StopAttack, reference `0x5ecac0`, for a caller with nobody to signal between its
+/// steps: [`stop_attack_head`], [`stop_attack_send`], then the save's leg of `CancelQueuedCast`
+/// ([`crate::spell::CastCore::cancel_queued_save`]). A queued on-next-swing spell is cancelled
+/// with `CMSG_CANCEL_CAST`: in the slot, as Esc does, with its pop's signal and `SPELLCAST_STOP`;
+/// in the save under a cast, by the packet alone, which is why Auto Shot (`0x6e5976`) darkens a
+/// Raptor Strike ring. `Engaged` stays until the `SMSG_ATTACKSTOP` echo (`0x624e40`), as in the
+/// reference.
 pub(crate) fn stop_attack_local(
     me: Option<Entity>,
     low: crate::tutorial::LowVitals,
@@ -218,20 +218,50 @@ pub(crate) fn stop_attack_local(
     word: &mut AttackStopInFlight,
     core: &mut crate::spell::CastCore,
 ) {
-    // The reference's `!IsAttacking(0x60ecb0) && [+0xc50] == 0` early-out: nothing sent, a queued
-    // strike survives. `[+0xc50]` is set only beside `[+0xc48]` (`0x47bf70`), so the attack
-    // target as the queue leaves it answers both.
-    if !me.is_some_and(|me| edits.attacking(me)) {
-        return;
+    if let Some(tail) = stop_attack_head(me, low, edits, core) {
+        stop_attack_send(tail, word, core);
+        core.cancel_queued_save();
     }
+}
+
+/// StopAttack's head (`0x5ecac0`-`0x5ecb54`): the reference's `!IsAttacking(0x60ecb0) &&
+/// [+0xc50] == 0` early-out, which sends nothing and leaves a queued strike, then `low`'s Food and
+/// Drink tutorials (`0x5ecb17`, `0x5ecb54`), whose `TUTORIAL_TRIGGER` signals before the send.
+/// What follows, when it goes on ([`stop_attack_send`]).
+pub(crate) fn stop_attack_head(
+    me: Option<Entity>,
+    low: crate::tutorial::LowVitals,
+    edits: &UnitEdits,
+    core: &mut crate::spell::CastCore,
+) -> Option<StopTail> {
+    // `[+0xc50]` is set only beside `[+0xc48]` (`0x47bf70`), so the attack target as the queue
+    // leaves it answers both.
+    let me = me.filter(|&me| edits.attacking(me))?;
     for id in low.tutorials() {
         core.trigger_tutorial(id);
     }
+    Some(StopTail { me })
+}
+
+/// What StopAttack does past its tutorials ([`stop_attack_head`]).
+#[must_use]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct StopTail {
+    me: Entity,
+}
+
+/// StopAttack past its tutorials: `CMSG_ATTACKSTOP` (`0x5ecb5b` → `0x624370`), which marks
+/// `me`'s stop in flight in `word` (`0x6243b2`), then `CancelQueuedCast`'s first leg (`0x5ecb63`
+/// → `0x6e6f30`, [`crate::spell::CastCore::cancel_queued_slot`]), whose cancel signals before the
+/// save's leg. Whether that cancel ran.
+pub(crate) fn stop_attack_send(
+    tail: StopTail,
+    word: &mut AttackStopInFlight,
+    core: &mut crate::spell::CastCore,
+) -> bool {
     let _ = core.net.0.send(crate::net::ClientCommand::AttackStop);
-    if let Some(me) = me {
-        word.set(me);
-    }
-    core.cancel_queued();
+    word.set(tail.me);
+    core.cancel_queued_slot()
 }
 
 /// What StartAttack (`0x5ecb70`) reads of the active player before it does anything: the pacified
@@ -529,25 +559,31 @@ impl AttackSeam<'_, '_> {
         self.me.single().is_ok_and(|me| self.edits.attacking(me))
     }
 
-    /// StopAttack (`0x5ecac0`).
+    /// StopAttack (`0x5ecac0`), with nobody to signal between its steps.
     pub(crate) fn stop(&mut self) {
-        let me = self.me.single().ok();
-        stop_attack_local(
-            me,
-            self.start_gate().low,
-            &self.edits,
-            &mut self.stop_word,
-            &mut self.slots.core(&self.net),
-        );
+        if let Some(tail) = self.stop_head() {
+            self.stop_send(tail);
+            self.stop_save();
+        }
     }
 
-    /// StopAttack in a selection's release (`0x493a08`): whether its next-swing cancel reported a
-    /// stop (`0x5ecb63` → `0x6e6f30` → `0x6e4940`), whose listeners run there, ahead of the rest
-    /// of the release.
-    pub(crate) fn release_stop(&mut self) -> bool {
-        let queued = self.slots.reports_queued();
-        self.stop();
-        self.slots.reports_queued() > queued
+    /// StopAttack's head ([`stop_attack_head`]): its gate and its tutorials, whose listeners a
+    /// caller runs before [`Self::stop_send`].
+    pub(crate) fn stop_head(&mut self) -> Option<StopTail> {
+        let me = self.me.single().ok();
+        let low = self.start_gate().low;
+        stop_attack_head(me, low, &self.edits, &mut self.slots.core(&self.net))
+    }
+
+    /// StopAttack's send and its next-swing cancel ([`stop_attack_send`]), whose listeners a
+    /// caller runs before [`Self::stop_save`]: whether the cancel ran.
+    pub(crate) fn stop_send(&mut self, tail: StopTail) -> bool {
+        stop_attack_send(tail, &mut self.stop_word, &mut self.slots.core(&self.net))
+    }
+
+    /// StopAttack's last leg, the save's `CMSG_CANCEL_CAST` (`0x6e6ff3`), read where it runs.
+    pub(crate) fn stop_save(&mut self) {
+        self.slots.core(&self.net).cancel_queued_save();
     }
 
     /// `unit`'s stop in flight cleared, as its death zeroes it (`0x6058a8`).

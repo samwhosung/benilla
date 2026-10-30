@@ -1,5 +1,6 @@
 //! The census of the sends a call's apply or an engine turn makes while a handler it signalled is
-//! held, for test builds. `SignalEvent` (`0x703e50`) runs every listener before the verb goes on,
+//! held, or a signal it queued on a lane of its own waits for its host's next point ([`queued`]),
+//! for test builds. `SignalEvent` (`0x703e50`) runs every listener before the verb goes on,
 //! so a send made while one waits goes out ahead of the packets its handler sends in 1.12.1. Each
 //! such send is counted under its call's kind, or `turn@` and its turn's caller
 //! ([`super::UiScript::host_out`]), from the first handler held to the signal point that runs it
@@ -229,6 +230,13 @@ pub(crate) fn held() {
             apply.mark.get_or_insert(sent);
         }
     });
+}
+
+/// An engine half queued a signal on a lane of its own (a cast report, a tutorial trigger), which
+/// its host fires at its next point: the innermost apply's window opens, as for a held handler
+/// ([`held`]), so a send made before that point is counted.
+pub fn queued() {
+    held();
 }
 
 /// Whether the innermost apply holds a handler since its last point: a lend that writes now is

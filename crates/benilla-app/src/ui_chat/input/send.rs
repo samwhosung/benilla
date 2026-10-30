@@ -41,6 +41,33 @@ pub(crate) struct ChatSender<'w, 's> {
     switches: Option<Res<'w, crate::text_filter::TextFilterSwitches>>,
 }
 
+/// Where `SendChatMessage` stands past [`ChatSender::begin_chat`], for a host that runs a line's
+/// listeners where it shows, before the call goes on.
+pub(crate) enum ChatStep {
+    /// The call ended: refused, or naming no joined channel.
+    Done,
+    /// The AFK arm past its echo ([`ChatSender::finish_afk`]).
+    Afk(AfkTail),
+    /// Every other type, from the AFK clear on: [`ChatSender::clear_afk_line`],
+    /// [`ChatSender::dnd_line`], then [`ChatSender::finish_chat`].
+    Go(ChatGo),
+}
+
+/// The AFK arm past its echo: the mirror's new value and the packet's body.
+pub(crate) struct AfkTail {
+    mirror: Option<u32>,
+    body: String,
+    /// Whether the arm echoed a line, whose listeners run before the packet.
+    pub(crate) shown: bool,
+}
+
+/// A message past its gates and its channel slot, with its type as promoted and on the wire.
+pub(crate) struct ChatGo {
+    send: ChatSend,
+    kind: SendType,
+    wire: ChatKind,
+}
+
 /// [`ChatSender::refuse`] on the sink alone, for a verb that holds the sender's other state.
 fn refuse_in(script: &mut UiScript, sink: &mut crate::ui_action::MessageSink, key: &'static str) {
     let input = script.input_events();
@@ -149,21 +176,36 @@ impl ChatSender<'_, '_> {
         }
     }
 
-    /// `SendChatMessage` from its group gates on, in the reference's order: the group gates and
-    /// the leader promotion, the channel slot, the AFK clear or the AFK arm, the DND arm, the dead
-    /// check (`0x49f592`), the tutorial (`0x49f5fc`), the `%` expander (`0x49f60f`), the escape
-    /// scan (`0x49f661`), and the packet (`0x49f6c3`). What a step does stands when a later step
-    /// ends the call or raises.
-    pub(crate) fn send_chat(&mut self, script: &mut UiScript, mut send: ChatSend) {
+    /// `SendChatMessage` from its group gates on, in the reference's order, for a harness with
+    /// nobody to signal between its lines: [`Self::begin_chat`], then the AFK arm's tail or the AFK
+    /// clear ([`Self::clear_afk`]), the DND arm ([`Self::dnd_line`]) and the rest
+    /// ([`Self::finish_chat`]).
+    #[cfg(test)]
+    pub(crate) fn send_chat(&mut self, script: &mut UiScript, send: ChatSend) {
+        match self.begin_chat(script, send) {
+            ChatStep::Done => {}
+            ChatStep::Afk(tail) => self.finish_afk(tail),
+            ChatStep::Go(mut go) => {
+                self.clear_afk(script);
+                self.dnd_line(script, &mut go);
+                self.finish_chat(script, go);
+            }
+        }
+    }
+
+    /// `SendChatMessage` up to its first line: the group gates and the leader promotion, the
+    /// channel slot, then the AFK arm's echo, or the rest to run past the AFK clear's line
+    /// ([`ChatStep`]). What a step does stands when a later step ends the call or raises.
+    pub(crate) fn begin_chat(&mut self, script: &mut UiScript, mut send: ChatSend) -> ChatStep {
         // The binding has raised on any other token (`0x49f27f`), so none reaches here.
         let Some(mut kind) = SendType::from_token(&send.chat_type) else {
-            return;
+            return ChatStep::Done;
         };
         match group_gate(kind, send.group) {
             Ok(promoted) => kind = promoted,
             Err(key) => {
                 self.refuse(script, key);
-                return;
+                return ChatStep::Done;
             }
         }
         // A channel target is a slot number, sent as that slot's name, read off the slot array
@@ -183,29 +225,42 @@ impl ChatSender<'_, '_> {
                     "chat: SendChatMessage names no joined channel {:?}; not sent",
                     send.target
                 );
-                return;
+                return ChatStep::Done;
             }
             send.target = name;
         }
         let wire = kind.wire();
         // The AFK arm (`0x49f4f3`-`0x49f562`) ends the call with its own packet.
         if wire == ChatKind::Afk {
-            self.afk(script, &send.text);
-            return;
+            return ChatStep::Afk(self.afk_echo(script, &send.text));
         }
         // Every other type first clears a standing AFK (`0x49f4f6 jne 0x49f3c7`), `/dnd` included.
-        self.clear_afk(script);
-        // The DND arm (`0x49f3de`-`0x49f58d`): its line, then the default text written back into
-        // the message, which goes on through the steps below.
-        if wire == ChatKind::Dnd {
-            let strings = |key: &str| super::super::combat::global_string(script, key);
-            let out = away::dnd_line(&send.text, self.player_flags() & 0x4 != 0, &strings);
-            // The echo, type 0xa through `0x49a870` (`0x49f588`), fires inside the call.
-            if let Some(line) = out.line {
-                away::show_system(&self.chat_log, script, line);
-            }
-            send.text = out.body;
+        ChatStep::Go(ChatGo { send, kind, wire })
+    }
+
+    /// The DND arm (`0x49f3de`-`0x49f58d`): its line, then the default text written back into the
+    /// message, which goes on through [`Self::finish_chat`]. Whether it showed a line, whose
+    /// listeners run before the rest.
+    pub(crate) fn dnd_line(&mut self, script: &mut UiScript, go: &mut ChatGo) -> bool {
+        if go.wire != ChatKind::Dnd {
+            return false;
         }
+        let strings = |key: &str| super::super::combat::global_string(script, key);
+        let out = away::dnd_line(&go.send.text, self.player_flags() & 0x4 != 0, &strings);
+        go.send.text = out.body;
+        // The echo, type 0xa through `0x49a870` (`0x49f588`), fires inside the call.
+        let Some(line) = out.line else {
+            return false;
+        };
+        away::show_system(&self.chat_log, script, line);
+        true
+    }
+
+    /// `SendChatMessage` past its lines: the dead check (`0x49f592`), the tutorial (`0x49f5fc`),
+    /// the `%` expander (`0x49f60f`), the drunk transform, the escape scan (`0x49f661`), and the
+    /// packet (`0x49f6c3`).
+    pub(crate) fn finish_chat(&mut self, script: &mut UiScript, go: ChatGo) {
+        let ChatGo { send, kind, wire } = go;
         // A dead or ghost player's line is refused (`0x49f592`-`0x49f5e4`, `0x605f30`) unless its
         // type is on the allowed chain (`0x49f5a3`-`0x49f5da`).
         if !dead_may_send(kind) && self.player().is_some_and(|s| s.0.is_dead_or_ghost()) {
@@ -274,31 +329,44 @@ impl ChatSender<'_, '_> {
     }
 
     /// The AFK arm: `SetAFK` (`0x5eb740`) or the forced `ClearAFK(1)` (`0x5eb830`), each echoing
-    /// and sending its own packet, language 0 (`0x5eb7ed`), not the argument's.
-    fn afk(&mut self, script: &mut UiScript, msg: &str) {
+    /// and then sending its own packet ([`Self::finish_afk`]).
+    fn afk_echo(&mut self, script: &mut UiScript, msg: &str) -> AfkTail {
         let strings = |key: &str| super::super::combat::global_string(script, key);
         let out = away::afk_line(msg, self.afk_mirror(), &strings);
         // `SetAFK`'s echo (`0x5eb7a9`) and the forced clear's (`0x5eb878`) fire inside the call.
+        let shown = out.line.is_some();
         if let Some(line) = out.line {
             away::show_system(&self.chat_log, script, line);
         }
-        if let (Some(v), Some(mirror)) = (out.mirror, self.mirror.as_mut()) {
-            mirror.0 = v;
+        AfkTail {
+            mirror: out.mirror,
+            body: out.body,
+            shown,
         }
-        self.send_afk(out.body);
     }
 
-    /// `ClearAFK(0)` (`0x5eb830`, from a send at `0x49f3d6` or a movement call's tick at
-    /// `0x514e23`): with the mirror set and `autoClearAFK` on, the line (fired inside the call,
-    /// `0x5eb878`), the mirror zeroed and the empty AFK packet, ahead of the message's own.
+    /// The AFK arm past its echo: the mirror written and the packet (`0x5eb801`, `0x5eb8d0`),
+    /// language 0 (`0x5eb7ed`), not the argument's.
+    pub(crate) fn finish_afk(&mut self, tail: AfkTail) {
+        if let (Some(v), Some(mirror)) = (tail.mirror, self.mirror.as_mut()) {
+            mirror.0 = v;
+        }
+        self.send_afk(tail.body);
+    }
+
+    /// `ClearAFK(0)` whole, for a harness with nobody to signal at its line
+    /// ([`Self::clear_afk_line`], [`Self::finish_clear_afk`]).
+    #[cfg(test)]
     pub(crate) fn clear_afk(&mut self, script: &mut UiScript) {
         if self.clear_afk_line(script) {
             self.finish_clear_afk();
         }
     }
 
-    /// [`Self::clear_afk`] up to its line (`0x5eb878`), for a caller that runs the line's
-    /// listeners there before [`Self::finish_clear_afk`]: whether it showed one.
+    /// `ClearAFK(0)` (`0x5eb830`, from a send at `0x49f3d6` or a movement call's tick at
+    /// `0x514e23`) up to its line: with the mirror set and `autoClearAFK` on, the line (fired
+    /// inside the call, `0x5eb878`), whose listeners a caller runs there before
+    /// [`Self::finish_clear_afk`]. Whether it showed one.
     pub(crate) fn clear_afk_line(&mut self, script: &mut UiScript) -> bool {
         let strings = |key: &str| super::super::combat::global_string(script, key);
         let Some(line) = away::auto_clear_line(self.afk_mirror(), auto_clear_afk(script), &strings)
@@ -309,8 +377,8 @@ impl ChatSender<'_, '_> {
         true
     }
 
-    /// [`Self::clear_afk`] past its line: the mirror zeroed (`0x5eb885`) and the empty AFK packet
-    /// (`0x5eb8d0`).
+    /// `ClearAFK(0)` past its line: the mirror zeroed (`0x5eb885`) and the empty AFK packet
+    /// (`0x5eb8d0`), ahead of the message's own.
     pub(crate) fn finish_clear_afk(&mut self) {
         if let Some(mirror) = self.mirror.as_mut() {
             mirror.0 = 0;
