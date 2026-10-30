@@ -1149,7 +1149,8 @@ fn decode_objects(first_pass: bool, objects: Vec<Object>) -> Vec<SessionEvent> {
             // Deviation: an out-of-range list past the first block reads no body in the write
             // passes (`0x466076`), which misread every block behind it, while the notify pass
             // reads past it (`0x465fd0`) and stays in step; benilla reads the list and drops it,
-            // keeping the blocks behind it whole.
+            // keeping the blocks behind it whole, because the faults the reference's passes have on
+            // malformed packets are recorded, not copied.
             Object::OutOfRange { guids } => {
                 if at == 0 {
                     first.push(SessionEvent::ObjectsRemoved(guids));
