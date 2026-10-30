@@ -19,7 +19,7 @@ use super::Scene;
 pub(super) fn head(sc: &mut Scene, item: u64) {
     if let (Some(loot), Some(latch)) = (sc.loot.as_deref_mut(), sc.loot_latch.as_deref_mut()) {
         if loot.source() == Some(item) {
-            crate::ui_loot::end_loot_window_on_its_item(loot, latch, &sc.net);
+            crate::ui_loot::end_loot_window_on_its_item(loot, latch, &sc.net, Some(&sc.items));
         }
     }
     let player = sc.self_guid.0.and_then(|me| sc.index.0.get(&me).copied());

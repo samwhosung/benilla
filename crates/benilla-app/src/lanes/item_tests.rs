@@ -532,3 +532,32 @@ fn a_close_owed_ahead_of_a_response_takes_only_the_window_before_it() {
     );
     assert_eq!(open(&app), Some(BOBBER));
 }
+
+/// Every close tears the session down through `0x48f33d` → `0x4c1cb0`, which cancels each row's
+/// pending fetch (`0x4c1d40`-`0x4c1d68`): a window the server's release closed while its copier
+/// waited leaves no callback on the record. A push that waits on the same record behind it, then a
+/// later window's row, answer in their own order (`0x55bdb0`): the line, then that window's open.
+#[test]
+fn a_closed_windows_row_fetch_leaves_no_callback_ahead_of_a_later_one() {
+    let mut app = client();
+    stream_bobber(&mut app);
+    assert!(frame(&mut app, vec![fished(&[(0, LINEN)])]).is_empty());
+    assert_eq!(
+        frame(
+            &mut app,
+            vec![SessionEvent::LootReleaseResponse {
+                guid: BOBBER,
+                result: 1
+            }]
+        ),
+        ["LOOT_CLOSED:nil"]
+    );
+    assert!(frame(&mut app, vec![pushed(LINEN)]).is_empty());
+    assert_eq!(
+        frame(
+            &mut app,
+            vec![fished(&[(0, LINEN)]), answered(LINEN, "Linen Cloth")]
+        ),
+        ["CHAT_MSG_LOOT", "LOOT_OPENED:nil"]
+    );
+}

@@ -1604,6 +1604,7 @@ fn end_open<X: bevy::ecs::system::SystemParam + 'static>(
             &mut steps.loot,
             &mut steps.latch,
             &steps.net,
+            Some(&steps.items),
             Unlocks::InPlace,
         );
         if closed.is_some() {
@@ -1739,11 +1740,13 @@ pub(crate) fn close_interaction(
     loot: &mut LootState,
     latch: &mut LootLatch,
     release: Option<&NetCommands>,
+    items: Option<&Items>,
 ) -> Option<u64> {
     close_with(
         loot,
         latch,
         release,
+        items,
         Unlocks::OnTheLane(Source::CheckedAtTheFire),
     )
 }
@@ -1752,8 +1755,13 @@ pub(crate) fn close_interaction(
 /// disenchant window with rows left owes its sweep (`0x48f24f`, `0x48f264`); any other closes with
 /// its release ([`close_interaction`]). The selection teardown's (`0x493974`) and our own death's
 /// (`0x5e9a5c`).
-pub(crate) fn end_loot_window(loot: &mut LootState, latch: &mut LootLatch, net: &NetCommands) {
-    end_window_with(loot, latch, net, Source::CheckedAtTheFire);
+pub(crate) fn end_loot_window(
+    loot: &mut LootState,
+    latch: &mut LootLatch,
+    net: &NetCommands,
+    items: Option<&Items>,
+) {
+    end_window_with(loot, latch, net, items, Source::CheckedAtTheFire);
 }
 
 /// [`end_loot_window`] from the item source's own deactivate (`0x5d869b`), which runs while the
@@ -1764,17 +1772,24 @@ pub(crate) fn end_loot_window_on_its_item(
     loot: &mut LootState,
     latch: &mut LootLatch,
     net: &NetCommands,
+    items: Option<&Items>,
 ) {
-    end_window_with(loot, latch, net, Source::LiveAtTheClose);
+    end_window_with(loot, latch, net, items, Source::LiveAtTheClose);
 }
 
-fn end_window_with(loot: &mut LootState, latch: &mut LootLatch, net: &NetCommands, source: Source) {
+fn end_window_with(
+    loot: &mut LootState,
+    latch: &mut LootLatch,
+    net: &NetCommands,
+    items: Option<&Items>,
+    source: Source,
+) {
     if loot.disenchant_holds() {
         loot.owe_sweep();
         loot.sweep_source_live = source == Source::LiveAtTheClose;
         return;
     }
-    close_with(loot, latch, Some(net), Unlocks::OnTheLane(source));
+    close_with(loot, latch, Some(net), items, Unlocks::OnTheLane(source));
 }
 
 /// [`close_interaction`] for a call or a turn that signals the unlocks and the teardown in place
@@ -1786,8 +1801,9 @@ pub(crate) fn close_interaction_in_place(
     loot: &mut LootState,
     latch: &mut LootLatch,
     release: Option<&NetCommands>,
+    items: Option<&Items>,
 ) -> Option<u64> {
-    close_with(loot, latch, release, Unlocks::InPlace)
+    close_with(loot, latch, release, items, Unlocks::InPlace)
 }
 
 /// Where a close's two unlocks go.
@@ -1810,10 +1826,16 @@ fn close_with(
     loot: &mut LootState,
     latch: &mut LootLatch,
     release: Option<&NetCommands>,
+    items: Option<&Items>,
     unlocks: Unlocks,
 ) -> Option<u64> {
     let source = loot.source()?;
     latch.clear_for(source);
+    // The teardown (`0x48f33d` → `0x4c1cb0`) cancels each row's pending fetch
+    // (`0x4c1d40`-`0x4c1d68`), so a record's answer reaches no closed window.
+    if let Some(items) = items {
+        items.cancel_waits(crate::items::RecordCallback::LootRow);
+    }
     if let Some(commands) = release {
         let _ = commands.0.send(ClientCommand::LootRelease { guid: source });
     }
@@ -1849,7 +1871,12 @@ pub(crate) fn close_loot_on_leave_world(mut vm: VmWith<(LootSteps<'static, 'stat
             steps.loot.owe_sweep();
             return;
         }
-        let closed = close_interaction(&mut steps.loot, &mut steps.latch, Some(&steps.net));
+        let closed = close_interaction(
+            &mut steps.loot,
+            &mut steps.latch,
+            Some(&steps.net),
+            Some(&steps.items),
+        );
         steps.dead.after_close(closed);
         return;
     }
@@ -1861,8 +1888,12 @@ pub(crate) fn close_loot_on_leave_world(mut vm: VmWith<(LootSteps<'static, 'stat
             }
             return None;
         }
-        let closed =
-            close_interaction_in_place(&mut steps.loot, &mut steps.latch, Some(&steps.net))?;
+        let closed = close_interaction_in_place(
+            &mut steps.loot,
+            &mut steps.latch,
+            Some(&steps.net),
+            Some(&steps.items),
+        )?;
         if let Some(script) = script {
             unlock_closed_source(script, &mut steps.loot, &steps.objects);
         }
@@ -1984,11 +2015,13 @@ fn close_on_move_start(
     loot: &mut LootState,
     latch: &mut LootLatch,
     commands: &NetCommands,
+    items: Option<&Items>,
 ) -> Option<u64> {
     move_start_close(
         loot,
         latch,
         commands,
+        items,
         Unlocks::OnTheLane(Source::CheckedAtTheFire),
     )
 }
@@ -2009,6 +2042,8 @@ pub(crate) struct MoveStartClose<'w, 's> {
     loot: Option<ResMut<'w, LootState>>,
     latch: Option<ResMut<'w, LootLatch>>,
     net: Res<'w, NetCommands>,
+    /// The record fetches the teardown cancels; absent in a harness without the item cache.
+    items: Option<Res<'w, Items>>,
     dead: DeadUnitDeselect<'w, 's>,
 }
 
@@ -2019,7 +2054,7 @@ impl MoveStartClose<'_, '_> {
         else {
             return;
         };
-        let closed = close_on_move_start(loot, latch, &self.net);
+        let closed = close_on_move_start(loot, latch, &self.net, self.items.as_deref());
         self.dead.after_close(closed);
     }
 }
@@ -2029,6 +2064,7 @@ fn move_start_close(
     loot: &mut LootState,
     latch: &mut LootLatch,
     commands: &NetCommands,
+    items: Option<&Items>,
     unlocks: Unlocks,
 ) -> Option<u64> {
     let source = loot.source()?;
@@ -2036,7 +2072,7 @@ fn move_start_close(
         return None;
     }
     debug!("ui_loot: movement started with {source:#x} open — release");
-    close_with(loot, latch, Some(commands), unlocks)
+    close_with(loot, latch, Some(commands), items, unlocks)
 }
 
 /// What a movement start's close keeps, `dl` set: a disenchant window with rows left
@@ -2074,6 +2110,8 @@ struct PrecastEndClose<'w, 's> {
     loot: Option<ResMut<'w, LootState>>,
     latch: Option<ResMut<'w, LootLatch>>,
     net: Res<'w, NetCommands>,
+    /// The record fetches the teardown cancels; absent in a harness without the item cache.
+    items: Option<Res<'w, Items>>,
     objects: crate::net::Objects<'w, 's>,
     dead: DeadUnitDeselect<'w, 's>,
 }
@@ -2084,13 +2122,14 @@ impl PrecastEndClose<'_, '_> {
         else {
             return;
         };
+        let items = self.items.as_deref();
         let closed = if moving {
-            close_on_move_start(loot, latch, &self.net)
+            close_on_move_start(loot, latch, &self.net, items)
         } else if loot.disenchant_hold(&self.objects) {
             loot.owe_sweep();
             None
         } else {
-            close_interaction(loot, latch, Some(&self.net))
+            close_interaction(loot, latch, Some(&self.net), items)
         };
         self.dead.after_close(closed);
     }

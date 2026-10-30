@@ -144,11 +144,12 @@ impl Response<'_, '_> {
         // A copier waiting on a record returned with nothing signalled (`0x4c1ea6`), so the close
         // runs here: its release now, its teardown's cancel of the row fetches (`0x4c1d4f`), whose
         // answers then copy nothing, and its `LOOT_CLOSED` behind the copier's step.
-        let closed = super::close_on_move_start(&mut seam.loot, &mut seam.loot_latch, &seam.net);
-        if closed.is_some() {
-            self.items
-                .cancel_waits(crate::items::RecordCallback::LootRow);
-        }
+        let closed = super::close_on_move_start(
+            &mut seam.loot,
+            &mut seam.loot_latch,
+            &seam.net,
+            Some(&self.items),
+        );
         self.dead.after_close(closed);
     }
 }
@@ -193,6 +194,7 @@ pub(super) struct WindowPacket<'w, 's> {
     loot: ResMut<'w, LootState>,
     latch: ResMut<'w, LootLatch>,
     net: Res<'w, NetCommands>,
+    items: Res<'w, crate::items::Items>,
     objects: crate::net::Objects<'w, 's>,
     dead: super::DeadUnitDeselect<'w, 's>,
 }
@@ -229,7 +231,12 @@ impl WindowPacket<'_, '_> {
         if self.loot.source().is_none() || self.loot.has_contents(&self.objects) {
             return;
         }
-        let closed = super::close_interaction(&mut self.loot, &mut self.latch, Some(&self.net));
+        let closed = super::close_interaction(
+            &mut self.loot,
+            &mut self.latch,
+            Some(&self.net),
+            Some(&self.items),
+        );
         if let Some(guid) = closed {
             debug!("net: loot emptied — release {guid:#x}");
         }
@@ -243,9 +250,12 @@ fn on_release_response(
     mut latch: ResMut<LootLatch>,
     mut dead: super::DeadUnitDeselect,
     objects: crate::net::Objects,
+    // The record fetches the close's teardown cancels; absent in a harness without the cache.
+    items: Option<Res<crate::items::Items>>,
 ) {
     if let SessionEvent::LootReleaseResponse { guid, result } = ev {
-        let closed = loot_release_response(guid, result, &mut loot, &mut latch, &objects);
+        let items = items.as_deref();
+        let closed = loot_release_response(guid, result, &mut loot, &mut latch, &objects, items);
         dead.after_close(closed);
     }
 }
@@ -459,6 +469,7 @@ fn loot_release_response(
     loot: &mut LootState,
     latch: &mut LootLatch,
     objects: &crate::net::Objects,
+    items: Option<&crate::items::Items>,
 ) -> Option<u64> {
     if result == 0 || latch.0 != Some(guid) {
         debug!(
@@ -475,7 +486,7 @@ fn loot_release_response(
         loot.owe_sweep();
         return None;
     }
-    super::close_interaction(loot, latch, None)
+    super::close_interaction(loot, latch, None, items)
 }
 
 /// `SMSG_LOOT_MASTER_LIST` (`0x61c550`): the candidate array, placed off the roster as this packet
@@ -859,7 +870,7 @@ mod tests {
         let mut latch = LootLatch(Some(CORPSE));
         loot.open(CORPSE, 1, 0, Vec::new());
         assert_eq!(
-            super::super::close_interaction(&mut loot, &mut latch, None),
+            super::super::close_interaction(&mut loot, &mut latch, None, None),
             Some(CORPSE)
         );
         assert!(loot

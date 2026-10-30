@@ -501,6 +501,8 @@ pub(crate) struct AttackSeam<'w, 's> {
     pub(crate) loot: ResMut<'w, crate::ui_loot::LootState>,
     /// The loot latch: the teardown's close drops it, and the right-click loot legs arm it.
     pub(crate) loot_latch: ResMut<'w, crate::ui_loot::LootLatch>,
+    /// The record fetches the close's teardown cancels; absent in a harness without the cache.
+    items: Option<Res<'w, crate::items::Items>>,
     /// Our stop in flight (`[+0xc54]`), which StopAttack's send sets and StartAttack reads.
     stop_word: ResMut<'w, AttackStopInFlight>,
     /// The pet's attack latch, which the selection's release lowers for a possessed unit
@@ -552,7 +554,12 @@ impl AttackSeam<'_, '_> {
     /// `0x48f200(1, 0, 0)`, the close with its release and `dl` clear (`0x493970`, `0x5e9a58`):
     /// [`crate::ui_loot::end_loot_window`].
     pub(crate) fn close_loot(&mut self) {
-        crate::ui_loot::end_loot_window(&mut self.loot, &mut self.loot_latch, &self.net);
+        crate::ui_loot::end_loot_window(
+            &mut self.loot,
+            &mut self.loot_latch,
+            &self.net,
+            self.items.as_deref(),
+        );
     }
 
     /// The selection release's pet leg (`0x493910`): `0x5ee5a0` asked of the player

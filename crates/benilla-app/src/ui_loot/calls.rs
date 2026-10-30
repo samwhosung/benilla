@@ -74,7 +74,7 @@ pub(crate) struct LootSteps<'w, 's> {
     pub(super) dead: DeadUnitDeselect<'w, 's>,
     pub(super) objects: crate::net::Objects<'w, 's>,
     pub(super) byte: ResMut<'w, AutoLootByte>,
-    items: Res<'w, Items>,
+    pub(super) items: Res<'w, Items>,
     group: Res<'w, GroupState>,
     pickup: MessageWriter<'w, crate::sound::LootPickupSound>,
     errors: Res<'w, UiErrorKeys>,
@@ -89,7 +89,12 @@ impl LootSteps<'_, '_> {
     /// nobody to signal between its steps: the movement start's close ([`super::MoveStartClose`]),
     /// its release sent now.
     pub(crate) fn close_for_stand(&mut self) {
-        let closed = super::close_on_move_start(&mut self.loot, &mut self.latch, &self.net);
+        let closed = super::close_on_move_start(
+            &mut self.loot,
+            &mut self.latch,
+            &self.net,
+            Some(&self.items),
+        );
         self.dead.after_close(closed);
     }
 
@@ -323,7 +328,12 @@ impl LootSteps<'_, '_> {
         if failed {
             self.errors.push(UiError::key("ERR_LOOT_NO_UI"));
         }
-        let closed = close_interaction_in_place(&mut self.loot, &mut self.latch, Some(&self.net));
+        let closed = close_interaction_in_place(
+            &mut self.loot,
+            &mut self.latch,
+            Some(&self.net),
+            Some(&self.items),
+        );
         // The window goes (`0x48f33d` → `0x4c1cb0`) before the dead unit's deselect (`0x48f369`).
         if let Some(source) = self.dead.dead_unit(closed) {
             self.loot.then.push(Then::Deselect(source));
