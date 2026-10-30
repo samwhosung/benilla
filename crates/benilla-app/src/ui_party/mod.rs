@@ -124,6 +124,9 @@ pub struct GroupState {
     /// raised, in its order, for the handler to resolve against the objects held
     /// ([`Self::take_released`]).
     pub(crate) released: Vec<RosterRelease>,
+    /// The `RefreshNameDesc` calls the party's slot writers made, in their order, for the handler
+    /// to resolve against the objects held ([`Self::take_roster_colours`]).
+    pub(crate) roster_colours: Vec<RosterColour>,
     /// While a test sets it, each signal with the roster cells as they stood when its handler
     /// signalled it, what a listener fired at that place would read.
     #[cfg(test)]
@@ -154,6 +157,20 @@ impl NameWait {
             NameWait::Seat(guid) | NameWait::Notice(guid, _) | NameWait::Row(guid) => guid,
         }
     }
+}
+
+/// A party slot writer's `RefreshNameDesc` (`0x607080`), whose plate leg recolours the member's bar:
+/// `AddPartyMember`'s on a member it seats (`0x4e83dd`), held as a player (`0x4e838d`), and
+/// `ClearParty`'s on each member it empties (`0x4e8568`), held as a unit (`0x4e84d7`), ahead of the
+/// slot's zeroing (`0x4e858c`). Each reads the reaction with the party slots as they stood there,
+/// [`RosterColour::party`], the member's own among them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RosterColour {
+    pub(crate) at: crate::lanes::Stamp,
+    pub(crate) guid: u64,
+    /// Whether the seat's (a player held) or the clear's (any unit held).
+    pub(crate) seat: bool,
+    pub(crate) party: [u64; 4],
 }
 
 /// A selection teardown the roster raises; the handler that applied it resolves which guid it
@@ -430,9 +447,22 @@ impl GroupState {
                 .filter(|&g| g != 0 && missed(g))
                 .map(NameWait::Seat),
         );
-        // The emptier ahead of the seat loop (`0x5e6b19` into `0x4e84a0(0)`) zeroes the leader
-        // cell and the index cell (`0x4e85a9`, `0x4e85b5`), which the leader store fills only after
-        // the event (`0x5e6c7e`).
+        // The emptier ahead of the seat loop (`0x5e6b19` into `0x4e84a0(0)`) refreshes each member
+        // it empties, slot by slot, then zeroes the leader cell and the index cell (`0x4e85a9`,
+        // `0x4e85b5`), which the leader store fills only after the event (`0x5e6c7e`); then the
+        // seat loop refreshes each member it seats into the slots it fills in order.
+        self.clear_colours(&held_slots);
+        // A zero guid takes no slot (`0x4e82eb`): each member fills the first one empty.
+        let mut filled = [0; 4];
+        for (slot, m) in seated.iter().filter(|m| m.guid != 0).enumerate() {
+            filled[slot] = m.guid;
+            self.roster_colours.push(RosterColour {
+                at: crate::lanes::stamp(),
+                guid: m.guid,
+                seat: true,
+                party: filled,
+            });
+        }
         self.leader = 0;
         self.store_leader_index();
         for m in &seated {
@@ -741,6 +771,8 @@ impl GroupState {
     /// leader store finds the 0 already there and signals nothing (`0x4e8267`). The raid roster
     /// stays.
     fn end_party(&mut self) {
+        let slots: Vec<u64> = self.party_slots().map(|m| m.guid).collect();
+        self.clear_colours(&slots);
         // Each slot's teardown, the argument set (`0x4e84b0`-`0x4e8598`).
         self.released = self
             .party_slots()
@@ -791,6 +823,32 @@ impl GroupState {
     /// The teardowns the last list or ending raised, for its handler to resolve.
     pub(crate) fn take_released(&mut self) -> Vec<RosterRelease> {
         std::mem::take(&mut self.released)
+    }
+
+    /// The colour refreshes the last list or ending made, in their order ([`RosterColour`]).
+    pub(crate) fn take_roster_colours(&mut self) -> Vec<RosterColour> {
+        std::mem::take(&mut self.roster_colours)
+    }
+
+    /// `ClearParty`'s walk over `slots` (`0x4e84b0`-`0x4e8598`): each member's refresh with the
+    /// slots ahead of it already zeroed (`0x4e858c`) and its own and those behind still held.
+    fn clear_colours(&mut self, slots: &[u64]) {
+        let mut standing = [0; 4];
+        for (slot, &guid) in slots.iter().take(4).enumerate() {
+            standing[slot] = guid;
+        }
+        for slot in 0..slots.len().min(4) {
+            let guid = standing[slot];
+            if guid != 0 {
+                self.roster_colours.push(RosterColour {
+                    at: crate::lanes::stamp(),
+                    guid,
+                    seat: false,
+                    party: standing,
+                });
+            }
+            standing[slot] = 0;
+        }
     }
 
     /// `SMSG_GROUP_INVITE` (`0x5e6730`): the invite's signal, which the feed fires as
@@ -988,8 +1046,9 @@ impl GroupState {
             name_waits: _,
             raid_names_pending: _,
             saved_instances: _,
-            // The list's own teardowns, raised before its reset.
+            // The list's own teardowns and refreshes, raised before its reset.
             released: _,
+            roster_colours: _,
             #[cfg(test)]
                 signal_cells: _,
         } = self;

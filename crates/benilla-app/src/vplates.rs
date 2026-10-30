@@ -712,6 +712,10 @@ pub(crate) enum PlateCall {
     /// The unit's release as it leaves the world (`CGUnit_C::Release` at `0x5fbba9`, the
     /// destructor at `0x5fb620`): its plate freed and its object's watches gone.
     Gone,
+    /// [`Self::Colour`] from a party slot writer, with the party slots as they stood there:
+    /// `AddPartyMember`'s (`0x4e83dd`) and `ClearParty`'s (`0x4e8568`)
+    /// ([`crate::ui_party::RosterColour`]).
+    ColourInParty { party: [u64; 4] },
 }
 
 /// `call` on `guid`'s plate, inside the packet that ran it.
@@ -728,6 +732,7 @@ pub(crate) fn fire_plate_call(
         PlateCall::Gate => script.gate_nameplate(guid),
         PlateCall::Release => script.release_nameplate(guid),
         PlateCall::Gone => script.nameplate_unit_gone(guid),
+        PlateCall::ColourInParty { party } => script.refresh_nameplate_colour_in_party(guid, party),
     }
 }
 

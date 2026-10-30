@@ -534,3 +534,85 @@ fn a_packets_gate_binds_a_plate_in_the_frame_the_plates_come_on() {
         ["UNIT_HEALTH:target:hidden", "UNIT_HEALTH:target:shown"]
     );
 }
+
+/// The party's slot writers refresh a held member's plate colour (`0x607080`): the seat's once
+/// the slot holds it (`0x4e83dd`), an enemy-faction player turning friendly (`0x6062b0`), its bar
+/// blue; the clear's ahead of the slot's zeroing (`0x4e8568`, `0x4e858c`), which reads the member
+/// in the party still, so the bar stays blue until a later refresh, its health watcher's.
+#[test]
+fn the_party_seat_and_clear_recolour_the_members_plate() {
+    use crate::target::relations::fixture::{factions, HUMAN, ORC, PC};
+    use benilla_protocol::messages::{member_status, GroupMemberEntry};
+    const MATE: u64 = 0x22;
+    const TEMPLATE: u16 = 35;
+    let mut app = client();
+    app.insert_resource(factions());
+    let _ = frame(
+        &mut app,
+        vec![
+            values(ME, &[(TEMPLATE, HUMAN), (FIELD_UNIT_FLAGS, PC)]),
+            created(
+                MATE,
+                EntityKind::Player,
+                &[
+                    (TEMPLATE, ORC),
+                    (FIELD_UNIT_FLAGS, PC),
+                    (FIELD_UNIT_HEALTH, 100),
+                    (FIELD_UNIT_MAXHEALTH, 100),
+                ],
+            ),
+        ],
+    );
+    let world = app.world_mut();
+    world.insert_resource(crate::vplates::VPlateMode {
+        enemies: true,
+        friends: true,
+    });
+    world
+        .resource_mut::<crate::vplates::PlateSpots>()
+        .0
+        .insert(MATE);
+    let mut script = world.non_send_resource_mut::<UiScript>();
+    crate::vplates::plates_for_test(&mut script, &[MATE]);
+    helpers(
+        &script,
+        r#"local r, g, b = Bar():GetStatusBarColor()
+        return Byte(r) .. "," .. Byte(g) .. "," .. Byte(b)"#,
+    );
+    let list = SessionEvent::GroupList {
+        group_type: 0,
+        own_flags: 0,
+        members: vec![GroupMemberEntry {
+            name: String::new(),
+            guid: MATE,
+            status: member_status::ONLINE,
+            flags: 0,
+        }],
+        leader: ME,
+        loot: None,
+    };
+    assert_eq!(
+        frame(&mut app, vec![list, values(WOLF, &health(70))]),
+        ["UNIT_HEALTH:target:0,0,255"],
+        "seated"
+    );
+    assert_eq!(
+        frame(
+            &mut app,
+            vec![SessionEvent::GroupDestroyed, values(WOLF, &health(60))]
+        ),
+        ["UNIT_HEALTH:target:0,0,255"],
+        "cleared while still in its slot"
+    );
+    assert_eq!(
+        frame(
+            &mut app,
+            vec![
+                values(MATE, &[(FIELD_UNIT_HEALTH, 90)]),
+                values(WOLF, &health(50))
+            ]
+        ),
+        ["UNIT_HEALTH:target:255,0,0"],
+        "the health watcher's, out of the party"
+    );
+}

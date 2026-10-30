@@ -43,16 +43,27 @@ impl NamePlateLive<'_, '_> {
         Some((kind == EntityKind::Player, store))
     }
 
-    /// `f` with the judge over the reads as of here.
-    fn judge<R>(&self, f: impl FnOnce(&super::gate::Judge) -> R) -> R {
+    /// `f` with the judge over the reads as of here, the party slots `party` in place of the
+    /// roster's when given.
+    fn judge<R>(&self, party: Option<[u64; 4]>, f: impl FnOnce(&super::gate::Judge) -> R) -> R {
+        let standing = party.map(|party| crate::spell::group_relation::GroupRoster {
+            party: party.into_iter().filter(|&g| g != 0).collect(),
+            raid: self
+                .relations
+                .roster()
+                .map(|r| r.raid.clone())
+                .unwrap_or_default(),
+        });
         let my_store = self.me.single().ok().and_then(|e| self.stores.get(e).ok());
         let my_level = my_store.and_then(|s| s.0.unit_level()).unwrap_or(1);
-        let my_drunk = my_store
-            .and_then(|s| s.0.player_drunk_byte())
-            .unwrap_or(0);
+        let my_drunk = my_store.and_then(|s| s.0.player_drunk_byte()).unwrap_or(0);
         let unit_of = |guid: u64, store: &ObjectStore| self.relations.unit_of(guid, store);
+        let mut rel = self.relations.get();
+        if let Some(standing) = standing.as_ref() {
+            rel.roster = Some(standing);
+        }
         let judge = super::gate::Judge {
-            rel: self.relations.get(),
+            rel,
             me: self.relations.me(),
             unit_of: &unit_of,
             types: crate::creature_type::CreatureTypeSources {
@@ -69,10 +80,10 @@ impl NamePlateLive<'_, '_> {
         f(&judge)
     }
 
-    /// The unit as a callback reads it now.
-    fn unit(&self, guid: u64) -> Option<PlateUnit> {
+    /// The unit as a callback reads it now, with the party slots `party` when given.
+    fn unit(&self, guid: u64, party: Option<[u64; 4]>) -> Option<PlateUnit> {
         let (is_player, store) = self.held(guid)?;
-        Some(self.judge(|j| j.unit_now(guid, is_player, Some(store))))
+        Some(self.judge(party, |j| j.unit_now(guid, is_player, Some(store))))
     }
 
     /// The gate on `guid` as of here: its spatial tests as the frame's gate last passed them (the
@@ -83,7 +94,7 @@ impl NamePlateLive<'_, '_> {
             return None;
         }
         let (is_player, store) = self.held(guid)?;
-        self.judge(|j| {
+        self.judge(None, |j| {
             let rank = j.admits(guid, is_player, Some(store))?;
             Some(j.unit(guid, is_player, Some(store), rank))
         })
@@ -92,7 +103,7 @@ impl NamePlateLive<'_, '_> {
 
 impl crate::script_calls::live::LiveFamily for NamePlateLive<'_, '_> {
     fn answer(&mut self, ask: &mut LiveAsk<'_>) -> bool {
-        ask.answer(|q: &PlateUnitQuery| self.unit(q.0))
+        ask.answer(|q: &PlateUnitQuery| self.unit(q.guid, q.party))
             || ask.answer(|q: &PlateGateQuery| Some(self.gate(q.0)))
     }
 }

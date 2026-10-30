@@ -129,9 +129,14 @@ pub struct PlateUnit {
 }
 
 /// The unit `guid` as a plate's callback reads it as it runs, asked of the lent host; no answer
-/// for no unit held under the guid (`0x468460`, mask 8).
+/// for no unit held under the guid (`0x468460`, mask 8). `party`, when set, is the four party
+/// slots as they stood where the callback ran, for one that runs inside a handler that is still
+/// writing them (`ClearParty`, `AddPartyMember`), where the host's stand as the handler left them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PlateUnitQuery(pub u64);
+pub struct PlateUnitQuery {
+    pub guid: u64,
+    pub party: Option<[u64; 4]>,
+}
 
 impl super::live::LiveQuery for PlateUnitQuery {
     type Answer = PlateUnit;
@@ -544,7 +549,20 @@ impl UiScript {
     /// of a unit, its summon and its charm (`0x606e3c`, `0x606e8a`, `0x606ecf`) and the active
     /// player's sweep (`0x606fa2`).
     pub fn refresh_nameplate_colour(&mut self, guid: u64) {
-        self.refresh_bound(guid, |model, i, unit| {
+        self.refresh_bound(PlateUnitQuery { guid, party: None }, |model, i, unit| {
+            Plate::colour(model, i, unit.bar_colour)
+        });
+    }
+
+    /// [`Self::refresh_nameplate_colour`] from a party slot writer, the reaction read with the
+    /// slots `party` as they stood there: `AddPartyMember`'s on the member it seats (`0x4e83dd`)
+    /// and `ClearParty`'s on each it empties, ahead of the slot's zeroing (`0x4e8568`, `0x4e858c`).
+    pub fn refresh_nameplate_colour_in_party(&mut self, guid: u64, party: [u64; 4]) {
+        let query = PlateUnitQuery {
+            guid,
+            party: Some(party),
+        };
+        self.refresh_bound(query, |model, i, unit| {
             Plate::colour(model, i, unit.bar_colour)
         });
     }
@@ -552,16 +570,21 @@ impl UiScript {
     /// `OnLevelChanged`'s plate leg (`0x60cdd0` at `0x60ce5b` → `0x7cbb40`) on `guid`'s plate, if
     /// it has one (`0x60ce58`), inside its packet: the level and skull as they stand.
     pub fn refresh_nameplate_level(&mut self, guid: u64) {
-        self.refresh_bound(guid, Plate::level);
+        self.refresh_bound(PlateUnitQuery { guid, party: None }, Plate::level);
     }
 
-    /// `f` on the plate bound to `guid`, with the unit as the lent host reads it now.
-    fn refresh_bound(&mut self, guid: u64, f: impl FnOnce(&mut Model, usize, &PlateUnit)) {
+    /// `f` on the plate bound to the query's unit, with the unit as the lent host reads it now.
+    fn refresh_bound(
+        &mut self,
+        query: PlateUnitQuery,
+        f: impl FnOnce(&mut Model, usize, &PlateUnit),
+    ) {
+        let guid = query.guid;
         let lua = self.lua();
         if bound_slot(&lua.app_data_ref::<Model>().expect("model app_data"), guid).is_none() {
             return;
         }
-        let Some(unit) = super::live::ask(lua, &PlateUnitQuery(guid)) else {
+        let Some(unit) = super::live::ask(lua, &query) else {
             return;
         };
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -584,7 +607,7 @@ impl UiScript {
             .copied()
             .collect();
         for guid in units {
-            self.refresh_bound(guid, |model, i, unit| {
+            self.refresh_bound(PlateUnitQuery { guid, party: None }, |model, i, unit| {
                 Plate::raid_icon(model, i, unit.raid_icon)
             });
         }

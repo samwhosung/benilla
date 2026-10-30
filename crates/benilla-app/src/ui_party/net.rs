@@ -155,6 +155,8 @@ struct RosterTeardown<'w, 's> {
     log: Option<ResMut<'w, crate::ui_unit::views::ViewLog>>,
     /// The party slots and raid rows the relation reads take, written where the packet wrote them.
     roster: Option<ResMut<'w, crate::spell::group_relation::GroupRoster>>,
+    /// Where the slot writers' plate legs go, each at its place ([`super::RosterColour`]).
+    notices: Option<ResMut<'w, crate::field_watch::NoticeLane>>,
 }
 
 impl RosterTeardown<'_, '_> {
@@ -177,6 +179,43 @@ impl RosterTeardown<'_, '_> {
                 log.roster(cells);
             }
             log.close();
+        }
+        // The slot writers' refreshes, each on a member the object manager holds as the packet
+        // left it: as a player for a seat (`0x4e838d`), as a unit for a clear (`0x4e84d7`).
+        let colours = group.take_roster_colours();
+        let unit = |guid: u64| {
+            self.index
+                .as_deref()
+                .and_then(|index| index.0.get(&guid))
+                .and_then(|&e| self.stores.get(e).ok())
+                .filter(|s| s.is_unit())
+        };
+        let player = |guid: u64| {
+            unit(guid).filter(|s| {
+                s.0.created_as() == Some(benilla_protocol::messages::ObjectType::Player)
+            })
+        };
+        let colours: Vec<_> = colours
+            .into_iter()
+            .filter(|c| {
+                if c.seat {
+                    player(c.guid).is_some()
+                } else {
+                    unit(c.guid).is_some()
+                }
+            })
+            .collect();
+        if let Some(notices) = self.notices.as_deref_mut() {
+            for colour in colours {
+                let call = crate::vplates::PlateCall::ColourInParty {
+                    party: colour.party,
+                };
+                let notice = crate::field_watch::FieldNotice::Plate {
+                    guid: colour.guid,
+                    call,
+                };
+                notices.write_at(colour.at, notice);
+            }
         }
         let released = group.take_released();
         let guids: Vec<u64> = released
