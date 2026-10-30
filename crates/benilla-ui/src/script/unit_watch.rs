@@ -1,9 +1,9 @@
 //! The units' own watch lists: every watcher on a unit's fields is a record linked at the tail of
 //! its list (`0x467e70` → `0x467f00`), and a change runs them in that order (`0x467f65`-
-//! `0x467f76`). Two kinds watch a unit's health here: its unit-field watchers, linked while its
-//! token flags `+0xc90` are nonzero (`0x51bbb0`, from `0x60c4b0` and `0x60c65c`), and each plate
-//! bar bound to it (`0x7cc510`). Their links share one order, kept by the flags' writers as they
-//! write them.
+//! `0x467f76`). Three kinds watch a unit's health: its unit-field watchers, linked while its token
+//! flags `+0xc90` are nonzero (`0x51bbb0`, from `0x60c4b0` and `0x60c65c`); each plate bar bound to
+//! it (`0x7cc510`); and the unit tooltip's, linked by each build that shows it (`0x52a0a8`). Their
+//! links share one order here, kept by the flags' writers as they write them.
 
 use std::collections::HashMap;
 
@@ -46,6 +46,8 @@ pub(crate) struct UnitWatches {
     flags: HashMap<u64, u32>,
     /// Each unit's unit-field watchers, by their link.
     bridges: HashMap<u64, u64>,
+    /// Each tooltip's watcher on the unit it shows, by its link.
+    tooltips: HashMap<FrameHandle, u64>,
 }
 
 impl UnitWatches {
@@ -75,24 +77,47 @@ impl UnitWatches {
         }
     }
 
-    /// The unit leaves the world: its object takes its list with it (`0x5fbb60`).
-    pub(crate) fn gone(&mut self, guid: u64) {
+    /// A tooltip build that shows a unit links the tooltip's watcher on it at the tail.
+    pub(crate) fn link_tooltip(&mut self, tooltip: FrameHandle) {
+        let at = self.link();
+        self.tooltips.insert(tooltip, at);
+    }
+
+    /// The tooltip's clear unlinks its watcher (`0x53007c`).
+    pub(crate) fn unlink_tooltip(&mut self, tooltip: FrameHandle) {
+        self.tooltips.remove(&tooltip);
+    }
+
+    /// The tooltips whose watchers are linked, on whichever unit each shows.
+    pub(crate) fn linked_tooltips(&self) -> impl Iterator<Item = FrameHandle> + '_ {
+        self.tooltips.keys().copied()
+    }
+
+    /// The unit leaves the world: its object takes its list with it (`0x5fbb60`), the watchers
+    /// of `tooltips`, which show it, included.
+    pub(crate) fn gone(&mut self, guid: u64, tooltips: &[FrameHandle]) {
         self.flags.remove(&guid);
         self.bridges.remove(&guid);
+        for h in tooltips {
+            self.tooltips.remove(h);
+        }
     }
 }
 
-/// What one health field's watchers write: the plate bars' range and value (`0x7cc570`), absent
-/// for a unit no longer held.
+/// What one health field's watchers write: the plate bars' range and value
+/// (`0x7cc570`), absent for a unit no longer held; the tooltip's, on the health field alone
+/// (`0x529560`, watching `+0x40`).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct HealthWatch {
     pub bar: Option<(f32, f32)>,
+    pub tooltip: Option<(u32, u32)>,
 }
 
 /// One watcher on a unit's health, in its list.
 enum Watcher {
     Bridge,
     Bar(FrameHandle),
+    Tooltip(FrameHandle),
 }
 
 impl super::UiScript {
@@ -167,6 +192,15 @@ impl super::UiScript {
                         .map(|(at, bar)| (at, Watcher::Bar(bar))),
                 );
             }
+            if watch.tooltip.is_some() {
+                list.extend(
+                    watches
+                        .tooltips
+                        .iter()
+                        .filter(|&(&h, _)| super::tooltip_unit::shows(&model, h, guid))
+                        .map(|(&h, &at)| (at, Watcher::Tooltip(h))),
+                );
+            }
             list
         };
         list.sort_by_key(|&(at, _)| at);
@@ -181,6 +215,11 @@ impl super::UiScript {
                 Watcher::Bar(bar) => {
                     if let Some((health, max)) = watch.bar {
                         self.bar_watch(bar, health, max);
+                    }
+                }
+                Watcher::Tooltip(h) => {
+                    if let Some((health, max)) = watch.tooltip {
+                        super::tooltip_unit::watch_health(self.lua(), h, health, max);
                     }
                 }
             }

@@ -736,19 +736,26 @@ pub(crate) fn fire_plate_call(
     }
 }
 
-/// The bars' watchers on `guid` (`0x7cc570`) and `bridge`, the unit's own watchers on the same
-/// field, in the order they were linked
-/// ([`benilla_ui::script::UiScript::unit_health_watchers`]), with the unit's health and maximum
-/// as `store` holds them where they run. A unit the object manager no longer holds has the bars
-/// write nothing (`0x7cc588`, `0x7cc591`).
+/// The watchers on one of `guid`'s health fields and `bridge`, its unit-field watchers' run, in
+/// the order they were linked ([`benilla_ui::script::UiScript::unit_health_watchers`]), with the
+/// unit's health and maximum as `store` holds them where they run: each plate bar's (`0x7cc570`)
+/// and, on the health field (`health`), each tooltip's (`0x529560`). A unit the object manager no
+/// longer holds has neither write (`0x7cc591`, `0x529584`).
 pub(crate) fn health_watch(
     script: &mut benilla_ui::script::UiScript,
     guid: u64,
     store: Option<&ObjectStore>,
+    health: bool,
     bridge: impl FnOnce(&mut benilla_ui::script::UiScript),
 ) {
     let watch = benilla_ui::script::HealthWatch {
         bar: store.map(gate::bar_of),
+        tooltip: store.filter(|_| health).map(|s| {
+            (
+                s.0.unit_health().unwrap_or(0),
+                s.0.unit_max_health().unwrap_or(0),
+            )
+        }),
     };
     script.unit_health_watchers(guid, watch, bridge);
 }

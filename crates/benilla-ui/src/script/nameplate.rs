@@ -519,6 +519,7 @@ impl UiScript {
     pub fn nameplate_health(&mut self, guid: u64, health: f32, max: f32) {
         let watch = super::HealthWatch {
             bar: Some((health, max)),
+            tooltip: None,
         };
         self.unit_health_watchers(guid, watch, |_| {});
     }
@@ -687,11 +688,16 @@ impl UiScript {
 
     /// The unit `guid` leaves the world inside its packet: its release frees its plate
     /// (`CGUnit_C::Release` at `0x5fbba9`, the destructor at `0x5fb620`), and its object, which
-    /// holds the bar watches, goes with them, so no plate's bar follows it again.
+    /// holds the bar and tooltip watches, goes with them, so neither follows it again.
     pub fn nameplate_unit_gone(&mut self, guid: u64) {
         self.release_nameplate(guid);
         let mut model = self.model_mut();
-        model.unit_watches.gone(guid);
+        let tooltips: Vec<_> = model
+            .unit_watches
+            .linked_tooltips()
+            .filter(|&h| super::tooltip_unit::shows(&model, h, guid))
+            .collect();
+        model.unit_watches.gone(guid, &tooltips);
         for plate in &mut model.nameplates.plates {
             if plate.bar_unit == guid {
                 plate.bar_unit = 0;

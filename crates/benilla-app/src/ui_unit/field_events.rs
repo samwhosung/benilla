@@ -108,9 +108,9 @@ impl NoticeFiring<'_, '_> {
             }
             return false;
         }
-        // The two health fields' watchers on the unit's own list, the bridge's and each plate
-        // bar's, in the order they were linked (`0x467f65`): a plate bound before the unit took
-        // a token runs ahead of the bridge. The unit tooltip's watcher follows the bridge's.
+        // The two health fields' watchers on the unit's own list, in the order they were linked
+        // (`0x467f65`): its unit-field watchers' signal, each plate bar's write and, on the health
+        // field, each tooltip's (`0x529560`, linked by the render at `0x52a0a8`).
         if let FieldNotice::Unit { guid, id } = notice {
             use crate::field_watch::id::{UNIT_HEALTH, UNIT_MAXHEALTH};
             if matches!(id, UNIT_HEALTH | UNIT_MAXHEALTH) {
@@ -119,19 +119,9 @@ impl NoticeFiring<'_, '_> {
                     .as_ref()
                     .and_then(|i| i.0.get(&guid))
                     .and_then(|&e| self.views.get(e).ok());
-                let tooltip = store.filter(|_| id == UNIT_HEALTH).map(|s| {
-                    (
-                        s.0.unit_health().unwrap_or(0),
-                        s.0.unit_max_health().unwrap_or(0),
-                    )
-                });
                 let sink = &mut self.sink;
-                crate::vplates::health_watch(script, guid, store, |script| {
+                crate::vplates::health_watch(script, guid, store, id == UNIT_HEALTH, |script| {
                     fire(script, sink, notice);
-                    // `0x529560`, registered by the render (`0x52a0a8`): its packet's health.
-                    if let Some((health, max)) = tooltip {
-                        script.tooltip_unit_health(guid, health, max);
-                    }
                 });
                 return false;
             }

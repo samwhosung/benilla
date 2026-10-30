@@ -1171,3 +1171,56 @@ fn a_unit_with_no_maximum_health_draws_an_empty_tooltip_bar() {
     assert_eq!(fill(&s), Some(([0.0, 0.0, 0.0, 1.0], 0.0)), "empty across");
     assert!(s.take_errors().is_empty());
 }
+
+/// The tooltip's health watcher and the unit's own watchers run in the order they were linked on
+/// the unit's list (`0x467f00`, `0x467f65`): hovered, the build links the tooltip's (`0x52a0a8`),
+/// then targeted, the selection's token flag links the unit-field watchers (`0x493540` →
+/// `0x60c4a0` → `0x51bbb0`), so on a health change the tooltip's bar moves first and the
+/// `UNIT_HEALTH("target")` handler reads the new value there. A build after the target links the
+/// tooltip's behind them, and the handler reads the bar's old value.
+#[test]
+fn a_units_tooltip_and_bridge_run_in_the_order_they_were_linked() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_unit("mouseover", Some(wolf()));
+    s.run(
+        r#"UIParent = CreateFrame("Frame", "UIParent"); UIParent:SetAllPoints()
+        local tt = CreateFrame("GameTooltip", "GameTooltip", nil, "TestTooltipTemplate")
+        tt:Hide()
+        tt:SetScript("OnTooltipSetDefaultAnchor", function()
+            GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+        end)
+        local bar = CreateFrame("StatusBar", "GameTooltipStatusBar", tt)
+        bar:SetWidth(100); bar:SetHeight(8)"#,
+    )
+    .unwrap();
+    let guid = wolf().guid;
+    let read = |s: &mut UiScript, health: u32| -> f64 {
+        let watch = HealthWatch {
+            bar: None,
+            tooltip: Some((health, 50)),
+        };
+        let mut seen = None;
+        s.unit_health_watchers(guid, watch, |s| {
+            seen = s.eval::<f64>("return GameTooltipStatusBar:GetValue()").ok();
+        });
+        seen.expect("the bridge ran")
+    };
+    assert!(s.publish_world_mouseover(Some(guid)));
+    assert!(s.world_tooltip_unit("mouseover"), "the hover shows");
+    s.set_unit_guids(&UnitGuids {
+        target: guid,
+        mouseover: guid,
+        held: [(guid, 0)].into_iter().collect(),
+        ..Default::default()
+    });
+    s.unit_token_flags(guid, TokenChange::Add(TOKEN_TARGET));
+    assert_eq!(read(&mut s, 20), 20.0, "hovered, then targeted");
+    assert!(s.world_tooltip_unit("mouseover"), "built again");
+    assert_eq!(
+        read(&mut s, 10),
+        30.0,
+        "targeted, then built: the build's own seed"
+    );
+    assert!(s.take_errors().is_empty());
+}
