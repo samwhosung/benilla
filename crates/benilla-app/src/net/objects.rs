@@ -1006,7 +1006,14 @@ fn object_create(
                 Landing::New { .. } => None,
             };
             use crate::creature_anim::move_flags;
-            let flags = move_flags::merge_server_authored(0, m.flags);
+            let mut flags = move_flags::merge_server_authored(0, m.flags);
+            // A path the create carries that benilla declines (finished, empty, or
+            // `WOW_CREATE_SPLINE=off`) still ends on the mover: the reference installs it
+            // (`0x619387`), and its next tick finds it at its end and stops the mover (`0x7c5490`
+            // → `0x7c6c00`), so the direction bits the block carried do not drift it on.
+            if carries_path && walk.is_none() {
+                flags &= !super::motion::spline::PATH_END_STOP;
+            }
             let airborne = flags & move_flags::FALLING != 0;
             let (vertical_velocity, jump_xy_vel) = if airborne {
                 crate::net::motion::jump_seed(
@@ -1643,15 +1650,16 @@ fn monster_move(
 }
 
 /// One queued relayed move as the flush's dispatcher takes it (`0x618080`, the flush `0x6185f0`
-/// passing `keep` 0): of what a relay queues, only the root, unroot and teleport tags act. The
-/// root stops the mover and roots it (tag 35: `0x619a00`, `0x61aa70` then `0x7c7340`; a relay's
-/// node has no send byte, so no snap to the path, `0x618425`), the unroot clears the bit (tag 36:
-/// `0x7c7370`; its fall start is not built: a remote mover has no landing), and the teleport
-/// places the mover (tag 38: `0x6184d0` → `0x617e90`). Every other pose is dropped (`0x61851e`),
-/// a plain move's, a heartbeat's (tag 37), a speed relay's and the fall start's (tag 6, `keep`
-/// 0) alike. Not built: benilla decodes the walk, run, hover, water-walk and feather-fall relays
-/// as plain poses, so their toggles (tags 14, 15, 29 to 34) drop with them, until the next relay's
-/// word carries the bits.
+/// passing `keep` 0): its tag's setter acts and its pose is dropped. The root stops the mover and
+/// roots it (tag 35: `0x619a00`, `0x61aa70` then `0x7c7340`; a relay's node has no send byte, so
+/// no snap to the path, `0x618425`), the unroot clears the bit (tag 36: `0x7c7370`; the fall it
+/// starts the start's own stop ends, `0x61aa70` at `0x6187b1`), and the teleport places the mover
+/// (tag 38: `0x6184d0` → `0x617e90`). The walk and run toggles (tags 14 and 15), the speeds (20
+/// to 25) and the mode toggles (29 to 34) act too, and every other tag drops whole (`0x61851e`):
+/// a plain move's, a heartbeat's (tag 37) and the fall start's (tag 6, `keep` 0). Not built:
+/// benilla decodes the walk, run, hover, water-walk and feather-fall relays as plain poses, so
+/// their toggles drop with them until the next relay's word carries the bits; a speed relay's
+/// speed applies at its arrival, so none is queued.
 fn flush_queued(
     e: Entity,
     mv: &crate::net::motion::RelayMove,

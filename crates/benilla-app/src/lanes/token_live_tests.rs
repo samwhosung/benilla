@@ -1280,6 +1280,45 @@ fn a_listener_reads_a_member_created_mid_jump_where_its_arc_has_carried_it() {
     assert_eq!(seen, ["0.5012,0.6000"]);
 }
 
+/// A member created on a path already ridden to its end stands where it was created: the create
+/// installs the path (`0x619387`), whose end the next tick reaches and stops the mover at
+/// (`0x7c5490` → `0x7c6c00`), so the forward bit the block carried does not run it on. Eleven
+/// frames at 7 yd/s would have carried it 1.232 yd.
+#[test]
+fn a_listener_reads_a_member_created_at_its_paths_end_where_it_stood() {
+    let mut c = client();
+    c.app
+        .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            std::time::Duration::from_millis(16),
+        ));
+    map_spy(&mut c, "party1");
+    fine_map_spy(&mut c, "party1");
+    let mut create = living(mate_created([500.0, 600.0, 0.0], None), FORWARD, 0);
+    if let SessionEvent::ObjectCreate { speeds, spline, .. } = &mut create {
+        *speeds = Some(benilla_protocol::MoveSpeeds {
+            run: 7.0,
+            ..Default::default()
+        });
+        *spline = Some(benilla_protocol::CreateSpline {
+            path: vec![[490.0, 600.0, 0.0], [500.0, 600.0, 0.0]],
+            id: 5,
+            time_passed_ms: 2000,
+            duration_ms: 2000,
+            flying: false,
+            cyclic: false,
+            run_mode: true,
+            facing: benilla_protocol::MonsterMoveFacing::None,
+        });
+    }
+    c.frame(vec![vec![create]]);
+    for _ in 0..10 {
+        c.frame(vec![]);
+    }
+    c.frame(vec![vec![member_at(MATE, 20, ELWYNN, (100, 200))]]);
+    let seen: Vec<String> = c.eval(false, "return Fine");
+    assert_eq!(seen, ["0.5000,0.6000"]);
+}
+
 /// A member created a second into a fall from rest starts its arc g/2, 9.6455 yd, above where it
 /// is created: the create's apply puts `z + D(ms)` at the mover's `+0x7c` (`0x618e1b` →
 /// `0x7c6490` → `0x7c5f30`), the height its landing measures its fall from.

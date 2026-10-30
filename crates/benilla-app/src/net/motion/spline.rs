@@ -508,7 +508,7 @@ pub(crate) fn moves_itself(m: &crate::net::RemoteMotion) -> bool {
 
 /// The bits a path's end clears on its mover, `0x7c6c00`'s: forward, back and the deferred
 /// forward (`0x8000`).
-const PATH_END_STOP: u32 =
+pub(in crate::net) const PATH_END_STOP: u32 =
     crate::creature_anim::move_flags::FORWARD | crate::creature_anim::move_flags::BACKWARD | 0x8000;
 
 /// A world path's end on its unit's mover state: the mover stops where the path left it
