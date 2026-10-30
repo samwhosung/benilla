@@ -1397,3 +1397,53 @@ fn a_known_transport_keeps_its_anchor_through_a_re_create() {
         "brought back by values"
     );
 }
+
+/// An object leaving frees its effects at once (`ReleaseEffects`, `0x614120`): a unit as its
+/// release runs (`CGUnit_C::Release`, `0x5fbc84`), any object as it is freed (`0x613be2`). A game
+/// object's release has no such call, so its leaving range alone releases nothing.
+#[test]
+fn a_leaving_unit_and_a_freed_object_release_their_effects() {
+    use crate::creature_anim::spell_visual::{SpellKitFx, SpellKitSound};
+    const CHEST: u64 = 0xF110_0000_0000_0E68;
+    let mut app = client();
+    app.add_message::<SpellKitFx>()
+        .add_message::<SpellKitSound>();
+    let world = app.world_mut();
+    let spawn = |world: &mut World, guid, kind| {
+        let e = indexed(world, guid);
+        world.entity_mut(e).insert(NetEntity {
+            kind,
+            display_id: Some(7),
+            scale: 1.0,
+        });
+        e
+    };
+    let mob = spawn(world, MOB, EntityKind::Unit);
+    spawn(world, DOOR, EntityKind::GameObject);
+    let chest = spawn(world, CHEST, EntityKind::GameObject);
+    let released = |world: &mut World| {
+        let fx: Vec<_> = (world.resource_mut::<Messages<SpellKitFx>>().drain())
+            .filter_map(|m| match m {
+                SpellKitFx::Release { entity, .. } => Some(entity),
+                _ => None,
+            })
+            .collect();
+        let sounds: Vec<_> = (world.resource_mut::<Messages<SpellKitSound>>().drain())
+            .filter_map(|m| match m {
+                SpellKitSound::Release { entity, .. } => Some(entity),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(fx, sounds, "the models and the sounds go together");
+        fx
+    };
+
+    super::super::handlers::dispatch(
+        world,
+        super::wire(vec![SessionEvent::ObjectsRemoved(vec![MOB, DOOR])]),
+    );
+    assert_eq!(released(world), [mob], "the unit's release, not the door's");
+
+    super::super::handlers::dispatch(world, vec![SessionEvent::ObjectDestroyed(CHEST)]);
+    assert_eq!(released(world), [chest], "a freed object's destructor");
+}

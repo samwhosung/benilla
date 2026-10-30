@@ -818,7 +818,10 @@ fn on_object_destroyed(In(ev): In<SessionEvent>, mut sc: Scene, script: Option<N
         free_item(&mut sc, guid);
         return;
     }
-    sc.commands.entity(e).queue(super::tear_down);
+    let at = crate::lanes::stamp();
+    sc.commands
+        .entity(e)
+        .queue(move |ent: EntityWorldMut| super::tear_down(ent, at, true));
 }
 
 /// The deactivate a release runs (vtable slot 1, `0x46496f`), reading the descriptor about to go:
@@ -1051,7 +1054,10 @@ fn release(sc: &mut Scene, guid: u64) {
     if sc.item_objects.contains(e) {
         sc.commands.entity(e).despawn();
     } else {
-        sc.commands.entity(e).queue(super::tear_down);
+        let at = crate::lanes::stamp();
+        sc.commands
+            .entity(e)
+            .queue(move |ent: EntityWorldMut| super::tear_down(ent, at, false));
     }
 }
 

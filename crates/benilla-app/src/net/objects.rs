@@ -1468,7 +1468,30 @@ fn unit_move(
 /// consumer; the [`NetEntity`] and [`ObjectStore`] stay so the model draws out (a decaying corpse
 /// stays lying down). The caller has already removed the guid from the [`GuidIndex`], so a block
 /// that brings the object back spawns a fresh entity beside the fading model.
-fn tear_down(mut ent: EntityWorldMut) {
+///
+/// What the object's effect list holds goes at once, its models closed and its sounds faded
+/// (`ReleaseEffects`, `0x614120`): a unit's release runs it (`CGUnit_C::Release`, `0x5fbc84`), and
+/// every object's destructor does as it is freed (`0x613be2`). `at` is the leave's place in the
+/// wire order.
+fn tear_down(mut ent: EntityWorldMut, at: crate::lanes::Stamp, freed: bool) {
+    use crate::creature_anim::spell_visual::{SpellKitFx, SpellKitSound};
+    let unit = ent
+        .get::<NetEntity>()
+        .is_some_and(|n| matches!(n.kind, EntityKind::Unit | EntityKind::Player));
+    if unit || freed {
+        let entity = ent.id();
+        ent.world_scope(|w| {
+            if let Some(mut fx) = w.get_resource_mut::<Messages<SpellKitFx>>() {
+                fx.write(SpellKitFx::Release {
+                    entity,
+                    at: Some(at),
+                });
+            }
+            if let Some(mut sounds) = w.get_resource_mut::<Messages<SpellKitSound>>() {
+                sounds.write(SpellKitSound::Release { entity, at });
+            }
+        });
+    }
     ent.remove::<Guid>();
     ent.insert(DespawnFade::default());
 }
