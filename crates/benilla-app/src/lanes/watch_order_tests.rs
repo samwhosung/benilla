@@ -11,6 +11,8 @@ use super::unit_view_tests::{client, created, frame, health, values, wire_packet
 
 /// The client's own guid.
 const ME: u64 = 0x7;
+/// The target [`client`] seats.
+const WOLF: u64 = 0xF130_0000_0044_0001;
 /// `UNIT_FIELD_SUMMON`, a unit's summoned pet.
 const SUMMON: u16 = 8;
 
@@ -74,6 +76,30 @@ fn show(app: &mut App, token: &str) {
     hosted(
         app,
         &format!(r#"Tip:SetOwner(UIParent, "ANCHOR_NONE") Tip:SetUnit("{token}")"#),
+    );
+}
+
+/// The tooltip's watcher runs at its link among the unit's own, inside the packet that moves the
+/// health: built after the target's store linked the unit-field watchers (`0x49372a` →
+/// `0x60c4a0`), it runs behind them, so the `UNIT_HEALTH("target")` listener reads the bar's old
+/// value; a deselect unlinks them (`0x4939cc` → `0x60c50c`) and a reselect links them again at the
+/// tail, behind the tooltip's, and the listener reads the packet's.
+#[test]
+fn the_tooltips_watcher_runs_at_its_link_among_the_units_own() {
+    let mut app = client();
+    tip(&mut app);
+    show(&mut app, "target");
+    assert_eq!(
+        frame(&mut app, vec![values(WOLF, &health(70))]),
+        ["UNIT_HEALTH:target:100"],
+        "the target's watchers first"
+    );
+    hosted(&mut app, "ClearTarget()");
+    hosted(&mut app, "TargetLastTarget()");
+    assert_eq!(
+        frame(&mut app, vec![values(WOLF, &health(60))]),
+        ["UNIT_HEALTH:target:60"],
+        "the tooltip's first"
     );
 }
 
