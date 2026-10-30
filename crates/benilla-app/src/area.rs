@@ -69,9 +69,17 @@ fn load_area_table(mut commands: Commands, assets: Option<Res<WorldAssets>>) {
 #[derive(Resource, Default, Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct CommittedZone(pub(crate) Option<u32>);
 
-/// The session's end, standing in for `ShutdownGame`'s zeroing of `0xb4e314` (`0x491180`).
-fn clear_committed_zone(mut zone: ResMut<CommittedZone>) {
+/// `s_realZoneText` (`0xb4b404`): the real zone name the last commit stored. Its change walks the
+/// zone channels (`0x4948b7` → `0x494931`). Like the zone it outlives a reload and is cleared only
+/// at the session's end (`0x491180`); an empty name leaves it as it was (`0x49489a`).
+#[derive(Resource, Default)]
+pub(crate) struct CommittedZoneText(String);
+
+/// The session's end, standing in for `ShutdownGame`'s zeroing of `0xb4e314` and `0xb4b404`
+/// (`0x491180`).
+fn clear_committed_zone(mut zone: ResMut<CommittedZone>, mut text: ResMut<CommittedZoneText>) {
     zone.set_if_neq(CommittedZone(None));
+    text.0.clear();
 }
 
 /// The client's zone-text cache: the compare targets of `0x494780`, the minimap line's cache
@@ -91,9 +99,6 @@ pub(crate) struct ZoneCache {
     wmo_group: u32,
     /// The realm flag last pushed to this VM.
     realm_pvp: Option<bool>,
-    /// The real zone text cache (`0xb4b404`), empty when the last commit's was: its change is what
-    /// walks the zone channels (`0x4948b7` → `0x494931`).
-    real_zone_text: String,
     /// The zone the VM's channel catalog was last fed for ([`crate::ui_chat::ZoneCommit`]).
     catalog: Option<Option<u32>>,
 }
@@ -157,6 +162,7 @@ pub(crate) fn feed_zone_events(
     factions: Option<Res<Factions>>,
     realm_pvp: Option<Res<RealmPvp>>,
     mut cache: Local<crate::ui_script::VmMemo<ZoneCache>>,
+    mut real_text: ResMut<CommittedZoneText>,
     cinematic: Option<Res<crate::cinematic::Cinematic>>,
     mut cascade: Option<ResMut<crate::ui_chat::GuildRecruitmentCascade>>,
 ) {
@@ -261,8 +267,10 @@ pub(crate) fn feed_zone_events(
 
         let event = elect_event(cache, &signal);
         let minimap_changed = cache.minimap_text != minimap_text;
-        // An empty name empties the cache and walks nothing (`0x4948a0`, `0x494936`).
-        let real_changed = !real_zone_text.is_empty() && cache.real_zone_text != real_zone_text;
+        // An empty name stores nothing and walks nothing (`0x49489a` → `0x494936`); the compare
+        // ignores case (`0x4948b0` → `0x64a4c0`).
+        let real_changed =
+            !real_zone_text.is_empty() && !real_text.0.eq_ignore_ascii_case(&real_zone_text);
         let texts = (signal.zone_text.clone(), signal.subzone_text.clone());
         if event.is_some() || minimap_changed || real_changed {
             script.set_zone_texts(benilla_ui::script::ZoneTexts {
@@ -277,7 +285,9 @@ pub(crate) fn feed_zone_events(
         cache.zone_id = Some(signal.zone_id);
         cache.zone_text = signal.zone_text;
         cache.subzone_text = signal.subzone_text;
-        cache.real_zone_text = real_zone_text;
+        if real_changed {
+            real_text.0 = real_zone_text;
+        }
         cache.minimap_text.clone_from(&minimap_text);
         cache.indoor = signal.indoor;
         cache.wmo_group = wmo_group;
@@ -295,7 +305,9 @@ pub(crate) fn feed_zone_events(
     // The zone is stored (`0x49479a`) outside the host's reads, feeds the verbs, and the walk
     // follows the caches (`0x494931`).
     let walked = vm.turn(|script, mut commit| {
-        commit.store_zone(done.zone);
+        if done.called {
+            commit.store_zone(done.zone);
+        }
         let Some(script) = script else { return false };
         commit.feed_catalog(script, Some(done.zone), &mut cache.get(script).catalog);
         done.called
@@ -380,6 +392,7 @@ impl Plugin for AreaPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<RealmPvp>()
             .init_resource::<CommittedZone>()
+            .init_resource::<CommittedZoneText>()
             // The session's end stands in for `ShutdownGame` (`0x491180`), the one zeroing.
             .add_systems(
                 OnExit(crate::client_state::ClientState::InWorld),
