@@ -519,21 +519,6 @@ impl CastLadder<'_, '_> {
         }
     }
 
-    /// A parked attempt's arm leg run at once, for a caller that reads what the leg left in the
-    /// same step; the arm's signal's listeners run after it, at the caller's next point. Any other
-    /// parked stage stays parked.
-    pub(crate) fn run_arm(&mut self) {
-        match self.take_parked() {
-            Some(CastStage::Arm(park)) => {
-                if let Some(next) = self.arm_leg(*park) {
-                    self.proceed(next);
-                }
-            }
-            Some(stage) => self.park(stage),
-            None => {}
-        }
-    }
-
     /// A parked cast past its listeners, up to its next signal or its end.
     pub(crate) fn resume_parked(&mut self, stage: CastStage) {
         if let Some(next) = self.run_stage(stage) {

@@ -211,9 +211,8 @@ impl ScriptCallHost<'_, '_> {
         if let Some(mut trade) = legs.trade() {
             trade.click(script);
         }
-        if let Some(mut feed) = legs.feed() {
-            feed.click(script);
-        }
+        let owed = legs.feed().and_then(|mut feed| feed.click(script));
+        self.feed_pet(script, at, owed);
         // What the offers signalled runs ahead of the select.
         self.at_point(script, at);
         let leg = self
@@ -356,9 +355,10 @@ impl ScriptCallHost<'_, '_> {
         if let Some(mut trade) = legs.trade() {
             trade.click_on(script, entity, click.guid);
         }
-        if let Some(mut feed) = legs.feed() {
-            feed.click_on(script, click.guid);
-        }
+        let owed = legs
+            .feed()
+            .and_then(|mut feed| feed.click_on(script, click.guid));
+        self.feed_pet(script, at, owed);
         self.at_point(script, at);
         let owed = self.appliers.click().plate().and_then(|mut plate| {
             plate.greet(entity);

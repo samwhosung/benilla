@@ -1024,6 +1024,26 @@ impl ScriptCallHost<'_, '_> {
         }
     }
 
+    /// Feed Pet's food bound once its attempt's arm and that arm's listeners have run (`0x6ea266`
+    /// → `0x6ea274`), the bind's signal and send run to their end, and then, the bind made,
+    /// `DropItemOnUnit`'s clear of the cursor (`0x48da8d`-`0x48da96`).
+    fn feed_pet(
+        &mut self,
+        script: &mut UiScript,
+        at: &mut Signalled,
+        owed: Option<crate::ui_action::drop_item::FoodBind>,
+    ) {
+        let Some(owed) = owed else {
+            return;
+        };
+        self.run_casts(script, at);
+        let bound = crate::ui_action::drop_item::bind_food(&mut self.appliers.cast(), owed);
+        self.run_casts(script, at);
+        if bound {
+            script.clear_cursor_payload();
+        }
+    }
+
     /// A unit caster's send owes its attack tail (`0x6e51de` → `0x6131a0`) before the attempt
     /// returns: its validator with the unit as the actor (`0x6131aa`), whose pick signals in place,
     /// then for the bar's unit the bar's Attack (`0x613217`).
@@ -1477,7 +1497,10 @@ impl CallHost for ScriptCallHost<'_, '_> {
             ScriptCall::PlateClick(click) => self.plate_click(script, &mut at, click),
             ScriptCall::Input(input) => tail = self.set_commands(script, &mut at, input),
             ScriptCall::Look(call) => tail = self.look(script, &mut at, call),
-            ScriptCall::DropItemOnUnit(token) => appliers.drop_item().drop_on(script, &token),
+            ScriptCall::DropItemOnUnit(token) => {
+                let owed = self.appliers.drop_item().drop_on(script, &token);
+                self.feed_pet(script, &mut at, owed);
+            }
         }
         self.run_casts(script, &mut at);
         // A profession opener the call cast toggles its window inside the cast (`0x6e4c22`,

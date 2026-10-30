@@ -196,6 +196,41 @@ fn food_dropped_on_our_targeted_pet_feeds_it() {
     );
 }
 
+/// Feed Pet's attempt signals inside the drop (`0x6e5026`, `0x6e5333`), and so does its bind of the
+/// food (`0x6e60cb`); the drop clears the cursor only once the bind has sent (`0x48da8d`), so their
+/// listeners see the food still held.
+#[test]
+fn feed_pets_signals_see_the_food_still_held() {
+    let mut f = client(true, 55);
+    run(
+        &mut f,
+        r#"local r = CreateFrame("Frame")
+        r:RegisterEvent("CURRENT_SPELL_CAST_CHANGED")
+        r:SetScript("OnEvent", function()
+            if HELD == nil then HELD = CursorHasItem() and 1 or 0 end
+        end)"#,
+    );
+    run(&mut f, "PickupContainerItem(0, 1) DropItemOnUnit('target')");
+    assert_eq!(
+        casts(&f),
+        vec![format!(
+            "{:?}",
+            ClientCommand::CastSpellItem {
+                spell_id: FEED_PET,
+                item_guid: JERKY,
+            }
+        )]
+    );
+    let held_then = f
+        .app
+        .world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .eval::<Option<i64>>("return HELD")
+        .expect("the global reads");
+    assert_eq!(held_then, Some(1));
+    assert!(held(&f).is_none(), "the feed cleared the cursor after");
+}
+
 /// The feed runs the attempt's rungs before it binds the food (`0x6ea266`): dead, Feed Pet is
 /// refused locally, nothing goes out and the food stays on the cursor (`0x48da8d`).
 #[test]
