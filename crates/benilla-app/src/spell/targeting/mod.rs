@@ -467,11 +467,6 @@ impl SpellTargeting {
         self.0.as_ref().map(|t| (t.spell_id, t.commit, t.word))
     }
 
-    /// The standing word and whether its spell holds the slot.
-    fn word_in_slot(&self) -> Option<(u16, bool)> {
-        self.0.as_ref().map(|t| (t.word, t.in_slot))
-    }
-
     /// The pending spell when the standing word answers `wants`. A surface that draws or binds for
     /// one seam reads this, never [`Self::spell`], or an armed lockpick gets an AoE reticle.
     pub(crate) fn spell_for(&self, wants: TargetingWants) -> Option<u32> {
@@ -729,11 +724,18 @@ fn merge(
 ) {
     if let Some(reason) = range {
         debug!("ui_action: cast {spell_id} not bound at {bound:x?} — range ({reason:#x})");
-        let word = ladder.ground.word_in_slot();
+        let word = ladder.ground.pending().map(|(_, _, word)| word);
+        // The hold the report's cancel pops: the cursor's, or at the arm's signal the attempt's
+        // push (`0x6e5026`), which the arm's word stands over without holding.
+        let in_slot = ladder
+            .core()
+            .slot()
+            .map(super::inflight::Inflight::spell_id)
+            == Some(spell_id);
         ladder.report_local(crate::ui_action::CastFail::local(spell_id, reason));
         // A report that cancelled nothing (a record never pushed) leaves the word and the caster
         // as the reference restores them (`0x6e6096`).
-        if let (Some((word, in_slot)), false) = (word, ladder.ground.active()) {
+        if let (Some(word), false) = (word, ladder.ground.active()) {
             ladder.core().rearm_cursor(spell_id, commit, word, in_slot);
         }
         return;

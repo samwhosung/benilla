@@ -1059,6 +1059,18 @@ fn a_cursor_bind_refused_out_of_range_at_the_arm_signal_leaves_the_word_to_the_a
         },
     );
     with_friendly_party1(&mut f, true);
+    with_party1_out_of_range(&mut f);
+    record_changes(&mut f);
+    once_on_change(&mut f, r#"TargetUnit("party1")"#);
+    run_hosted(&mut f, &format!("UseAction(1) {CHANGES}"));
+    assert_eq!(item_targets(&f), vec![UseItemTarget::Unit(OLD)]);
+    assert_eq!(selected(&f), Some(OLD));
+    let seen = seen(&mut f);
+    assert!(seen.contains("ERR_SPELL_OUT_OF_RANGE"), "{seen}");
+}
+
+/// `party1` (`NEW`) 100 yd out, past range row 5's 30 yd.
+fn with_party1_out_of_range(f: &mut Frame) {
     let world = f.app.world_mut();
     world.resource_mut::<crate::ui_action::Spells>().ranges =
         benilla_formats::SpellRangeCatalog::from_rows(
@@ -1077,13 +1089,6 @@ fn a_cursor_bind_refused_out_of_range_at_the_arm_signal_leaves_the_word_to_the_a
         Transform::from_xyz(100.0, 0.0, 0.0),
         GlobalTransform::from_translation(Vec3::new(100.0, 0.0, 0.0)),
     ));
-    record_changes(&mut f);
-    once_on_change(&mut f, r#"TargetUnit("party1")"#);
-    run_hosted(&mut f, &format!("UseAction(1) {CHANGES}"));
-    assert_eq!(item_targets(&f), vec![UseItemTarget::Unit(OLD)]);
-    assert_eq!(selected(&f), Some(OLD));
-    let seen = seen(&mut f);
-    assert!(seen.contains("ERR_SPELL_OUT_OF_RANGE"), "{seen}");
 }
 
 /// `TryCast`'s tail picks its refusal of a standing enemy word by whether anything is selected
@@ -1197,4 +1202,42 @@ fn a_cancel_at_the_arm_signal_sends_nothing_and_raises_no_cursor() {
     run_hosted(&mut f, r#"CastSpellByName("Mark of the Wild")"#);
     assert_eq!(casts_and_cancels(&f), vec![]);
     assert!(!cursor_is_up(&f));
+}
+
+/// A unit selected out of range at a pushed cast's arm signal is refused by the merge
+/// (`0x6e6089`), whose report finds the cast in flight and cancels it (`0x6e2201` → `0x6e4940`),
+/// popping it from the slot. benilla re-arms the cursor as the attempt left it (`merge`'s
+/// deviation), its hold on the slot included, so the click that commits it sends a cast in
+/// flight, which `SpellStopCasting` finds (`0x6e3d30`) and cancels.
+#[test]
+fn a_cursor_rearmed_at_the_arm_signal_keeps_its_cast_in_flight() {
+    let mut f = frame(true);
+    with_factions(&mut f, FRIEND, &[(2, 0x19), (FLAGS, 0x8)]);
+    seat_spells(
+        &mut f,
+        vec![(
+            MOTW,
+            benilla_formats::SpellDisplay {
+                name: "Mark of the Wild".into(),
+                implicit_target_a1: 21,
+                range_index: 5,
+                ..Default::default()
+            },
+        )],
+    );
+    with_friendly_party1(&mut f, true);
+    with_party1_out_of_range(&mut f);
+    on_change_number(&mut f, 2, r#"TargetUnit("party1")"#);
+    run_hosted(&mut f, r#"CastSpellByName("Mark of the Wild")"#);
+    assert!(cursor_is_up(&f), "the refusal re-armed the cursor");
+    assert_eq!(casts_and_cancels(&f), vec![]);
+    run_hosted(
+        &mut f,
+        r#"SpellTargetUnit("target") STOPPED = SpellStopCasting()"#,
+    );
+    assert_eq!(global(&mut f, "STOPPED"), Some(1));
+    assert_eq!(
+        casts_and_cancels(&f),
+        vec![("cast", MOTW), ("cancel", MOTW)]
+    );
 }
