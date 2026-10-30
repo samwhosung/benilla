@@ -308,6 +308,11 @@ impl ParticleEmitter {
         self.on_owner_loss = OwnerLoss::Drain;
     }
 
+    /// What losing the owner does to this pool ([`Self::drain_on_owner_loss`]).
+    pub fn on_owner_loss(&self) -> OwnerLoss {
+        self.on_owner_loss
+    }
+
     /// The cloud's live world anchor, the census probe's distance subject.
     pub fn anchor_world(&self) -> Vec3 {
         self.anchor_pos

@@ -6,9 +6,9 @@
 //! (`0x60ae10`, against `[unit+0xb34]`), re-resolving its model facts (`0x60afb0`) and the stand or
 //! ride animation (`0x60ce70`): an instant swap, a ghost's revive too. Its scale handler eases
 //! over 2 s with a cosine smoothstep (`0x614bbf`). Here a swap tears the visual down for
-//! `attach_entity_visuals` to rebuild without the spawn fade; the unit's
-//! [`super::spell_fx::FxAttached`] list outlives it, as the reference's per-unit `+0xb4` effect
-//! list does, so persistent effects re-spawn on the new body.
+//! `attach_entity_visuals` to rebuild without the spawn fade, first ending the unit's spell effects
+//! as the rebuild's `0x60ac10` loop does ([`super::spell_fx::RebuildFx`]), so persistent ones
+//! re-spawn on the new body.
 
 use benilla_protocol::EntityKind;
 use bevy::prelude::*;
@@ -89,6 +89,7 @@ pub(super) fn refresh_live_display(
         ),
     >,
     mut swapped: MessageWriter<DisplaySwapped>,
+    mut fx: super::spell_fx::RebuildFx,
 ) {
     for (entity, guid, mut net, store, applied, height, tf) in &mut entities {
         // ── The display-id swap ──────────────────────────────────────────────────────────────
@@ -101,6 +102,7 @@ pub(super) fn refresh_live_display(
                 );
                 net.display_id = Some(live);
                 swapped.write(DisplaySwapped { entity });
+                fx.end_all(&mut commands, entity);
                 // `attach_entity_visuals` rebuilds from scratch, fade-skipped by `Reattached`.
                 commands
                     .entity(entity)
@@ -218,6 +220,7 @@ pub(super) fn heal_rig_starved(
             Without<benilla_world::model_fade::DespawnFade>,
         ),
     >,
+    mut fx: super::spell_fx::RebuildFx,
 ) {
     if starved.is_empty() || palettes.slot_headroom() < HEAL_MIN_HEADROOM {
         return;
@@ -227,6 +230,7 @@ pub(super) fn heal_rig_starved(
             "rig heal: guid {:016x} was denied a palette rig at attach — rebuilding (0x60abe0 shape)",
             guid.0
         );
+        fx.end_all(&mut commands, entity);
         commands
             .entity(entity)
             .despawn_related::<Children>()

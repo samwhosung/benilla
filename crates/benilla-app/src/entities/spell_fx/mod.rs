@@ -9,7 +9,8 @@
 //!
 //! A persistent instance lives until its spell's [`SpellKitFx::Reap`] (`0x614150`); a
 //! self-terminating one despawns after one pass of its model's sequence 0, a span clock standing in
-//! for the client's completion callback.
+//! for the client's completion callback. A rebuild of the unit's visual ends both first
+//! ([`RebuildFx`]).
 
 mod lifecycle;
 
@@ -632,10 +633,11 @@ pub(super) fn resolve_spell_fx(
     }
 }
 
-/// Hand an ending instance's emitters to the drain, the half of the teardown `0x6203e0` that is not
-/// a despawn: emission stops and live particles age out, since the reference gates the particle
-/// draw on the live count (`0x7b4b46`) while the meshes leave the draw list at once (`0x719207`).
-fn drain_instance_emitters(
+/// The teardown `0x6203e0` of a spawned instance: the root and its meshes leave the draw list at
+/// once (`0x719207`), while its emitters drain, emission stopping and live particles ageing out,
+/// as the reference gates the particle draw on the live count (`0x7b4b46`).
+fn end_root(
+    commands: &mut Commands,
     emitters: &mut Query<&mut benilla_world::particles::ParticleEmitter>,
     root: Entity,
 ) {
@@ -643,6 +645,44 @@ fn drain_instance_emitters(
         if e.anchor() == Some(root) {
             e.drain_on_owner_loss();
         }
+    }
+    commands.entity(root).despawn();
+}
+
+/// What a rebuild of a unit's visual needs to end the unit's instances first ([`Self::end_all`]).
+#[derive(bevy::ecs::system::SystemParam)]
+pub(super) struct RebuildFx<'w, 's> {
+    lists: Query<'w, 's, &'static mut FxAttached>,
+    emitters: Query<'w, 's, &'static mut benilla_world::particles::ParticleEmitter>,
+}
+
+impl RebuildFx<'_, '_> {
+    /// The rebuild `0x60abe0` (a display swap, or the rig heal that takes its shape) stops every
+    /// effect on the unit's list through `0x6203e0` before the old model goes (`0x60ac10`), a world
+    /// plant too, which `0x61fcf0` links on the same list (`0x61fdbf`). A persistent instance
+    /// re-arms for the new body, the rebuild's replay of the auras (`0x5ff130`) and the channel
+    /// (`0x612a30`); a one-shot or decaying one is dropped. Called before the visual's despawn, so
+    /// each root goes first and no later teardown meets a dead one.
+    pub(super) fn end_all(&mut self, commands: &mut Commands, unit: Entity) {
+        let Ok(mut att) = self.lists.get_mut(unit) else {
+            return;
+        };
+        att.instances.retain_mut(|inst| {
+            if let Some(root) = inst.root.take() {
+                end_root(commands, &mut self.emitters, root);
+            }
+            let re_arm = inst.persistent && !inst.decaying;
+            if benilla_assets::trace::enabled() {
+                benilla_assets::trace::line(
+                    "fx",
+                    &format!(
+                        "kit rebuild end unit={unit} path={} re_arm={re_arm}",
+                        inst.path
+                    ),
+                );
+            }
+            re_arm
+        });
     }
 }
 
@@ -664,9 +704,7 @@ fn replace_same_slot(
             return true;
         }
         if let Some(root) = i.root {
-            // Through the shared teardown `0x6203e0`, so its particles finish.
-            drain_instance_emitters(emitters, root);
-            commands.entity(root).despawn();
+            end_root(commands, emitters, root);
         }
         false
     });
@@ -700,9 +738,7 @@ fn reap_matching(
             .and_then(|dm| decay_span(dm.animations.as_ref()));
         let (Some(root), Some(span)) = (i.root, span) else {
             if let Some(root) = i.root {
-                // Destroyed at once, through `0x6203e0` like any other, so its particles drain.
-                drain_instance_emitters(emitters, root);
-                commands.entity(root).despawn();
+                end_root(commands, emitters, root); // destroyed at once
             }
             return false;
         };
@@ -749,9 +785,7 @@ pub(super) fn attach_spell_fx(
             if let Some(expires) = inst.expires {
                 if now >= expires {
                     if let Some(root) = inst.root {
-                        // The `0x6203e0` teardown: the particles outlive the flash.
-                        drain_instance_emitters(&mut emitters, root);
-                        commands.entity(root).despawn();
+                        end_root(&mut commands, &mut emitters, root);
                     }
                     if benilla_assets::trace::enabled() {
                         benilla_assets::trace::line(
@@ -762,32 +796,9 @@ pub(super) fn attach_spell_fx(
                     return false;
                 }
             }
-            // A root lost with the unit's visual: the reference's rebuild `0x60abe0` drains the
-            // effect list and re-creates what persists (`0x5ff130` auras, `0x612a30` channels), so
-            // a persistent instance re-arms here and a one-shot or decaying one goes.
-            if let Some(root) = inst.root {
-                if commands.get_entity(root).is_ok() {
-                    return true;
-                }
-                if !inst.persistent || inst.decaying {
-                    if benilla_assets::trace::enabled() {
-                        benilla_assets::trace::line(
-                            "fx",
-                            &format!(
-                                "kit collateral drain unit={unit} path={} decaying={}",
-                                inst.path, inst.decaying
-                            ),
-                        );
-                    }
-                    return false;
-                }
-                inst.root = None;
-                if benilla_assets::trace::enabled() {
-                    benilla_assets::trace::line(
-                        "fx",
-                        &format!("kit collateral re-create unit={unit} path={}", inst.path),
-                    );
-                }
+            // Spawned: only its own teardown or the rebuild's ([`RebuildFx`]) ends it.
+            if inst.root.is_some() {
+                return true;
             }
             // Pending: unspawnable flashes time out; a spawn sets the real span.
             if !inst.persistent && inst.expires.is_none() {
@@ -1018,27 +1029,242 @@ mod tests {
             .collect()
     }
 
-    /// The reference's rebuild (`0x60abe0`) drains every effect node and re-creates what persists.
-    #[test]
-    fn a_persistent_instance_whose_root_died_as_collateral_is_re_armed() {
-        let (mut app, unit, roots) = standing(&[true, false]);
-        // A display swap despawns the unit's whole visual.
-        for root in roots {
-            app.world_mut().entity_mut(root).despawn();
+    // ---- the rebuild (`0x60abe0`): a display swap, and the rig heal that takes its shape ----
+
+    /// The cast flash's record, tag and model: a one-shot release kit at a hand.
+    const FLASH: (u32, u16, &str) = (7, 0x16, "Spells\\CastFlash.mdx");
+    /// A one-shot planted at the unit's feet (kit field 12), standing free of its visual.
+    const PLANT: (u32, u16, &str) = (8, benilla_formats::WORLD_EFFECT_TAG, "Spells\\Ring.mdx");
+
+    /// The frame's kit and rebuild systems in the plugin's order, on a clock the test advances.
+    fn rebuilding() -> App {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins.build().disable::<bevy::time::TimePlugin>(),
+            AssetPlugin::default(),
+        ))
+        .init_asset::<WowModelMaterial>()
+        .init_asset::<benilla_assets::M2Model>()
+        .init_asset::<SkinnedMeshInverseBindposes>()
+        .init_resource::<Time>()
+        .init_resource::<SpellFx>()
+        .init_resource::<FxTintAnims>()
+        .init_resource::<benilla_world::doodad_anim::UvAnimMaterials>()
+        .init_resource::<benilla_world::mat_anim_table::MatAnimTable>()
+        .init_resource::<benilla_world::rig_palette::RigPalettes>()
+        .add_message::<SpellKitFx>()
+        .add_message::<crate::entities::live_display::DisplaySwapped>()
+        .add_systems(
+            Update,
+            (
+                resolve_spell_fx,
+                attach_spell_fx,
+                crate::entities::live_display::refresh_live_display,
+                crate::entities::live_display::heal_rig_starved,
+            )
+                .chain(),
+        );
+        app
+    }
+
+    /// One emitter anchored on `root`, spawned `Free` as every attached instance's is.
+    fn emitter_on(app: &mut App, root: Entity) -> Entity {
+        let em = benilla_assets::ModelEmitter {
+            def: benilla_world::testing::plain_particle_def(),
+            texture: Some(Handle::default()),
+            bone_pivot: [0.0; 3],
+            billboard: None,
+            recursion: None,
+            geometry: None,
+            owner_reach: 0.0,
+            water_bound: (Vec3::ZERO, 0.0),
+            idle_seq: 0,
+        };
+        let world = app.world_mut();
+        let e = particles::spawn_emitter(
+            &mut world.commands(),
+            &em,
+            Transform::IDENTITY,
+            particles::EmitterFrames {
+                owner: Some((root, [0.0; 3])),
+                anchor: Some(root),
+                on_owner_loss: particles::OwnerLoss::Free,
+                alpha: Some(root),
+                light_node: None,
+            },
+            particles::EmitClock::Effect(None),
+        )
+        .expect("an emitter");
+        world.flush();
+        e
+    }
+
+    /// A unit in display 7 with a built visual, `body` standing for its rig: a cast flash ending at
+    /// 1 s and Ice Barrier's state hang under `body`, a ground plant stands free, and each root has
+    /// one emitter. Returns the unit, the three roots and their emitters.
+    fn mid_cast() -> (App, Entity, [Entity; 3], [Entity; 3]) {
+        let mut app = rebuilding();
+        let world = app.world_mut();
+        let body = world
+            .spawn((Transform::default(), GlobalTransform::default()))
+            .id();
+        let [flash_root, aura_root] = [(); 2].map(|_| {
+            let root = world
+                .spawn((Transform::default(), GlobalTransform::default()))
+                .id();
+            world.entity_mut(body).add_child(root);
+            root
+        });
+        let plant_root = world.spawn(Transform::default()).id();
+        let one_shot = |(effect, tag, path): (u32, u16, &str), root| FxInstance {
+            spell_id: 116, // Frostbolt
+            persistent: false,
+            class: FxClass::Hold,
+            stage: FxStage::OneShot,
+            tag,
+            effect,
+            path: path.into(),
+            root: Some(root),
+            expires: Some(1.0),
+            decaying: false,
+        };
+        let unit = world
+            .spawn((
+                Transform::default(),
+                GlobalTransform::default(),
+                crate::entities::VisualAttached,
+                crate::net::Guid(0xB0B),
+                crate::net::NetEntity {
+                    kind: benilla_protocol::EntityKind::Unit,
+                    display_id: Some(7),
+                    scale: 1.0,
+                },
+                display_field(7),
+                crate::entities::live_display::AppliedDisplay(Some(7)),
+                FxAttached {
+                    instances: vec![
+                        one_shot(FLASH, flash_root),
+                        instance(aura_root, true),
+                        one_shot(PLANT, plant_root),
+                    ],
+                },
+            ))
+            .add_child(body)
+            .id();
+        world.entity_mut(plant_root).insert(WorldPlantFx {
+            owner: unit,
+            follow: false,
+        });
+        let roots = [flash_root, aura_root, plant_root];
+        let emitters = roots.map(|root| emitter_on(&mut app, root));
+        (app, unit, roots, emitters)
+    }
+
+    fn display_field(display: u32) -> crate::net::ObjectStore {
+        crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(
+            benilla_protocol::field::FIELD_UNIT_DISPLAYID,
+            display,
+        )]))
+    }
+
+    /// Every root the list names is live. Each teardown site despawns only a named root, so a list
+    /// naming a dead one is a despawn of a dead entity waiting for the next reap, replace or expiry.
+    fn assert_names_no_dead_root(app: &App, unit: Entity) {
+        for inst in &app.world().get::<FxAttached>(unit).unwrap().instances {
+            if let Some(root) = inst.root {
+                assert!(
+                    app.world().get_entity(root).is_ok(),
+                    "{} still names its root {root}, which is already despawned",
+                    inst.path
+                );
+            }
         }
-        app.update();
+    }
+
+    /// The rebuild's effect leg, as `0x60abe0` runs it: the `0x60ac10` loop stops every effect on
+    /// the unit's list `+0xb4` through `0x6203e0` (`0x61fcf0` links a planted one there too,
+    /// `0x61fdbf`), so each root goes and each emitter drains; what persists re-arms for the new
+    /// body (`0x5ff130`). Then the flash's expiry, a forced reap of the aura and a replay of the
+    /// flash's slot all run with nothing dead to despawn.
+    fn assert_the_rebuild_ended_every_effect(
+        mut app: App,
+        unit: Entity,
+        roots: [Entity; 3],
+        emitters: [Entity; 3],
+    ) {
+        assert_names_no_dead_root(&app, unit);
         assert_eq!(
             instances_of(&app, unit),
             vec![(true, None)],
-            "the aura's instance re-arms for the spawn pass; the one-shot drains",
+            "the flash and the plant end; the aura's state re-arms, pending the new body",
         );
+        for (root, emitter) in roots.into_iter().zip(emitters) {
+            assert!(app.world().get_entity(root).is_err(), "{root} ends");
+            assert_eq!(
+                app.world()
+                    .get::<particles::ParticleEmitter>(emitter)
+                    .expect("a stopped instance's emitter outlives its root")
+                    .on_owner_loss(),
+                particles::OwnerLoss::Drain,
+                "the particles finish their lives (`0x61f680`), not pop",
+            );
+        }
+
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs(2));
+        let mut messages = app.world_mut().resource_mut::<Messages<SpellKitFx>>();
+        messages.write(SpellKitFx::Reap {
+            entity: unit,
+            spell_id: 13033,
+            class: FxClass::AuraState,
+            force: true,
+        });
+        messages.write(begin(unit, FLASH.0, FLASH.1, FLASH.2));
+        app.update();
+        assert_names_no_dead_root(&app, unit);
+        assert_eq!(
+            instances_of(&app, unit),
+            vec![(false, None)],
+            "the reap takes the pending aura; the replayed flash waits for its model",
+        );
+    }
+
+    #[test]
+    fn a_display_swap_ends_the_units_effects_before_its_visual_goes() {
+        let (mut app, unit, roots, emitters) = mid_cast();
+        app.world_mut().entity_mut(unit).insert(display_field(8));
+        app.update();
+        assert!(
+            !app.world()
+                .entity(unit)
+                .contains::<crate::entities::VisualAttached>(),
+            "the swap tore the visual down"
+        );
+        assert_the_rebuild_ended_every_effect(app, unit, roots, emitters);
+    }
+
+    /// The rig heal rebuilds through the display swap's teardown, so it ends the effects the same way.
+    #[test]
+    fn a_rig_heal_ends_the_units_effects_before_its_visual_goes() {
+        let (mut app, unit, roots, emitters) = mid_cast();
+        app.world_mut()
+            .entity_mut(unit)
+            .insert(benilla_world::rig_palette::RigStarved);
+        app.update();
+        assert!(
+            !app.world()
+                .entity(unit)
+                .contains::<crate::entities::VisualAttached>(),
+            "the heal tore the visual down"
+        );
+        assert_the_rebuild_ended_every_effect(app, unit, roots, emitters);
     }
 
     /// With the new body still loading, a re-armed instance waits rather than spawn at the root.
     #[test]
     fn a_re_armed_instance_waits_for_the_body_before_it_spawns() {
-        let (mut app, unit, roots) = standing(&[true]);
-        app.world_mut().entity_mut(roots[0]).despawn();
+        let (mut app, unit, ..) = mid_cast();
         app.world_mut().resource_mut::<SpellFx>().models.insert(
             "Spells\\IceShield_State.mdx".into(),
             DisplayModel {
@@ -1046,6 +1272,7 @@ mod tests {
                 ..crate::entities::display::empty_shell()
             },
         );
+        app.world_mut().entity_mut(unit).insert(display_field(8));
         app.update();
         app.update();
         assert_eq!(
@@ -1063,18 +1290,19 @@ mod tests {
         );
     }
 
-    /// A decaying instance was already ending, so the drain takes it too.
+    /// A decaying instance was already ending, so the rebuild takes it too.
     #[test]
-    fn a_decaying_instance_whose_root_died_as_collateral_is_dropped() {
-        let (mut app, unit, roots) = standing(&[true]);
+    fn a_decaying_instance_ends_at_the_rebuild() {
+        let (mut app, unit, ..) = mid_cast();
         app.world_mut()
             .entity_mut(unit)
             .get_mut::<FxAttached>()
             .unwrap()
-            .instances[0]
+            .instances[1]
             .decaying = true;
-        app.world_mut().entity_mut(roots[0]).despawn();
+        app.world_mut().entity_mut(unit).insert(display_field(8));
         app.update();
+        assert_names_no_dead_root(&app, unit);
         assert_eq!(instances_of(&app, unit), vec![]);
     }
 
