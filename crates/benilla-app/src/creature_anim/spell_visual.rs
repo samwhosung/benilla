@@ -115,6 +115,12 @@ pub(crate) enum SpellKitSound {
         cast_hold: bool,
         at: crate::lanes::Stamp,
     },
+    /// `ReleaseEffects` at `at` (`0x614120`): every effect the unit holds is released at once, its
+    /// sound stopped as `0x61f520` closes it, with no fade.
+    Release {
+        entity: Entity,
+        at: crate::lanes::Stamp,
+    },
 }
 
 /// A kit's camera shake (kit field 14 → `SpellEffectCameraShakes.dbc`), consumed by
@@ -195,13 +201,23 @@ pub(crate) enum SpellKitFx {
         /// Its packet's place ([`SpellKitFx::at`]).
         at: Option<crate::lanes::Stamp>,
     },
+    /// `ReleaseEffects` (`0x614120`): every effect on the unit's list is unlinked (`0x6203a0`)
+    /// and released (`0x6210e0`) at once, with no stop and no drain; at refcount 0 `0x61f520`
+    /// closes the model with its emitters.
+    Release {
+        entity: Entity,
+        /// Its packet's place ([`SpellKitFx::at`]).
+        at: Option<crate::lanes::Stamp>,
+    },
 }
 
 impl SpellKitFx {
     /// The unit the edge plays on.
     pub(crate) fn entity(&self) -> Entity {
         match self {
-            Self::Begin { entity, .. } | Self::Reap { entity, .. } => *entity,
+            Self::Begin { entity, .. }
+            | Self::Reap { entity, .. }
+            | Self::Release { entity, .. } => *entity,
         }
     }
 
@@ -210,7 +226,7 @@ impl SpellKitFx {
     /// frame ends it or not; `None` for an edge the frame raised, after every packet.
     pub(crate) fn at(&self) -> Option<crate::lanes::Stamp> {
         match self {
-            Self::Begin { at, .. } | Self::Reap { at, .. } => *at,
+            Self::Begin { at, .. } | Self::Reap { at, .. } | Self::Release { at, .. } => *at,
         }
     }
 }
@@ -1462,6 +1478,14 @@ pub(crate) fn arm_aura_state_fx(
 /// `CORPSE_FIELD_DYNAMIC_FLAGS` bit 0 (`0x5d6de0`): the `"HARDCODED Loot Art"` row at `0x13`.
 /// Edge-driven (`0x600440`) with no viewer or distance logic, since the server strips the flag per
 /// viewer; the falling edge reaps with no fade (`0x600680`).
+///
+/// Here too the unit's effects are released at once (`ReleaseEffects`, `0x614120`), at its two
+/// watcher sites, in wire order: the health watcher's death runs `OnDied` (`0x6047a3` →
+/// `0x605860`), which releases at `0x605922`; the dynamic-flags watcher, on any write that leaves
+/// bit 0x1 set on a unit whose death is stamped (`+0xcb4` above 0, `0x600574`, `0x60057c`),
+/// releases (`0x600587`) and hangs the sparkle again (`0x60058e`). The stamp is the time the
+/// death's animation ended (`0x5fc95a`) or a create found the unit dead (`0x5fba26`), never the
+/// update it died in; benilla keeps no such stamp, so a unit dead before this frame stands for it.
 pub(super) fn arm_loot_fx(
     // Re-read on an edge of any of the four fields and on first sight (armed at build, `0x5d6e30`).
     units: Query<(Entity, &ObjectStore, &crate::net::NetEntity)>,
@@ -1469,34 +1493,59 @@ pub(super) fn arm_loot_fx(
     mut edges: MessageReader<FieldChanged>,
     visuals: Option<Res<SpellVisuals>>,
     mut fx: MessageWriter<SpellKitFx>,
+    mut sounds: MessageWriter<SpellKitSound>,
     mut armed: Local<EntityHashSet>,
 ) {
-    let full_sweep = visuals.as_ref().is_some_and(|v| v.is_changed());
-    let Some((effect, path)) = visuals.as_ref().and_then(|v| v.0.loot_art_effect()) else {
-        return; // no client data or no such row
+    use benilla_protocol::field::{
+        FIELD_CORPSE_DYNAMIC_FLAGS, FIELD_UNIT_DYNAMIC_FLAGS, FIELD_UNIT_HEALTH,
+        FIELD_UNIT_MAXHEALTH,
     };
+    let full_sweep = visuals.as_ref().is_some_and(|v| v.is_changed());
+    let art = visuals.as_ref().and_then(|v| v.0.loot_art_effect());
     let mut loot_at: EntityHashMap<crate::lanes::Stamp> = EntityHashMap::default();
+    let mut due: EntityHashSet = arrived.iter().collect();
+    let mut died = EntityHashSet::default();
+    let mut rehang = EntityHashSet::default();
+    let mut release = |entity: Entity, at: crate::lanes::Stamp| {
+        fx.write(SpellKitFx::Release {
+            entity,
+            at: Some(at),
+        });
+        sounds.write(SpellKitSound::Release { entity, at });
+    };
+    for e in edges.read() {
+        if e.unit_died() {
+            died.insert(e.entity);
+            release(e.entity, e.at);
+        }
+        let watched = e.unit_field(FIELD_UNIT_DYNAMIC_FLAGS)
+            || e.unit_field(FIELD_UNIT_HEALTH)
+            || e.unit_field(FIELD_UNIT_MAXHEALTH)
+            || (e.kind == benilla_protocol::messages::ObjectType::Corpse
+                && e.index == FIELD_CORPSE_DYNAMIC_FLAGS);
+        if !watched {
+            continue;
+        }
+        due.insert(e.entity);
+        // The last of the fields to move, after which the unit reads dead and lootable.
+        let at = loot_at.entry(e.entity).or_insert(e.at);
+        *at = (*at).max(e.at);
+        let settled = !died.contains(&e.entity)
+            && units
+                .get(e.entity)
+                .is_ok_and(|(_, store, _)| store.0.unit_is_dead());
+        if e.unit_field(FIELD_UNIT_DYNAMIC_FLAGS) && e.new & 0x1 != 0 && settled {
+            release(e.entity, e.at);
+            rehang.insert(e.entity);
+        }
+    }
     let scan = if full_sweep {
         units.iter().collect::<Vec<_>>()
     } else {
-        use benilla_protocol::field::{
-            FIELD_CORPSE_DYNAMIC_FLAGS, FIELD_UNIT_DYNAMIC_FLAGS, FIELD_UNIT_HEALTH,
-            FIELD_UNIT_MAXHEALTH,
-        };
-        let mut due: EntityHashSet = arrived.iter().collect();
-        for e in edges.read().filter(|e| {
-            e.unit_field(FIELD_UNIT_DYNAMIC_FLAGS)
-                || e.unit_field(FIELD_UNIT_HEALTH)
-                || e.unit_field(FIELD_UNIT_MAXHEALTH)
-                || (e.kind == benilla_protocol::messages::ObjectType::Corpse
-                    && e.index == FIELD_CORPSE_DYNAMIC_FLAGS)
-        }) {
-            due.insert(e.entity);
-            // The last of the fields to move, after which the unit reads dead and lootable.
-            let at = loot_at.entry(e.entity).or_insert(e.at);
-            *at = (*at).max(e.at);
-        }
         due.into_iter().filter_map(|e| units.get(e).ok()).collect()
+    };
+    let Some((effect, path)) = art else {
+        return; // no client data or no such row
     };
     for (entity, store, net) in scan {
         // A corpse object's sparkle: bit 0 rising calls `0x5d6e30`, the same row at the same tag.
@@ -1505,7 +1554,8 @@ pub(super) fn arm_loot_fx(
         } else {
             store.0.unit_is_dead() && store.0.unit_lootable()
         };
-        if lootable && armed.insert(entity) {
+        // A release took the sparkle with the rest; the watcher hangs it again.
+        if lootable && (armed.insert(entity) | rehang.contains(&entity)) {
             fx.write(SpellKitFx::Begin {
                 entity,
                 spell_id: LOOT_FX_KEY,

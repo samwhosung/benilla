@@ -61,8 +61,10 @@ impl HoldLoops {
 
     /// The kit sounds `edge` stops on its unit, the books moved to match: a hold's stop and a
     /// rebuild take the loops they name, an aura's stop and a replay their kit, a play nothing.
-    /// Each fades as `0x6203e0` stops an effect's sound ([`kit_stop_fade`]).
+    /// Each fades as `0x6203e0` stops an effect's sound ([`kit_stop_fade`]), but a release's,
+    /// which stops at once.
     pub(crate) fn stops(&mut self, edge: &SpellKitSound) -> Vec<KitStop> {
+        let mut fade = kit_stop_fade();
         let (entity, kits) = match *edge {
             SpellKitSound::Play { .. } | SpellKitSound::PlayAt { .. } => return Vec::new(),
             SpellKitSound::StopHold { entity, spell_id } => {
@@ -74,6 +76,11 @@ impl HoldLoops {
                 (entity, vec![kit_sound])
             }
             SpellKitSound::Rebuilt { entity, at } => (entity, self.take(entity, |h| h.at < at)),
+            SpellKitSound::Release { entity, at } => {
+                // `0x61f520` closes the released effect's sound outright.
+                fade = super::mixer::declick();
+                (entity, self.take(entity, |h| h.at < at))
+            }
             SpellKitSound::Replay {
                 entity, kit_sound, ..
             } => {
@@ -87,7 +94,7 @@ impl HoldLoops {
             .map(|kit_sound| KitStop {
                 entity,
                 kit_sound,
-                fade: kit_stop_fade(),
+                fade,
             })
             .collect()
     }
@@ -211,7 +218,8 @@ fn route_spell_kit_sounds(
             }
             SpellKitSound::StopHold { .. }
             | SpellKitSound::StopKit { .. }
-            | SpellKitSound::Rebuilt { .. } => continue,
+            | SpellKitSound::Rebuilt { .. }
+            | SpellKitSound::Release { .. } => continue,
         };
         played_now.push((entity, kit_sound));
         let pos = transforms.get(entity).map(|t| t.translation).ok();
@@ -395,6 +403,27 @@ mod tests {
         edge(&mut loops, precast);
         assert_eq!(edge(&mut loops, rebuilt(swap)), [AM_HUM], "the channel's");
         assert_eq!(loops.held(unit), [(FIREBALL, BUILDUP)], "rang after");
+    }
+
+    /// `ReleaseEffects` (`0x614120`) closes each released effect's sound outright (`0x61f520`),
+    /// with no fade; a loop rung after the release plays on.
+    #[test]
+    fn a_release_stops_what_rang_before_it_at_once() {
+        let unit = Entity::PLACEHOLDER;
+        let mut loops = HoldLoops::default();
+        edge(&mut loops, play(ARCANE_MISSILES, AM_HUM, true, None));
+        let at = crate::lanes::stamp();
+        edge(
+            &mut loops,
+            play(FIREBALL, BUILDUP, true, Some(crate::lanes::stamp())),
+        );
+        let stops: Vec<_> = loops
+            .stops(&SpellKitSound::Release { entity: unit, at })
+            .into_iter()
+            .map(|s| (s.kit_sound, s.fade.duration))
+            .collect();
+        assert_eq!(stops, [(AM_HUM, super::super::mixer::declick().duration)]);
+        assert_eq!(loops.held(unit), [(FIREBALL, BUILDUP)]);
     }
 
     /// Every stop of a kit's sound is `0x6203e0`'s, a 0.15 s fade (`0x6204b6` → `0x7a5a10`): a

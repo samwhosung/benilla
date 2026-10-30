@@ -308,6 +308,12 @@ impl ParticleEmitter {
         self.on_owner_loss = OwnerLoss::Drain;
     }
 
+    /// Switch to [`OwnerLoss::Free`]: the effect is released with its model, whose destructor
+    /// frees its emitters at once (`0x6210e0` → `0x61f520`), its live particles with them.
+    pub fn free_on_owner_loss(&mut self) {
+        self.on_owner_loss = OwnerLoss::Free;
+    }
+
     /// What losing the owner does to this pool ([`Self::drain_on_owner_loss`]).
     pub fn on_owner_loss(&self) -> OwnerLoss {
         self.on_owner_loss

@@ -647,6 +647,14 @@ pub(super) fn resolve_spell_fx(
                         &mut emitters,
                     );
                 }
+                // What the wire put after it stands.
+                SpellKitFx::Release { .. } => {
+                    for inst in instances.drain(..) {
+                        if let Some(root) = inst.root {
+                            release_root(&mut commands, &mut emitters, root);
+                        }
+                    }
+                }
             }
         }
         if cut == Some(len) {
@@ -678,6 +686,21 @@ fn end_root(
     for mut e in emitters.iter_mut() {
         if e.anchor() == Some(root) {
             e.drain_on_owner_loss();
+        }
+    }
+    commands.entity(root).despawn();
+}
+
+/// The release `0x6210e0` of a spawned instance (`ReleaseEffects`, `0x614120`): no stop and no
+/// drain, the model closed with its emitters (`0x61f520`), live particles and all.
+fn release_root(
+    commands: &mut Commands,
+    emitters: &mut Query<&mut benilla_world::particles::ParticleEmitter>,
+    root: Entity,
+) {
+    for mut e in emitters.iter_mut() {
+        if e.anchor() == Some(root) {
+            e.free_on_owner_loss();
         }
     }
     commands.entity(root).despawn();
@@ -1359,6 +1382,42 @@ mod tests {
             [(13033, None)],
             "the aura waits for the body"
         );
+    }
+
+    /// `ReleaseEffects` (`0x614120`) frees every effect on the unit's list at once, a planted one
+    /// too: each root goes with no stop and no drain, its emitters freed with the model
+    /// (`0x6210e0` → `0x61f520`). What the wire put after the release stands.
+    #[test]
+    fn a_release_frees_every_effect_at_once_and_keeps_what_follows() {
+        let (mut app, unit, roots, emitters) = mid_cast();
+        let [release, after] = places::<2>();
+        let sparkle = start(
+            &mut app,
+            unit,
+            (u32::MAX, true, FxStage::Relive),
+            (11, 0x13, "Spells\\LootSparkle.mdx"),
+            Some(after),
+        );
+        let mut messages = app.world_mut().resource_mut::<Messages<SpellKitFx>>();
+        messages.write(sparkle);
+        messages.write(SpellKitFx::Release {
+            entity: unit,
+            at: Some(release),
+        });
+        app.update();
+        let paths: Vec<String> = paths_of(&app, unit).into_iter().map(|(p, _)| p).collect();
+        assert_eq!(paths, ["Spells\\LootSparkle.mdx"]);
+        for (root, emitter) in roots.into_iter().zip(emitters) {
+            assert!(app.world().get_entity(root).is_err(), "{root} goes at once");
+            assert_eq!(
+                app.world()
+                    .get::<particles::ParticleEmitter>(emitter)
+                    .expect("its emitter")
+                    .on_owner_loss(),
+                particles::OwnerLoss::Free,
+                "freed with the model, not drained",
+            );
+        }
     }
 
     /// A precast loop is kind 4 (`0x60ee7e`), which nothing in the rebuild plays again: it ends

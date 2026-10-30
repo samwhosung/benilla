@@ -795,6 +795,100 @@ fn a_rebuild_rings_the_aura_and_channel_kits_again() {
     );
 }
 
+/// `ReleaseEffects` (`0x614120`) at its two watcher sites, in wire order: the death's `OnDied`
+/// (`0x6047a3` → `0x605922`) at the health edge, and the dynamic-flags watcher on a corpse whose
+/// death is settled (`0x600587`), on any write that leaves it lootable, which hangs the sparkle
+/// again (`0x60058e`). In the update the unit dies in, the flags write releases nothing more.
+#[test]
+fn a_death_and_a_settled_corpses_lootable_flags_release_its_effects() {
+    use benilla_protocol::field::{FIELD_UNIT_DYNAMIC_FLAGS, FIELD_UNIT_HEALTH};
+    let mut app = App::new();
+    app.add_message::<crate::net::FieldChanged>()
+        .add_message::<SpellKitFx>()
+        .add_message::<SpellKitSound>()
+        .insert_resource(SpellVisuals(
+            SpellVisualCatalog::from_tables(HashMap::new(), HashMap::new()).with_hardcoded(
+                "HARDCODED Loot Art",
+                14,
+                "Particles\\LootFX.mdl",
+            ),
+        ))
+        .add_systems(Update, super::arm_loot_fx);
+    let fields = |health: u32, flags: u32| {
+        crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+            (FIELD_UNIT_HEALTH, health),
+            (FIELD_UNIT_DYNAMIC_FLAGS, flags),
+        ]))
+    };
+    let mob = app
+        .world_mut()
+        .spawn((
+            fields(100, 0),
+            crate::net::NetEntity {
+                kind: benilla_protocol::EntityKind::Unit,
+                display_id: Some(7),
+                scale: 1.0,
+            },
+        ))
+        .id();
+    app.update();
+    let edge = |index, old, new| crate::net::FieldChanged {
+        at: crate::lanes::stamp(),
+        entity: mob,
+        guid: 1,
+        kind: benilla_protocol::messages::ObjectType::Unit,
+        index,
+        old,
+        new,
+    };
+    let frame = |app: &mut App, flags: u32, edges: &[crate::net::FieldChanged]| {
+        app.world_mut().entity_mut(mob).insert(fields(0, flags));
+        for &e in edges {
+            app.world_mut().write_message(e);
+        }
+        app.update();
+        let fx: Vec<_> = app
+            .world_mut()
+            .resource_mut::<Messages<SpellKitFx>>()
+            .drain()
+            .map(|ev| match ev {
+                SpellKitFx::Release { at, .. } => ("release", at),
+                SpellKitFx::Begin { at, .. } => ("sparkle", at),
+                SpellKitFx::Reap { at, .. } => ("reap", at),
+            })
+            .collect();
+        let sounds: Vec<_> = app
+            .world_mut()
+            .resource_mut::<Messages<SpellKitSound>>()
+            .drain()
+            .filter_map(|ev| match ev {
+                SpellKitSound::Release { at, .. } => Some(at),
+                _ => None,
+            })
+            .collect();
+        (fx, sounds)
+    };
+
+    // The killing update, in field order: the health, then the lootable flag.
+    let died = edge(FIELD_UNIT_HEALTH, 100, 0);
+    let lootable = edge(FIELD_UNIT_DYNAMIC_FLAGS, 0, 1);
+    let (fx, sounds) = frame(&mut app, 1, &[died, lootable]);
+    assert_eq!(
+        fx,
+        [("release", Some(died.at)), ("sparkle", Some(lootable.at))]
+    );
+    assert_eq!(sounds, [died.at]);
+
+    // A later write that leaves the flag set.
+    let tapped = edge(FIELD_UNIT_DYNAMIC_FLAGS, 1, 5);
+    let (fx, sounds) = frame(&mut app, 5, &[tapped]);
+    assert_eq!(
+        fx,
+        [("release", Some(tapped.at)), ("sparkle", Some(tapped.at))]
+    );
+    assert_eq!(sounds, [tapped.at]);
+}
+
 /// The ranged weapon-visual merge (`0x60d450`): a spell with `Attributes & 0x2` fills every zero
 /// slot of its own row from the caster's weapon visual; a non-ranged spell never looks.
 #[test]
