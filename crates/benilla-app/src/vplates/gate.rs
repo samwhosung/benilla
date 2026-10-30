@@ -112,7 +112,7 @@ impl Judge<'_> {
         rank: u8,
     ) -> PlateUnit {
         let tint = plate_tint(rank, is_player);
-        let (health, max_health) = bar_of(store);
+        let (health, max_health) = store.map_or((0.0, 0.0), bar_of);
         let my_level = self.my_level;
         let level = store.and_then(|s| s.0.unit_level());
         let mark = self.group.map_or(0, |g| g.raid_target_index(guid));
@@ -160,13 +160,12 @@ impl Judge<'_> {
 
 /// The bar's value and range off the unit (`0x7cc41b`-`0x7cc442`, `0x7cc593`-`0x7cc5be`): raw
 /// health, not a fraction, as `healthbar:GetValue()` is `[bar+0x320]` (`0x78f5d0`) and addons
-/// divide it by the maximum.
-pub(crate) fn bar_of(store: Option<&ObjectStore>) -> (f32, f32) {
+/// divide it by the maximum. Both fields load signed (`fild` at `0x7cc421`, `0x7cc437`) and go to
+/// the bar unclamped, a field not streamed as 0: `0x783270` takes a range of 0 to 0.
+pub(crate) fn bar_of(store: &ObjectStore) -> (f32, f32) {
+    let signed = |field: Option<u32>| field.unwrap_or(0) as i32 as f32;
     (
-        store.and_then(|s| s.0.unit_health()).unwrap_or(0) as f32,
-        store
-            .and_then(|s| s.0.unit_max_health())
-            .unwrap_or(1)
-            .max(1) as f32,
+        signed(store.0.unit_health()),
+        signed(store.0.unit_max_health()),
     )
 }

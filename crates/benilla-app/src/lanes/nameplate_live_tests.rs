@@ -6,12 +6,24 @@
 //! the gate `InvalidateNameDesc` runs (`0x60706a`), which a name answer's release (`0x6046c1`)
 //! hands a new bind. So a listener a later packet of the frame fires reads its packet's plate.
 
-use benilla_protocol::field::{FIELD_UNIT_BYTES_1, FIELD_UNIT_LEVEL};
-use benilla_protocol::SessionEvent;
+use benilla_protocol::field::{
+    FIELD_UNIT_BYTES_1, FIELD_UNIT_FLAGS, FIELD_UNIT_HEALTH, FIELD_UNIT_LEVEL, FIELD_UNIT_MAXHEALTH,
+};
+use benilla_protocol::{EntityKind, SessionEvent};
 use benilla_ui::script::UiScript;
 use bevy::prelude::*;
 
-use super::unit_view_tests::{client, frame, health, values};
+use super::unit_view_tests::{client, created, frame, health, values};
+
+/// The client's own guid.
+const ME: u64 = 0x7;
+/// `PLAYER_BYTES_3`, whose byte 1 is the drunkenness.
+const PLAYER_BYTES_3: u16 = 195;
+/// The drunkenness 50 in `PLAYER_BYTES_3`: a cut of `trunc(50 * 0.05 + 0.5)`, 3 levels.
+const DRUNK_50: u32 = 50 << 8;
+/// `UNIT_FLAG_PLAYER_CONTROLLED`, which takes `CanAttack`'s player arm: with no faction tables we
+/// may attack the boar.
+const PLAYER_CONTROLLED: u32 = 0x8;
 
 /// The target [`client`] seats.
 const WOLF: u64 = 0xF130_0000_0044_0001;
@@ -23,8 +35,8 @@ const OBJECT_ENTRY: u16 = 3;
 const BOAR_ENTRY: u32 = 1984;
 
 /// [`client`] with both kinds of plate on and the boar's plate bound, as the frame's gate bound
-/// it (health 30 of 40, a red bar, "unit 0x…", level 12), its spatial tests passed; `Plate()` and
-/// `Bar()` name its frame and its bar. The spy's `Look` is the test's.
+/// it (health 30 of 40, a red bar, "unit 0x…", level 12), its spatial tests passed
+/// ([`helpers`]). The spy's `Look` is the test's.
 fn plated_client(look: &str) -> App {
     let mut app = client();
     let world = app.world_mut();
@@ -38,19 +50,7 @@ fn plated_client(look: &str) -> App {
         .insert(BOAR);
     let mut script = world.non_send_resource_mut::<UiScript>();
     crate::vplates::plates_for_test(&mut script, &[BOAR]);
-    script
-        .run(&format!(
-            r#"
-            function Plate() return WorldFrame:GetChildren() end
-            function Bar() return Plate():GetChildren() end
-            function Name() local _, _, name = Plate():GetRegions() return name end
-            function Shown(f) if f:IsShown() then return "shown" end return "hidden" end
-            function Byte(c) return math.floor(c * 255 + 0.5) end
-            function Look(event, unit) {look} end
-            Seen = {{}}
-            "#
-        ))
-        .unwrap();
+    helpers(&script, look);
     app
 }
 
@@ -262,5 +262,43 @@ fn a_raid_mark_shows_on_the_plate_ahead_of_its_event() {
             }]
         ),
         ["RAID_TARGET_UPDATE:shown:0.25,0.25"]
+    );
+}
+
+/// The script helpers both clients define: `Plate()`, `Bar()`, `Name()` and `Level()` name the
+/// first plate and its parts.
+fn helpers(script: &UiScript, look: &str) {
+    script
+        .run(&format!(
+            r#"
+            function Plate() return WorldFrame:GetChildren() end
+            function Bar() return Plate():GetChildren() end
+            function Name() local _, _, name = Plate():GetRegions() return name end
+            function Level() local _, _, _, level = Plate():GetRegions() return level end
+            function Shown(f) if f:IsShown() then return "shown" end return "hidden" end
+            function Byte(c) return math.floor(c * 255 + 0.5) end
+            function Look(event, unit) {look} end
+            Seen = {{}}
+            "#
+        ))
+        .unwrap();
+}
+
+/// The bar's watcher loads both fields signed and clamps neither (`fild` at `0x7cc599`,
+/// `0x7cc5b3`, into `0x783270`): a maximum of 0 is a range of 0 to 0, and `0xffffffff` is -1.
+#[test]
+fn a_plates_bar_reads_its_units_health_signed_and_unclamped() {
+    let mut app = plated_client("local _, max = Bar():GetMinMaxValues() return max");
+    assert_eq!(
+        frame(
+            &mut app,
+            vec![
+                values(BOAR, &[(FIELD_UNIT_MAXHEALTH, 0)]),
+                values(WOLF, &health(70)),
+                values(BOAR, &[(FIELD_UNIT_MAXHEALTH, 0xFFFF_FFFF)]),
+                values(WOLF, &health(60)),
+            ]
+        ),
+        ["UNIT_HEALTH:target:0", "UNIT_HEALTH:target:-1"]
     );
 }

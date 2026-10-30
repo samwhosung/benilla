@@ -724,12 +724,16 @@ pub(crate) fn fire_plate_call(
 }
 
 /// The bar's watcher on `guid` (`0x7cc570`) after the bridge's on the same field, with the unit's
-/// health and maximum as `store` holds them where it runs.
+/// health and maximum as `store` holds them where it runs. A unit the object manager no longer
+/// holds writes nothing (`0x7cc588`, `0x7cc591`).
 pub(crate) fn health_watch(
     script: &mut benilla_ui::script::UiScript,
     guid: u64,
     store: Option<&ObjectStore>,
 ) {
+    let Some(store) = store else {
+        return;
+    };
     let (health, max) = gate::bar_of(store);
     script.nameplate_health(guid, health, max);
 }
