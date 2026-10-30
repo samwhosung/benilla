@@ -71,6 +71,7 @@ type CensusQuery = (
     Has<CreatureSwimming>,
     // The rest of `ground_derived`'s inputs, so the listing is the clamp's own population.
     Has<Embodied>,
+    Option<&'static crate::net::RemoteMotion>,
     Option<&'static crate::net::ObjectStore>,
 );
 
@@ -103,9 +104,15 @@ fn fire_ground_census(
     let radius2 = probe.radius * probe.radius;
 
     let mut rows: Vec<(f32, bool, String)> = Vec::new();
-    for (guid, net, t, clamped, spline, swimming, embodied, store) in &units {
-        if !ground_derived(net.kind, spline.is_some(), clamped.is_some(), embodied)
-            || t.translation.distance_squared(body.translation) > radius2
+    for (guid, net, t, clamped, spline, swimming, embodied, motion, store) in &units {
+        let self_moving = motion.is_some_and(crate::net::motion::spline::moves_itself);
+        if !ground_derived(
+            net.kind,
+            spline.is_some(),
+            clamped.is_some(),
+            embodied,
+            self_moving,
+        ) || t.translation.distance_squared(body.translation) > radius2
         {
             continue;
         }

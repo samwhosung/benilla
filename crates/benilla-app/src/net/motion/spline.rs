@@ -480,6 +480,13 @@ pub(in crate::net) fn sample_splines(
     }
 }
 
+/// Whether a mover moves itself: a flag of `0x20ff`, which `CMovement::Update`'s substep loop
+/// steps (`0x616e20`) and [`crate::net::motion::remote::reckon`] resolves; a path, when it has one,
+/// drives it instead.
+pub(crate) fn moves_itself(m: &crate::net::RemoteMotion) -> bool {
+    m.flags & crate::creature_anim::move_flags::INTEGRATED != 0
+}
+
 /// The bits a path's end clears on its mover, `0x7c6c00`'s: forward, back and the deferred
 /// forward (`0x8000`).
 const PATH_END_STOP: u32 =
@@ -538,15 +545,19 @@ fn trace_ride(guid: u64, spline: &Spline, pos: [f32; 3], was: [f32; 3], now: Ins
 /// (`0x616cec`-`0x616d03`) reads only the mover's flags. So: every `Unit`; a `Player` a server
 /// spline moves or has moved, until a relayed move takes it back (`derived_before` is
 /// [`GroundClamped`]'s presence, which the relay clears); never the body we steer
-/// ([`crate::net::Embodied`]); nothing else. A relayed player's Z comes grounded by its own client,
-/// and a down-ray would flatten its dead-reckoned jump arc.
+/// ([`crate::net::Embodied`]); never a body whose mover moves itself, a flag of `0x20ff` and no
+/// path (`self_moving`): its own step resolves its Z ([`crate::net::motion::remote::reckon`], as
+/// `0x616cb0` → `0x634040`), the falling resolver `0x635b00` taking a fall's from the arc, so a
+/// down-ray would flatten the arc; nothing else. A relayed player's Z comes grounded by its own
+/// client.
 pub(crate) fn ground_derived(
     kind: EntityKind,
     splined: bool,
     derived_before: bool,
     embodied: bool,
+    self_moving: bool,
 ) -> bool {
-    if embodied {
+    if embodied || (self_moving && !splined) {
         return false;
     }
     match kind {
@@ -636,7 +647,14 @@ pub(in crate::net) fn ground_clamp_creatures(
 
     for (entity, net, spline, mut t, mut clamped, swimming, modes, embodied, mut motion) in &mut q {
         visited += 1;
-        if !ground_derived(net.kind, spline.is_some(), clamped.is_some(), embodied) {
+        let self_moving = motion.as_deref().is_some_and(moves_itself);
+        if !ground_derived(
+            net.kind,
+            spline.is_some(),
+            clamped.is_some(),
+            embodied,
+            self_moving,
+        ) {
             skipped += 1;
             continue; // somebody else owns this body's Z
         }
@@ -811,8 +829,7 @@ pub(in crate::net) fn ground_clamp_creatures(
             moved += 1;
             t.translation.y = y;
             // Its mover stands where the clamp put it, as the walk resolve re-derives the mover's
-            // own Z (`0x6367b0`): a path's end leaves it there, and a relayed creature's
-            // dead-reckoning steps on from it.
+            // own Z (`0x6367b0`): on a path, or standing, as a derived body's mover is.
             if let Some(rm) = motion.as_deref_mut() {
                 rm.wow_pos = bevy_to_wow(t.translation);
             }
@@ -891,6 +908,7 @@ type SwimMarkQuery = (
     Has<Spline>,
     Has<GroundClamped>,
     Has<crate::net::Embodied>,
+    Option<&'static crate::net::RemoteMotion>,
 );
 
 /// The stamp [`mark_swimming_creatures`] leaves once a unit's room claim settles; 1.12 water is
@@ -980,8 +998,11 @@ pub(in crate::net) fn mark_swimming_creatures(
             commands.entity(e).remove::<SwimEvaluated>();
         }
     }
-    for (e, net, t, collision, store, marked, evaluated, splined, clamped, embodied) in &units {
-        if !ground_derived(net.kind, splined, clamped, embodied) {
+    for (e, net, t, collision, store, marked, evaluated, splined, clamped, embodied, motion) in
+        &units
+    {
+        let self_moving = motion.is_some_and(moves_itself);
+        if !ground_derived(net.kind, splined, clamped, embodied, self_moving) {
             continue; // GameObjects don't swim; a relayed player's flag arrives on the wire
         }
         // The unit's own room decides whose liquid answers (an interior's, not the ADT water over
@@ -1751,6 +1772,39 @@ mod server_moved_players {
         assert_eq!(y_of(&app, body), RIM_Z, "the relay's again");
     }
 
+    /// A creature whose mover moves itself keeps the height its own step gave it, its mover's
+    /// included: a fall's is the arc's (`0x635b00`), and a clamp that wrote it would flatten the
+    /// arc. Standing, or under a path, it is the clamp's again.
+    #[test]
+    fn a_creature_moving_itself_keeps_its_own_height() {
+        use crate::creature_anim::move_flags::{FALLING, FORWARD};
+        let mover_z = |app: &App, e| app.world().get::<RemoteMotion>(e).unwrap().wow_pos[2];
+        for flags in [FALLING, FORWARD] {
+            let (mut app, body) = hollow(EntityKind::Unit);
+            app.world_mut()
+                .entity_mut(body)
+                .insert(RemoteMotion { flags, ..relayed() });
+            clamp(&mut app);
+            assert_eq!(y_of(&app, body), RIM_Z, "{flags:#x}: its own step's height");
+            assert_eq!(mover_z(&app, body), RIM_Z, "{flags:#x}: and its mover's");
+
+            app.world_mut().get_mut::<RemoteMotion>(body).unwrap().flags = 0;
+            clamp(&mut app);
+            assert_grounded(&app, body, &format!("{flags:#x}, then standing"));
+            assert_eq!(
+                mover_z(&app, body),
+                benilla_assets::coords::bevy_to_wow(Vec3::new(0.0, FLOOR_Y, 0.0))[2],
+                "{flags:#x}: a standing mover stands where the clamp put it"
+            );
+        }
+
+        let (mut app, body) = hollow(EntityKind::Unit);
+        app.world_mut().entity_mut(body).insert(relayed());
+        walking(&mut app, body);
+        clamp(&mut app);
+        assert_grounded(&app, body, "a path drives it, whatever its mover's flags");
+    }
+
     /// A swimming body keeps its wire Z, a Player included.
     #[test]
     fn a_swimming_bot_keeps_its_wire_z() {
@@ -1808,16 +1862,21 @@ mod server_moved_players {
     /// The subject rule as a table, with a GameObject and the ways a Player leaves the set.
     #[test]
     fn the_subject_rule() {
-        let unit =
-            |splined, memo, embodied| ground_derived(EntityKind::Unit, splined, memo, embodied);
-        let player =
-            |splined, memo, embodied| ground_derived(EntityKind::Player, splined, memo, embodied);
+        let unit = |splined, memo, embodied| {
+            ground_derived(EntityKind::Unit, splined, memo, embodied, false)
+        };
+        let player = |splined, memo, embodied| {
+            ground_derived(EntityKind::Player, splined, memo, embodied, false)
+        };
         // A creature is ours walking or idle.
         assert!(unit(true, true, false));
         assert!(unit(false, false, false));
         // A possessed creature is the controller's.
         assert!(!unit(true, true, true));
         assert!(!unit(false, false, true));
+        // One whose mover moves itself is its own, unless a path drives it.
+        assert!(!ground_derived(EntityKind::Unit, false, true, false, true));
+        assert!(ground_derived(EntityKind::Unit, true, true, false, true));
 
         assert!(player(true, false, false), "a bot's first path");
         assert!(
@@ -1832,7 +1891,7 @@ mod server_moved_players {
 
         for kind in [EntityKind::GameObject, EntityKind::Corpse] {
             assert!(
-                !ground_derived(kind, true, true, false),
+                !ground_derived(kind, true, true, false, false),
                 "{kind:?} sits at the Z it was authored at"
             );
         }
