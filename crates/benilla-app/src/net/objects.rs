@@ -974,6 +974,7 @@ fn object_create(
                     relay,
                     last_apply_ms: now_ms,
                     last_apply_pos: position,
+                    fired_at_ms: None,
                 }
             })
         });
@@ -1319,6 +1320,7 @@ fn unit_move(
                 relay: Default::default(),
                 last_apply_ms: now_ms,
                 last_apply_pos: wow_pos,
+                fired_at_ms: None,
             };
             let fire_ms = rm.relay.schedule(mv.wire_ms, now_ms, 0, true);
             debug_assert_eq!(
@@ -3109,6 +3111,7 @@ mod tests {
                 relay: Default::default(),
                 last_apply_ms: 0.0,
                 last_apply_pos: [0.0; 3],
+                fired_at_ms: None,
             }
         }
 

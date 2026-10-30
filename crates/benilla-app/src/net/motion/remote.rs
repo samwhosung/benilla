@@ -40,6 +40,10 @@ pub(crate) struct RemoteMotion {
     /// since is our extrapolation.
     pub(crate) last_apply_ms: f64,
     pub(crate) last_apply_pos: [f32; 3],
+    /// The fire-time of the move this frame's tick fired, where its pose stands: the frame's step
+    /// runs on from it, not from the frame's start ([`drain_pending_moves`]). `None`, the
+    /// whole frame.
+    pub(crate) fired_at_ms: Option<f64>,
 }
 
 /// A relayed pose's height in both frames its packet carries: the world's, and the deck's while
@@ -337,9 +341,12 @@ pub(in crate::net) fn apply_move(
 pub(crate) struct MoveTick(pub(crate) Option<f64>);
 
 /// Fires every due queued move (the drain `0x615c30`), then stamps the movement clock
-/// ([`MoveTick`]); runs before [`extrapolate_remote_units`]. Real time: the reference's clock is
-/// the OS wall clock (`0x42c010`), and Bevy's virtual clock clamps each delta to 250 ms, so a
-/// throttled window would fall behind the schedule.
+/// ([`MoveTick`]); runs before [`extrapolate_remote_units`]. A fired move stands its mover at its
+/// fire-time, which the frame's step then runs on from: `CMovement::AdvanceTo` (`0x616620`) cuts
+/// each step at the queued head's time (`0x61668f`-`0x61669c`) and applies the move there
+/// (`0x615c30`), so only the window's rest moves the mover under the new flags. Real time: the
+/// reference's clock is the OS wall clock (`0x42c010`), and Bevy's virtual clock clamps each
+/// delta to 250 ms, so a throttled window would fall behind the schedule.
 #[allow(clippy::type_complexity)]
 pub(in crate::net) fn drain_pending_moves(
     time: Res<Time<Real>>,
@@ -353,6 +360,7 @@ pub(in crate::net) fn drain_pending_moves(
         while rm.pending.front().is_some_and(|ev| ev.fire_ms <= now_ms) {
             let ev = rm.pending.pop_front().expect("front checked");
             apply_move(e, &ev.mv, &mut rm, now_ms, &mut commands, &mut landings);
+            rm.fired_at_ms = Some(ev.fire_ms);
         }
     }
     tick.0 = Some(now_ms);
@@ -530,9 +538,18 @@ pub(in crate::net) fn extrapolate_remote_units(
     >,
 ) {
     use crate::creature_anim::{ease_strafe_yaw, strafe_body_offset, wrap_pi};
-    let dt = time.delta_secs();
+    let frame_dt = time.delta_secs();
     let now_ms = time.elapsed_secs_f64() * 1000.0;
     for (e, mut t, mut rm, speeds, twist, latched, riding, guid, granted) in &mut q {
+        // The window this mover steps: the frame's, or its rest past a move the tick fired in it.
+        let step = match rm.fired_at_ms.take() {
+            Some(fired) => {
+                let rest = ((now_ms - fired) / 1000.0).clamp(0.0, time.delta().as_secs_f64());
+                std::time::Duration::from_secs_f64(rest)
+            }
+            None => time.delta(),
+        };
+        let dt = step.as_secs_f32();
         if benilla_assets::trace::enabled() {
             let silent = now_ms - rm.last_apply_ms;
             let moving = rm.flags & move_flags::ANY_MOVE != 0;
@@ -556,7 +573,7 @@ pub(in crate::net) fn extrapolate_remote_units(
             vertical_velocity,
             speed,
             held,
-        } = reckon(e, &rm, s, modes, riding, time.delta(), Some(&world));
+        } = reckon(e, &rm, s, modes, riding, step, Some(&world));
         // The pre-fire reconcile toward the queued head, facing (armed by `0x619030`) and position
         // (`0x619090`); a teleport arms neither (`@0x61904b`, `@0x6190bb`).
         if let Some(ev) = rm.pending.front() {
@@ -622,7 +639,7 @@ pub(in crate::net) fn extrapolate_remote_units(
             strafe_body_offset(rm.flags)
         };
         let yaw = if offset != 0.0 {
-            ease_strafe_yaw(yaw_of(t.rotation), orientation, offset, dt)
+            ease_strafe_yaw(yaw_of(t.rotation), orientation, offset, frame_dt)
         } else {
             orientation
         };
@@ -824,6 +841,7 @@ mod under_floor {
             relay: RelayChain::default(),
             last_apply_ms: 0.0,
             last_apply_pos: [0.0, 0.0, wow_z],
+            fired_at_ms: None,
         }
     }
 

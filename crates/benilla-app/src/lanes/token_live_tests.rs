@@ -852,6 +852,42 @@ fn a_listener_reads_a_late_mover_stepped_on_by_its_lateness() {
     assert_eq!(seen, ["0.7034,0.8000"]);
 }
 
+/// `mv` stamped `stamp` on the server's clock.
+fn stamped(mut mv: SessionEvent, stamp: u32) -> SessionEvent {
+    if let SessionEvent::UnitMove { time, .. } = &mut mv {
+        *time = stamp;
+    }
+    mv
+}
+
+/// A queued move the frame's tick fires inside its window stands the mover at its fire-time, and
+/// only the window's rest moves it on: `CMovement::AdvanceTo` (`0x616620`) cuts its step at the
+/// queued head's time (`0x61668f`-`0x61669c`) and applies the move there (`0x615c30`). A move
+/// stamped 40 ms past the mover's last, arriving 32 ms after that one fired, fires 8 ms into the
+/// next frame's 16, which carries it 0.28 yd on at a run speed of 35, where a later packet's
+/// listener reads it.
+#[test]
+fn a_listener_reads_a_move_fired_mid_frame_stepped_on_from_its_fire_time() {
+    let mut c = seated(FORWARD);
+    let mate = c.app.world().resource::<crate::net::GuidIndex>().0[&MATE];
+    c.app
+        .world_mut()
+        .entity_mut(mate)
+        .insert(crate::net::UnitSpeeds(benilla_protocol::MoveSpeeds {
+            run: 35.0,
+            ..Default::default()
+        }));
+    fine_map_spy(&mut c, "party1");
+    c.frame(vec![vec![stamped(
+        heartbeat(MATE, [700.0, 800.0, 0.0], FORWARD, None),
+        40,
+    )]]);
+    c.frame(vec![]);
+    c.frame(vec![vec![member_at(MATE, 20, ELWYNN, (100, 200))]]);
+    let seen: Vec<String> = c.eval(false, "return Fine");
+    assert_eq!(seen, ["0.7003,0.8000"]);
+}
+
 /// A standing member's packet waits for the frame's tick, so a later packet's listener reads the
 /// member where it stood: the re-base puts the fire-time at or past the arrival
 /// (`0x618cfc`-`0x618d41`), past the movement clock (`@0x618dd2`, `0x618dde`), and the move is

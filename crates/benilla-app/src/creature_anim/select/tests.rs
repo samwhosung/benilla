@@ -982,6 +982,7 @@ fn the_granted_modes_fold_into_the_flags_word_on_every_leg_but_our_own() {
         relay: Default::default(),
         last_apply_ms: 0.0,
         last_apply_pos: [0.0; 3],
+        fired_at_ms: None,
     };
     let v = unify(None, Some(&rm), None, false, Some(&walking));
     assert_eq!(v.flags, move_flags::FORWARD | move_flags::WALK_MODE);
