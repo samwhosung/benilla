@@ -37,6 +37,8 @@ pub(crate) use drain::{clear_wrap_on_right_press, dispatch_fork};
 pub(crate) use equip_error::{equip_error_key, inventory_result_key, EquipError, EquipErrors};
 // `UseContainerItem`, `UseInventoryItem` and the item verbs' calls, applied in call order by
 // `crate::script_calls`.
+#[cfg(test)]
+pub(crate) use bags::eval_with_bags;
 pub(crate) use bags::{BagLive, BagReads};
 pub(crate) use calls::ItemSteps;
 pub(crate) use drain::ScriptItemUse;
@@ -237,11 +239,18 @@ fn item_is_whole(fields: &ObjectFields) -> bool {
 pub(crate) trait ItemObjects {
     /// The object held under `guid`, `None` for none.
     fn object(&self, guid: u64) -> Option<&ObjectFields>;
+
+    /// The item's countdown cells under `guid` (`+0x320`, `+0x324`), `None` for no item.
+    fn countdowns(&self, guid: u64) -> Option<&crate::items::Countdowns>;
 }
 
 impl ItemObjects for Objects<'_, '_> {
     fn object(&self, guid: u64) -> Option<&ObjectFields> {
         Objects::object(self, guid)
+    }
+
+    fn countdowns(&self, guid: u64) -> Option<&crate::items::Countdowns> {
+        Objects::countdowns(self, guid)
     }
 }
 
@@ -1032,10 +1041,8 @@ impl Plugin for UiItemsPlugin {
             .add_systems(
                 Update,
                 (
-                    // The dead objects' locks, ahead of the doll's feed.
-                    crate::ui_items::locks::forget_gone_item_locks
-                        .in_set(crate::ui_script::UiFeed)
-                        .before(crate::ui_char::feed_char),
+                    // The dead objects' locks.
+                    crate::ui_items::locks::forget_gone_item_locks.in_set(crate::ui_script::UiFeed),
                     // The item-tooltip store answers in the feed, so the next frame's input
                     // records, a re-hover among them, see the answer, and seats a new VM before its world entry.
                     feed_item_stats.in_set(UnitFeed),

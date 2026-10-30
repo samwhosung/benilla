@@ -178,11 +178,22 @@ pub(super) fn owned_instance(
             .find(held_copy)
             .map(|s| slot_instance(s, false))
     };
+    // The worn slots now, by live id (`0x6228a0`): the doll's keys, and a slot's view read once,
+    // only where its item is this one.
+    let keys = crate::script::worn::worn_keys(lua, model);
+    let views: [std::cell::OnceCell<Option<crate::script::InvSlotView>>;
+        crate::script::INVENTORY_SLOT_COUNT] = Default::default();
+    let worn_view = |i: usize| -> Option<&crate::script::InvSlotView> {
+        keys.get(i)
+            .copied()
+            .flatten()
+            .filter(|&(_, id)| id == item_id)?;
+        views[i]
+            .get_or_init(|| crate::script::worn::worn_slot(lua, model, i))
+            .as_ref()
+    };
     let worn = |i: usize| {
-        model
-            .inventory_slots
-            .get(i)
-            .and_then(Option::as_ref)
+        worn_view(i)
             .filter(worn_copy)
             .map(|s| worn_instance(s, true))
     };
@@ -199,7 +210,7 @@ pub(super) fn owned_instance(
     if !summed {
         return Some(found);
     }
-    let worn_charges = model.inventory_slots.iter().skip(1).take(23).flatten();
+    let worn_charges = (1..crate::script::INVENTORY_SLOT_COUNT).filter_map(worn_view);
     let held_charges = bags
         .iter()
         .filter(|(b, _, _)| (0..=4).contains(b) || *b == super::char_stats::KEYRING_CONTAINER)

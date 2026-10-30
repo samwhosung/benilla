@@ -1014,16 +1014,17 @@ fn canceled_and_code_13_signal_the_purse_ahead_of_the_dispatcher() {
 }
 
 /// The open leg's item path asks for the held item's guid and its source container's
-/// (`0x4bf667`, `0x4bf674`): an item from bag 1 with no bag known in inventory slot 20 leaves the
-/// cursor and the offer alone, and the world click asks no trade for it; with the bag seated
-/// both go on. The bag is in the world either way; the doll's slot holds it only when seated.
+/// (`0x4bf667`, `0x4bf674`), the bag slot read at the call: an item from bag 1 whose bag has left
+/// inventory slot 20 since the pickup leaves the cursor and the offer alone, and the world click
+/// asks no trade for it; with the bag still seated both go on.
 #[test]
 fn the_open_leg_takes_no_item_whose_bag_has_no_guid() {
+    use benilla_protocol::field::{FIELD_CONTAINER_SLOT_1, FIELD_PLAYER_INV_SLOT_HEAD};
+    const BAG: u64 = 0x4000_0000_0000_0b01;
+    let seat = FIELD_PLAYER_INV_SLOT_HEAD + 2 * 19;
     for seated in [false, true] {
         let mut t = client();
         {
-            use benilla_protocol::field::{FIELD_CONTAINER_SLOT_1, FIELD_PLAYER_INV_SLOT_HEAD};
-            const BAG: u64 = 0x4000_0000_0000_0b01;
             let world = t.app.world_mut();
             crate::items::test_spawn_item(
                 world,
@@ -1039,7 +1040,6 @@ fn the_open_leg_takes_no_item_whose_bag_has_no_guid() {
                 true,
             );
             let me = world.resource::<crate::net::GuidIndex>().0[&ME];
-            let seat = FIELD_PLAYER_INV_SLOT_HEAD + 2 * 19;
             world
                 .get_mut::<crate::net::ObjectStore>(me)
                 .expect("our store")
@@ -1051,19 +1051,16 @@ fn the_open_leg_takes_no_item_whose_bag_has_no_guid() {
                     (seat + 1, (BAG >> 32) as u32),
                 ]));
         }
-        with_hosted_vm(t.app.world_mut(), |vm| {
-            let vm = vm.expect("a VM");
-            if seated {
-                let mut slots: benilla_ui::script::InventorySlots = Default::default();
-                slots[20] = Some(benilla_ui::script::InvSlotView {
-                    item_id: 4496,
-                    guid: 0x4000_0000_0000_0b01,
-                    ..Default::default()
-                });
-                vm.set_inventory_slots(slots);
-            }
-        });
         run(&mut t, "PickupContainerItem(1, 1)");
+        if !seated {
+            let world = t.app.world_mut();
+            let me = world.resource::<crate::net::GuidIndex>().0[&ME];
+            world
+                .get_mut::<crate::net::ObjectStore>(me)
+                .expect("our store")
+                .0
+                .merge(ObjectFields::from_pairs(&[(seat, 0), (seat + 1, 0)]));
+        }
         // The world click's trade leg asks the same of the payload (`0x49264d`).
         click_on(&mut t, BOB);
         assert_eq!(

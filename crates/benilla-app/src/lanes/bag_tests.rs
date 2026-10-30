@@ -603,12 +603,8 @@ fn a_bag_updates_listener_reads_the_seat_its_packet_left() {
 /// logout runs it: `SMSG_LOGOUT_COMPLETE` and the disconnect through the handler table, which
 /// free the objects, then the session's end, whose shutdown signals the event with the host lent.
 fn before_and_at_logout(app: &mut App, expr: &str) -> (String, String) {
-    use bevy::ecs::system::RunSystemOnce;
     use std::cell::RefCell;
     use std::rc::Rc;
-    app.world_mut()
-        .run_system_once(crate::ui_char::feed_char)
-        .unwrap();
     let before: String = hosted_eval(app, &format!("return {expr}"));
     let seen: Rc<RefCell<Vec<String>>> = Rc::default();
     let sink = seen.clone();

@@ -47,9 +47,6 @@ mod reference_ui;
 /// What the host remembers per VM, so a seed or change-memo never outlives the VM it was for.
 mod session;
 
-/// The feed gate: a UI feed's input-side early-out, audited by `WOW_FEED_GATE_CHECK=1`.
-pub(crate) mod gate;
-
 pub(crate) use session::{VmMemo, WindowMemo};
 
 // Not test-only: the addon harness loads the whole shipped interface under each addon.

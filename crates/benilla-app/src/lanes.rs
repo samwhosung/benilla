@@ -596,6 +596,8 @@ mod quest_log_live_tests;
 #[cfg(test)]
 mod quiet_tests;
 #[cfg(test)]
+mod raw_store_tests;
+#[cfg(test)]
 mod record_callback_tests;
 #[cfg(test)]
 mod reputation_live_tests;
@@ -642,6 +644,8 @@ mod unit_view_tests;
 
 #[cfg(test)]
 mod world_map_update_tests;
+#[cfg(test)]
+mod worn_live_tests;
 
 #[cfg(test)]
 mod unit_tests {

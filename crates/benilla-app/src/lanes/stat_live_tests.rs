@@ -425,8 +425,10 @@ fn client() -> Client {
 #[test]
 fn every_stat_getter_answers_the_same_live_as_off_the_snapshot() {
     let mut c = client();
-    // The four tokens' copies, which no feed pushes in game, seated for the host-less answer.
+    // The four tokens' copies and the doll's, which no feed pushes in game, seated for the
+    // host-less answer.
     crate::ui_unit::seat_tokens_once(c.app.world_mut());
+    crate::ui_char::seat_doll_once(c.app.world_mut());
     let snapshot = c.answers(false);
     let live = c.answers(true);
     let unseated = |l: &String| l.starts_with("pet ");

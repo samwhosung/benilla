@@ -342,9 +342,6 @@ pub(super) const READS_FRAME_FINAL: &[(&str, &[&str])] = &[
         // `SetCVar` moves it inside its call, and the build reads it as the frame left it.
         "video::Widescreen"]),
 
-    // The ammo getters' hits fire after the push that carries their record, whenever it runs.
-    ("::ui_char::feed_char", &["items::Countdowns", "items::Items", "names::NameCache",
-        "net::GuidIndex", "net::ObjectStore", "ui_char::AmmoRecordHits"]),
     // The account-data readers (#2448): each reruns off the sections a download stored through
     // `&self`, read as the frame left them, where the reference runs each inside the settle that
     // its section's digest or download handler makes (`0x5afaca`, `0x5afd19`): the bindings
@@ -2004,10 +2001,11 @@ pub(super) const LANE_READS_FRAME_FINAL: &[(&str, &[&str])] = &[
     // (`0x4a67a0`) reads the guard-directions marker and the world states.
     ("field notices", &["net::GuidIndex", "net::ObjectStore", "poi_marker::PoiMarker",
         "ui_trainer::TrainerOpen", "world_state::WorldStates"]),
-    // The views lane rewinds the stores, records and roster cells as of each packet for the
-    // tokens' live reads; it reads the index and the selection as the frame left them (#2217).
-    ("unit views", &["net::GuidIndex", "net::ObjectStore", "target::Selection",
-        "ui_party::GroupState", "ui_session::latch::InteractLatch"]),
+    // The views lane rewinds the stores, records, roster cells and item countdown cells as of
+    // each packet for the getters' live reads, from the live ones; it reads the index, the
+    // selection and the interaction latch as the frame left them (#2217).
+    ("unit views", &["items::Countdowns", "net::GuidIndex", "net::ObjectStore",
+        "target::Selection", "ui_party::GroupState", "ui_session::latch::InteractLatch"]),
     ("cast reports", &["items::Items", "net::ObjectStore"]),
     ("item watchers", &["items::Countdowns", "items::Items", "names::NameCache", "net::GuidIndex",
         "net::ObjectStore", "ui_trade::TradeSession"]),
@@ -2154,6 +2152,92 @@ fn every_lane_reads_of_what_a_handler_writes_is_listed() {
         "these lanes' firings read state a handler writes as the frame left it: version it, or \
          give each its row in LANE_READS_FRAME_FINAL as it stands:\n  {}",
         wrong.join("\n  ")
+    );
+}
+
+/// The handler-written components the call host's getters read as the views lane serves them:
+/// an object's store and an item's countdown cells, rewound to the drain's place for the getters
+/// that read through [`crate::ui_unit::views::ViewStores`], so a listener reads its own packet's.
+/// The exemption is by component: a getter's store read that skips the views is
+/// `raw_store_tests`'s row.
+const VERSIONED_BY_THE_VIEWS: &[&str] = &["items::Countdowns", "net::ObjectStore"];
+
+/// The components a packet's handler writes that the call host reads and the views lane does not
+/// version, past the handlers that lend the host, whose access names the host's own: a
+/// getter fired on an earlier packet's lane reads each as the frame's last packet left it, where
+/// the reference reads the object live inside its packet. [`LANE_READS_FRAME_FINAL`] sets the
+/// host's reads apart, as every firing that lends it shows them all; this holds the host's own to
+/// its access, for the state a packet writes on one object and a getter reads off it by guid. The
+/// host's handler-written resources are not held here. The list only shrinks: a component goes
+/// once the views version it ([`VERSIONED_BY_THE_VIEWS`]), and the rest at the flip.
+#[rustfmt::skip]
+pub(super) const HOST_READS_FRAME_FINAL: &[&str] = &[
+    "Transform", "entities::equipment::WornPins", "go_anim::GoAnim", "net::UnitSpeeds",
+    "net::motion::modes::UnitMoveModes", "net::motion::remote::RemoteMotion",
+];
+
+/// Every component a handler writes that the call host reads is versioned by the views
+/// ([`VERSIONED_BY_THE_VIEWS`]) or listed in [`HOST_READS_FRAME_FINAL`], so a getter's read of
+/// one off an object as the frame left it is counted, as a lane's own read is.
+#[test]
+fn every_component_the_host_reads_of_what_a_handler_writes_is_versioned_or_listed() {
+    use bevy::ecs::query::ComponentAccessKind;
+    let mut app = headless_client();
+    // A handler that lends the host holds all the host holds, so its access names the host's
+    // state, not what its packet writes ([`filled_apart_from_the_host`]).
+    let host_writes: Vec<ComponentId> = call_host_access(app.world_mut())
+        .resource_writes()
+        .collect();
+    let written: BTreeSet<ComponentId> = {
+        let handlers = app.world().resource::<crate::net::handlers::NetHandlers>();
+        handlers
+            .accesses()
+            .iter()
+            .map(|(_, a)| a.combined_access())
+            .filter(|a| !host_writes.iter().all(|&id| a.has_resource_write(id)))
+            .filter_map(|a| a.try_iter_component_access().ok())
+            .flat_map(|kinds| {
+                kinds
+                    .filter_map(|k| match k {
+                        ComponentAccessKind::Exclusive(id) => Some(id),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    };
+    let world = app.world_mut();
+    let host = call_host_access(world);
+    let read: BTreeSet<String> = written
+        .iter()
+        .filter(|&&id| host.has_component_read(id))
+        .map(|&id| short_name(&name(world, id)))
+        .collect();
+    if !read.iter().any(|n| n.contains("::")) {
+        eprintln!("skipped: this build carries no type names");
+        return;
+    }
+    let versioned: BTreeSet<String> = VERSIONED_BY_THE_VIEWS
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let listed: BTreeSet<String> = HOST_READS_FRAME_FINAL
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let unread: Vec<&String> = versioned.difference(&read).collect();
+    assert!(
+        unread.is_empty(),
+        "versioned but no longer read by the host: {unread:?}"
+    );
+    let frame_final: BTreeSet<String> = read.difference(&versioned).cloned().collect();
+    let rows: Vec<String> = frame_final.iter().map(|n| format!("{n:?}")).collect();
+    assert_eq!(
+        frame_final,
+        listed,
+        "the call host reads these handler-written components as the frame left them: version \
+         each in the views, or list it in HOST_READS_FRAME_FINAL as it stands:\n  &[{}]",
+        rows.join(", ")
     );
 }
 

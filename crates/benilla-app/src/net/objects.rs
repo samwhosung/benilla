@@ -378,7 +378,15 @@ fn run_record_callback(
                 &sc.bag_cache,
             );
             if run.notice.is_some() {
-                replay_enchant_times(&mut sc.items, &mut sc.countdowns, &sc.index, guid);
+                replay_enchant_times(
+                    &mut sc.items,
+                    &mut sc.countdowns,
+                    &sc.index,
+                    &mut sc.view_log,
+                    guid,
+                );
+                // Its entry sorts ahead of its own notice and behind the set-ups before it.
+                sc.view_log.close();
             }
             sc.item_lane.push(run);
         }
@@ -520,6 +528,7 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
             match sc.index.0.get(&item_guid).copied() {
                 Some(e) if sc.countdowns.contains(e) => {
                     if let Ok(mut c) = sc.countdowns.get_mut(e) {
+                        sc.view_log.countdowns(item_guid, Some(c.clone()));
                         c.set_lifetime(seconds);
                     }
                     debug!("item duration: item {item_guid:#x} → {seconds}s");
@@ -534,6 +543,7 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
         } => match sc.index.0.get(&item_guid).copied() {
             Some(e) if sc.countdowns.contains(e) => {
                 if let Ok(mut c) = sc.countdowns.get_mut(e) {
+                    sc.view_log.countdowns(item_guid, Some(c.clone()));
                     if c.set_enchant(slot, seconds) {
                         debug!("enchant timer: item {item_guid:#x} slot {slot} → {seconds}s");
                     } else {
@@ -551,6 +561,7 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
         },
         _ => {}
     }
+    sc.view_log.close();
 }
 
 /// `CGItem_C::ApplyRecord`'s replay (`0x5ebde0` at `0x5d85b7`): the enchant times queued on the
@@ -562,12 +573,16 @@ fn replay_enchant_times(
     items: &mut Items,
     countdowns: &mut Query<&mut crate::items::Countdowns>,
     index: &GuidIndex,
+    view_log: &mut crate::ui_unit::views::ViewLog,
     guid: u64,
 ) {
     let queued = items.take_enchant_times(guid);
     let Some(mut cells) = index.0.get(&guid).and_then(|&e| countdowns.get_mut(e).ok()) else {
         return;
     };
+    if !queued.is_empty() {
+        view_log.countdowns(guid, Some(cells.clone()));
+    }
     for (slot, seconds) in queued {
         if !cells.set_enchant(slot, seconds) {
             debug!("enchant timer: queued slot {slot} for {guid:#x} is past the seventh — refused");

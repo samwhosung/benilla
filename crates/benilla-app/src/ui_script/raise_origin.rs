@@ -71,6 +71,12 @@ pub(crate) const RAISES_AT_THEIR_OWN_PLACE: &[Allow] = &[
         why: "QUEUED_FOR_THE_TICK: a capture's fixture",
     },
     Allow {
+        frame: "capture::fixtures::open_character_fixture",
+        why: "a capture's fixture, dev tooling outside any session: the character window's open \
+              stands in for a login's items' creates, whose set-up signals \
+              `UNIT_INVENTORY_CHANGED` in place (`0x5d8606`)",
+    },
+    Allow {
         frame: "ui_world_map::feed_world_map",
         why: "QUEUED_FOR_THE_TICK: the first world enter's selection",
     },

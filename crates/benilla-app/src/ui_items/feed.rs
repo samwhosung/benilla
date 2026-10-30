@@ -8,7 +8,7 @@ use benilla_ui::script::{ContainerSlot, ItemRead, UiScript};
 
 use crate::entities::ItemDisplays;
 use crate::items::Items;
-use crate::net::{NetCommands, ObjectStore, Objects, SelfPlayer};
+use crate::net::{NetCommands, ObjectStore, SelfPlayer};
 use crate::query_cache::Ask;
 
 use super::find_equip_slot;
@@ -760,7 +760,6 @@ type CasterReads<'w, 's> = (
 pub(super) fn resolve_slot(
     guid: u64,
     held: &(impl super::ItemObjects + ?Sized),
-    objects: &Objects,
     items: &Items,
     icons: Option<&ItemDisplays>,
     rolls: crate::items::RollCatalogs,
@@ -775,7 +774,7 @@ pub(super) fn resolve_slot(
         return None;
     }
     // The enchant and lifetime (`SMSG_ITEM_TIME_UPDATE`) countdowns, in whole seconds.
-    let countdowns = objects.countdowns(guid);
+    let countdowns = held.countdowns(guid);
     let enchant_ms: [Option<u64>; crate::items::ENCHANT_SLOTS] =
         std::array::from_fn(|s| countdowns.and_then(|c| c.enchant_remaining_display_ms(s as u32)));
     let duration_ms = countdowns.and_then(|c| c.lifetime_remaining_display_ms());
@@ -1322,7 +1321,6 @@ mod tests {
             resolve_slot(
                 guid,
                 &o,
-                &o,
                 &items,
                 None,
                 RollCatalogs::NONE,
@@ -1382,7 +1380,6 @@ mod tests {
             let o = objs.get();
             resolve_slot(
                 0xC1,
-                &o,
                 &o,
                 &items,
                 None,
@@ -1445,7 +1442,6 @@ mod tests {
                 resolve_slot(
                     guid,
                     &o,
-                    &o,
                     &items,
                     None,
                     RollCatalogs::NONE,
@@ -1502,7 +1498,6 @@ mod tests {
                 let o = objs.get();
                 resolve_slot(
                     guid,
-                    &o,
                     &o,
                     &items,
                     None,
@@ -1565,7 +1560,6 @@ mod tests {
                 let o = objs.get();
                 resolve_slot(
                     guid,
-                    &o,
                     &o,
                     &items,
                     None,
@@ -1702,7 +1696,6 @@ mod tests {
                 let o = objs.get();
                 resolve_slot(
                     guid,
-                    &o,
                     &o,
                     &items,
                     None,

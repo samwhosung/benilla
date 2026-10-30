@@ -15,8 +15,6 @@ const BG_ENV_PREFIXES: &[&str] = &[
     "WOW_CAPTURE",
     "WOW_CREATE_TEST",
     "WOW_DEPTH",
-    "WOW_FEED_GATE_CHECK",
-    "WOW_FEED_GATE_TRACE",
     "WOW_FPS_",
     "WOW_GLUE_ROUNDTRIP",
     "WOW_LIVE_",
@@ -58,8 +56,6 @@ const NO_PIXEL_ENV_PREFIXES: &[&str] = &[
     // In both lists: unattended runs pair it with a no-pixel `WOW_PROBE*` or `WOW_RIG`, which the
     // all-of rule would otherwise grow back to full size. A run that photographs names itself.
     "WOW_UNATTENDED",
-    "WOW_FEED_GATE_CHECK",
-    "WOW_FEED_GATE_TRACE",
     "WOW_FPS_",
     "WOW_LIVE_FPS",
     "WOW_PARTICLE_CENSUS",

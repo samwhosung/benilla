@@ -35,6 +35,46 @@ fn vm(app: &mut App) -> Mut<'_, UiScript> {
 /// The active player's guid, which the ammo and cooldown lookups pass as their owner id.
 const ME: u64 = 0x2a;
 
+/// `PLAYER_AMMO_ID`.
+const AMMO_ID: u16 = 1223;
+
+/// [`seat_player`] with arrows as its ammo, `PLAYER_AMMO_ID`, and 200 of them carried in the
+/// backpack's first seat: the slot the ammo getters read at the call, and the count their asks
+/// wait on (`0x4c83a0`).
+fn seat_ammo(app: &mut App) {
+    use benilla_protocol::field::{
+        FIELD_ITEM_STACK_COUNT, FIELD_OBJECT_ENTRY, FIELD_PLAYER_INV_SLOT_HEAD,
+    };
+    const ARROWS: u64 = 0x4000_0000_0000_0061;
+    let seat = FIELD_PLAYER_INV_SLOT_HEAD + 2 * 23;
+    seat_player_with(
+        app,
+        &[
+            (AMMO_ID, 2512),
+            (seat, ARROWS as u32),
+            (seat + 1, (ARROWS >> 32) as u32),
+        ],
+    );
+    let world = app.world_mut();
+    let arrows = world
+        .spawn((
+            crate::net::Guid(ARROWS),
+            crate::net::ObjectStore(
+                benilla_protocol::ObjectFields::from_pairs(&[
+                    (2, 0x3),
+                    (FIELD_OBJECT_ENTRY, 2512),
+                    (FIELD_ITEM_STACK_COUNT, 200),
+                ])
+                .into_created(benilla_protocol::messages::ObjectType::Item),
+            ),
+        ))
+        .id();
+    world
+        .resource_mut::<crate::net::GuidIndex>()
+        .0
+        .insert(ARROWS, arrows);
+}
+
 /// The active player: its object, which the inventory getters find held (`0x4944af`), and the
 /// VM's guid, as the unit feeds seat it.
 fn seat_player(app: &mut App) {
@@ -364,14 +404,7 @@ fn a_battlefield_position_asks_a_missed_name_inside_its_call() {
 #[test]
 fn the_ammo_getters_ask_a_missed_record_inside_their_calls() {
     let (mut app, rx) = client();
-    let mut slots: benilla_ui::script::InventorySlots = Default::default();
-    slots[0] = Some(benilla_ui::script::InvSlotView {
-        item_id: 2512,
-        count: 200,
-        ..Default::default()
-    });
-    vm(&mut app).set_inventory_slots(slots);
-    seat_player(&mut app);
+    seat_ammo(&mut app);
     eval::<()>(
         &mut app,
         r#"GetInventoryItemTexture("player", 0) RandomRoll(1, 2)
@@ -393,14 +426,7 @@ fn the_ammo_getters_ask_a_missed_record_inside_their_calls() {
 #[test]
 fn the_ammo_getters_query_body_is_byte_exact() {
     let (mut app, rx) = client();
-    let mut slots: benilla_ui::script::InventorySlots = Default::default();
-    slots[0] = Some(benilla_ui::script::InvSlotView {
-        item_id: 2512,
-        count: 200,
-        ..Default::default()
-    });
-    vm(&mut app).set_inventory_slots(slots);
-    seat_player(&mut app);
+    seat_ammo(&mut app);
     eval::<()>(&mut app, r#"GetInventoryItemTexture("player", 0)"#);
     let bodies: Vec<Vec<u8>> = rx
         .try_iter()
@@ -423,12 +449,13 @@ fn the_cooldown_queries_ask_a_missed_record_inside_their_calls() {
     use benilla_protocol::field::{
         FIELD_ITEM_STACK_COUNT, FIELD_OBJECT_ENTRY, FIELD_PLAYER_INV_SLOT_HEAD,
     };
-    use benilla_ui::script::{InvSlotView, InventorySlots};
     let (mut app, rx) = client();
-    // The backpack's first two seats, 23 and 24, hold the two items whose records are missing.
+    // The backpack's first two seats, 23 and 24, and the hands, 13 (live id 14), hold the three
+    // items whose records are missing.
     let held = [
         (23, 0x4000_0000_0000_0051_u64, 6948),
         (24, 0x4000_0000_0000_0052, 5976),
+        (13, 0x4000_0000_0000_0053, 2589),
     ];
     let half = |lo: u16, guid: u64| [(lo, guid as u32), (lo + 1, (guid >> 32) as u32)];
     let seats: Vec<(u16, u32)> = held
@@ -460,12 +487,6 @@ fn the_cooldown_queries_ask_a_missed_record_inside_their_calls() {
             .0
             .insert(guid, item);
     }
-    let mut worn: InventorySlots = Default::default();
-    worn[14] = Some(InvSlotView {
-        item_id: 2589,
-        ..Default::default()
-    });
-    vm(&mut app).set_inventory_slots(worn);
     eval::<()>(
         &mut app,
         r#"local tip = CreateFrame("GameTooltip", "AskTip")

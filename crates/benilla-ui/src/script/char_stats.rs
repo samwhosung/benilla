@@ -1,7 +1,7 @@
-//! The paper doll's data feed: the stat and equipment-slot globals. The stat getters read the
+//! The paper doll's globals: the stat and equipment-slot getters. The stat getters read the
 //! unit's object as the call runs, through the lent host ([`super::stat_read`]), and with no host
-//! to ask, the combat-stats snapshots the app pushes for the active player and with each unit; the
-//! slot getters read the inventory-slot snapshot and its items live ([`super::item_read`]).
+//! to ask, the combat-stats copies a harness seats; the slot getters read the player's slot and
+//! its item as the call runs ([`super::worn`], [`super::item_read`]).
 //!
 //! As in the reference, the pet sheet calls the same `PaperDollFrame_Set*` helpers with `"pet"`
 //! (`PetPaperDollFrame.lua:75-81`). Any other token, or a snapshot not yet pushed, serves the
@@ -140,7 +140,7 @@ pub struct InvSlotView {
     pub field_duration: u32,
 }
 
-/// The doll snapshot: 0 ammo, 1..=19 equipment, 20..=23 the equipped bags, as
+/// The doll by live id: 0 ammo, 1..=19 equipment, 20..=23 the equipped bags, as
 /// `GetInventorySlotInfo` numbers them; `None` is an empty slot.
 pub const INVENTORY_SLOT_COUNT: usize = 24;
 pub type InventorySlots = [Option<InvSlotView>; INVENTORY_SLOT_COUNT];
@@ -357,7 +357,7 @@ pub(super) fn recompute_inventory_alerts_in_verb(lua: &Lua) {
 }
 
 impl super::UiScript {
-    /// Push, or clear with `None`, the player's combat-stats snapshot.
+    /// Seat, or clear with `None`, the player's combat-stats copy a getter with no host reads.
     pub fn set_player_combat_stats(&mut self, stats: Option<UnitCombatStats>) {
         self.model_mut().player_combat_stats = stats;
     }
@@ -371,8 +371,8 @@ impl super::UiScript {
         })
     }
 
-    /// Push the doll snapshot. The alert statuses are the recompute's alone
-    /// ([`Self::recompute_inventory_alerts`]).
+    /// Seat the doll's copy a getter with no host reads ([`super::worn`]). The alert statuses are
+    /// the recompute's alone ([`Self::recompute_inventory_alerts`]).
     pub fn set_inventory_slots(&mut self, slots: InventorySlots) {
         self.model_mut().inventory_slots = slots;
     }
@@ -391,8 +391,7 @@ impl super::UiScript {
         self.fire_event("UPDATE_INVENTORY_ALERTS", vec![]);
     }
 
-    /// Push the six bank-bag slots. The caller fires `PLAYERBANKSLOTS_CHANGED` for a changed item:
-    /// the stock bank buttons repaint only on it and `BANKFRAME_OPENED` (`BankFrame.lua:206-212`).
+    /// Seat the six bank-bag slots' copy a getter with no host reads ([`super::worn`]).
     pub fn set_bank_bag_slots(&mut self, slots: BankBagSlots) {
         self.model_mut().bank_bag_slots = slots;
     }
@@ -694,13 +693,9 @@ pub(crate) fn player_slot_object(lua: &Lua, model: &Model, slot: usize) -> Optio
     if BANK_INV_SLOTS.contains(&slot) || KEYRING_INV_SLOTS.contains(&slot) {
         return None;
     }
-    if BANK_BAG_INV_SLOTS.contains(&slot) {
-        // A bank bag is a container, not a slot in one, so this band is its own store; stock
-        // picks it up and describes it through this API.
-        let i = slot - BANK_BAG_INV_SLOTS.start();
-        return model.bank_bag_slots.get(i)?.clone();
-    }
-    model.inventory_slots.get(slot)?.clone()
+    // The doll, the equipped bags and the bank bags, each a bag item and not a slot in one, which
+    // stock picks up and describes through this API.
+    super::worn::worn_slot(lua, model, slot)
 }
 
 /// The bag-slot item object behind the player's live id `slot` in the vault and keyring bands,
@@ -1414,7 +1409,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             }
             let (held, snapshot_class) = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                let held = model.inventory_slots[17].clone().filter(|v| v.item_id != 0);
+                // The off hand's object at the call (`0x6228a0`).
+                let held = super::worn::worn_slot(lua, &model, 17).filter(|v| v.item_id != 0);
                 let class = held
                     .as_ref()
                     .and_then(|v| model.item_templates.get(&v.item_id))

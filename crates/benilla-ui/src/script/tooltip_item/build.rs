@@ -126,15 +126,18 @@ fn name_of(lua: &Lua, model: &Model, guid: u64) -> Option<String> {
     let held = bags.filter_map(|s| {
         of(s.creator_guid, &s.creator).or_else(|| of(s.gift_creator_guid, &s.gift_creator))
     });
-    // Our own worn items, and the inspected players', whose maker is the visible block's creator.
-    let worn = model
-        .inventory_slots
-        .iter()
-        .chain(model.visible_equipment.values().flat_map(|v| v.iter()))
+    // Our own worn items, each read as the walk reaches it, and the inspected players', whose
+    // maker is the visible block's creator.
+    let maker = |s: &crate::script::InvSlotView| {
+        of(s.creator_guid, &s.creator).or_else(|| of(s.gift_creator_guid, &s.gift_creator))
+    };
+    let own = crate::script::worn::worn_iter(lua, model).filter_map(|s| maker(&s));
+    let inspected = model
+        .visible_equipment
+        .values()
         .flatten()
-        .filter_map(|s| {
-            of(s.creator_guid, &s.creator).or_else(|| of(s.gift_creator_guid, &s.gift_creator))
-        });
+        .flatten()
+        .filter_map(maker);
     let traded = model
         .trade
         .iter()
@@ -143,7 +146,7 @@ fn name_of(lua: &Lua, model: &Model, guid: u64) -> Option<String> {
         .filter_map(|s| {
             of(s.creator_guid, &s.creator).or_else(|| of(s.gift_creator_guid, &s.gift_creator))
         });
-    held.chain(worn).chain(traded).next()
+    held.chain(own).chain(inspected).chain(traded).next()
 }
 
 /// The bag slot that holds the item object `guid` now, wherever it moved; none for guid 0.
@@ -176,20 +179,19 @@ pub(super) fn live_object(lua: &Lua, model: &Model, guid: u64) -> Option<HeldObj
             inst: super::slot_instance(&s, true),
         });
     }
-    model
-        .inventory_slots
+    // The worn slot that holds it now (`0x6228a0`), found by the doll's keys and read alone.
+    let slot = crate::script::worn::worn_keys(lua, model)
         .iter()
-        .flatten()
-        .find(|s| guid != 0 && s.guid == guid)
-        .map(|s| HeldObject {
-            item_id: s.item_id,
-            quality: u32::try_from(s.quality).ok(),
-            count: s.count.max(1),
-            inst: ItemInstance {
-                openable_source: true,
-                ..super::worn_instance(s, true)
-            },
-        })
+        .position(|k| guid != 0 && k.is_some_and(|(g, _)| g == guid))?;
+    crate::script::worn::worn_slot(lua, model, slot).map(|s| HeldObject {
+        item_id: s.item_id,
+        quality: u32::try_from(s.quality).ok(),
+        count: s.count.max(1),
+        inst: ItemInstance {
+            openable_source: true,
+            ..super::worn_instance(&s, true)
+        },
+    })
 }
 
 impl ItemBuild {

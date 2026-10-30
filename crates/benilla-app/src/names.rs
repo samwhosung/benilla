@@ -20,7 +20,7 @@ use benilla_protocol::guid;
 use benilla_protocol::messages::ObjectFields;
 
 use crate::net::{ClientCommand, NetCommands, ObjectStore, Objects};
-use crate::query_cache::{Ask, QueryCache, Refused};
+use crate::query_cache::{Ask, QueryCache};
 
 mod live;
 pub(crate) use live::NameLive;
@@ -67,9 +67,6 @@ pub(crate) struct NameCache {
     creatures: QueryCache<u32, CreatureRecord>,
     /// No negative entry: the server answers for a live pet or says nothing.
     pets: QueryCache<u32, String>,
-    /// Bumped by every landed answer, a refusal that took a record away and the pet-rename
-    /// eviction, never by an ask: the gated feeds re-run when it moves.
-    generation: u64,
 }
 
 /// One cached creature template head.
@@ -287,16 +284,10 @@ impl NameCache {
             Some(t) => self.player_traits.insert(guid, t),
             None => self.player_traits.remove(&guid),
         };
-        // A refusal redisplays only a name it took away: the status-0 callback `0x5fb840` does
-        // nothing (`0x5fb84b`).
-        let moved = if name.is_empty() {
-            self.players.refuse(guid) == Refused::Record
+        if name.is_empty() {
+            self.players.refuse(guid);
         } else {
             self.players.insert(guid, name);
-            true
-        };
-        if moved {
-            self.generation = self.generation.wrapping_add(1);
         }
     }
 
@@ -308,7 +299,6 @@ impl NameCache {
         self.players.clear();
         self.player_traits.clear();
         self.pets.clear();
-        self.generation = self.generation.wrapping_add(1);
     }
 
     /// The creature-template store, the one [`crate::wdb`] saves.
@@ -320,11 +310,6 @@ impl NameCache {
         &mut self.creatures
     }
 
-    /// The landed-answer counter.
-    pub(crate) fn generation(&self) -> u64 {
-        self.generation
-    }
-
     /// `(race, class, gender)` for a player guid the name query has answered for.
     pub(crate) fn player_traits(&self, guid: u64) -> Option<(u8, u8, u8)> {
         self.player_traits.get(&guid).copied()
@@ -333,29 +318,21 @@ impl NameCache {
     /// Record a pet-name answer, keyed by pet number.
     pub(crate) fn insert_pet(&mut self, pet_number: u32, name: String) {
         self.pets.insert(pet_number, name);
-        self.generation = self.generation.wrapping_add(1);
     }
 
     /// Forget a pet's name and its in-flight mark so the next resolve asks again: a rename
     /// arrives only as a bumped `UNIT_FIELD_PET_NAME_TIMESTAMP`, never as the name.
     pub(crate) fn forget_pet(&mut self, pet_number: u32) {
         self.pets.evict(pet_number);
-        self.generation = self.generation.wrapping_add(1);
     }
 
     /// Record a creature-name answer; `None` is a refusal (an entry the server flagged unknown).
-    /// A refusal redisplays only a record it took away: the status-0 callback `0x604660` finds
-    /// no record and sets nothing (`0x60469c`).
     pub(crate) fn insert_creature(&mut self, entry: u32, record: Option<CreatureRecord>) {
-        let moved = match record {
-            Some(record) => {
-                self.creatures.insert(entry, record);
-                true
+        match record {
+            Some(record) => self.creatures.insert(entry, record),
+            None => {
+                self.creatures.refuse(entry);
             }
-            None => self.creatures.refuse(entry) == Refused::Record,
-        };
-        if moved {
-            self.generation = self.generation.wrapping_add(1);
         }
     }
 
@@ -398,7 +375,6 @@ impl NameCache {
     pub(crate) fn invalidate_player(&mut self, guid: u64) {
         self.players.evict(guid);
         self.player_traits.remove(&guid);
-        self.generation = self.generation.wrapping_add(1);
     }
 }
 
@@ -849,42 +825,6 @@ mod tests {
         (NetCommands(tx), rx)
     }
 
-    /// An ask must not move the counter, or an outstanding query would hold every gated feed open.
-    #[test]
-    fn the_generation_counts_landings_never_asks() {
-        let (cmds, _rx) = commands();
-        let mut cache = NameCache::default();
-        let g0 = cache.generation();
-
-        let player = compose(0, 0, 7);
-        assert_eq!(cache.resolve_unit(player, None, Ask::New(&cmds)), None);
-        assert_eq!(
-            cache.generation(),
-            g0,
-            "the miss asked, and asking is not a landing"
-        );
-
-        cache.insert_player(player, "Benilla".into(), None);
-        let landed = cache.generation();
-        assert_ne!(g0, landed, "the answer landing is the edge");
-
-        assert_eq!(
-            cache.resolve_unit(player, None, Ask::New(&cmds)),
-            Some("Benilla")
-        );
-        assert_eq!(cache.generation(), landed, "a cache hit moves nothing");
-
-        cache.insert_pet(137, "Voidwalker".into());
-        let pet = cache.generation();
-        assert_ne!(landed, pet);
-        cache.forget_pet(137);
-        assert_ne!(
-            pet,
-            cache.generation(),
-            "the rename eviction is a landing-shaped edge"
-        );
-    }
-
     /// A summoned pet asks `CMSG_PET_NAME_QUERY` by the pet number in its guid; its entry slot
     /// names no creature template.
     #[test]
@@ -988,12 +928,7 @@ mod tests {
         );
         assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)), "no ask");
 
-        let before = cache.generation();
         cache.invalidate_player(0x11);
-        assert!(
-            cache.generation() != before,
-            "an eviction is a landed change"
-        );
         assert_eq!(
             cache.player_traits(0x11),
             None,
@@ -1059,16 +994,10 @@ mod tests {
             rx.try_recv(),
             Ok(ClientCommand::NameQuery { guid }) if guid == g
         ));
-        let before = cache.generation();
         cache.insert_player(g, String::new(), None); // server: unknown guid
         assert!(
             cache.players.answered_unknown(g),
             "the waiters read unknown"
-        );
-        assert_eq!(
-            cache.generation(),
-            before,
-            "nothing redisplays: `0x5fb840` ignores status 0"
         );
         assert_eq!(cache.resolve_unit(g, None, Ask::New(&cmds)), None);
         assert!(
@@ -1133,21 +1062,17 @@ mod tests {
     #[test]
     fn a_refusal_nobody_asked_for_marks_nothing() {
         let mut cache = NameCache::default();
-        let before = cache.generation();
         cache.insert_creature(4321, None);
         assert!(!cache.creatures.answered_unknown(4321));
-        assert_eq!(cache.generation(), before);
     }
 
-    /// `0x556f35` frees a valid node too, and what the readers showed changes.
+    /// `0x556f35` frees a valid node too.
     #[test]
-    fn a_refusal_of_a_held_record_takes_it_away_and_redisplays() {
+    fn a_refusal_of_a_held_record_takes_it_away() {
         let mut cache = NameCache::default();
         cache.insert_creature(55, Some(record("Kobold")));
-        let before = cache.generation();
         cache.insert_creature(55, None);
         assert!(cache.creature_record(55).is_none());
-        assert_ne!(cache.generation(), before);
     }
 
     #[test]

@@ -269,12 +269,16 @@ pub(super) fn render_view_flagged(
                 view
             })
             .flatten();
-        let equipped: std::collections::HashSet<u32> = model
-            .inventory_slots
-            .iter()
-            .flatten()
-            .map(|s| s.item_id)
-            .collect();
+        // The worn item ids as the call runs (`0x6228a0`), off the doll's keys, for a set alone.
+        let equipped: std::collections::HashSet<u32> = if set_view.is_some() {
+            crate::script::worn::worn_keys(lua, &model)
+                .iter()
+                .flatten()
+                .map(|&(_, id)| id)
+                .collect()
+        } else {
+            std::collections::HashSet::new()
+        };
         (
             crate::script::requirements::player_req(lua, &model),
             known,

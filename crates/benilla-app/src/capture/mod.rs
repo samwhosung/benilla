@@ -1166,6 +1166,91 @@ mod tests {
         });
         assert_eq!(read, (4, Some(1)));
     }
+    /// The character fixture's doll, by number: once its seed's spawns land, the worn slots'
+    /// texture getters answer through the host, and the window opened over them shows those
+    /// textures on the doll's buttons and the buffed stamina green.
+    #[test]
+    fn the_char_fixture_fills_the_doll() {
+        use bevy::ecs::system::RunSystemOnce;
+        let _data = benilla_formats::wow_data_or_skip!();
+        let _l = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _c = EnvGuard::set("WOW_CAPTURE", "ui-char");
+        let mut app = crate::game_plugins::schedule_tests::headless_client_with(|app| {
+            app.add_plugins(super::CapturePlugin);
+        });
+        let world = app.world_mut();
+        {
+            let mut progress = world.resource_mut::<super::WorldLoadProgress>();
+            progress.ready = 1;
+            progress.total = 1;
+        }
+        let script = benilla_ui::script::UiScript::new().unwrap();
+        for f in crate::ui_script::test_ui::CHARACTER_UI {
+            crate::ui_script::test_ui::load_ui_strict(&script, f);
+        }
+        world.insert_non_send_resource(script);
+        world.init_resource::<crate::player::Player>();
+        world.init_resource::<crate::loading_screen::LoadingScreen>();
+        world.init_resource::<crate::ui_quest::QuestGiver>();
+        world.init_resource::<crate::ui_loot::LootState>();
+        world.init_resource::<crate::net::HomeBind>();
+        // The level line's race and class names.
+        let tables = crate::ui_unit::TestNames::english();
+        world.insert_resource(crate::chr_classes::ChrRaceTable(tables.races));
+        world.insert_resource(crate::chr_classes::ChrClassTable(tables.classes));
+        // The fixture's displays (sword, shield, hearthstone), each with its own icon.
+        let icon = |name: &str| benilla_formats::ItemDisplay {
+            icon: Some(name.into()),
+            ..Default::default()
+        };
+        world.insert_resource(crate::entities::ItemDisplays::icons_for_tests(
+            benilla_formats::ItemDisplayCatalog::from_displays(std::collections::HashMap::from([
+                (1542, icon("SWORD")),
+                (18730, icon("SHIELD")),
+                (6418, icon("STONE")),
+            ])),
+        ));
+        world
+            .run_system_once(super::fixtures::seed_ui_fixture)
+            .unwrap();
+        world.flush();
+        // Chest, main hand, ranged and ammo: the getters, then the buttons the window drew.
+        let read = crate::script_calls::with_hosted_vm(world, |s| {
+            s.expect("a VM")
+                .eval::<Vec<String>>(
+                    r#"local t = {}
+                    for i, slot in ipairs({5, 16, 18, 0}) do
+                        t[i] = GetInventoryItemTexture("player", slot) or "none"
+                    end
+                    for i, name in ipairs({"Chest", "MainHand", "Ranged", "Ammo"}) do
+                        local tex = getglobal("Character" .. name .. "SlotIconTexture")
+                        t[4 + i] = tex:GetTexture() or "none"
+                    end
+                    t[9] = CharacterStatFrame3StatText:GetText() or "none"
+                    t[10] = CharacterFrame:IsVisible() and "shown" or "hidden"
+                    return t"#,
+                )
+                .unwrap()
+        });
+        let errors = world
+            .non_send_resource::<benilla_ui::script::UiScript>()
+            .errors();
+        assert!(errors.is_empty(), "the open runs clean: {errors:?}");
+        assert_eq!(read[9], "shown");
+        let icons = ["SHIELD", "SWORD", "STONE", "STONE"];
+        let shown = |t: &str, icon: &str| t.to_ascii_uppercase().ends_with(icon);
+        for (i, icon) in icons.iter().enumerate() {
+            assert!(shown(&read[i], icon), "the getter, slot {i}: {read:?}");
+            assert!(shown(&read[4 + i], icon), "the button, slot {i}: {read:?}");
+        }
+        assert!(
+            read[8].starts_with("|cff20ff20"),
+            "the stamina line: {read:?}"
+        );
+    }
+
     /// The vendor and trainer fixtures open through the lists' own opens, so each queues its
     /// window's `MERCHANT_SHOW` or `TRAINER_SHOW` as a list does.
     #[test]

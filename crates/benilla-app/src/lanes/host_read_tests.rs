@@ -26,8 +26,9 @@
 //!   placed queue's field edges after the dispatch, at the edge's earlier stamp, which the
 //!   dispatch's own firing would already have passed, or at their own.
 //!
-//! [`super::guard_tests::LANE_READS_FRAME_FINAL`] empties at the flip itself, which makes the
-//! world a lane firing reads its packet's, and every entry of
+//! [`super::guard_tests::LANE_READS_FRAME_FINAL`] and
+//! [`super::guard_tests::HOST_READS_FRAME_FINAL`] empty at the flip itself, which makes the world
+//! a lane firing and its getters read their packet's, and every entry of
 //! [`super::guard_tests::HOST_HELD_UNREAD`] is read first, as quiet or as a row of its own.
 //! [`super::guard_tests::QUEUED_FOR_THE_TICK`] holds the calls that queue an event for the VM's
 //! next tick, which fires behind every packet's events before the flip and after it.
@@ -44,8 +45,8 @@ use crate::game_plugins::schedule_tests::{census, type_names_available, SyncPoin
 
 /// The most rows [`super::guard_tests::READS_FRAME_FINAL`] may hold, and the most inputs across
 /// them: each only falls, so lower it when a row or an input goes.
-const FRAME_FINAL_FEEDS: usize = 16;
-const FRAME_FINAL_INPUTS: usize = 129;
+const FRAME_FINAL_FEEDS: usize = 15;
+const FRAME_FINAL_INPUTS: usize = 123;
 
 /// The systems that may run after the dispatch (`apply_net_updates`) and run ahead of the drain
 /// (`fire_in_order`), by a suffix of the system's name, with what each writes of the state a
@@ -58,10 +59,9 @@ const FRAME_FINAL_INPUTS: usize = 129;
 /// obstacles to the flip, each a write the reference makes inside a packet, or a view pushed in
 /// its place. A listener fired inside the dispatch would read each of these as the frame before
 /// left it. The writers the reference also runs after the packets are
-/// [`AFTER_THE_PACKETS_IN_THE_REFERENCE`]'s, not these. `UiScript`
-/// names a view the drain waits for ([`crate::ui_unit::field_events::FieldEventPushes`]);
-/// `Commands` names a component a system filters out and may add with its commands, which
-/// access does not show; `exclusive` a system whose access Bevy does not report.
+/// [`AFTER_THE_PACKETS_IN_THE_REFERENCE`]'s, not these. `Commands` names a component a system
+/// filters out and may add with its commands, which access does not show; `exclusive` a system
+/// whose access Bevy does not report.
 #[rustfmt::skip]
 const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
     ("::bindings::reread_arrived_bindings", &["account_data::AccountData"],
@@ -73,10 +73,6 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[
         "the arrival snap `0x7c6420` (`0x618dfc`) is written inside the packet"),
     ("::transport::compose_riders", &["Transform", "net::motion::remote::RemoteMotion"],
         "the arrival snap `0x7c6420` (`0x618dfc`) is written inside the packet"),
-    ("::ui_char::feed_char", &["UiScript", "ui_char::AmmoRecordHits"],
-        "a field event's listeners read its push, and it takes the ammo getters' record hits, a \
-         `UNIT_INVENTORY_CHANGED` each behind it, where the reference's hit registers no callback \
-         and the call reads the record itself (`0x4c83bc`, `0x4c89cf`)"),
     ("::ui_item_text::apply_reads", &["ui_item_text::ItemTextOpen"],
         "a click's or a bag use's read, queued in its input or its call, which the reference \
          opens inside them (`0x5f58c0`, `0x4e32e0`), ahead of the packets (`0x420d23`)"),
@@ -300,9 +296,6 @@ fn writers_between(app: &mut App) -> Option<BTreeMap<String, BTreeSet<String>>> 
         if *exclusive {
             writes.insert("exclusive".to_string());
         }
-        if info.sets.iter().any(|s| s == "FieldEventPushes") {
-            writes.insert("UiScript".to_string());
-        }
         let mut own: Vec<&FilteredAccess> = access.iter().collect();
         // A system that lends the host holds the host's access beside its own.
         if c.hosted.contains(k) {
@@ -474,6 +467,16 @@ fn flip_readiness() {
             "LANE_READS_FRAME_FINAL (empties at the flip)",
             g::LANE_READS_FRAME_FINAL.len(),
             format!(" ({lane_inputs} inputs)"),
+        ),
+        (
+            "HOST_READS_FRAME_FINAL (components; empties at the flip)",
+            g::HOST_READS_FRAME_FINAL.len(),
+            String::new(),
+        ),
+        (
+            "RAW_STORE_READS (getters past the views; empties at the flip)",
+            super::raw_store_tests::RAW_STORE_READS.len(),
+            String::new(),
         ),
         (
             "AFTER_THE_PACKETS_IN_THE_REFERENCE (stays)",

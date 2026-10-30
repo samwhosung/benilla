@@ -229,6 +229,7 @@ mod weapon_enchant;
 mod who_sort;
 mod worldmap;
 mod worldstate;
+mod worn;
 mod worn_display;
 pub(crate) mod xml_layout;
 mod zone_text;
@@ -373,6 +374,7 @@ pub use tabard::{
 };
 pub use video_pairs::VIDEO_PAIR_CVARS;
 pub use worldmap_arrow::ARROW_MODEL;
+pub use worn::{WornKeys, WornKeysQuery, WornSlotQuery};
 
 pub(crate) use button::{refresh_label_lua, state_font_lua, LabelFont};
 pub(crate) use font_block::{face_loads, font_size_loads, own_font_lua, SAME_FONT_HEIGHT};
@@ -516,7 +518,7 @@ pub use unit::{
     UnitTokenParse,
 };
 pub use use_gates::{ControlBypassQuery, FarSightOnQuery};
-pub use weapon_enchant::WeaponEnchant;
+pub use weapon_enchant::{WeaponEnchant, WeaponEnchantQuery};
 pub use who_sort::{WhoSortChain, WhoSortKey};
 pub use worldmap::{
     UnitMapPosition, UnitMapPositionQuery, WorldMapContinentView, WorldMapLandmarkSource,

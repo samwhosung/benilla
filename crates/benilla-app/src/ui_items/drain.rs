@@ -1204,7 +1204,8 @@ mod tests {
                 ..crate::items::test_template("Questing Helm")
             }),
         );
-        // The doll as the inventory feed pushes it: the call reads the worn item's lock.
+        // The VM's own doll copy, which a call with no host lent reads: the call reads the worn
+        // item's lock.
         let mut worn: benilla_ui::script::InventorySlots = Default::default();
         worn[1] = Some(benilla_ui::script::InvSlotView {
             item_id: HELM_ENTRY,

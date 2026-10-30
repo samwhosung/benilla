@@ -18,6 +18,11 @@
 //!
 //! The reference's expiration is nil only when the duration dword is 0; ours is nil until the
 //! first `SMSG_ITEM_ENCHANT_TIME_UPDATE`, which follows the field within a frame or two.
+//!
+//! The call looks the active player up (`0x4c97af` → `0x468460`, six nils with none,
+//! `0x4c9965`) and each weapon in its item list (`0x6228a0`) as it runs, so the getter asks the
+//! lent host ([`WeaponEnchantQuery`]); with none to ask, the VM's copy answers, which only a
+//! harness seats.
 
 use mlua::{Lua, MultiValue, Value};
 
@@ -34,9 +39,18 @@ pub struct WeaponEnchant {
     pub charges: u32,
 }
 
+/// The main hand's and the off hand's temporary enchantments now, `None` for no item or no
+/// enchant, both `None` while no active player is held.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WeaponEnchantQuery;
+
+impl super::live::LiveQuery for WeaponEnchantQuery {
+    type Answer = [Option<WeaponEnchant>; 2];
+}
+
 impl super::UiScript {
-    /// Push the two weapons' temporary enchantments, `None` for no item or no enchant. Pushed every
-    /// frame: `remaining_ms` is live, and the reference recomputes it per call.
+    /// Seat the two weapons' temporary enchantments a getter with no host reads, `None` for no
+    /// item or no enchant.
     pub fn set_weapon_enchants(
         &mut self,
         main_hand: Option<WeaponEnchant>,
@@ -52,10 +66,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     lua.globals().set(
         "GetWeaponEnchantInfo",
         lua.create_function(|lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            let hands = super::live::ask(lua, &WeaponEnchantQuery).unwrap_or_else(|| {
+                lua.app_data_ref::<Model>()
+                    .expect("model app_data")
+                    .weapon_enchants
+            });
             let mut out = Vec::with_capacity(6);
             // Main hand then off hand, three values each: always six.
-            for hand in model.weapon_enchants {
+            for hand in hands {
                 match hand {
                     Some(e) => {
                         out.push(Value::Integer(1));

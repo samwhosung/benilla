@@ -1,25 +1,24 @@
-//! The character-window feed: the [`UnitCombatStats`] and `InventorySlots` snapshots the paper
-//! doll's Lua bindings read, built from our avatar's descriptor and item stores, pushed ahead of
-//! the stat events that repaint it ([`crate::ui_unit::field_events`]); the inventory events; and
-//! the booth's yaw from the stock `CharacterModelFrame`. [`unit_combat_stats`] is
-//! the half any unit shares: a creature has no player fields, so those read absent and keep their
-//! defaults.
+//! The character window's half of the engine: the stat getters' reads of a unit's combat fields
+//! ([`StatsObject`]), the active player's worn slots as the slot getters read them at the call
+//! ([`worn_slot_view`], [`weapon_enchants`]), the inventory alerts' reads, the skill list
+//! ([`SkillLive`]) and the skill tiers. [`unit_combat_stats`] is the half any unit shares: a
+//! creature has no player fields, so those read absent and keep their defaults.
 
 use bevy::prelude::*;
 
 use benilla_protocol::messages::{ItemInfo, PLAYER_SKILL_SLOTS};
 use benilla_protocol::ObjectFields;
 use benilla_ui::script::{
-    weapon_subclass_skill, BankBagSlots, CombatRead, InvSlotView, InventorySlots, ItemRead,
-    SkillEntry, UnitCombatStats, SKILL_DEFENSE, SKILL_UNARMED,
+    weapon_subclass_skill, CombatRead, InvSlotView, ItemRead, SkillEntry, UnitCombatStats,
+    SKILL_DEFENSE, SKILL_UNARMED,
 };
 
 use crate::entities::ItemDisplays;
 use crate::items::Items;
-use crate::net::{ClientCommand, NetCommands, ObjectStore, Objects};
+use crate::net::{ClientCommand, NetCommands, ObjectStore};
 use crate::query_cache::Ask;
 use crate::ui_items::find_equip_slot;
-use crate::ui_script::{gate, UiFeed};
+use crate::ui_script::UiFeed;
 
 mod skills_live;
 pub(crate) use skills_live::SkillLive;
@@ -33,51 +32,16 @@ const ITEM_CLASS_WEAPON: u32 = 2;
 /// Weapon subclass 19, wand (`ItemPrototype.h:211`), for `HasWandEquipped`.
 const SUBCLASS_WAND: u32 = 19;
 
-/// The last snapshots pushed, so a push happens on change only; held per VM
-/// ([`crate::ui_script::VmMemo`]), so a `/reload` re-pushes. The stat events are field watches
-/// ([`crate::field_watch`]), never fired off these diffs.
-#[derive(Resource, Default)]
-pub(crate) struct CharFeedState {
-    vm: crate::ui_script::VmMemo<CharFeedMemo>,
-}
-
-/// The per-VM half of [`CharFeedState`]: the transition-diff bases.
-#[derive(Default)]
-struct CharFeedMemo {
-    last_stats: Option<UnitCombatStats>,
-    last_inv: Option<InventorySlots>,
-    last_bank_bags: Option<BankBagSlots>,
-    /// Counters for the stores whose lazy resolves poison `is_changed` (item templates, creator
-    /// names); item objects are entities, watched through [`crate::items::ItemChanges`].
-    items_templates: gate::Watch,
-    names_generation: gate::Watch,
-    /// `ItemChanges::countdown_steps`: one step per displayed-second change, the final elapse too.
-    enchant_deadlines: gate::Watch,
-}
-
-/// The character-window feed; its bindings are `benilla-ui`'s `char_stats`.
+/// The character window's tables: the skill tiers.
 pub(crate) struct UiCharPlugin;
 
 impl Plugin for UiCharPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<CharFeedState>()
-            .init_resource::<AmmoRecordHits>()
-            .add_systems(
-                Startup,
-                load_skill_tiers.after(benilla_assets::AssetSet::Open),
-            )
-            .add_systems(
-                Update,
-                (
-                    // A `BAG_UPDATE` handler may read the bag item's own row
-                    // (`GetInventoryItemLink("player", ContainerIDToInventoryID(bag))`): the lanes'
-                    // drain and the world-enter cascade both follow this push.
-                    feed_char
-                        .in_set(UiFeed)
-                        .in_set(crate::ui_unit::field_events::FieldEventPushes),
-                    feed_skill_tiers.in_set(UiFeed),
-                ),
-            );
+        app.add_systems(
+            Startup,
+            load_skill_tiers.after(benilla_assets::AssetSet::Open),
+        )
+        .add_systems(Update, feed_skill_tiers.in_set(UiFeed));
     }
 }
 
@@ -247,9 +211,9 @@ impl<'a> Worn<'a> {
 
 /// A unit's combat stats as the stat getters read them ([`CombatRead`]): each field derived off
 /// its descriptor as it is asked for, the active player's with its [`Worn`] weapons and its skill
-/// and avoidance fields; any other unit's leave those at their defaults. The snapshots' builds
-/// take every field from here ([`unit_combat_stats`], [`combat_stats`]), so the live read and the
-/// frame's push are one derivation.
+/// and avoidance fields; any other unit's leave those at their defaults. A unit view's build takes
+/// every field from here ([`unit_combat_stats`]), so the live read and the view are one
+/// derivation.
 pub(crate) struct StatsObject<'a> {
     store: &'a ObjectStore,
     own: Option<Worn<'a>>,
@@ -459,18 +423,23 @@ pub(crate) fn unit_combat_stats(store: &ObjectStore) -> UnitCombatStats {
     UnitCombatStats::read(&StatsObject::unit(store))
 }
 
-/// The player's snapshot: [`unit_combat_stats`] plus the equipment flags and the skill pairs
-/// ([`StatsObject::player`]).
-fn combat_stats(store: &ObjectStore, objects: &Objects, items: &Items) -> UnitCombatStats {
+/// The active player's stats as one value: [`unit_combat_stats`] plus the equipment flags and the
+/// skill pairs ([`StatsObject::player`]), for a test of their derivation.
+#[cfg(test)]
+fn combat_stats(
+    store: &ObjectStore,
+    objects: &crate::net::Objects,
+    items: &Items,
+) -> UnitCombatStats {
     let entry = |guid| objects.object(guid)?.object_entry();
     UnitCombatStats::read(&StatsObject::player(store, Worn::new(store, &entry, items)))
 }
 
-/// One slot's view from the item object and its ask-once template (no icon while in flight).
-/// Keyed by guid and live id: the doll (`PLAYER_FIELD_INV_SLOT_*`, live id = slot + 1) and the
-/// bank bags (`PLAYER_FIELD_BANK_BAG_SLOT_*`, 64..=69) read their guids from different arrays.
+/// One slot's view from the item object `guid` and its countdowns, off `held`, and its record,
+/// read without asking (no icon while in flight).
+#[allow(clippy::too_many_arguments)] // the slot's inputs, each a store it reads
 fn slot_view(
-    objects: &Objects,
+    held: &dyn crate::ui_items::ItemObjects,
     items: &Items,
     icons: Option<&ItemDisplays>,
     rolls: crate::items::RollCatalogs,
@@ -481,11 +450,11 @@ fn slot_view(
     has_relic_slot: bool,
     guid: u64,
 ) -> Option<InvSlotView> {
-    let countdowns = objects.countdowns(guid);
+    let countdowns = held.countdowns(guid);
     let enchant_ms: [Option<u64>; crate::items::ENCHANT_SLOTS] =
         std::array::from_fn(|s| countdowns.and_then(|c| c.enchant_remaining_display_ms(s as u32)));
     let duration_ms = countdowns.and_then(|c| c.lifetime_remaining_display_ms());
-    let obj = objects.object(guid)?;
+    let obj = held.object(guid)?;
     let entry = obj.object_entry()?;
     // What the getters read of it as they run, read here the same way.
     let live = crate::ui_items::live::LiveItem::object(obj, guid, items, icons, rolls);
@@ -547,7 +516,7 @@ fn slot_view(
         if counts_contents {
             content_guids
                 .iter()
-                .filter_map(|&g| objects.object(g))
+                .filter_map(|&g| held.object(g))
                 .map(|o| o.item_stack_count().unwrap_or(1).max(1))
                 .sum()
         } else {
@@ -597,23 +566,23 @@ fn slot_view(
 
 /// Carried ammo matching `ammo_id`, in the backpack and the four equipped bags; bank and buyback
 /// never count.
-fn ammo_count(store: &ObjectStore, objects: &Objects, ammo_id: u32) -> u32 {
+fn ammo_count(me: &ObjectFields, held: &dyn crate::ui_items::ItemObjects, ammo_id: u32) -> u32 {
     let mut n = 0;
     let mut add = |guid: Option<u64>| {
-        if let Some(o) = guid.and_then(|g| objects.object(g)) {
+        if let Some(o) = guid.and_then(|g| held.object(g)) {
             if o.object_entry() == Some(ammo_id) {
                 n += o.item_stack_count().unwrap_or(1);
             }
         }
     };
     for i in 0..16u8 {
-        add(store.0.player_pack_slot(i));
+        add(me.player_pack_slot(i));
     }
     for b in 19..23u8 {
-        if let Some(bag) = store.0.player_inv_slot(b).and_then(|g| objects.object(g)) {
+        if let Some(bag) = me.player_inv_slot(b).and_then(|g| held.object(g)) {
             let slots = bag.container_num_slots().unwrap_or(0).min(36) as u8;
             for s in 0..slots {
-                if let Some(o) = bag.container_slot(s).and_then(|g| objects.object(g)) {
+                if let Some(o) = bag.container_slot(s).and_then(|g| held.object(g)) {
                     if o.object_entry() == Some(ammo_id) {
                         n += o.item_stack_count().unwrap_or(1);
                     }
@@ -661,80 +630,29 @@ pub(crate) fn alert_inputs(
     benilla_ui::script::AlertInputs { worn, ammo }
 }
 
-/// The 24-wide inventory snapshot by `GetInventorySlotInfo` id: 0 ammo, 1..=19 the equipment,
-/// 20..=23 the equipped bags themselves (inv slots 19..22).
-fn inventory_slots(
-    store: &ObjectStore,
-    objects: &Objects,
+/// The active player `me`'s item at live-API id `slot` as the slot getters read it at the call
+/// ([`benilla_ui::script::WornSlotQuery`]): the reference's look it up in the player's item list
+/// as they run (`GetItemInSlot` `0x6228a0`; `GetInventoryItemLink` at `0x4c8cd3`). 0 is the ammo,
+/// off `PLAYER_AMMO_ID` and its record; 1..=19 the equipment and 20..=23 the equipped bags
+/// themselves, inventory slot `slot - 1`; 64..=69 the bank bags, which the stock bank reads through
+/// `BankButtonIDToInvSlotID(i, 1)` (`BankFrame.lua:28-35, 199-204`). `None` for an empty slot, an
+/// object `held` lacks, or any other id. Each object and its countdowns are read off `held`, as of
+/// the getter's place.
+#[allow(clippy::too_many_arguments)] // the slot's inputs, each a store it reads
+pub(crate) fn worn_slot_view(
+    me: &ObjectFields,
+    held: &dyn crate::ui_items::ItemObjects,
     items: &Items,
     icons: Option<&ItemDisplays>,
     rolls: crate::items::RollCatalogs,
     names: &crate::names::NameCache,
     sub_classes: Option<&crate::ui_items::ItemSubClasses>,
     classes: Option<&benilla_formats::ChrClasses>,
-) -> InventorySlots {
-    let has_relic_slot = store
-        .0
-        .unit_class()
-        .is_some_and(|c| classes.is_some_and(|t| t.has_relic_slot(u32::from(c))));
-    let mut inv: InventorySlots = Default::default();
-    let ammo_id = store.0.player_ammo_id().unwrap_or(0);
-    if ammo_id != 0 {
-        // Only read: what asks the record are the texture and quality getters' lookups with the
-        // callback `0x4c84f0` (`0x4c83ce`, `0x4c8a0a`), drained in `feed_char`.
-        let live = crate::ui_items::live::LiveItem::record(
-            ammo_id,
-            Default::default(),
-            items,
-            icons,
-            rolls,
-        );
-        inv[0] = Some(InvSlotView {
-            uncached_link: None,
-            inventory_type: live.cached().then(|| live.inventory_type()),
-            durability: None,
-            flags: 0,
-            // Ammo has no item object, only its template, so there is no bind to read.
-            already_bound: false,
-            bonding: 0,
-            occupied_seats: None,
-            use_spell: 0,
-            use_fork: Default::default(),
-            item_id: ammo_id,
-            icon: live.texture(),
-            count: ammo_count(store, objects, ammo_id),
-            // `GetInventoryItemCount`'s `PLAYER_AMMO_ID` leg, before the container fork.
-            contents_count: None,
-            quality: live.quality().map_or(0, |q| q as i32),
-            name: live.name(),
-            link: live.link(),
-            roll: Default::default(),
-            // The ammo leg names the ammo by entry, never by an item object (`0x4c7509`): no guid
-            // to lock, and no equip slots, as `CursorCanGoInSlot(0)` answers held ammo alone.
-            guid: 0,
-            equip_slots: Vec::new(),
-            bar_placeable: false,
-            consumable: false,
-            creator: None,
-            gift_creator: None,
-            creator_guid: 0,
-            gift_creator_guid: 0,
-            // No ammo instance streams, only its template id: no enchants, no countdown.
-            enchants: Vec::new(),
-            duration_ms: None,
-            field_duration: 0,
-            spell_0: false,
-            spell_charges: [0; 5],
-        });
-    }
-    // Equipment 1..=19, then `Bag0Slot`..`Bag3Slot` (20..=23 in `PaperDollItemFrame.dbc`), the
-    // equipped bag items: the live id is the inv slot plus one across the band.
-    for live in 1..=23u32 {
-        let Some(guid) = store.0.player_inv_slot(live as u8 - 1).filter(|g| *g != 0) else {
-            continue;
-        };
-        inv[live as usize] = slot_view(
-            objects,
+    slot: usize,
+) -> Option<InvSlotView> {
+    let view = |guid: u64, has_relic_slot: bool| {
+        slot_view(
+            held,
             items,
             icons,
             rolls,
@@ -742,205 +660,103 @@ fn inventory_slots(
             sub_classes,
             has_relic_slot,
             guid,
-        );
+        )
+    };
+    match slot {
+        0 => ammo_view(me, held, items, icons, rolls),
+        1..=23 => {
+            let guid = me.player_inv_slot(slot as u8 - 1).filter(|&g| g != 0)?;
+            let has_relic_slot = me
+                .unit_class()
+                .is_some_and(|c| classes.is_some_and(|t| t.has_relic_slot(u32::from(c))));
+            view(guid, has_relic_slot)
+        }
+        // A bank bag slot holds a bag; the relic flag decides INVSLOT 17 alone.
+        64..=69 => view(
+            me.player_bank_bag_slot((slot - 64) as u8)
+                .filter(|&g| g != 0)?,
+            false,
+        ),
+        _ => None,
     }
-    inv
 }
 
-/// The six bank-bag slots' views (live ids 64..=69). They are inventory slots, streamed whether
-/// or not a banker is open, and the stock bank reads them through `BankButtonIDToInvSlotID(i, 1)`
-/// (`BankFrame.lua:28-35, 199-204`), so they ride this feed rather than the bank window's state.
-fn bank_bag_slots(
-    store: &ObjectStore,
-    objects: &Objects,
+/// Each of `me`'s slots 0..=23 as [`worn_slot_view`] would find it, by its object guid and entry
+/// off `held` and with no view built ([`benilla_ui::script::WornKeysQuery`]); the ammo slot is
+/// `PLAYER_AMMO_ID` with guid 0.
+pub(crate) fn worn_keys(
+    me: &ObjectFields,
+    held: &dyn crate::ui_items::ItemObjects,
+) -> benilla_ui::script::WornKeys {
+    std::array::from_fn(|slot| match slot {
+        0 => me.player_ammo_id().filter(|&id| id != 0).map(|id| (0, id)),
+        _ => {
+            let guid = me.player_inv_slot(slot as u8 - 1).filter(|&g| g != 0)?;
+            Some((guid, held.object(guid)?.object_entry()?))
+        }
+    })
+}
+
+/// The ammo slot's view: `PLAYER_AMMO_ID`'s record, read without asking, and the carried count;
+/// `None` with no ammo set. What asks the record are the texture and quality getters' lookups
+/// with the callback `0x4c84f0` (`0x4c83ce`, `0x4c8a0a`).
+fn ammo_view(
+    me: &ObjectFields,
+    held: &dyn crate::ui_items::ItemObjects,
     items: &Items,
     icons: Option<&ItemDisplays>,
     rolls: crate::items::RollCatalogs,
-    names: &crate::names::NameCache,
-    sub_classes: Option<&crate::ui_items::ItemSubClasses>,
-) -> BankBagSlots {
-    let mut bags: BankBagSlots = Default::default();
-    for (i, bag) in bags.iter_mut().enumerate() {
-        let Some(guid) = store.0.player_bank_bag_slot(i as u8).filter(|g| *g != 0) else {
-            continue;
-        };
-        *bag = slot_view(
-            objects,
-            items,
-            icons,
-            rolls,
-            names,
-            sub_classes,
-            // A bank bag slot holds a bag; the relic flag decides INVSLOT 17 alone.
-            false,
-            guid,
-        );
-    }
-    bags
+) -> Option<InvSlotView> {
+    let ammo_id = me.player_ammo_id().filter(|&id| id != 0)?;
+    let live =
+        crate::ui_items::live::LiveItem::record(ammo_id, Default::default(), items, icons, rolls);
+    Some(InvSlotView {
+        uncached_link: None,
+        inventory_type: live.cached().then(|| live.inventory_type()),
+        durability: None,
+        flags: 0,
+        // Ammo has no item object, only its template, so there is no bind to read.
+        already_bound: false,
+        bonding: 0,
+        occupied_seats: None,
+        use_spell: 0,
+        use_fork: Default::default(),
+        item_id: ammo_id,
+        icon: live.texture(),
+        count: ammo_count(me, held, ammo_id),
+        // `GetInventoryItemCount`'s `PLAYER_AMMO_ID` leg, before the container fork.
+        contents_count: None,
+        quality: live.quality().map_or(0, |q| q as i32),
+        name: live.name(),
+        link: live.link(),
+        roll: Default::default(),
+        // The ammo leg names the ammo by entry, never by an item object (`0x4c7509`): no guid
+        // to lock, and no equip slots, as `CursorCanGoInSlot(0)` answers held ammo alone.
+        guid: 0,
+        equip_slots: Vec::new(),
+        bar_placeable: false,
+        consumable: false,
+        creator: None,
+        gift_creator: None,
+        creator_guid: 0,
+        gift_creator_guid: 0,
+        // No ammo instance streams, only its template id: no enchants, no countdown.
+        enchants: Vec::new(),
+        duration_ms: None,
+        field_duration: 0,
+        spell_0: false,
+        spell_charges: [0; 5],
+    })
 }
-
-/// The ammo getters' calls that found the record the cache holds and the VM's doll lacked: the
-/// reference's call would have read it, so the feed's next push fires `UNIT_INVENTORY_CHANGED`
-/// after it, once per call, for the frame to read it there.
-#[derive(Resource, Default)]
-pub(crate) struct AmmoRecordHits(u32);
 
 /// The ammo slot getters' lookup with the callback `0x4c84f0` (`0x4c83bc`, `0x4c89cf`), inside
 /// their calls ([`benilla_ui::script::RecordAsk::AmmoItem`]): a miss asks, a refused entry again,
 /// and waits for the answer, whose ready record signals `UNIT_INVENTORY_CHANGED` (`0x4c8509`) at
-/// its packet. A hit registers no callback; it is the doll's push's to show ([`AmmoRecordHits`]).
-pub(crate) fn ask_ammo_record(
-    items: &Items,
-    commands: &NetCommands,
-    hits: &mut AmmoRecordHits,
-    entry: u32,
-    owner: u64,
-) {
+/// its packet. A hit registers no callback: the call reads the record itself.
+pub(crate) fn ask_ammo_record(items: &Items, commands: &NetCommands, entry: u32, owner: u64) {
     if items.template(entry, owner, Ask::Event(commands)).is_none() {
         items.wait_for_ammo_record(entry);
-    } else {
-        hits.0 += 1;
     }
-}
-
-pub(crate) fn feed_char(
-    // `ChrClasses.dbc` field 16, the relic flag `find_equip_slot` reads; absent, no class has one.
-    classes: Option<Res<crate::chr_classes::ChrClassTable>>,
-    // The VM beside the hits its getters' calls leave.
-    mut vm: crate::script_calls::disjoint::Pair<
-        crate::script_calls::HostedVm<'static, 'static>,
-        ResMut<'static, AmmoRecordHits>,
-    >,
-    mut field_notices: ResMut<crate::field_watch::NoticeLane>,
-    mut inv: crate::items::Inventory,
-    items: Res<Items>,
-    icons: Option<Res<ItemDisplays>>,
-    enchants: Option<Res<crate::items::Enchants>>,
-    props: Option<Res<crate::items::RandomProperties>>,
-    mut feed: ResMut<CharFeedState>,
-    names: Res<crate::names::NameCache>,
-    // `ItemSubClass.dbc`, for `GetInventoryItemCount`'s container count bit.
-    sub_classes: Option<Res<crate::ui_items::ItemSubClasses>>,
-) {
-    vm.p0().run(|script| {
-        let Some(script) = script else {
-            return;
-        };
-        // Per VM: after a `/reload` both snapshots re-push.
-        let (memo, vm_reset) = feed.vm.get_reset(script);
-
-        let Some(store) = inv.self_store.iter().next() else {
-            // No self store is no data, not an empty inventory, so the copy stays: the getters
-            // that take a unit answer nothing while no active player is held (`0x4944c9`), and the
-            // next session starts a fresh VM.
-            return;
-        };
-
-        // `GetWeaponEnchantInfo`'s data, pushed every frame outside the gate: the remaining time is
-        // a live countdown, which the reference also recomputes per call (`0x5d9d00`). Pushed
-        // first, so handlers the snapshots fire read the fresh value.
-        let objects = &inv.objects;
-        script.set_weapon_enchants(
-            weapon_enchant(store, objects, EQUIPMENT_SLOT_MAINHAND),
-            weapon_enchant(store, objects, EQUIPMENT_SLOT_OFFHAND),
-        );
-
-        // The gate, around the two snapshot builds only.
-        let objects_moved = inv.changes.moved();
-        let templates_moved = memo.items_templates.moved(items.template_epoch());
-        let names_moved = memo.names_generation.moved(names.generation());
-        // The display epoch, not a per-frame hold-open: the views read whole-second countdowns, so
-        // they can change only when it steps.
-        let deadlines_moved = memo.enchant_deadlines.moved(inv.changes.countdown_steps());
-        let self_changed = !inv.self_changed.is_empty();
-        // `is_added`, not `is_changed`: only the load-once icon column is read, and the model-cache
-        // half churns every frame.
-        let icons_added = icons.as_ref().is_some_and(|r| r.is_added());
-        // Both catalogs load once at startup; one input covers the pair.
-        let enchants_changed = enchants.as_ref().is_some_and(|r| r.is_changed())
-            || props.as_ref().is_some_and(|r| r.is_changed());
-        gate::trace(
-            "feed_char",
-            &[
-                ("vm_reset", vm_reset),
-                ("objects", objects_moved),
-                ("templates", templates_moved),
-                ("names", names_moved),
-                ("deadlines", deadlines_moved),
-                ("self", self_changed),
-                ("icons", icons_added),
-                ("enchants", enchants_changed),
-            ],
-        );
-        let gate = gate::Gate::new(
-            vm_reset
-                || objects_moved
-                || templates_moved
-                || names_moved
-                || deadlines_moved
-                || self_changed
-                || icons_added
-                || enchants_changed,
-        );
-        if gate.skip() {
-            return;
-        }
-
-        // The paper doll's getters read this; the stat events that repaint it are field watches,
-        // fired after this push (`crate::ui_unit::field_events`).
-        let stats = combat_stats(store, objects, &items);
-        if memo.last_stats.as_ref() != Some(&stats) {
-            gate.audit("feed_char", "the combat-stats snapshot");
-            script.set_player_combat_stats(Some(stats.clone()));
-            memo.last_stats = Some(stats);
-        }
-
-        let inv = inventory_slots(
-            store,
-            objects,
-            &items,
-            icons.as_deref(),
-            crate::items::RollCatalogs {
-                enchants: enchants.as_deref(),
-                props: props.as_deref(),
-            },
-            &names,
-            sub_classes.as_deref(),
-            classes.as_deref().map(|t| &t.0),
-        );
-        let bank_bags = bank_bag_slots(
-            store,
-            objects,
-            &items,
-            icons.as_deref(),
-            crate::items::RollCatalogs {
-                enchants: enchants.as_deref(),
-                props: props.as_deref(),
-            },
-            &names,
-            sub_classes.as_deref(),
-        );
-        // The doll's `UNIT_INVENTORY_CHANGED` is its producers' alone, the visible-item bridge, the
-        // ammunition watch and the item paths ([`crate::field_watch`], [`crate::item_watch`]),
-        // fired after this push; a view change raises none, a repair's durability included, which
-        // repaints through the durability watcher's alert recompute (`0x5d9920` → `0x4c7ee0`), on
-        // the item lane at its packet. So is the bank bag buttons' `PLAYERBANKSLOTS_CHANGED`
-        // (`BankFrame.lua:206-208`): the inventory watcher's (`0x5ddd69`) and the item path's
-        // (`0x4c728d`).
-        if memo.last_inv.as_ref() != Some(&inv) || memo.last_bank_bags.as_ref() != Some(&bank_bags)
-        {
-            gate.audit("feed_char", "the inventory snapshot");
-            script.set_inventory_slots(inv.clone());
-            script.set_bank_bag_slots(bank_bags.clone());
-            memo.last_inv = Some(inv);
-            memo.last_bank_bags = Some(bank_bags);
-        }
-    });
-    // Fired with the field events, after this push ([`AmmoRecordHits`]).
-    let hits = std::mem::take(&mut vm.p1().0);
-    field_notices.write_batch((0..hits).map(|_| crate::field_watch::FieldNotice::Player {
-        id: crate::field_watch::id::UNIT_INVENTORY_CHANGED,
-    }));
 }
 
 /// The 0-based weapon slots `GetWeaponEnchantInfo` (`0x4c9790`) reads (`0x4c97c3`, `0x4c988b`);
@@ -952,25 +768,83 @@ const EQUIPMENT_SLOT_OFFHAND: u8 = 16;
 /// remaining-time read passes it (`0x4c9828`).
 const TEMP_ENCHANTMENT_SLOT: u8 = 1;
 
+/// `GetWeaponEnchantInfo`'s two weapons as the call reads them
+/// ([`benilla_ui::script::WeaponEnchantQuery`]): the active player `me`'s main and off hands in
+/// its item list (`0x6228a0` at `0x4c97ca`), each object and its deadline off `held`, the
+/// remaining time recomputed per call (`0x5d9d00`).
+pub(crate) fn weapon_enchants(
+    me: &ObjectFields,
+    held: &dyn crate::ui_items::ItemObjects,
+) -> [Option<benilla_ui::script::WeaponEnchant>; 2] {
+    [EQUIPMENT_SLOT_MAINHAND, EQUIPMENT_SLOT_OFFHAND].map(|slot0| weapon_enchant(me, held, slot0))
+}
+
 /// One weapon's temporary enchantment, read off the raw descriptor rather than
 /// [`InvSlotView::enchants`], which drops unnamed ids and the totem imbues; the reference's only
 /// gate is a nonzero id (`[descriptor+0x4c]`).
 fn weapon_enchant(
-    store: &ObjectStore,
-    objects: &Objects,
+    me: &ObjectFields,
+    held: &dyn crate::ui_items::ItemObjects,
     slot0: u8,
 ) -> Option<benilla_ui::script::WeaponEnchant> {
-    let guid = store.0.player_inv_slot(slot0)?;
+    let guid = me.player_inv_slot(slot0)?;
     // The deadline read, not the tooltip's: an elapsed timer answers 0, not "no timer".
-    let remaining_ms = objects
+    let remaining_ms = held
         .countdowns(guid)
         .and_then(|c| c.enchant_deadline_ms(u32::from(TEMP_ENCHANTMENT_SLOT)));
-    let obj = objects.object(guid)?;
+    let obj = held.object(guid)?;
     obj.item_enchant(TEMP_ENCHANTMENT_SLOT)?;
     Some(benilla_ui::script::WeaponEnchant {
         remaining_ms,
         charges: obj.item_enchant_charges(TEMP_ENCHANTMENT_SLOT),
     })
+}
+
+/// The doll's copies a getter with no host reads, seated off the active player as it stands: its
+/// combat stats, its worn slots and its weapons' enchantments, for a test whose reads run with no
+/// host lent. In game the getters read them at the call ([`benilla_ui::script::WornSlotQuery`]).
+#[cfg(test)]
+pub(crate) fn seat_doll_once(world: &mut World) {
+    use bevy::ecs::system::RunSystemOnce;
+    world
+        .run_system_once(seat_doll)
+        .expect("the doll's seat runs as a one-shot system");
+}
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)] // the doll's inputs, each a store it reads
+fn seat_doll(
+    mut vm: NonSendMut<benilla_ui::script::UiScript>,
+    objects: crate::net::Objects,
+    me: Query<&ObjectStore, With<crate::net::SelfPlayer>>,
+    items: Res<Items>,
+    icons: Option<Res<ItemDisplays>>,
+    rolls: crate::items::Rolls,
+    names: Res<crate::names::NameCache>,
+    sub_classes: Option<Res<crate::ui_items::ItemSubClasses>>,
+    classes: Option<Res<crate::chr_classes::ChrClassTable>>,
+) {
+    let Ok(store) = me.single() else {
+        return;
+    };
+    vm.set_player_combat_stats(Some(combat_stats(store, &objects, &items)));
+    let view = |slot: usize| {
+        worn_slot_view(
+            &store.0,
+            &objects,
+            &items,
+            icons.as_deref(),
+            rolls.get(),
+            &names,
+            sub_classes.as_deref(),
+            classes.as_deref().map(|t| &t.0),
+            slot,
+        )
+    };
+    vm.set_inventory_slots(std::array::from_fn(view));
+    vm.set_bank_bag_slots(std::array::from_fn(|i| view(64 + i)));
+    let [main_hand, off_hand] = weapon_enchants(&store.0, &objects);
+    vm.set_weapon_enchants(main_hand, off_hand);
 }
 
 #[cfg(test)]
@@ -1005,9 +879,10 @@ mod tests {
         );
         let items = Items::default();
         let names = crate::names::NameCache::default();
-        let mut seats = |guid: u64| {
+        let objects = objs.get();
+        let seats = |guid: u64| {
             slot_view(
-                &objs.get(),
+                &objects,
                 &items,
                 None,
                 crate::items::RollCatalogs::NONE,
@@ -1024,7 +899,6 @@ mod tests {
         assert_eq!(seats(0xB3), None);
     }
     use benilla_protocol::messages::ObjectFields;
-    use bevy::ecs::system::RunSystemOnce;
 
     /// The reference's split (`0x5ea460`); a value-0 line skips the permanent add (`0x5ea4b4`).
     #[test]
@@ -1070,13 +944,11 @@ mod tests {
     const F_BANK_BAG_1: u16 = 612;
     /// `OBJECT_FIELD_ENTRY` on the item object.
     const F_OBJECT_ENTRY: u16 = 3;
-    /// `ITEM_FIELD_STACK_COUNT`, one of the six item fields the reference's watcher covers.
-    const F_ITEM_STACK_COUNT: u16 = 14;
-    /// Any container entry ("Traveler's Backpack"); the feed only needs it to resolve.
+    /// Any container entry ("Traveler's Backpack"); the view only needs it to resolve.
     const BAG_ENTRY: u32 = 4500;
     const BAG: u64 = 0x4000_0000_0000_0abc;
 
-    /// Re-stream a live item object's fields as a values update does, moving its change tick.
+    /// Re-stream a live item object's fields as a values update does.
     fn restream(app: &mut App, guid: u64, fields: ObjectFields) {
         let entity = app
             .world()
@@ -1088,16 +960,13 @@ mod tests {
         *app.world_mut().get_mut::<ObjectStore>(entity).unwrap() = ObjectStore(fields);
     }
 
-    /// A world with `bag`, or nothing, in the first bank bag slot, and a frame recording events.
+    /// A world with `bag`, or nothing, in the first bank bag slot, and a VM recording events.
     fn world_with_bank_bag(bag: Option<u64>) -> App {
         let (tx, _rx) = crossbeam_channel::unbounded();
         let mut app = App::new();
-        app.init_resource::<CharFeedState>()
-            .init_resource::<AmmoRecordHits>()
-            .init_resource::<Items>()
+        app.init_resource::<Items>()
             .init_resource::<crate::net::GuidIndex>()
             .init_resource::<crate::names::NameCache>()
-            .init_resource::<crate::field_watch::NoticeLane>()
             .insert_resource(NetCommands(tx));
         let fields = match bag {
             Some(g) => ObjectFields::from_pairs(&[
@@ -1138,28 +1007,9 @@ mod tests {
         app
     }
 
-    fn seen(app: &mut App) -> Vec<String> {
-        let script = app.world_mut().non_send_resource_mut::<UiScript>();
-        let out = script.eval::<Vec<String>>("return SEEN").unwrap();
-        script.run("SEEN = {}").unwrap();
-        out
-    }
-
-    /// The bank bag buttons' `PLAYERBANKSLOTS_CHANGED` is the inventory watcher's and the item
-    /// path's (`0x5ddd69`, `0x4c728d`, [`crate::item_watch`]): the feed's push of a bank bag
-    /// arriving, or of its own field moving, fires none, nor a doll event.
-    #[test]
-    fn a_bank_bag_push_fires_no_event() {
-        let mut app = world_with_bank_bag(Some(BAG));
-        app.world_mut().run_system_once(feed_char).unwrap();
-        assert!(seen(&mut app).is_empty());
-        restream(
-            &mut app,
-            BAG,
-            ObjectFields::from_pairs(&[(F_OBJECT_ENTRY, BAG_ENTRY), (F_ITEM_STACK_COUNT, 3)]),
-        );
-        app.world_mut().run_system_once(feed_char).unwrap();
-        assert!(seen(&mut app).is_empty());
+    /// `chunk` with the player's items lent as the getters read them at the call.
+    fn eval<T: benilla_ui::mlua::FromLuaMulti>(app: &mut App, chunk: &str) -> T {
+        crate::ui_items::eval_with_bags(app.world_mut(), chunk)
     }
 
     /// Rewrite the active player's descriptor wholesale: `ObjectFields` has no setter.
@@ -1171,12 +1021,10 @@ mod tests {
         *store = ObjectStore(ObjectFields::from_pairs(pairs));
     }
 
-    /// A repair moves the doll's view and fires no `UNIT_INVENTORY_CHANGED`: the durability
-    /// watcher `0x5d97c0` ends in the alert recompute (`0x5d9920`), whose
-    /// `UPDATE_INVENTORY_ALERTS` repaints the slots. The doll's inventory event is its producers'
-    /// alone ([`crate::field_watch`], [`crate::item_watch`]), never a change of this feed's view.
+    /// The doll reads its item at the call (`GetInventoryItemBroken` → `0x6228a0`): a repair shows
+    /// in the next call, with no push between.
     #[test]
-    fn a_repair_moves_the_doll_and_fires_no_inventory_event() {
+    fn a_repair_reads_at_the_next_call() {
         use benilla_protocol::field::FIELD_PLAYER_INV_SLOT_HEAD;
         const HELM: u64 = 0x4000_0000_0000_0b01;
         const HELM_ID: u32 = 7366;
@@ -1199,23 +1047,14 @@ mod tests {
         app.world_mut()
             .resource_mut::<Items>()
             .insert_template(HELM_ID, Some(crate::items::test_template("Helm")));
-        let broken = |app: &mut App| {
-            app.world_mut()
-                .non_send_resource_mut::<UiScript>()
-                .eval::<bool>(r#"return GetInventoryItemBroken("player", 1) ~= nil"#)
-                .unwrap()
-        };
-        app.world_mut().run_system_once(feed_char).unwrap();
-        assert!(broken(&mut app));
-        let _ = seen(&mut app);
+        let broken = r#"return GetInventoryItemBroken("player", 1) ~= nil"#;
+        assert!(eval::<bool>(&mut app, broken));
         restream(
             &mut app,
             HELM,
             ObjectFields::from_pairs(&[(F_OBJECT_ENTRY, HELM_ID), (DURABILITY, 40), (47, 40)]),
         );
-        app.world_mut().run_system_once(feed_char).unwrap();
-        assert!(!broken(&mut app), "the doll reads the repair");
-        assert_eq!(seen(&mut app), Vec::<String>::new());
+        assert!(!eval::<bool>(&mut app, broken), "the doll reads the repair");
     }
 
     /// The player's own equipped link comes from the item object through `0x52ae00`
@@ -1243,12 +1082,7 @@ mod tests {
         app.world_mut()
             .resource_mut::<Items>()
             .insert_template(HELM_ID, Some(crate::items::test_template("Helm")));
-        app.world_mut().run_system_once(feed_char).unwrap();
-        let link = app
-            .world_mut()
-            .non_send_resource_mut::<UiScript>()
-            .eval::<String>(r#"return GetInventoryItemLink("player", 1)"#)
-            .unwrap();
+        let link: String = eval(&mut app, r#"return GetInventoryItemLink("player", 1)"#);
         assert_eq!(link, "|cffffffff|Hitem:7366:1900:862:7|h[Helm]|h|r");
     }
 
@@ -1274,12 +1108,7 @@ mod tests {
             ObjectFields::from_pairs(&[(F_OBJECT_ENTRY, HELM_ID), (22, 1900), (43, 7), (44, 862)]),
             false,
         );
-        app.world_mut().run_system_once(feed_char).unwrap();
-        let link = app
-            .world_mut()
-            .non_send_resource_mut::<UiScript>()
-            .eval::<Option<String>>(r#"return GetInventoryItemLink("player", 1)"#)
-            .unwrap();
+        let link: Option<String> = eval(&mut app, r#"return GetInventoryItemLink("player", 1)"#);
         assert_eq!(
             link.as_deref(),
             Some("|cffffffff|Hitem:7366:1900:862:7|h[]|h|r")
@@ -1325,12 +1154,13 @@ mod tests {
                 ]),
             );
         }
-        let mut name = |guid: u64| {
+        let objects = objs.get();
+        let name = |guid: u64| {
             let rolls = crate::items::RollCatalogs {
                 enchants: None,
                 props: Some(&props),
             };
-            slot_view(&objs.get(), &items, None, rolls, &names, None, false, guid)
+            slot_view(&objects, &items, None, rolls, &names, None, false, guid)
                 .expect("a view")
                 .name
         };
@@ -1349,25 +1179,22 @@ mod tests {
             .world_mut()
             .non_send_resource_mut::<UiScript>()
             .take_ammo_record_asks();
-        app.world_mut()
-            .resource_scope(|world, mut hits: Mut<AmmoRecordHits>| {
-                for entry in entries {
-                    ask_ammo_record(
-                        world.resource::<Items>(),
-                        world.resource::<NetCommands>(),
-                        &mut hits,
-                        entry,
-                        0,
-                    );
-                }
-            });
+        for entry in entries {
+            ask_ammo_record(
+                app.world().resource::<Items>(),
+                app.world().resource::<NetCommands>(),
+                entry,
+                0,
+            );
+        }
     }
 
-    /// The ammo view only reads the record: what asks it are the texture and quality getters'
-    /// lookups with the callback `0x4c84f0` (`0x4c83ce`, `0x4c8a0a`), so a frame no getter read
-    /// the slot in sends nothing.
+    /// The ammo slot getters' record lookups with the callback `0x4c84f0` (`0x4c83bc`,
+    /// `0x4c89cf`): a call that misses the cache asks and waits for the answer, one callback per
+    /// call; once the record is cached the call reads it itself and asks nothing. The slot's view
+    /// only reads the record, so a getter without the callback sends nothing.
     #[test]
-    fn the_ammo_view_reads_and_the_getters_ask() {
+    fn an_ammo_getters_miss_waits_and_a_hit_asks_nothing() {
         const ARROW: u32 = 2512;
         /// `PLAYER_AMMO_ID`.
         const AMMO_ID: u16 = 1223;
@@ -1375,6 +1202,19 @@ mod tests {
         let (tx, rx) = crossbeam_channel::unbounded();
         app.insert_resource(NetCommands(tx));
         set_self(&mut app, &[(AMMO_ID, ARROW)]);
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .keep_calls();
+        let ask = |app: &mut App| {
+            let quality: Option<i64> = eval(app, r#"return GetInventoryItemQuality("player", 0)"#);
+            ask_kept_ammo(app);
+            quality
+        };
+        let waiters = |app: &mut App| {
+            app.world_mut()
+                .resource_mut::<Items>()
+                .take_ammo_waiters(ARROW)
+        };
         let asked = |rx: &crossbeam_channel::Receiver<crate::net::ClientCommand>| {
             crate::query_cache::queries(rx)
                 .into_iter()
@@ -1383,127 +1223,65 @@ mod tests {
                 })
                 .count()
         };
-        app.world_mut().run_system_once(feed_char).unwrap();
-        app.world_mut().run_system_once(feed_char).unwrap();
-        assert_eq!(asked(&rx), 0, "the view reads");
-        let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
-        script.keep_calls();
-        script
-            .run(r#"GetInventoryItemQuality("player", 0)"#)
-            .unwrap();
+        // The count getter builds the slot's view, which only reads the record: none carried is
+        // its 0, where no view is the empty slot's 1 (`0x4c8797`). The link getter answers the
+        // slot ahead of the view (`0x4c8c8a`).
+        let count: i64 = eval(&mut app, r#"return GetInventoryItemCount("player", 0)"#);
         ask_kept_ammo(&mut app);
-        assert_eq!(asked(&rx), 1, "the getter asks");
-    }
-
-    /// The ammo slot getters' record lookups with the callback `0x4c84f0` (`0x4c83bc`,
-    /// `0x4c89cf`): a call that misses the cache waits for the answer, one callback per call; a
-    /// call that finds the record registers none.
-    #[test]
-    fn an_ammo_getters_miss_waits_and_a_hit_registers_nothing() {
-        const ARROW: u32 = 2512;
-        /// `PLAYER_AMMO_ID`.
-        const AMMO_ID: u16 = 1223;
-        let mut app = world_with_bank_bag(None);
-        set_self(&mut app, &[(AMMO_ID, ARROW)]);
-        app.world_mut().run_system_once(feed_char).unwrap();
-        app.world_mut()
-            .non_send_resource_mut::<UiScript>()
-            .keep_calls();
-        let ask = |app: &mut App| {
-            app.world_mut()
-                .non_send_resource_mut::<UiScript>()
-                .run(r#"GetInventoryItemQuality("player", 0)"#)
-                .unwrap();
-            ask_kept_ammo(app);
-        };
-        let waiters = |app: &mut App| {
-            app.world_mut()
-                .resource_mut::<Items>()
-                .take_ammo_waiters(ARROW)
-        };
-        ask(&mut app);
-        ask(&mut app);
+        assert_eq!(count, 0, "the view, with none carried");
+        assert_eq!(asked(&rx), 0, "the view reads");
+        assert_eq!(ask(&mut app), None);
+        assert_eq!(ask(&mut app), None);
+        assert_eq!(asked(&rx), 1, "one query in flight");
         assert_eq!(waiters(&mut app), 2, "each miss waits for its answer");
         app.world_mut()
             .resource_mut::<Items>()
             .insert_template(ARROW, Some(crate::items::test_template("Rough Arrow")));
-        // The view still lacks the name, so the getter looks up, and the cache answers.
-        ask(&mut app);
+        assert!(
+            ask(&mut app).is_some(),
+            "the landed record, read in the call"
+        );
         assert_eq!(waiters(&mut app), 0, "a hit registers no callback");
     }
 
-    /// A getter call that finds the record the host holds and the doll's view lacks, which landed
-    /// after the doll's last push, reaches the frame: the next push fires `UNIT_INVENTORY_CHANGED`
-    /// after it, as the callback `0x4c84f0` would at the landing (`0x4c8509`), so the frame reads
-    /// the record the reference's call would have returned.
-    #[test]
-    fn a_held_record_the_doll_lacks_reaches_the_frame() {
-        use crate::field_watch::{id, FieldNotice, NoticeLane};
-        const ARROW: u32 = 2512;
-        /// `PLAYER_AMMO_ID`.
-        const AMMO_ID: u16 = 1223;
-        let mut app = world_with_bank_bag(None);
-        set_self(&mut app, &[(AMMO_ID, ARROW)]);
-        app.world_mut().run_system_once(feed_char).unwrap();
-        app.world_mut()
-            .non_send_resource_mut::<UiScript>()
-            .keep_calls();
-        app.world_mut()
-            .resource_mut::<Items>()
-            .insert_template(ARROW, Some(crate::items::test_template("Rough Arrow")));
-        app.world_mut()
-            .non_send_resource_mut::<UiScript>()
-            .run(r#"GetInventoryItemQuality("player", 0)"#)
-            .unwrap();
-        ask_kept_ammo(&mut app);
-        app.world_mut().run_system_once(feed_char).unwrap();
-        let fired: Vec<_> = app
-            .world_mut()
-            .resource_mut::<NoticeLane>()
-            .drain()
-            .collect();
-        assert_eq!(
-            fired,
-            [FieldNotice::Player {
-                id: id::UNIT_INVENTORY_CHANGED
-            }]
-        );
-        let named = app
-            .world_mut()
-            .non_send_resource_mut::<UiScript>()
-            .eval::<bool>(r#"return GetInventoryItemQuality("player", 0) ~= nil"#)
-            .unwrap();
-        assert!(named, "the push carries the record");
-    }
-
-    /// The lock is the VM's, keyed by the guid this feed pushes: a lock moves no snapshot, and
-    /// `IsInventoryItemLocked` reads it on the bank bag's own guid, at a banker
-    /// (`GetItemInSlot`'s bank gate, `0x6228a0`).
+    /// The lock is the VM's, keyed by the guid the slot holds: `IsInventoryItemLocked` reads it on
+    /// the bank bag's own guid, at a banker (`GetItemInSlot`'s bank gate, `0x6228a0`).
     #[test]
     fn a_bank_bag_reads_the_lock_on_its_own_guid() {
         let mut app = world_with_bank_bag(Some(BAG));
-        app.world_mut().run_system_once(feed_char).unwrap();
-        let _ = seen(&mut app);
         app.world_mut()
             .non_send_resource_mut::<UiScript>()
             .set_bank(Some(benilla_ui::script::BankState::default()));
-        let locked = |app: &mut App| {
-            app.world_mut()
-                .non_send_resource_mut::<UiScript>()
-                .eval::<bool>(r#"return IsInventoryItemLocked(64) and true or false"#)
-                .unwrap()
-        };
-        assert!(!locked(&mut app));
+        let locked = r#"return IsInventoryItemLocked(64) and true or false"#;
+        assert!(!eval::<bool>(&mut app, locked));
         app.world_mut()
             .non_send_resource_mut::<UiScript>()
             .lock_item(BAG);
-        app.world_mut().run_system_once(feed_char).unwrap();
-        assert!(seen(&mut app).is_empty(), "a lock is no inventory change");
-        assert!(locked(&mut app), "a send's lock on the bag");
+        assert!(eval::<bool>(&mut app, locked), "a send's lock on the bag");
         app.world_mut()
             .non_send_resource_mut::<UiScript>()
             .unlock_item(BAG);
-        assert!(!locked(&mut app), "the server's answer");
+        assert!(!eval::<bool>(&mut app, locked), "the server's answer");
+        let seen: Vec<String> = eval(&mut app, "return SEEN");
+        assert!(seen.is_empty(), "a lock is no inventory change: {seen:?}");
+    }
+
+    /// A bank bag's object reads in the next call, with no push and no event between: its record
+    /// landing names its link at once (`0x52ae00`).
+    #[test]
+    fn a_bank_bag_reads_its_object_at_the_call() {
+        let mut app = world_with_bank_bag(Some(BAG));
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .set_bank(Some(benilla_ui::script::BankState::default()));
+        let link = r#"return GetInventoryItemLink("player", 64)"#;
+        assert!(eval::<String>(&mut app, link).contains("[Traveler's Backpack]"));
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(BAG_ENTRY, Some(crate::items::test_template("Mule Pack")));
+        assert!(eval::<String>(&mut app, link).contains("[Mule Pack]"));
+        let seen: Vec<String> = eval(&mut app, "return SEEN");
+        assert!(seen.is_empty(), "{seen:?}");
     }
 
     // The UNIT-block field indices the core reads (`benilla_protocol`'s `fields::FIELD_UNIT_*`).
@@ -1654,11 +1432,7 @@ mod tests {
             false,
         );
         let quality = |app: &mut App| {
-            app.world_mut().run_system_once(feed_char).unwrap();
-            app.world_mut()
-                .non_send_resource_mut::<UiScript>()
-                .eval::<Option<i64>>(r#"return GetInventoryItemQuality("player", 1)"#)
-                .unwrap()
+            eval::<Option<i64>>(app, r#"return GetInventoryItemQuality("player", 1)"#)
         };
         assert_eq!(quality(&mut app), None, "the record is not cached");
         let helm = crate::items::test_template("Helm");

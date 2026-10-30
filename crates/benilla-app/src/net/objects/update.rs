@@ -410,6 +410,7 @@ fn on_item_create(In(ev): In<SessionEvent>, mut sc: Scene) {
         ) => {
             let moved = write_fields(&mut store, fields);
             sc.view_log.replaced(guid, None);
+            sc.view_log.countdowns(guid, None);
             let e =
                 crate::items::spawn_item(&mut sc.commands, &mut sc.index, guid, store, container);
             if let Body::Item { countdowns, .. } = body {
@@ -421,6 +422,7 @@ fn on_item_create(In(ev): In<SessionEvent>, mut sc: Scene) {
         (None, None) => {
             allocate(&mut sc, guid, item_type(container));
             sc.view_log.replaced(guid, None);
+            sc.view_log.countdowns(guid, None);
             crate::items::spawn_item(&mut sc.commands, &mut sc.index, guid, fields, container);
             sc.pass.unshown.insert(guid);
             Vec::new()
@@ -458,7 +460,7 @@ fn write_logged(
 /// A held object leaving the live table: the store it takes, logged for any unit, as one a token
 /// names now or named earlier in the frame (the target's target before it changed) reads it in
 /// the frame's earlier listeners, and for any item, as a weapon the active player wore earlier in
-/// the frame reads to the stat getters there.
+/// the frame reads to the stat getters there, with the item's countdown cells.
 fn log_destroy(sc: &mut Scene, guid: u64) {
     let Some(&e) = sc.index.0.get(&guid) else {
         return;
@@ -466,6 +468,9 @@ fn log_destroy(sc: &mut Scene, guid: u64) {
     let before = sc.stores.get(e).ok().cloned();
     if before.is_some() {
         sc.view_log.replaced(guid, before);
+    }
+    if let Ok(cells) = sc.countdowns.get(e) {
+        sc.view_log.countdowns(guid, Some(cells.clone()));
     }
 }
 
@@ -612,6 +617,7 @@ fn respawn(sc: &mut Scene, guid: u64, body: Body, store: ObjectFields, pose: Opt
             let e =
                 crate::items::spawn_item(&mut sc.commands, &mut sc.index, guid, store, container);
             sc.commands.entity(e).insert(countdowns);
+            sc.view_log.countdowns(guid, None);
         }
         Body::World {
             kind,
@@ -1420,7 +1426,13 @@ fn create_hook(
                 }
             }
             if let Some(crate::item_watch::ItemNotice::Record { guid, .. }) = run.notice {
-                super::replay_enchant_times(&mut sc.items, &mut sc.countdowns, &sc.index, guid);
+                super::replay_enchant_times(
+                    &mut sc.items,
+                    &mut sc.countdowns,
+                    &sc.index,
+                    &mut sc.view_log,
+                    guid,
+                );
             }
             sc.item_lane.push(run);
         }

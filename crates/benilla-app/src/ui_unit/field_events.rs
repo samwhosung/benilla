@@ -1,9 +1,9 @@
 //! The interface events of the field watches and the packet handlers that signal unit events
 //! ([`crate::field_watch`]): the notice lane, whose notices fire their callbacks' signals in the
-//! packets' order among the other lanes ([`crate::lanes`]), after every snapshot those events'
-//! handlers read is pushed ([`FieldEventPushes`]), as the update handler's notify pass follows its
-//! two write passes over every block of the packet (`0x465277` after `0x46520e`, `0x465222`). The
-//! unit tokens' views the drain then steps back to each packet's state ([`super::views`]).
+//! packets' order among the other lanes ([`crate::lanes`]), each after its packet's writes, as
+//! the update handler's notify pass follows its two write passes over every block of the packet
+//! (`0x465277` after `0x46520e`, `0x465222`). The unit tokens' views the drain then steps back to
+//! each packet's state ([`super::views`]).
 
 use bevy::prelude::*;
 
@@ -12,12 +12,6 @@ use benilla_ui::strings::Arg;
 
 use crate::field_watch::{FieldNotice, NoticeLane};
 use crate::lanes::Until;
-
-/// The feeds that push what a field event's handlers read: the player's inventory and ammo. The
-/// lanes' drain runs after all of them, as the update handler writes every block of its packet
-/// before its notify pass (`0x46520e`, `0x465222`, then `0x46522d`).
-#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct FieldEventPushes;
 
 /// What a field notice's firing reads.
 #[derive(bevy::ecs::system::SystemParam)]
@@ -1495,19 +1489,6 @@ mod tests {
             .get_resource_or_init::<crate::ui_world_enter::ArrivalLane>()
             .push(crate::ui_world_enter::Entry::Reload);
         crate::ui_world_enter::fire_lane(app.world_mut());
-    }
-
-    /// Every feed whose push a field event's handlers read runs ahead of the drain that fires it,
-    /// as the update handler writes every block of its packet before its notify pass (`0x46520e`,
-    /// `0x465222`, then `0x46522d`).
-    #[test]
-    fn the_field_event_pushes_run_ahead_of_the_drain() {
-        let mut headless = crate::game_plugins::schedule_tests::headless_client();
-        assert!(crate::test_support::runs_before(
-            &mut headless,
-            crate::ui_char::feed_char,
-            crate::lanes::fire_in_order,
-        ));
     }
 
     /// The active player's arrival runs its ghost state (`0x5dea50` → `0x5deb2a` → `0x5de9c0`)

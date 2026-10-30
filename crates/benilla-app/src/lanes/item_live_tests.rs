@@ -480,15 +480,19 @@ fn client(window: Window) -> Client {
 /// Wherever the frame's snapshots are current, every item getter answers the same off the cache
 /// and the objects as off the snapshot, across the bags, the bank, the worn slots, the trade and
 /// the mail: the fields the snapshots hold are the ones the live read derives
-/// ([`crate::ui_items::live::LiveItem`]). The inspected slots have no snapshot pushed, and read
+/// ([`crate::ui_items::live::LiveItem`]). The worn slots have no snapshot pushed in game, and the
+/// test seats one ([`crate::ui_char::seat_doll_once`]). The inspected slots have none, and read
 /// the visible block live ([`crate::ui_inspect::InspectLive`]); nor have the bags, the trade or
 /// the mail ([`crate::ui_trade::TradeLive`], [`crate::ui_mail::MailLive`]), which read nothing off
 /// the VM alone.
 #[test]
 fn every_item_getter_answers_the_same_live_as_off_the_snapshot() {
     let mut c = client(Window::Trade);
+    // The doll's copy, which no feed pushes in game, seated for the host-less answer.
+    crate::ui_char::seat_doll_once(c.app.world_mut());
     let (mut snapshot, mut live) = (c.answers(false), c.answers(true));
     let mut c = client(Window::Mail);
+    crate::ui_char::seat_doll_once(c.app.world_mut());
     snapshot.extend(c.answers(false));
     live.extend(c.answers(true));
     // The fixture shows what it means to on every surface.
