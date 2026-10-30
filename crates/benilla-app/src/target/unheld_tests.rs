@@ -179,6 +179,26 @@ fn target_unit_selects_a_party_member_out_of_range_by_guid() {
     assert_eq!(selection(&f), (Some(MEMBER), None));
 }
 
+/// The store's token flag goes on the object it finds as a unit, and on nothing without one
+/// (`0x4936ee`-`0x49372a`); the release's comes off one alike (`0x493999`-`0x4939cc`): a party
+/// member selected out of range takes no flag, and its deselect takes none off.
+#[test]
+fn a_selection_with_no_object_takes_no_token_flag() {
+    let mut f = grouped();
+    let flags = |f: &Fix| {
+        f.app
+            .world()
+            .non_send_resource::<benilla_ui::script::UiScript>()
+            .token_flags_of(MEMBER)
+    };
+    run(&mut f, r#"TargetUnit("party1")"#);
+    assert_eq!(selection(&f), (Some(MEMBER), None));
+    assert_eq!(flags(&f), 0, "no object, no flag");
+    run(&mut f, "ClearTarget()");
+    assert_eq!(selection(&f), (None, None));
+    assert_eq!(flags(&f), 0);
+}
+
 /// The call's own chunk reads the new target at once: a party member selected out of range reads as
 /// its guid does, its name off the name cache (`0x515970`, `0x5171eb`), not the old target's
 /// snapshot.

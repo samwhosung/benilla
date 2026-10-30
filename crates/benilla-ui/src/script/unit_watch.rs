@@ -152,6 +152,17 @@ impl super::UiScript {
         watches.bridges = carry.bridges;
     }
 
+    /// `guid`'s token flags as the writers left them, for a test.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn token_flags_of(&self, guid: u64) -> u32 {
+        self.model_ref()
+            .unit_watches
+            .flags
+            .get(&guid)
+            .copied()
+            .unwrap_or(0)
+    }
+
     /// A writer's change of `guid`'s token flags, at its place.
     pub fn unit_token_flags(&mut self, guid: u64, change: TokenChange) {
         if guid == 0 {

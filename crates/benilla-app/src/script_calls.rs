@@ -688,6 +688,17 @@ impl ScriptCallHost<'_, '_> {
         *mark = self.appliers.reports().mark();
     }
 
+    /// Whether the object manager holds `guid` as a unit, as the selection's lookups ask
+    /// (`0x468460`, then the type's unit bit).
+    fn holds_unit(&mut self, guid: u64) -> bool {
+        let mut held = false;
+        self.appliers
+            .live()
+            .units()
+            .read_tokens(&mut |objects| held = objects.target_of(guid).is_some());
+        held
+    }
+
     /// What `SetSelection` (`0x493540`) signals for a selection this call moved since `at` last
     /// signalled, in its order: the release's `PET_BAR_UPDATE` when it called a possessed unit off
     /// (`0x493a18` → `0x4bd6b4`), the usable refresh (`0x493892`, `0x493a69`), then
@@ -698,22 +709,25 @@ impl ScriptCallHost<'_, '_> {
         if selected == at.selected {
             return false;
         }
+        // The release's token flag off the old selection, ahead of its stop's report and its
+        // `PET_BAR_UPDATE` (`0x4939cc`, `0x493a08`, `0x493a18`), then after them the store's on the
+        // new (`0x49372a`): each on the object its lookup finds as a unit (`0x493999`-`0x4939b8`,
+        // `0x4936ee`-`0x493712`), linking or unlinking its unit-field watchers where the flags
+        // leave or reach 0.
+        use benilla_ui::script::{TokenChange, TOKEN_TARGET};
+        if let Some(old) = at.selected.filter(|&g| self.holds_unit(g)) {
+            script.unit_token_flags(old, TokenChange::Remove(TOKEN_TARGET));
+        }
         self.signal_reports(script, &mut at.mark);
         let appliers = &mut self.appliers;
         script.seat_selection(appliers.select().seated());
         if at.latched && !appliers.pet().attack_latched() {
             script.fire_event("PET_BAR_UPDATE", vec![]);
         }
-        // The teardown's token flag off the old selection (`0x493910` → `0x60c4f0`), then the
-        // store's on the new (`0x493540` → `0x60c4a0`), each linking or unlinking its unit-field
-        // watchers where the flags leave or reach 0.
-        use benilla_ui::script::{TokenChange, TOKEN_TARGET};
-        if let Some(old) = at.selected {
-            script.unit_token_flags(old, TokenChange::Remove(TOKEN_TARGET));
-        }
-        if let Some(guid) = selected {
+        if let Some(guid) = selected.filter(|&g| self.holds_unit(g)) {
             script.unit_token_flags(guid, TokenChange::Add(TOKEN_TARGET));
         }
+        let appliers = &mut self.appliers;
         if let Some(states) = appliers.action_states().as_mut() {
             states.usable_refresh(script).fire(script);
         }
