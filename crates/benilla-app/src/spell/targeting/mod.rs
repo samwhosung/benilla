@@ -1408,6 +1408,7 @@ mod tests {
                 Some(&def),
                 &CastCandidates {
                     selection: Some(guid),
+                    selected: true,
                     selection_held: true,
                     caster: Some(ME),
                     auto_self: Some(ME),
@@ -1658,6 +1659,7 @@ mod tests {
                             Some(&def),
                             &CastCandidates {
                                 selection: Some(guid),
+                                selected: true,
                                 selection_held: true,
                                 caster: Some(ME),
                                 auto_self: Some(ME),

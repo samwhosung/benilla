@@ -615,6 +615,7 @@ mod tests {
             };
             let candidates = CastCandidates {
                 selection: Some(target.0),
+                selected: true,
                 selection_held: true,
                 caster: Some(ME),
                 auto_self: Some(ME),
@@ -692,6 +693,7 @@ mod tests {
                 };
                 let candidates = CastCandidates {
                     selection: Some(target.0),
+                    selected: true,
                     selection_held: true,
                     caster: Some(ME),
                     auto_self: Some(ME),

@@ -387,6 +387,7 @@ mod tests {
             };
             let candidates = CastCandidates {
                 selection: Some(if selection_is_self { ME } else { THEM }),
+                selected: true,
                 selection_held: true,
                 caster: Some(ME),
                 auto_self: Some(ME),

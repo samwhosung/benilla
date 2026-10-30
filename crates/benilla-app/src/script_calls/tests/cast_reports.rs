@@ -1050,3 +1050,26 @@ fn a_bind_refused_out_of_range_goes_on_to_auto_self_cast() {
     run_hosted(&mut f, "UseAction(1)");
     assert_eq!(item_targets(&f), vec![UseItemTarget::Unit(ME)]);
 }
+
+/// `TryCast`'s tail picks its refusal of a standing enemy word by whether anything is selected
+/// (`0x6e5084`), not by the candidate: cast on the player with nothing selected, it is "You have no
+/// target".
+#[test]
+fn the_tails_refusal_reads_the_selection_not_the_candidate() {
+    const BOLT: u32 = 133;
+    let mut f = frame(false);
+    with_book_spell(
+        &mut f,
+        BOLT,
+        "Bolt",
+        benilla_formats::SpellDisplay {
+            implicit_target_a1: 6,
+            ..Default::default()
+        },
+    );
+    record_changes(&mut f);
+    run_hosted(&mut f, &format!(r#"CastSpellByName("Bolt", 1) {CHANGES}"#));
+    let seen = seen(&mut f);
+    assert!(seen.contains("ERR_GENERIC_NO_TARGET"), "{seen}");
+    assert!(!seen.contains("SPELL_FAILED_BAD_TARGETS"), "{seen}");
+}

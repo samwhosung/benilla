@@ -113,8 +113,10 @@ pub(crate) enum CastWireTarget {
 /// fallback (`0x6e53d7`).
 #[derive(Clone, Copy, Default)]
 pub(crate) struct CastCandidates<'a> {
-    /// The current selection (the client's `0xb4e2d8`); benilla never passes an explicit guid.
+    /// The candidate: `TryCast`'s guid, else the selection (the client's `0xb4e2d8`).
     pub(crate) selection: Option<u64>,
+    /// Whether anything is selected, which the tail's refusal reads (`0x6e5084`).
+    pub(crate) selected: bool,
     /// Whether the object manager holds the selection's object: the arm looks the candidate up
     /// (`0x468460` at `0x6e53bc`) and `BindTarget` binds no null object (`0x6e5b5e`).
     pub(crate) selection_held: bool,
@@ -232,6 +234,9 @@ impl UnitLookup for TargetRelations<'_> {
 pub(crate) struct CastContext<'a> {
     /// Where the arm's candidate comes from, so the arm can read it again past its signal.
     pub(crate) candidate: ArmCandidate,
+    /// Whether anything is selected (`0xb4e2d8`), whatever the candidate: `TryCast`'s tail picks
+    /// its refusal by it (`0x6e5084`).
+    pub(crate) selected: bool,
     pub(crate) selection_guid: Option<u64>,
     /// Whether the object manager holds [`Self::selection_guid`]'s object, which the bind needs
     /// (`0x6e53bc`, `0x6e5b5e`).
@@ -401,9 +406,8 @@ impl CastTargeting<'_, '_> {
     /// The context for an attempt passed a unit's guid (`0x6e4b60`'s last argument, as
     /// `InteractWithSpell 0x5f05e0` passes the body's): the range test (`0x6e4f26` → `0x6e4440`)
     /// and the arm's candidate (`0x6e5393`) take it in the selection's place. The arm's refusal of
-    /// an enemy word with nothing bound picks its line off the selection itself (`0x6e50a3`), which
-    /// this context no longer holds; Skinning's word (`Targets` 0x402, implicit target 25) has no
-    /// enemy bit.
+    /// an enemy word with nothing bound still picks its line off the selection itself (`0x6e5084`,
+    /// [`CastContext::selected`]).
     pub(crate) fn context_at(&self, entity: Entity, guid: u64) -> CastContext<'_> {
         CastContext {
             candidate: ArmCandidate::Guid(guid),
@@ -458,6 +462,7 @@ impl CastTargeting<'_, '_> {
                 caster: caster_guid,
                 guid,
             },
+            selected: self.selection.guid.is_some(),
             selection_guid: guid,
             selection_held: target.is_some(),
             self_guid: Some(caster_guid),
@@ -517,6 +522,7 @@ impl CastTargeting<'_, '_> {
         let self_store = self.self_store.iter().next();
         CastContext {
             candidate: ArmCandidate::Selection,
+            selected: self.selection.guid.is_some(),
             selection_guid: guid,
             selection_held: target.is_some(),
             self_guid: self.self_guid.0,
@@ -820,10 +826,11 @@ pub(crate) fn bind_leg(
         }
     }
     // A standing enemy word is refused by the attempt's tail once the arm returns false
-    // (`0x6e507b`-`0x6e50a9`): "Invalid target" with a selection, else "You have no target", with
-    // the spell in flight. Every other residual unit word proceeds to `BindTarget`'s hand cursor.
+    // (`0x6e507b`-`0x6e50a9`): "Invalid target" with anything selected (`0x6e5084`), whatever the
+    // candidate was, else "You have no target", with the spell in flight. Every other residual
+    // unit word proceeds to `BindTarget`'s hand cursor.
     if word & TF_UNIT_ENEMY != 0 {
-        CastWireTarget::RefusedAtArm(if cand.selection.is_some() {
+        CastWireTarget::RefusedAtArm(if cand.selected {
             ERR_INVALID_TARGET
         } else {
             ERR_NO_TARGET
@@ -841,6 +848,7 @@ mod tests {
     fn cands(selection: Option<u64>, caster: Option<u64>) -> CastCandidates<'static> {
         CastCandidates {
             selection,
+            selected: selection.is_some(),
             selection_held: true,
             caster,
             auto_self: caster,
