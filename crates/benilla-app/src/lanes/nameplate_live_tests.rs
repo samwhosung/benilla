@@ -331,6 +331,27 @@ fn a_drunk_player_reads_a_lower_level_on_the_plate_of_a_unit_it_can_attack() {
     );
 }
 
+/// A creature record cached for `entry`.
+fn record(app: &mut App, entry: u32, name: &str) {
+    app.world_mut()
+        .resource_mut::<crate::names::NameCache>()
+        .insert_creature(
+            entry,
+            Some(crate::names::CreatureRecord {
+                name: name.into(),
+                subname: None,
+                creature_type: 1,
+                pet_family: 0,
+                rank: 0,
+                type_flags: 0,
+                pet_spell_list: 0,
+                civilian: false,
+                racial_leader: false,
+                display_id: 0,
+            }),
+        );
+}
+
 /// [`client`] with the frame's gate able to run (`drive_vplates`): both kinds of plate on, the
 /// camera looking down on us, and the boar alone drawn, so the gate gives it the one plate. The
 /// spy's `Look` is the test's; the frame's gate has run once.
@@ -410,4 +431,33 @@ fn a_change_of_our_drunkenness_refreshes_the_kept_plates_level_at_the_frame() {
     );
     crate::vplates::drive_vplates_once(app.world_mut());
     assert_eq!(level(&app), "17");
+}
+
+/// The spatial tests run with both kinds of plate off (`0x60f773` projects where the gate runs):
+/// a script turns them on in a frame whose gate has not run yet, and a packet's gate in it binds
+/// the boar, which the frame before left in view.
+#[test]
+fn a_packets_gate_binds_a_plate_in_the_frame_the_plates_come_on() {
+    let mut app = framed_client("return Shown(Plate())");
+    record(&mut app, BOAR_ENTRY, "Boar");
+    let set_mode = |app: &mut App, on: bool| {
+        app.world_mut().insert_resource(crate::vplates::VPlateMode {
+            enemies: on,
+            friends: on,
+        });
+    };
+    set_mode(&mut app, false);
+    crate::vplates::drive_vplates_once(app.world_mut());
+    set_mode(&mut app, true);
+    assert_eq!(
+        frame(
+            &mut app,
+            vec![
+                values(WOLF, &health(70)),
+                values(BOAR, &[(OBJECT_ENTRY, BOAR_ENTRY)]),
+                values(WOLF, &health(60)),
+            ]
+        ),
+        ["UNIT_HEALTH:target:hidden", "UNIT_HEALTH:target:shown"]
+    );
 }

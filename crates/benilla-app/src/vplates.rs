@@ -403,9 +403,6 @@ fn drive_vplates(
         // Every early return retires the plates first, or the widgets stay on screen; the reference
         // hides each live plate and returns it to the pool (`0x608a10`).
         let mode = *world.mode;
-        if !mode.enemies && !mode.friends {
-            return PlateStep::Retire;
-        }
         // The camera's object (`[cam+0x88]`), resolved with the unit mask alone (`0x60f677`): the
         // far-sight object while the camera follows one (`0x5ee483`, `0x5ee4ae`, whatever its
         // type), else our body. No camera unit (`0x60f685`), or an object that is no unit, a Far
@@ -549,6 +546,13 @@ fn drive_vplates(
                 guid,
                 store,
             ));
+        }
+        // The spatial tests run with both bits off too, for the gate a packet runs once a script
+        // turns them on: the reference's projects there and then (`0x60f773`), so the units in
+        // view are the ones this frame found, not none.
+        if !mode.enemies && !mode.friends {
+            world.spots.0 = spots;
+            return PlateStep::Retire;
         }
         cands.sort_by(|a, b| a.0.total_cmp(&b.0));
         for (_, screen, anchor, rank, is_player, entity, guid, store) in cands {
