@@ -701,23 +701,12 @@ fn on_monster_move(In(ev): In<SessionEvent>, mut sc: Scene) {
                 rooted |= rm.flags & crate::creature_anim::move_flags::ROOT != 0;
             }
         }
-        // The start allocates the mover's spline unless the root refuses it (`0x6187e0` after
-        // `0x6187c2`); a stop within 3 yd allocates its own past the root test (`0x6019be` →
-        // `0x618750` → `0x619300`). A remote mover holds it past the end ([`HeldSpline`]).
+        // Every monster move allocates the mover's spline: a path installs it (`0x6187e0` →
+        // `0x7c62c0`), and a stop or a path the root refuses stops at its point through one
+        // (`0x601fee` → `0x6020cd` → `0x618750` → `0x619300` → `0x7c62c0`). A remote mover holds
+        // it past the end ([`HeldSpline`]).
         if let Some(e) = sc.index.0.get(&guid).copied() {
-            let drawn = match transport {
-                Some(_) => sc.riders.get(e).ok().map(|r| r.local_pos),
-                None => sc
-                    .transforms
-                    .get(e)
-                    .ok()
-                    .map(|t| bevy_to_wow(t.translation)),
-            };
-            let near = drawn.is_some_and(|p| {
-                let d = [p[0] - start[0], p[1] - start[1], p[2] - start[2]];
-                d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < 9.0
-            });
-            if (!rooted || (stop && near)) && !sc.movers.contains(e) {
+            if !sc.movers.contains(e) {
                 sc.commands.entity(e).insert(HeldSpline);
             }
         }
@@ -1007,10 +996,10 @@ fn object_create(
             };
             use crate::creature_anim::move_flags;
             let mut flags = move_flags::merge_server_authored(0, m.flags);
-            // A path the create carries that benilla declines (finished, empty, or
-            // `WOW_CREATE_SPLINE=off`) still ends on the mover: the reference installs it
-            // (`0x619387`), and its next tick finds it at its end and stops the mover (`0x7c5490`
-            // → `0x7c6c00`), so the direction bits the block carried do not drift it on.
+            // A path the create carries still ends on the mover when benilla declines it
+            // (finished, empty, or `WOW_CREATE_SPLINE=off`; the reference declines none, installing
+            // any create path, `0x619371` → `0x619387`): its end stops the mover (`0x61a863` →
+            // `0x7c6c00`), so the direction bits the block carried do not drift it on.
             if carries_path && walk.is_none() {
                 flags &= !super::motion::spline::PATH_END_STOP;
             }

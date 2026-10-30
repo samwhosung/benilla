@@ -891,15 +891,36 @@ fn a_listener_reads_a_move_fired_mid_frame_stepped_on_from_its_fire_time() {
 
 /// A monster move keeps its mover's replay chain: the start flushes the queue and stops the
 /// mover (`0x6187a0` → `0x6185f0`, `0x61aa70`), and nothing of it writes bit 31, `+0xa8`, `+0xac`
-/// or the ring. Rooted, the mover refuses the path before allocating its spline (`0x6187c2`,
-/// `0x6187e0`), so the next move is scheduled, not forced (`0x618c43`). A move stamped 100 ms
-/// further past the mover's last than its arrival is, the next frame, still times against that
-/// last move: standing now, the mover re-bases by the ring's worst lateness, which this move does
-/// not raise, and fires 100 ms past its arrival (`0x618cfc`-`0x618d41`), so the frame's tick
-/// leaves it queued and a later packet's listener reads the member near where it stood.
+/// or the ring. The stop's held spline forces the first move after it (`0x618c43`), which still
+/// times on the chain: stamped a second past the mover's last, it fires a second past that one's
+/// fire (`@0x618d67`), and its apply frees the spline. The second, its stamp not advanced and the
+/// mover standing, re-bases no earlier than the first's fire (`@0x618d3b`), most of a second
+/// away, so the frame's tick leaves it queued and a later packet's listener reads the member
+/// where the first put it.
 #[test]
-fn a_listener_reads_a_member_whose_move_after_a_monster_move_times_on_its_chain() {
-    let mut c = seated(FORWARD);
+fn a_listener_reads_a_member_whose_moves_after_a_stop_time_on_its_chain() {
+    let mut c = seated(0);
+    c.frame(vec![vec![halt(MATE, [500.0, 600.0, 0.0])]]);
+    c.frame(vec![vec![stamped(
+        heartbeat(MATE, [700.0, 800.0, 0.0], 0, None),
+        1000,
+    )]]);
+    c.frame(vec![vec![stamped(
+        heartbeat(MATE, [900.0, 800.0, 0.0], 0, None),
+        1000,
+    )]]);
+    c.frame(vec![vec![member_at(MATE, 20, ELWYNN, (100, 200))]]);
+    let seen: Vec<String> = c.eval(false, "return Maps");
+    assert_eq!(seen, ["0.7,0.8"]);
+}
+
+/// A path the root refuses still holds the mover's spline, so the next move applies at once,
+/// where a later packet's listener reads it: the refusal stops at the path's point through one
+/// (`0x601fee` → `0x6020cd` → `0x618750` → `0x619300`), and a held spline forces the apply
+/// (`0x618c43`).
+#[test]
+fn a_listener_reads_a_rooted_members_move_after_a_refused_path_where_it_put_it() {
+    let mut c = seated(0);
     c.frame(vec![
         vec![SessionEvent::SplineMoveMode {
             guid: MATE,
@@ -913,19 +934,12 @@ fn a_listener_reads_a_member_whose_move_after_a_monster_move_times_on_its_chain(
             100_000,
         )],
     ]);
-    let mate = c.app.world().resource::<crate::net::GuidIndex>().0[&MATE];
-    assert!(
-        c.app.world().get::<crate::net::Spline>(mate).is_none(),
-        "the root refuses the path"
-    );
-    // Its last move fired 48 ms before this one arrives.
-    c.frame(vec![vec![stamped(
-        heartbeat(MATE, [700.0, 800.0, 0.0], FORWARD, None),
-        148,
-    )]]);
-    c.frame(vec![vec![member_at(MATE, 20, ELWYNN, (100, 200))]]);
+    c.frame(vec![
+        vec![heartbeat(MATE, [700.0, 800.0, 0.0], 0, None)],
+        vec![member_at(MATE, 20, ELWYNN, (100, 200))],
+    ]);
     let seen: Vec<String> = c.eval(false, "return Maps");
-    assert_eq!(seen, ["0.5,0.6"]);
+    assert_eq!(seen, ["0.7,0.8"]);
 }
 
 /// A monster move's stop holds its spline, so the next move applies at once, where a later

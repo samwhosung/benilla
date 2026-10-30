@@ -51,10 +51,11 @@ pub(crate) struct Spline {
 #[derive(Component, Debug, Clone, Copy)]
 pub(crate) struct SplineStopped(pub(crate) u32);
 
-/// A remote unit's mover holds a spline (`CMovement+0xa4`), live or ended: a monster move
-/// allocates it (`0x6187e0` → `0x7c62c0`; a stop's `0x619300`), as a create that carries a path
-/// does (`0x619387`), and a path's end frees it only for the active player (`0x619de0`,
-/// `0x619dff`-`0x619e70`). It forces the next relayed move's apply (`0x618c43`), which frees it
+/// A remote unit's mover holds a spline (`CMovement+0xa4`), live or ended: every monster move
+/// allocates it, a path's install (`0x6187e0` → `0x7c62c0`) or, for a stop or a path the root
+/// refuses, its stop at the point (`0x6020cd` → `0x618750` → `0x619300`), as a create that
+/// carries a path does (`0x619387`), and a path's end frees it only for the active player
+/// (`0x619de0`, `0x619dff`-`0x619e70`). It forces the next relayed move's apply (`0x618c43`), which frees it
 /// (`0x618f43` → `0x7c6310`), as a create without a path does (`0x61940c`).
 #[derive(Component, Debug, Clone, Copy)]
 pub(crate) struct HeldSpline;
