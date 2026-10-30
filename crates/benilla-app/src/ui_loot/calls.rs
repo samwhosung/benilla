@@ -85,11 +85,39 @@ pub(crate) struct LootSteps<'w, 's> {
 }
 
 impl LootSteps<'_, '_> {
-    /// A stand state change's loot close inside its call, `0x48f200(1, 1, 0)` at `0x5f07d5`: the
-    /// movement start's close ([`super::LootMoveStart`]), its release sent now.
+    /// A probe line's stand state change's loot close, `0x48f200(1, 1, 0)` at `0x5f07d5`, with
+    /// nobody to signal between its steps: the movement start's close ([`super::LootMoveStart`]),
+    /// its release sent now.
     pub(crate) fn close_for_stand(&mut self) {
         let closed = super::close_on_move_start(&mut self.loot, &mut self.latch, &self.net);
         self.dead.after_close(closed);
+    }
+
+    /// A stand state change's loot close inside its call, `0x48f200(1, 1, 0)` at `0x5f07d5`: what
+    /// `dl` keeps stays ([`super::move_start_keeps`]), anything else closes as `CloseLoot` closes
+    /// it, its release now and the rest owed past `depth`, the depth returned, for the caller to
+    /// run step by step ([`Self::then_past`]) ahead of the stand's attack stop (`0x5f07e7`).
+    pub(crate) fn close_for_stand_here(&mut self, script: &mut UiScript) -> usize {
+        let depth = self.loot.then.len();
+        if let Some(source) = self.loot.source() {
+            if !super::move_start_keeps(&self.loot, source) {
+                self.end_window(script, false);
+            }
+        }
+        depth
+    }
+
+    /// The next step owed past `depth` ([`Self::then`]), as [`LootCall::Resume`] runs it, for the
+    /// caller to run its signals' listeners before the next: whether one ran.
+    pub(crate) fn then_past(&mut self, script: &mut UiScript, depth: usize) -> bool {
+        if self.loot.then.len() <= depth {
+            return false;
+        }
+        let Some(then) = self.loot.then.pop() else {
+            return false;
+        };
+        self.then(script, then);
+        true
     }
 
     /// A movement start's close inside its call, `0x48f200(1, 1, 0)` at `0x60e9dd`: what `dl`

@@ -563,10 +563,25 @@ impl ScriptCallHost<'_, '_> {
             return;
         };
         if leave {
-            self.appliers.loot().close_for_stand();
-            self.stop_attack(script, at);
+            self.leave_stand(script, at);
         }
         self.appliers.stand().finish();
+    }
+
+    /// A stand state change's leave (`0x5f0790`) to a state but 0, each step's signals' listeners
+    /// running where it fires: the loot close (`0x48f200(1, 1, 0)` at `0x5f07d5`), its release,
+    /// its `LOOT_CLOSED` (`0x4c1dac`) and its dead source's deselect (`0x48f369`), then the attack
+    /// stop (`0x5ecac0` at `0x5f07e7`).
+    fn leave_stand(&mut self, script: &mut UiScript, at: &mut Signalled) {
+        let from = self.appliers.select().owed_mark();
+        let depth = self.appliers.loot().close_for_stand_here(script);
+        while self.appliers.loot().then_past(script, depth) {
+            self.at_point(script, at);
+            while let Some(owed) = self.appliers.select().owed_deselect(from) {
+                self.settle_selection(script, at, owed);
+            }
+        }
+        self.stop_attack(script, at);
     }
 
     /// StopAttack (`0x5ecac0`) inside a call, its signals' listeners running where they fire: its
@@ -1174,12 +1189,12 @@ impl CallHost for ScriptCallHost<'_, '_> {
                     self.appliers.chat().send_channel(packet);
                 }
             }
-            // A posture emote's leave stops the attack in place, its listeners running there.
+            // A posture emote's leave closes the loot and stops the attack in place, its listeners
+            // running there.
             ScriptCall::DoEmote(request) => {
                 if let Some(step) = appliers.emote().do_emote(script, request) {
                     if step.leave {
-                        self.appliers.loot().close_for_stand();
-                        self.stop_attack(script, &mut at);
+                        self.leave_stand(script, &mut at);
                     }
                     self.appliers.emote().finish(step);
                 }

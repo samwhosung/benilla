@@ -521,6 +521,57 @@ fn a_refused_assists_slot_cancel_listener_sends_ahead_of_the_saves_cancel() {
     );
 }
 
+/// A sit's leave (`0x5f0790`) closes the loot on the dead `MOB` we swing at and have selected
+/// (`0x48f200` at `0x5f07d5`), whose last step deselects it (`0x48f369` → `0x493910`): that
+/// teardown's stop, its send and its `PLAYER_TARGET_CHANGED` listener's packet go ahead of the
+/// leave's own attack stop (`0x5f07e7`).
+#[test]
+fn a_sits_dead_loot_source_deselect_signals_ahead_of_its_attack_stop() {
+    let mut f = frame(false);
+    spawn_mob(&mut f, &[(2, 0x9), (HEALTH, 0)]);
+    let world = f.app.world_mut();
+    let mob = world.resource::<GuidIndex>().0[&MOB];
+    *world.resource_mut::<Selection>() = Selection {
+        target: Some(mob),
+        guid: Some(MOB),
+        ..Default::default()
+    };
+    let me = world.resource::<GuidIndex>().0[&ME];
+    world
+        .entity_mut(me)
+        .insert(crate::creature_anim::Engaged(MOB));
+    world.resource_mut::<crate::ui_loot::LootState>().open(
+        MOB,
+        benilla_protocol::messages::loot_type::CORPSE,
+        0,
+        Vec::new(),
+    );
+    on_target_changed(&mut f, "RandomRoll(1, 2)");
+    f.rx.try_iter().for_each(drop);
+    run(&mut f, "SitOrStand()");
+    assert_eq!(selected(&f), None);
+    let wire: Vec<String> =
+        f.rx.try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::LootRelease { guid } => Some(format!("LootRelease {guid:#x}")),
+                ClientCommand::AttackStop => Some("AttackStop".to_string()),
+                ClientCommand::SetSelection { guid } => Some(format!("SetSelection {guid:#x}")),
+                ClientCommand::RandomRoll { .. } => Some("RandomRoll".to_string()),
+                _ => None,
+            })
+            .collect();
+    assert_eq!(
+        wire,
+        [
+            "LootRelease 0x31",
+            "AttackStop",
+            "SetSelection 0x0",
+            "RandomRoll",
+            "AttackStop"
+        ]
+    );
+}
+
 /// The keys of the refusals a handler queued for the action feed's lines.
 fn error_keys(f: &Frame) -> Vec<String> {
     f.app

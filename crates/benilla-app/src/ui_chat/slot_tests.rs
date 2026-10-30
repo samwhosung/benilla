@@ -649,6 +649,7 @@ fn posture_wire(c: &mut Client) -> Vec<String> {
             ClientCommand::LootRelease { guid } => Some(format!("release {guid:#x}")),
             ClientCommand::AttackStop => Some("attack stop".into()),
             ClientCommand::TextEmote { text_id, .. } => Some(format!("emote {text_id}")),
+            ClientCommand::RandomRoll { .. } => Some("roll".into()),
             _ => None,
         })
         .collect()
@@ -690,6 +691,40 @@ fn a_sit_emote_releases_the_loot_and_stops_the_attack_ahead_of_its_packet() {
             "sheath 0",
             "stand 1",
             "release 0xf130000000000042",
+            "attack stop",
+            "emote 86"
+        ]
+    );
+}
+
+/// The leave's loot close signals `LOOT_CLOSED` (`0x4c1dac`) inside `0x48f200` (`0x5f07d5`), so
+/// its listeners run before the attack stop's `CMSG_ATTACKSTOP` (`0x5f07e7`).
+#[test]
+fn a_sit_emotes_loot_closed_listener_sends_ahead_of_its_attack_stop() {
+    const CORPSE: u64 = 0xf130_0000_0000_0042;
+    let (mut c, me) = seated_client(&[]);
+    c.world()
+        .entity_mut(me)
+        .insert(crate::creature_anim::Engaged(CORPSE));
+    c.world().resource_mut::<crate::ui_loot::LootState>().open(
+        CORPSE,
+        benilla_protocol::messages::loot_type::CORPSE,
+        0,
+        Vec::new(),
+    );
+    c.run(
+        r#"local r = CreateFrame("Frame")
+        r:RegisterEvent("LOOT_CLOSED")
+        r:SetScript("OnEvent", function() RandomRoll(1, 2) end)"#,
+    );
+    c.run("DoEmote('SIT')");
+    assert_eq!(
+        posture_wire(&mut c),
+        [
+            "sheath 0",
+            "stand 1",
+            "release 0xf130000000000042",
+            "roll",
             "attack stop",
             "emote 86"
         ]
