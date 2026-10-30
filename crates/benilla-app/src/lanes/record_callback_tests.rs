@@ -633,3 +633,68 @@ fn two_waiting_lines_of_one_item_are_written_newest_first_one_per_callback() {
         ]
     );
 }
+
+/// A reconnect drops the item callbacks (`net::session`'s teardown) and the wait list with them:
+/// a line on the same kind and item after it, in the lowest free slot, is the one its callback
+/// frees and writes, never an entry left from before the reconnect in a slot above it.
+#[test]
+fn a_reconnect_clears_the_combat_logs_wait_list() {
+    use benilla_protocol::messages::{ExecuteLog, SpellLogExecute};
+    const PELT: u32 = 900;
+    const LEATHER: u32 = 901;
+    /// [`client`]'s wolf.
+    const WOLF: u64 = 0xF130_0000_0044_0001;
+    let mut app = client();
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(
+            r#"
+            TRADESKILL_LOG_FIRSTPERSON = "You create %s."
+            TRADESKILL_LOG_THIRDPERSON = "%s creates %s."
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("CHAT_MSG_SPELL_TRADESKILLS")
+            f:SetScript("OnEvent", function() table.insert(Seen, arg1) end)
+            "#,
+        )
+        .unwrap();
+    let craft = |caster, item_entry| {
+        SessionEvent::SpellLogExecute(SpellLogExecute {
+            caster,
+            spell_id: 1,
+            effects: vec![(24, vec![ExecuteLog::CreateItem { item_entry }])],
+        })
+    };
+    let answer = |entry, name| SessionEvent::ItemTemplate {
+        entry,
+        info: Some(Box::new(crate::items::test_template(name))),
+    };
+    // The leather's line takes the first slot and the wolf's pelt the second; the leather's
+    // answer frees the first.
+    frame(&mut app, vec![craft(ME, LEATHER), craft(WOLF, PELT)]);
+    frame(&mut app, vec![answer(LEATHER, "Light Leather")]);
+    frame(
+        &mut app,
+        vec![SessionEvent::Disconnected {
+            reason: "lost".into(),
+            end: benilla_protocol::SessionEnd::Lost,
+        }],
+    );
+    // The reconnect's world entry: we are created again.
+    app.world_mut().resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
+    frame(
+        &mut app,
+        vec![super::unit_view_tests::created(
+            ME,
+            benilla_protocol::EntityKind::Player,
+            &[],
+        )],
+    );
+    let me = app.world().resource::<crate::net::GuidIndex>().0[&ME];
+    app.world_mut()
+        .entity_mut(me)
+        .insert(crate::net::SelfPlayer);
+    frame(&mut app, vec![craft(ME, PELT)]);
+    hosted(&mut app, "Seen = {}");
+    let seen = frame(&mut app, vec![answer(PELT, "Wolf Pelt")]);
+    assert_eq!(seen, ["You create Wolf Pelt."]);
+}

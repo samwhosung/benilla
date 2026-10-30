@@ -787,12 +787,15 @@ impl ChatLog {
         });
     }
 
-    /// Drop every pending and held item on disconnect.
+    /// Drop every pending and held item on disconnect, and the combat log's wait list with them:
+    /// the item cache drops their callbacks there ([`crate::items::Items::clear_session`]), so an
+    /// entry left would be freed by a later line's callback in that line's place.
     pub(crate) fn clear_session(&self) {
         let mut q = self.q();
         q.pending.clear();
         q.held.clear();
         q.answers = 0;
+        q.waits.clear();
     }
 
     /// What is parked, in order, by kind: the order a packet batch left the lines in.
