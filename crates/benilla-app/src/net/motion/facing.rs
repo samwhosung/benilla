@@ -192,12 +192,12 @@ fn filter_step(cur: f32, goal: f32, hist: &mut [f32; 4]) -> f32 {
 /// | row | test | goal |
 /// |---|---|---|
 /// | 0 | the body we steer | excluded by [`ActiveMover`] |
-/// | 1 | moving | raw, excluded by [`Spline`] |
+/// | 1 | moving: the mover's flags `& 0xf` (`0x600da5`), a path's or a relay's | raw, excluded: its [`Spline`] or its dead-reckoning shows it ([`moving`]) |
 /// | 2 | `standState != 0` | raw |
 /// | 3 | a state emote lacking [`EMOTE_PERMITS_FACING`] | raw |
 /// | 4 | [`UNIT_FLAG_STUNNED`] | raw |
 /// | 5 | the combat override `+0xc58 & 1` to `+0xcac` (writer `0x624f10`) | not built |
-/// | 6 | a remote player | raw, excluded by [`RemoteMotion`] |
+/// | 6 | unit flag `0x8` on a player (`0x600df6`-`0x600e08`), which vmangos sets on every player | raw: a player is never smoothed ([`smoothed`]) |
 /// | 7 | `UNIT_FIELD_TARGET` resolves | bearing to that unit |
 /// | 9 | this unit is the interaction NPC | bearing to the local player |
 /// | - | none of the above | raw |
@@ -212,16 +212,16 @@ pub(crate) fn drive_display_facing(
     interact: Option<Res<crate::ui_session::InteractNpc>>,
     emotes: Option<Res<crate::sound::EmoteSounds>>,
     candidates: Query<
-        (Entity, &NetEntity, &ObjectStore),
-        (Without<Spline>, Without<RemoteMotion>, Without<ActiveMover>),
+        (Entity, &NetEntity, &ObjectStore, Option<&RemoteMotion>),
+        (Without<Spline>, Without<ActiveMover>),
     >,
     self_q: Query<Entity, With<SelfPlayer>>,
     mut transforms: Query<&mut Transform>,
     mut facings: Query<&mut DisplayFacing>,
-    // A remote player's latch belongs to the remote facing interp; sweeping it here would fight it.
-    latched: Query<Entity, (With<FacingStep>, Without<RemoteMotion>)>,
+    // The latches this pump owns, a smoothed unit's; a player's is its dead-reckoning's.
+    latched: Query<(Entity, &NetEntity), (With<FacingStep>, Without<ActiveMover>)>,
     // A unit that starts moving drops its state, so the next seed reads the pose it stops at.
-    ungoverned: Query<Entity, (With<DisplayFacing>, Or<(With<Spline>, With<RemoteMotion>)>)>,
+    governed: Query<(Entity, Has<Spline>, Option<&RemoteMotion>), With<DisplayFacing>>,
 ) {
     let self_pos = self_q
         .iter()
@@ -232,9 +232,12 @@ pub(crate) fn drive_display_facing(
 
     // Collect goals first, then apply, so no transform is borrowed mutably while another is read.
     let mut goals: Vec<(Entity, Option<f32>, GoalSource)> = Vec::new();
-    for (e, net, store) in &candidates {
-        if net.kind != EntityKind::Unit {
-            continue; // a GameObject sits at its authored facing
+    for (e, net, store, motion) in &candidates {
+        if !smoothed(Some(net.kind), false) {
+            continue; // a GameObject sits at its authored facing; a player is row 6's
+        }
+        if moving(false, motion) {
+            continue; // row 1
         }
         let fields = &store.0;
         // Rows 2-4.
@@ -305,14 +308,23 @@ pub(crate) fn drive_display_facing(
         }
         trace_face(e, source, goal, cur, new);
     }
-    for e in &latched {
-        if !stepping.contains(&e) {
+    for (e, net) in &latched {
+        if smoothed(Some(net.kind), false) && !stepping.contains(&e) {
             commands.entity(e).remove::<FacingStep>();
         }
     }
-    for e in &ungoverned {
-        commands.entity(e).remove::<DisplayFacing>();
+    for (e, splined, motion) in &governed {
+        if moving(splined, motion) {
+            commands.entity(e).remove::<DisplayFacing>();
+        }
     }
+}
+
+/// Row 1 of [`drive_display_facing`]: the mover's flags have a direction bit (`0x600da5`, `test
+/// [mover+0x40],0xf`), which a path sets at its start (`0x7c6a50` → `0x7c6ae0`) and clears at its
+/// end (`0x7c6c00`).
+pub(in crate::net) fn moving(splined: bool, motion: Option<&RemoteMotion>) -> bool {
+    splined || motion.is_some_and(|m| m.flags & crate::creature_anim::move_flags::ANY_MOVE != 0)
 }
 
 /// The `face` trace tag: one line per turning unit per frame, naming the goal-chain row that won.
@@ -670,6 +682,117 @@ mod tests {
     }
 
     /// `0x47f220`'s fixed headings: a point under the unit faces 0.5π, never "no direction".
+    /// A creature's mover state, standing.
+    fn standing() -> RemoteMotion {
+        RemoteMotion {
+            wow_pos: [5.0, 0.0, 0.0],
+            orientation: 0.0,
+            flags: 0,
+            pitch: 0.0,
+            speed: 0.0,
+            vertical_velocity: 0.0,
+            jump_xy_vel: [0.0; 2],
+            fall_start: None,
+            pending: std::collections::VecDeque::new(),
+            relay: Default::default(),
+            last_apply_ms: 0.0,
+            last_apply_pos: [5.0, 0.0, 0.0],
+            fired_at_ms: None,
+        }
+    }
+
+    /// A creature, its mover state standing, at (5, 0) and facing `yaw`, in an app that runs the
+    /// pump.
+    fn creature_with_a_mover(pairs: &[(u16, u32)], yaw: f32) -> (App, Entity) {
+        use benilla_protocol::ObjectFields;
+        let mut app = App::new();
+        app.init_resource::<GuidIndex>()
+            .add_systems(Update, drive_display_facing);
+        app.world_mut()
+            .spawn((SelfPlayer, ActiveMover, Transform::default()));
+        let unit = app
+            .world_mut()
+            .spawn((
+                NetEntity {
+                    kind: EntityKind::Unit,
+                    display_id: None,
+                    scale: 1.0,
+                },
+                ObjectStore(ObjectFields::from_pairs(pairs)),
+                Transform::from_translation(wow_to_bevy([5.0, 0.0, 0.0]))
+                    .with_rotation(Quat::from_rotation_y(yaw)),
+                standing(),
+            ))
+            .id();
+        (app, unit)
+    }
+
+    /// A standing creature's mover state leaves it to the pump: row 1 reads the mover's direction
+    /// bits (`0x600da5`), not whether it has a mover, so it still turns to its target (row 7).
+    #[test]
+    fn a_creature_with_a_mover_still_turns_to_its_target() {
+        // UNIT_FIELD_TARGET is field 16, a guid pair; the victim is guid 7, due north.
+        let (mut app, unit) = creature_with_a_mover(&[(16, 7), (17, 0)], 0.0);
+        let victim = app
+            .world_mut()
+            .spawn(Transform::from_translation(wow_to_bevy([5.0, 5.0, 0.0])))
+            .id();
+        app.world_mut()
+            .resource_mut::<GuidIndex>()
+            .0
+            .insert(7, victim);
+        for _ in 0..24 {
+            app.update();
+        }
+        let yaw = yaw_of(
+            app.world()
+                .entity(unit)
+                .get::<Transform>()
+                .unwrap()
+                .rotation,
+        );
+        assert!(
+            crate::creature_anim::wrap_pi(yaw - FRAC_PI_2).abs() <= DEAD_BAND,
+            "the creature squares up on its target (+pi/2): {yaw}"
+        );
+    }
+
+    /// A path's end writes a smoothed creature's raw facing, which its display turns to over the
+    /// next pumps (`0x600cd0`), not at once: its mover state standing, the pump keeps its state.
+    #[test]
+    fn a_creatures_path_end_facing_is_turned_to_not_snapped() {
+        let (mut app, unit) = creature_with_a_mover(&[], 0.0);
+        app.world_mut()
+            .entity_mut(unit)
+            .insert(DisplayFacing::seeded(FRAC_PI_2));
+        app.update();
+        let first = yaw_of(
+            app.world()
+                .entity(unit)
+                .get::<Transform>()
+                .unwrap()
+                .rotation,
+        );
+        assert!(
+            first > 0.0 && first < FRAC_PI_2,
+            "one pump turns partway toward the end's facing: {first}"
+        );
+        for _ in 0..24 {
+            app.update();
+        }
+        let yaw = yaw_of(
+            app.world()
+                .entity(unit)
+                .get::<Transform>()
+                .unwrap()
+                .rotation,
+        );
+        assert!(
+            crate::creature_anim::wrap_pi(yaw - FRAC_PI_2).abs() <= DEAD_BAND,
+            "and settles on it: {yaw}"
+        );
+    }
+
     #[test]
     fn heading_between_takes_the_references_fixed_headings() {
         let o = [10.0, 20.0, 0.0];

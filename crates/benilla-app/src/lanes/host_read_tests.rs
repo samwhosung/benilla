@@ -62,8 +62,8 @@ const BETWEEN_THE_DISPATCH_AND_THE_DRAIN: &[(&str, &[&str], &str)] = &[];
 /// held to its systems' access by the same test.
 #[rustfmt::skip]
 const AFTER_THE_PACKETS_IN_THE_REFERENCE: &[(&str, &[&str], &str)] = &[
-    ("::net::motion::facing::drive_display_facing", &["Commands net::motion::remote::RemoteMotion",
-        "Commands net::motion::spline::Spline", "Transform"],
+    ("::net::motion::facing::drive_display_facing", &["Commands net::motion::spline::Spline",
+        "Transform"],
         "turns the units' models toward their facing; unit movement is \
          frame time, which the reference runs after the packets (`0x420d63` after `0x420d55`)"),
     ("::net::motion::spline::ground_clamp_creatures", &["Transform",

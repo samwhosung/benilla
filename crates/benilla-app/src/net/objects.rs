@@ -964,24 +964,22 @@ fn object_create(
     // and its flags word (`new & 0x75a07dff` over the word `0x61936e` cleared), and its replay
     // chain re-seeds from the block's stamp and the clock, on its own ring, which a held unit
     // keeps; the queue empties. `UpdateActiveState` (`0x619426` → `0x618940`) then lists it while a
-    // flag of `0x20ff` is set, so a unit created moving is dead-reckoned from its create. The
-    // mover state is [`RemoteMotion`]: every other player's, and a creature's created moving with
-    // no path to walk or already relayed, since a creature's path is its [`Spline`]'s and one
-    // standing has nothing to reckon.
+    // flag of `0x20ff` is set, so a unit created moving is dead-reckoned from its create, and a
+    // standing one is listed by its fall start (`0x619456` → `0x617b00`). Every unit but ours
+    // takes the mover state ([`RemoteMotion`]), a path riding on it ([`Spline`]). Not built: that
+    // fall start (`0x7c61c0`), which needs a landing a remote mover lacks; the clamp grounds a
+    // standing unit instead.
     let motion = matches!(kind, EntityKind::Unit | EntityKind::Player)
         .then_some(mover)
         .flatten()
         .filter(|_| sc.self_guid.0 != Some(guid))
-        .and_then(|m| {
+        .map(|m| {
             let held = match &landing {
                 Landing::Live(e) => sc.remote.get(*e).ok().map(|rm| rm.relay.clone()),
                 Landing::New { .. } => None,
             };
             let flags = crate::creature_anim::move_flags::merge_server_authored(0, m.flags);
-            let moving = flags & crate::creature_anim::move_flags::INTEGRATED != 0;
-            let reckoned =
-                kind == EntityKind::Player || held.is_some() || (moving && walk.is_none());
-            reckoned.then(|| {
+            {
                 let now_ms = sc.real.elapsed_secs_f64() * 1000.0;
                 let mut relay = held.unwrap_or_default();
                 relay.seed_at_create(m.time, now_ms);
@@ -1000,7 +998,7 @@ fn object_create(
                     last_apply_pos: position,
                     fired_at_ms: None,
                 }
-            })
+            }
         });
     let commands = &mut sc.commands;
     match landing {
@@ -1126,6 +1124,7 @@ pub(super) fn object_move(
     index: &GuidIndex,
     transforms: &mut Query<&mut Transform>,
     movers: &Query<(), With<ActiveMover>>,
+    remote: &mut Query<&mut RemoteMotion>,
 ) {
     if let Some(&e) = index.0.get(&guid) {
         if movers.contains(e) {
@@ -1134,6 +1133,11 @@ pub(super) fn object_move(
         commands.entity(e).remove::<Spline>();
         // A yaw only: the GameObjects that get one are transports, which their tick then owns.
         write_pose(commands, transforms, e, position, wire_yaw(orientation));
+        // A unit's mover stands there too, its dead-reckoning going on from the block's pose.
+        if let Ok(mut rm) = remote.get_mut(e) {
+            rm.wow_pos = position;
+            rm.orientation = orientation;
+        }
     }
 }
 

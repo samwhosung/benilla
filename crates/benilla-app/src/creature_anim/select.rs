@@ -837,20 +837,20 @@ pub(crate) fn unify(
         return MovementState { flying, ..*m };
     }
     let granted = modes.map_or(0, |m| m.0);
-    if let Some(r) = remote.filter(|_| spline.is_none()) {
-        return MovementState {
-            speed: r.speed,
-            flags: r.flags | granted,
-            vertical_speed: r.vertical_velocity,
-            flying,
-            ..default()
-        };
-    }
     let swim = if creature_swimming {
         move_flags::SWIMMING
     } else {
         0
     };
+    if let Some(r) = remote.filter(|_| spline.is_none()) {
+        return MovementState {
+            speed: r.speed,
+            flags: r.flags | granted | swim,
+            vertical_speed: r.vertical_velocity,
+            flying,
+            ..default()
+        };
+    }
     let s = spline.map(|s| s.speed()).filter(|s| *s > MOVING_EPSILON);
     MovementState {
         speed: s.unwrap_or(0.0),

@@ -584,6 +584,7 @@ fn on_object_move(In(ev): In<SessionEvent>, mut sc: Scene) {
         &sc.index,
         &mut sc.transforms,
         &sc.movers,
+        &mut sc.remote,
     );
 }
 

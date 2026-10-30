@@ -533,6 +533,8 @@ pub(in crate::net) fn extrapolate_remote_units(
             // Modes from `SMSG_SPLINE_MOVE_*`, which vmangos sends only for a unit it drives; a
             // player's ride the pose, so the union is the reference's one `CMovement+0x40` word.
             Option<&crate::net::UnitMoveModes>,
+            // Whose standing facing the display smoother turns ([`super::facing::smoothed`]).
+            Option<&crate::net::NetEntity>,
         ),
         (Without<Spline>, Without<ActiveMover>),
     >,
@@ -540,7 +542,7 @@ pub(in crate::net) fn extrapolate_remote_units(
     use crate::creature_anim::{ease_strafe_yaw, strafe_body_offset, wrap_pi};
     let frame_dt = time.delta_secs();
     let now_ms = time.elapsed_secs_f64() * 1000.0;
-    for (e, mut t, mut rm, speeds, twist, latched, riding, guid, granted) in &mut q {
+    for (e, mut t, mut rm, speeds, twist, latched, riding, guid, granted, net) in &mut q {
         // The window this mover steps: the frame's, or its rest past a move the tick fired in it.
         let step = match rm.fired_at_ms.take() {
             Some(fired) => {
@@ -586,6 +588,10 @@ pub(in crate::net) fn extrapolate_remote_units(
                 pos = reconcile_lerp(pos, predicted, ev.mv.position, swimming, dt, remaining_s);
             }
         }
+        // A standing creature's facing is the display smoother's, its rows 2 to 9
+        // ([`super::facing::drive_display_facing`]); only a moving one's is its mover's (row 1).
+        let smoother_faces = super::facing::smoothed(net.map(|n| n.kind), false)
+            && !super::facing::moving(false, Some(&rm));
         // A mouse-turning mover sends no turn flag, only facing packets, so a standing, grounded
         // mover's applied yaw latches the shuffle (the reference's display-facing latch,
         // `0x607ed0` to `+0xd58` `0x800`/`0x1000` to `0x712090`, anims 11 and 12).
@@ -601,7 +607,9 @@ pub(in crate::net) fn extrapolate_remote_units(
         } else {
             0.0
         };
-        if step.abs() > super::facing::TURN_LATCH_BAND {
+        if smoother_faces {
+            // The smoother's pump owns the latch.
+        } else if step.abs() > super::facing::TURN_LATCH_BAND {
             commands.entity(e).insert(super::FacingStep(step));
         } else if latched {
             commands.entity(e).remove::<super::FacingStep>();
@@ -629,6 +637,9 @@ pub(in crate::net) fn extrapolate_remote_units(
         let translation = wow_to_bevy(pos);
         if t.translation != translation {
             t.translation = translation;
+        }
+        if smoother_faces {
+            continue;
         }
         // The strafe body pose, as our own avatar's; swimming snaps the display facing to the aim
         // (`0x607ed0`'s `mov [esi+0xc94],[esi+0xc98]`).
@@ -874,6 +885,26 @@ mod under_floor {
             .id();
         app.update(); // seats Position/Rotation and the collider trees
         (app, e)
+    }
+
+    /// A standing creature's dead-reckoning leaves its facing to the display smoother
+    /// ([`super::super::facing::drive_display_facing`]), which turns it from where it shows.
+    #[test]
+    fn a_standing_creatures_facing_is_left_to_the_smoother() {
+        let (mut app, e) = half_arrived_world(0);
+        let shown = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+        app.world_mut().entity_mut(e).insert(crate::net::NetEntity {
+            kind: benilla_protocol::EntityKind::Unit,
+            display_id: None,
+            scale: 1.0,
+        });
+        app.world_mut().get_mut::<Transform>(e).unwrap().rotation = shown;
+        frames(&mut app, 3);
+        assert_eq!(
+            app.world().get::<Transform>(e).unwrap().rotation,
+            shown,
+            "the mover's own facing, 0, does not snap it"
+        );
     }
 
     fn frames(app: &mut App, n: usize) {
