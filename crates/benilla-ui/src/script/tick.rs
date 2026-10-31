@@ -74,15 +74,13 @@ impl Model {
     /// (`0x495409`, `0x495449`), so each handler reads the locks as its event left them: inside a
     /// [`verb`] segment the change is recorded with the segment's events, and outside one it is
     /// made at once, behind the point that ran what waited for the host, as the host makes it; one
-    /// made ahead of a held handler's point is the census's to refuse
-    /// ([`super::census::vm_write`]).
+    /// made ahead of the point of a held handler or of a signal queued on a lane is the census's
+    /// to refuse ([`super::census::vm_write`]).
     pub(crate) fn set_item_lock(&mut self, guid: u64, locked: bool) {
         let was = set_lock_bit(self, guid, locked);
         let Some(segment) = &mut self.verb_events else {
             #[cfg(debug_assertions)]
-            if !self.script_calls.is_empty() {
-                super::census::vm_write("lock");
-            }
+            super::census::vm_write("lock");
             return;
         };
         segment.push(Raised::Lock { guid, locked, was });

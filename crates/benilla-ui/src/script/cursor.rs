@@ -377,16 +377,18 @@ impl CursorWrite {
 /// Make cursor write `op`: inside a verb segment as one record ([`CursorWrite`]), which its
 /// fan-out shows and its replay for the host makes again ([`super::tick::fan_out`]); outside one
 /// at once, and while something waits for the host its records wait behind it, held as a segment
-/// of their own ([`super::Model::hold_behind`]); one made ahead of a held handler's point is the
-/// census's to refuse ([`super::census::vm_write`]). With nothing waiting outside a segment it is
-/// just made.
+/// of their own ([`super::Model::hold_behind`]); one made ahead of the point of a held handler or
+/// of a signal queued on a lane is the census's to refuse ([`super::census::vm_write`]). With
+/// nothing waiting outside a segment it is just made.
 pub(crate) fn write(model: &mut Model, op: CursorOp) {
     let before = model.cursor_state();
     let start = model.verb_events.as_ref().map(Vec::len);
+    #[cfg(debug_assertions)]
+    if start.is_none() {
+        super::census::vm_write("cursor");
+    }
     let behind = start.is_none() && !model.script_calls.is_empty();
     if behind {
-        #[cfg(debug_assertions)]
-        super::census::vm_write("cursor");
         model.verb_events = Some(Vec::new());
     }
     match op.clone() {

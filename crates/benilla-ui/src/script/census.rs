@@ -8,7 +8,8 @@
 //! tests, this crate's and the host's, which asks for it ([`refuse_sends`]), and in a live debug
 //! build only with `BENILLA_SEND_CENSUS_PANIC=1`, else counted alone. The panic goes on by default
 //! once a survey of the stock UI and a smoke run are clean. A write of the VM's own lock bits or
-//! cursor made while a handler is held is refused the same way ([`vm_write`]). With
+//! cursor made while a handler is held or a queued signal waits is refused the same way
+//! ([`vm_write`]). With
 //! `BENILLA_SEND_CENSUS` naming a file, each count is first appended to it as `kind count test
 //! site`, a whole suite's survey (`test` is the test's name under nextest, else its thread's, and
 //! `site` the frames of the app crate that held the first handler). A survey also gives every
@@ -350,9 +351,9 @@ pub(crate) fn vm_write(what: &str) {
     });
     if let Some(kind) = kind {
         panic!(
-            "census: `{kind}` wrote the {what} while a handler it signalled was held, ahead of \
-             the point that runs it: `SignalEvent` (0x703e50) runs every listener before the \
-             verb goes on"
+            "census: `{kind}` wrote the {what} while a handler it signalled was held, or a \
+             signal it queued waited, ahead of the point that runs it: `SignalEvent` (0x703e50) \
+             runs every listener before the verb goes on"
         );
     }
 }
