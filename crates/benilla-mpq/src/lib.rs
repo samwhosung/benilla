@@ -27,7 +27,9 @@ const SIGNATURE: u32 = 0x1A51_504D;
 /// `MPQ\x1B`: a user-data header, which points past itself to the real one.
 const USERDATA_SIGNATURE: u32 = 0x1B51_504D;
 
-const FLAG_IMPLODE: u32 = 0x0000_0100;
+/// The block flags' sector-codec byte (`0x651993`): any bit in it makes the file sectored, and
+/// a shrunken sector reads only when the byte is exactly [`FLAG_COMPRESS`].
+const FLAG_CODEC_MASK: u32 = 0x0000_FF00;
 const FLAG_COMPRESS: u32 = 0x0000_0200;
 const FLAG_ENCRYPTED: u32 = 0x0001_0000;
 const FLAG_SINGLE_UNIT: u32 = 0x0100_0000;
@@ -228,8 +230,9 @@ impl Archive {
         let file = File::open(&idx.path)?;
         let file_pos = idx.archive_offset + block.file_pos as u64;
         let file_size = block.file_size as usize;
-        let compressed = block.flags & (FLAG_COMPRESS | FLAG_IMPLODE) != 0;
-        let implode_only = block.flags & FLAG_IMPLODE != 0 && block.flags & FLAG_COMPRESS == 0;
+        // `0x651450` reads the sector table when any of `0xff00` is set (`0x651549`).
+        let codec_flags = block.flags & FLAG_CODEC_MASK;
+        let compressed = codec_flags != 0;
 
         let file_len = file.metadata()?.len();
         let avail = avail_from(file_len, file_pos);
@@ -241,7 +244,7 @@ impl Archive {
             size: file_size,
             sector_size: idx.sector_size,
             offsets: None,
-            implode_only,
+            codec_flags,
             avail,
             pos: 0,
             sector: None,
@@ -297,7 +300,8 @@ pub struct ArchiveFile {
     sector_size: usize,
     /// The sector offset table, relative to `base`; `None` for a stored file.
     offsets: Option<Vec<u32>>,
-    implode_only: bool,
+    /// The block flags' `0xff00` byte: only [`FLAG_COMPRESS`] runs a codec on a shrunken sector.
+    codec_flags: u32,
     /// Bytes from `base` to the archive's end: the cap on every length read from a header.
     avail: usize,
     /// The read position in the uncompressed file.
@@ -363,9 +367,13 @@ impl ArchiveFile {
             // A sector that would not shrink is stored verbatim.
             raw.truncate(want);
             raw
-        } else if self.implode_only {
-            // IMPLODE sectors carry no method byte; 1.12.1 data has none.
-            decompress(0x08, &raw, want, name)?
+        } else if self.codec_flags != FLAG_COMPRESS {
+            // `0x651993`-`0x65199f`: `and ecx,0xff00; cmp ecx,0x200; jne 0x651a76`, which fails the
+            // read. The image has no explode path, so `0x100` and `0x300` fail like any other.
+            return Err(Error::Unsupported(format!(
+                "{name}: sector {i} is packed under block flags 0x{:X}, which 1.12.1 cannot read",
+                self.codec_flags
+            )));
         } else {
             // COMPRESS: the leading byte is the codec mask, the rest the payload.
             let method = raw[0]; // non-empty: refused above
@@ -981,6 +989,61 @@ mod tests {
             err.contains("sector 0 inflates to 500 bytes, not 512"),
             "{err}"
         );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// `0x651993`-`0x65199f`: a shrunken sector reads only under `0xff00` exactly `0x200`; the
+    /// implode flag alone, with `0x200` or any other codec bit fails the read (`0x651a76`).
+    #[test]
+    fn a_shrunken_sector_reads_only_under_exactly_the_compress_flag() {
+        let plain = three_sector_plain();
+        let stored = sectored(&plain);
+        for (tag, flags) in [
+            ("flags_100", 0x100u32),
+            ("flags_300", 0x300),
+            ("flags_400", 0x400),
+            ("flags_600", 0x600),
+        ] {
+            let (arc, path) = open_temp_kept(
+                tag,
+                &archive_with_one_block("a.bin", FLAG_EXISTS | flags, &stored, plain.len() as u32),
+            );
+            match arc.read_file("a.bin") {
+                Err(Error::Unsupported(e)) => {
+                    assert!(e.contains(&format!("block flags 0x{flags:X}")), "{e}")
+                }
+                other => panic!("flags 0x{flags:X}: expected a failed read, got {other:?}"),
+            }
+            let mut f = arc.open_file("a.bin").unwrap();
+            assert!(f.read(&mut [0u8; 16]).is_err(), "flags 0x{flags:X}: stream");
+            let _ = std::fs::remove_file(&path);
+        }
+        let (arc, path) = open_temp_kept(
+            "flags_200",
+            &archive_with_one_block(
+                "a.bin",
+                FLAG_EXISTS | FLAG_COMPRESS,
+                &stored,
+                plain.len() as u32,
+            ),
+        );
+        assert_eq!(arc.read_file("a.bin").unwrap(), plain);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A sector that did not shrink is copied as it is (`0x651982`), whatever the codec byte.
+    #[test]
+    fn a_stored_sector_reads_under_any_codec_flags() {
+        let plain: Vec<u8> = (0..512u32).map(|i| (i * 7 % 251) as u8).collect();
+        let mut stored = Vec::new();
+        stored.extend_from_slice(&8u32.to_le_bytes());
+        stored.extend_from_slice(&520u32.to_le_bytes());
+        stored.extend_from_slice(&plain);
+        let (arc, path) = open_temp_kept(
+            "stored_sector_100",
+            &archive_with_one_block("a.bin", FLAG_EXISTS | 0x100, &stored, 512),
+        );
+        assert_eq!(arc.read_file("a.bin").unwrap(), plain);
         let _ = std::fs::remove_file(&path);
     }
 
