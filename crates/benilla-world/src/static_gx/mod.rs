@@ -59,8 +59,8 @@ const WORD_WINDOW: u32 = 1 << 26;
 // The batch authors vertex colours. White passes every lane unchanged except INT's
 // ×(1 + 4·MOCV.a) self-illumination, which a colourless entity batch skips, so it keys on this.
 const WORD_HAS_VC: u32 = 1 << 27;
-// `ShadeSel::Matte`, fixed 1.0: a map doodad never reaches the 2.5 site (`0x69e4ad`). Not
-// `WORD_SHADE_LIT`, so lifting the shader's `min(I, 1)` cap leaves this at 1.0.
+// `ShadeSel::Matte`, fixed 1.0: a map doodad never reaches the 2.5 site (`0x69e4ad`), so it is
+// not `WORD_SHADE_LIT`.
 const WORD_MATTE: u32 = 1 << 28;
 // An interior M2 prop is WORD_INTERIOR with WORD_WMO clear, the entity shader's `interior_prop =
 // flags.z && !flags.x`: SH-probe light from its record slot, interior fog, no live point lights.
