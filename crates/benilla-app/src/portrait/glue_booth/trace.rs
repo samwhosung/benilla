@@ -5,7 +5,8 @@
 //! - `select` the look changed (a select or a create dial);
 //! - `bake` the assembly for it landed ([`GluePreviewBake`]);
 //! - `stage` the requested scene file stands, when it was not standing at the select;
-//! - `stand` the booth holds the new look's batches and none of the old;
+//! - `stand` the booth stood a fresh set of batches, `of=look` when they are this look's bake's
+//!   and `of=other` when a stage swap stood the old look again;
 //! - `draw first` / `draw whole` (render world) one, then every, standing batch of the look is
 //!   in a render phase this frame; `draw scene` every batch of the requested scene file.
 //!
@@ -71,12 +72,10 @@ impl ExtractResource for GlueDrawWatch {
 #[derive(Default)]
 struct SelectState {
     seq: u64,
-    /// The character root's batches at the end of the last frame: at a select, the old look's.
+    /// The character root's batches at the end of the last frame.
     last_standing: EntityHashSet,
-    old: EntityHashSet,
     baked: bool,
     staged: bool,
-    stood: bool,
 }
 
 fn ms(since: Option<(Instant, u32)>, frame: u32) -> String {
@@ -143,7 +142,7 @@ fn watch_glue_select(
     booths: Res<Booths>,
     scene: Option<Res<CreateScene>>,
     children: Query<&Children>,
-    meshes: Query<(), With<Mesh3d>>,
+    mesh_of: Query<&Mesh3d>,
     frame: Res<FrameCount>,
     mut watch: ResMut<GlueDrawWatch>,
     mut state: Local<SelectState>,
@@ -154,7 +153,7 @@ fn watch_glue_select(
     let batches = |root: Entity| -> Vec<Entity> {
         children
             .iter_descendants(root)
-            .filter(|e| meshes.contains(*e))
+            .filter(|e| mesh_of.contains(*e))
             .collect()
     };
     let standing = batches(booth.root);
@@ -165,7 +164,6 @@ fn watch_glue_select(
         *state = SelectState {
             seq: watch.seq,
             last_standing: std::mem::take(&mut state.last_standing),
-            old: last_standing,
             staged,
             ..default()
         };
@@ -197,22 +195,41 @@ fn watch_glue_select(
         .filter(|_| staged)
         .map(|s| batches(s.root))
         .unwrap_or_default();
-    let new: Vec<Entity> = standing
-        .iter()
-        .copied()
-        .filter(|e| !state.old.contains(e))
-        .collect();
-    if new.is_empty() || new.len() != standing.len() {
+    // A fresh stand: every batch new since the last frame. It is this look's when the bake is
+    // and every batch draws one of the bake's meshes; a stage swap re-stands the old look too.
+    let fresh = !standing.is_empty() && standing.iter().all(|e| !last_standing.contains(e));
+    if !fresh {
         return;
     }
-    if !state.stood {
-        state.stood = true;
-        benilla_assets::trace::line(
-            TAG,
-            &format!("#{} stand {at} batches={}", watch.seq, new.len()),
-        );
+    let baked: bevy::platform::collections::HashSet<AssetId<Mesh>> = bake
+        .parts
+        .iter()
+        .flat_map(|p| {
+            [
+                Some(p.static_mesh.id()),
+                p.skinned_mesh.as_ref().map(Handle::id),
+            ]
+        })
+        .flatten()
+        .chain(bake.riders.iter().map(|r| r.mesh.id()))
+        .chain(bake.billboards.iter().map(|b| b.mesh.id()))
+        .collect();
+    let ours = bake.look == preview.look
+        && standing
+            .iter()
+            .all(|e| mesh_of.get(*e).is_ok_and(|m| baked.contains(&m.id())));
+    benilla_assets::trace::line(
+        TAG,
+        &format!(
+            "#{} stand {at} batches={} of={}",
+            watch.seq,
+            standing.len(),
+            if ours { "look" } else { "other" }
+        ),
+    );
+    if ours {
+        watch.body = standing;
     }
-    watch.body = new;
 }
 
 /// The render world's half: how many watched batches are in a render phase this frame.
