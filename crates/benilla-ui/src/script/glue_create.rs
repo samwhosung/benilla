@@ -19,9 +19,10 @@
 //! only the range law and the order of the draws are the reference's.
 //!
 //! The 3-D side, the model build into the frame's scene (`0x470b70`), its dressing in the class's
-//! `CharStartOutfit` (`0x470800`), the bake `UpdateCustomizationScene` runs each frame (`0x471300`)
-//! and the facing's rotation (`0x470a50`), is the host's scene drive; what it reads is kept here
-//! ([`super::UiScript::glue_create_look`], [`super::UiScript::glue_create_facing`]).
+//! `CharStartOutfit` (`0x470800`), the composite and wait `UpdateCustomizationScene` runs each
+//! frame (`0x471300`) and the facing's rotation (`0x470a50`), is the host's scene drive; what it
+//! reads is kept here ([`super::UiScript::glue_create_look`],
+//! [`super::UiScript::glue_create_facing`]).
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -888,8 +889,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `0x471810` → `0x471300`: the character bake (`0x477860`) and the scene's advance
-    // (`0x710450`), once per `OnUpdateModel` (`CharacterCreate.lua:325`): the scene drive's.
+    // `0x471810` → `0x471300`: the character's forced composite (`0x477860(1)`, `0x471308`) and
+    // the wait for the whole scene (`IsReady(1, 1)`, `0x710450`, `0x471320`), once per
+    // `OnUpdateModel` (`CharacterCreate.lua:287`): the host's glue stage, after each look change.
     g.set(
         "UpdateCustomizationScene",
         lua.create_function(|_, _: MultiValue| Ok(()))?,

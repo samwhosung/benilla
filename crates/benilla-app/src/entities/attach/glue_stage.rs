@@ -2,26 +2,34 @@
 //! frame in a schedule of their own between `PreUpdate` and `Update`, so the frame's booth stands
 //! what they built.
 //!
-//! A select waits there for its whole stage, as the reference's does. Its build `0x472950` ends on
-//! `IsReady(1, 1)` over the frame's scene model (`0x473083`, `0x710450`), which waits for each
-//! model's file (`0x710520`) and loads every texture it binds (`0x44acf0` with load set, which
-//! waits in `0x44ad50`), the character and pet attached to the scene included (`0x7104e8`), so
-//! the click's own frame holds until the stage is whole and the next frame drawn shows it. The
-//! same frame's paint waits a second time, for the body's composite (`OnUpdateModel` →
-//! `0x473190` → `0x477860(1)`); here the assembly composites on the calling thread
-//! (`SkinComposites::force`), inside this wait. A read that fails ends its wait too: the reader
-//! thread tries `SFile::Read` ten times (`0x443423` to `0x443445`) and queues the read as finished
-//! either way (`0x4434a8`), whose drain marks it done (`0x443eed`), so `AsyncFileReadWait`
-//! (`0x443bd0`) returns; a texture slot with no texture is skipped (`0x71049f`).
+//! Each new stage waits there until it is whole, as the reference's does. A select's build
+//! `0x472950` ends on `IsReady(1, 1)` over the frame's scene model (`0x473083`, `0x710450`), and
+//! the create screen calls it on every paint: `OnUpdateModel` runs `UpdateCustomizationScene`
+//! (`0x471810` → `0x471300`), which forces the character's composite (`0x477860(1)`, `0x471308`)
+//! and then calls `IsReady(1, 1)` (`0x471320`). `IsReady` waits for each model's file
+//! (`0x710520`) and loads every texture it binds (`0x44acf0` with load set, which waits in
+//! `0x44ad50`), the character and pet attached to the scene included (`0x7104e8`), so the frame
+//! holds until the stage is whole and the next frame drawn shows it. The select's paint forces
+//! the composite too (`0x473190` → `0x477860(1)`); here the assembly composites on the calling
+//! thread (`SkinComposites::force`), inside this wait. A create dial loads no model: its setter
+//! (`0x478790`, `0x4785b0`, `0x4784c0`, `0x4783f0`, `0x478660`) remakes composite cells, the
+//! skin's binds the fur (type 8, `0x478160`) and the hair's the hair texture (type 6,
+//! `0x478220`), so its reassembly here finds every model built and waits on the new textures
+//! alone. A read that fails ends its wait too: the reader thread tries `SFile::Read` ten times
+//! (`0x443423` to `0x443445`) and queues the read as finished either way (`0x4434a8`), whose drain
+//! marks it done (`0x443eed`), so `AsyncFileReadWait` (`0x443bd0`) returns; a texture slot with no
+//! texture is skipped (`0x71049f`).
 //!
-//! Here the wait runs one frame after the click: the click's Lua runs in `Update`, so that frame
+//! Here the wait runs one frame after the change: the click's Lua runs in `Update`, so that frame
 //! still draws the old stage, and the next frame waits here, before its `Update` stands the new
 //! one. The reads stay on the asset server's threads and the frame waits on them, landing each
 //! file as it finishes and running the steps whose next files it names: the display models, their
 //! forms and the assembly. The wait ends when the stage is whole, or when nothing it waits on is
 //! still loading and one more pass leaves it short, as when a file failed. Each stage waits once:
-//! a new look, a new scene instance, or the same look again after the stage went away (a logout,
-//! a lost link, the create screen). A create look builds on the asset server's own pace.
+//! a new look (a select, a create dial, race, sex or class), a new scene instance, or the same
+//! look again after the stage went away (a logout, a lost link). Between changes nothing the
+//! stage binds is still loading, so waiting on each change holds the frames the create paint's
+//! wait on every frame holds.
 
 use std::time::{Duration, Instant};
 
@@ -64,18 +72,18 @@ pub(in crate::entities) fn plugin(app: &mut App) {
     }
 }
 
-/// The stage a select waited for: its look, its scene file and the scene's instance.
+/// The stage a look waited for: the look, its scene file and the scene's instance.
 type StageKey = (Option<GlueLook>, Option<GlueSceneFile>, u64);
 
-/// Build the stage's character and pet; on a select's first frame, until its stage is whole.
+/// Build the stage's character and pet; on a new stage's first frame, until it is whole.
 fn build_glue_stage(world: &mut World, mut waited: Local<Option<StageKey>>) {
     build(world);
     let Some(preview) = world.get_resource::<GluePreview>() else {
         return;
     };
-    // Off a select the stage goes away (the world, the create screen, a lost link), and the same
-    // look back is a new build that waits again, as the list's own reselect rebuilds (`0x472950`).
-    if !matches!(preview.look, Some(GlueLook::Select(_))) {
+    // With no look the stage is gone (the world, a lost link), and the same look back is a new
+    // build that waits again, as the list's own reselect rebuilds (`0x472950`).
+    if preview.look.is_none() {
         *waited = None;
         return;
     }
@@ -121,7 +129,7 @@ fn build_glue_stage(world: &mut World, mut waited: Local<Option<StageKey>>) {
 }
 
 /// The assembly of the character and the pet, each once per look. The pet has its own latch, so
-/// outside a select's wait a slow pet model never holds the character back.
+/// outside a stage's wait a slow pet model never holds the character back.
 fn build(world: &mut World) {
     run(world, build_glue_preview);
     run(world, build_glue_pet);
@@ -367,6 +375,20 @@ mod tests {
         GlueLook::Select(look)
     }
 
+    /// A create look, told apart by its skin dial.
+    fn create(skin: u8) -> GlueLook {
+        GlueLook::Create(crate::portrait::CreateLook {
+            race: 1,
+            sex: 0,
+            class: 1,
+            skin,
+            face: 0,
+            hair_style: 0,
+            hair_color: 0,
+            facial_hair: 0,
+        })
+    }
+
     /// The stage alone, over a memory source with the slow and failing loaders.
     fn stage_app() -> App {
         let dir = Dir::default();
@@ -433,28 +455,9 @@ mod tests {
     }
 
     /// A select's frame does not go on while its stage is still being read (`0x473083` waits
-    /// through `0x710450`): after one update its texture is in `Assets`, where a create look's
-    /// frame, which does not wait, has none.
+    /// through `0x710450`): after one update its texture is in `Assets`.
     #[test]
     fn a_select_frame_waits_for_its_stage() {
-        let mut app = stage_app();
-        let create = GlueLook::Create(crate::portrait::CreateLook {
-            race: 1,
-            sex: 0,
-            class: 1,
-            skin: 0,
-            face: 0,
-            hair_style: 0,
-            hair_color: 0,
-            facial_hair: 0,
-        });
-        let texture = stand(&mut app, create, "a.slow");
-        app.update();
-        assert!(
-            !landed(&app, &texture),
-            "the read takes {SLOW_READ:?}, so a frame that does not wait has no texture"
-        );
-
         let mut app = stage_app();
         let texture = stand(&mut app, select(1), "a.slow");
         app.update();
@@ -464,7 +467,29 @@ mod tests {
         );
     }
 
-    /// The wait is the select's: the frames after it stand what lands, on the server's pace.
+    /// The create screen's frame waits for its stage on its first look and again on a dial's, as
+    /// its paint forces the composite and waits on `IsReady(1, 1)` each frame (`0x471308`,
+    /// `0x471320`); a new texture stands in for the one the dial binds (the skin's fur,
+    /// `0x478160`).
+    #[test]
+    fn a_create_change_waits_for_its_stage() {
+        let mut app = stage_app();
+        let first = stand(&mut app, create(0), "a.slow");
+        app.update();
+        assert!(
+            landed(&app, &first),
+            "the create screen's first frame waited for its stage"
+        );
+        let dial = stand(&mut app, create(1), "b.slow");
+        app.update();
+        assert!(
+            landed(&app, &dial),
+            "the dial's frame waited for its texture"
+        );
+    }
+
+    /// The wait is the change's: the frames after it stand what lands, on the server's pace (the
+    /// slow read is longer than a frame that does not wait).
     #[test]
     fn a_select_waits_in_its_own_frame_only() {
         let mut app = stage_app();
@@ -480,7 +505,7 @@ mod tests {
     }
 
     /// The same look back after the stage went away (here the look cleared, as off the glue
-    /// screens or on the create screen) waits again.
+    /// screens) waits again.
     #[test]
     fn the_same_select_after_the_stage_went_away_waits_again() {
         let mut app = stage_app();
