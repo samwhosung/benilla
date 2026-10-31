@@ -287,8 +287,9 @@ enum Step {
     /// teardown's (`0x4c1d36`), after the removal's `LOOT_SLOT_CLEARED` and before the close's
     /// `LOOT_CLOSED`, or a refusal's. Flagged when it needs a live item object.
     Unlock(u64, bool, Window),
-    /// A close's `CMSG_LOOT_RELEASE` (`0x48f311`), past its own unlock's `ITEM_LOCK_CHANGED`
-    /// (`0x48f2bd`) and ahead of its teardown's (`0x4c1d36`).
+    /// A close's `CMSG_LOOT_RELEASE` (`0x48f311`), past what the lane signals ahead of it (a
+    /// removal's `LOOT_SLOT_CLEARED`, `0x4c1f77`) and an item's own unlock's `ITEM_LOCK_CHANGED`
+    /// (`0x48f2bd`), and ahead of its teardown's (`0x4c1d36`).
     Release(u64),
     /// A response's copier (`0x4c1cb0`): the cells its teardown leaves, the ended session's with
     /// the source zeroed (`0x4c1da0`), its `LOOT_CLOSED` while that window is open
@@ -355,9 +356,11 @@ pub(crate) struct LootState {
     /// object. Every other close and the copier's ending put theirs on the lane at their place
     /// ([`close_interaction`], [`Self::open`]), as a refusal's does ([`Self::unlock_item_here`]).
     item_unlocks: Vec<(u64, bool)>,
-    /// The `CMSG_LOOT_RELEASE` such a close owes (`0x48f311`), sent once its own unlock's
-    /// `ITEM_LOCK_CHANGED` listeners have run ([`calls::Then::Release`]).
-    release_owed: Option<u64>,
+    /// The `CMSG_LOOT_RELEASE`s such closes owe (`0x48f311`), innermost last, each sent once
+    /// its line's and its own unlock's listeners have run ([`calls::Then::Release`]): a listener's
+    /// `CloseLoot` inside an outer close's unlock owes its own, as the reference's nested
+    /// `EndLootWindow` sends one of its own.
+    release_owed: Vec<u64>,
     /// The response's copier end, `LOOT_OPENED` or the sweep, waits on its item records: the
     /// copier returns with a fetch outstanding (`0x4c1ea6`) and the cache callback ends it at the
     /// last arrival (`0x4c2afc`).
@@ -798,11 +801,17 @@ impl LootState {
     }
 
     /// A close's own unlock, its release when it sends one, and its teardown's unlock, on the
-    /// lane at its place, each signalling or sending past the one before ([`Step::Release`]).
-    fn queue_source_close(&mut self, guid: u64, source: Source, release: bool) {
+    /// lane at its place, each signalling or sending past the one before ([`Step::Release`]);
+    /// only an item source unlocks. With nothing on the lane ahead of the release it goes now, in
+    /// its place among the handler's sends.
+    fn queue_source_close(&mut self, guid: u64, source: Source, release: Option<&NetCommands>) {
         self.queue_source_unlock(guid, source);
-        if release {
-            self.queue(Step::Release(guid));
+        if let Some(net) = release {
+            if self.steps.is_empty() {
+                let _ = net.0.send(ClientCommand::LootRelease { guid });
+            } else {
+                self.queue(Step::Release(guid));
+            }
         }
         self.queue_source_unlock(guid, source);
     }
@@ -1651,6 +1660,8 @@ fn end_open<X: bevy::ecs::system::SystemParam + 'static>(
             Some(&steps.items),
             Unlocks::InPlace,
         );
+        // `dl` set: no line and no item unlock ahead of the release (`0x48f311`).
+        send_owed_release(&mut steps.loot, &steps.net);
         if closed.is_some() {
             steps.dead.after_close(closed);
             match script {
@@ -1882,24 +1893,19 @@ fn close_with(
     }
     // An item source unlocks twice, each with its `ITEM_LOCK_CHANGED`: the close's own
     // `UnlockItem` (`0x48f2bd`), ahead of the release (`0x48f311`), then the frame teardown's
-    // (`0x4c1d36`), ahead of its `LOOT_CLOSED` (`0x4c1dac`). So an item's release waits for the
-    // first unlock's listeners; any other's goes now. A move-start close, the one with `dl` set,
-    // returns before both and never reaches here with an item.
-    let item = benilla_protocol::guid::is_item(source);
-    if let (Some(commands), false) = (release, item) {
-        let _ = commands.0.send(ClientCommand::LootRelease { guid: source });
-    }
+    // (`0x4c1d36`), ahead of its `LOOT_CLOSED` (`0x4c1dac`). So the release waits for what was
+    // signalled ahead of it: the line its flag shows (`0x48f27b`), an item's first unlock, and on
+    // the lane what the packet signalled before its close (`0x4c1f77`). A move-start close, the
+    // one with `dl` set, returns before both unlocks and never reaches here with an item.
     match unlocks {
         Unlocks::OnTheLane(live) => {
-            if item {
-                loot.queue_source_close(source, live, release.is_some());
-            }
+            loot.queue_source_close(source, live, release);
             loot.clear();
         }
         Unlocks::InPlace => {
             loot.unlock_item_source(source);
-            if item && release.is_some() {
-                loot.release_owed = Some(source);
+            if release.is_some() {
+                loot.release_owed.push(source);
             }
             loot.unlock_item_source(source);
         }
@@ -2001,9 +2007,10 @@ fn unlock_closed_source(
     }
 }
 
-/// A close's owed release (`0x48f311`), past its own unlock's listeners.
+/// The innermost close's owed release (`0x48f311`), past its line's and its own unlock's
+/// listeners.
 fn send_owed_release(loot: &mut LootState, net: &NetCommands) {
-    if let Some(guid) = loot.release_owed.take() {
+    if let Some(guid) = loot.release_owed.pop() {
         let _ = net.0.send(ClientCommand::LootRelease { guid });
     }
 }
@@ -3485,11 +3492,12 @@ mod tests {
             .expect("the close runs as a one-shot system");
     }
 
-    /// Opens a window as an admitted response does: the rows and the latch.
+    /// Opens a window as an admitted response did long ago: the rows and the latch, its
+    /// `LOOT_OPENED` fired.
     fn open_loot(app: &mut App, guid: u64, kind: u8, gold: u32, rows: Vec<LootItem>) {
-        app.world_mut()
-            .resource_mut::<LootState>()
-            .open(guid, kind, gold, rows);
+        let mut loot = app.world_mut().resource_mut::<LootState>();
+        loot.open(guid, kind, gold, rows);
+        loot.signals_fired();
         app.world_mut().resource_mut::<LootLatch>().0 = Some(guid);
     }
 
@@ -3499,13 +3507,22 @@ mod tests {
     #[test]
     fn every_loot_close_deselects_a_dead_unit() {
         let (mut app, rx) = close_app();
-        let released = |rx: &crossbeam_channel::Receiver<ClientCommand>| -> Vec<u64> {
-            rx.try_iter()
+        // What went out, and what waits on the lane behind the removal's `LOOT_SLOT_CLEARED`
+        // (`0x4c1f77` ahead of `0x48f311`).
+        let released = |app: &mut App, rx: &crossbeam_channel::Receiver<ClientCommand>| {
+            let mut out: Vec<u64> = rx
+                .try_iter()
                 .filter_map(|c| match c {
                     ClientCommand::LootRelease { guid } => Some(guid),
                     _ => None,
                 })
-                .collect()
+                .collect();
+            out.extend(
+                app.world_mut()
+                    .resource_mut::<LootState>()
+                    .take_queued_releases(),
+            );
+            out
         };
         app.insert_non_send_resource(UiScript::new().unwrap());
         let close_loot = |app: &mut App| run_hosted(app, "CloseLoot()");
@@ -3519,7 +3536,7 @@ mod tests {
             vec![item(0, 117, 1)],
         );
         close_loot(&mut app);
-        assert_eq!(released(&rx), [CORPSE]);
+        assert_eq!(released(&mut app, &rx), [CORPSE]);
         assert_eq!(app.world().resource::<LootLatch>().0, None);
         assert_eq!(
             deselects(&mut app),
@@ -3538,7 +3555,7 @@ mod tests {
         app.world_mut()
             .run_system_once_with(net::on_removed, SessionEvent::LootRemoved { slot: 0 })
             .unwrap();
-        assert_eq!(released(&rx), [CORPSE]);
+        assert_eq!(released(&mut app, &rx), [CORPSE]);
         assert_eq!(
             deselects(&mut app),
             [CORPSE],
@@ -3550,7 +3567,7 @@ mod tests {
         app.world_mut()
             .run_system_once_with(net::on_clear_money, SessionEvent::LootClearMoney)
             .unwrap();
-        assert_eq!(released(&rx), [CORPSE]);
+        assert_eq!(released(&mut app, &rx), [CORPSE]);
         assert_eq!(deselects(&mut app), [CORPSE], "the coin's close deselects");
 
         // A live pickpocket target keeps the selection.
@@ -3562,7 +3579,7 @@ mod tests {
             vec![item(0, 117, 1)],
         );
         close_loot(&mut app);
-        assert_eq!(released(&rx), [LIVE]);
+        assert_eq!(released(&mut app, &rx), [LIVE]);
         assert!(
             deselects(&mut app).is_empty(),
             "a live unit is not deselected"
@@ -3570,7 +3587,7 @@ mod tests {
 
         // With nothing open, a second `CloseLoot` sends and asks nothing.
         close_loot(&mut app);
-        assert!(released(&rx).is_empty());
+        assert!(released(&mut app, &rx).is_empty());
         assert!(deselects(&mut app).is_empty());
     }
 

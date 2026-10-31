@@ -1422,6 +1422,65 @@ fn a_lockboxs_close_unlocks_it_ahead_of_its_release() {
     }
 }
 
+/// A listener's `CloseLoot` on the close's own unlock (`0x48f2bd` → `0x495420`) runs a nested
+/// `EndLootWindow` while the window is still open, which sends its own release (`0x48f311`)
+/// before the outer one goes on to send its own: two releases.
+#[test]
+fn a_nested_close_on_the_unlock_sends_its_own_release() {
+    let mut l = client();
+    run(
+        &mut l,
+        r#"local f = CreateFrame("Frame")
+        f:RegisterEvent("ITEM_LOCK_CHANGED")
+        f:SetScript("OnEvent", function()
+            if not NESTED then NESTED = true CloseLoot() end
+        end)"#,
+    );
+    open(&mut l, LOCKBOX, 1, 0, vec![row(0, LINEN)]);
+    l.rx.try_iter().for_each(drop);
+    run(&mut l, "CloseLoot()");
+    let released =
+        l.rx.try_iter()
+            .filter(|c| matches!(c, ClientCommand::LootRelease { guid: LOCKBOX }))
+            .count();
+    assert_eq!(released, 2);
+}
+
+/// Every source's release follows what was signalled ahead of it: the last row's removal signals
+/// `LOOT_SLOT_CLEARED` (`0x4c1f77`) before its close sends the release (`0x4c1f8d` → `0x48f311`),
+/// and `CloseLoot(1)` shows `ERR_LOOT_NO_UI` (`0x48f27b`) before it: each listener's packet goes
+/// out first, for a corpse as for an item.
+#[test]
+fn a_corpses_release_follows_the_signals_ahead_of_it() {
+    for how in ["removal", "CloseLoot(1)"] {
+        let mut l = client();
+        run(
+            &mut l,
+            r#"local f = CreateFrame("Frame")
+            f:RegisterEvent("LOOT_SLOT_CLEARED")
+            f:RegisterEvent("UI_ERROR_MESSAGE")
+            f:SetScript("OnEvent", function() RandomRoll(1, 1) end)"#,
+        );
+        open(&mut l, CORPSE, 1, 0, vec![row(0, LINEN)]);
+        l.rx.try_iter().for_each(drop);
+        if how == "removal" {
+            packets(&mut l, vec![SessionEvent::LootRemoved { slot: 0 }]);
+            feed(&mut l);
+        } else {
+            run(&mut l, how);
+        }
+        let wire: Vec<&str> =
+            l.rx.try_iter()
+                .filter_map(|c| match c {
+                    ClientCommand::RandomRoll { .. } => Some("roll"),
+                    ClientCommand::LootRelease { guid: CORPSE } => Some("release"),
+                    _ => None,
+                })
+                .collect();
+        assert_eq!(wire, ["roll", "release"], "{how}");
+    }
+}
+
 /// `OnItemPush` signals `ITEM_PUSH` in the push's handler (`0x491be8`), which touches no loot
 /// window, so its handlers read the window as the packets before it left it: none, here, for a
 /// push ahead of the response.

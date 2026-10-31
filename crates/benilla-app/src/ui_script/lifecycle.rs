@@ -2199,6 +2199,8 @@ mod tests {
             .arm();
         let mut loot = crate::ui_loot::LootState::default();
         loot.open(CORPSE, 1, 0, Vec::new());
+        // Open long ago: its `LOOT_OPENED` has fired.
+        loot.signals_fired();
         world.insert_resource(loot);
         let body = world.spawn_empty().id();
         {

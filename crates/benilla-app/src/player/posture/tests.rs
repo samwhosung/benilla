@@ -213,12 +213,15 @@ fn a_sit_closes_the_loot_and_stops_the_attack_and_a_stand_does_neither() {
     ));
     const CORPSE: u64 = 0xf130_0000_0000_0042;
     let mut apply = |s: u8, stand_now: u8| {
-        world.resource_mut::<crate::ui_loot::LootState>().open(
+        let mut loot = world.resource_mut::<crate::ui_loot::LootState>();
+        loot.open(
             CORPSE,
             benilla_protocol::messages::loot_type::CORPSE,
             0,
             vec![],
         );
+        // Open long ago: its `LOOT_OPENED` has fired.
+        loot.signals_fired();
         world.resource_mut::<crate::ui_loot::LootLatch>().0 = Some(CORPSE);
         world
             .run_system_once(

@@ -1247,9 +1247,10 @@ mod tests {
     #[test]
     fn the_selection_tears_down_the_old_targets_window_before_the_new_one_opens() {
         let (mut world, rx) = tabbed_world();
-        world
-            .resource_mut::<LootState>()
-            .open(KOBOLD, 2, 0, Vec::new());
+        let mut loot = world.resource_mut::<LootState>();
+        loot.open(KOBOLD, 2, 0, Vec::new());
+        // Open long ago: its `LOOT_OPENED` has fired.
+        loot.signals_fired();
         world.resource_mut::<LootLatch>().0 = Some(CORPSE);
         respond(&mut world, CORPSE, 1);
         let sent: Vec<_> = rx.try_iter().collect();
@@ -1637,7 +1638,8 @@ mod tests {
         }
     }
 
-    /// A GO behind the response takes the window it opened, at that GO.
+    /// A GO behind the response takes the window it opened, at that GO, its release behind the
+    /// response's `LOOT_OPENED` still on the lane (`0x48f311` after the copier's end).
     #[test]
     fn a_close_owed_after_the_response_takes_its_window() {
         for (owed, flags) in Owed::BOTH {
@@ -1648,7 +1650,9 @@ mod tests {
             owed.owe(&mut world);
             assert_eq!(world.resource::<LootState>().source(), None, "{owed:?}");
             assert_eq!(world.resource::<LootLatch>().0, None, "{owed:?}");
-            assert_eq!(releases(&rx), [CHEST], "{owed:?}");
+            let mut released = releases(&rx);
+            released.extend(world.resource_mut::<LootState>().take_queued_releases());
+            assert_eq!(released, [CHEST], "{owed:?}");
         }
     }
 

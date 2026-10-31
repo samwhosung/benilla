@@ -289,12 +289,15 @@ fn a_water_walk_or_hover_ack_ends_the_precast_and_a_root_or_feather_fall_ack_doe
             spell_id: 133,
             busy: true,
         });
-        world.resource_mut::<crate::ui_loot::LootState>().open(
+        let mut loot = world.resource_mut::<crate::ui_loot::LootState>();
+        loot.open(
             CORPSE,
             benilla_protocol::messages::loot_type::CORPSE,
             5,
             vec![],
         );
+        // Open long ago: its `LOOT_OPENED` has fired.
+        loot.signals_fired();
         world.resource_mut::<crate::ui_loot::LootLatch>().0 = Some(CORPSE);
         world.write_message(crate::net::MoveModeMessage {
             guid: ME,
@@ -1016,12 +1019,15 @@ fn a_move_key_in_the_air_closes_the_loot_and_ends_a_follow_at_the_press() {
     follow(&mut client);
     const CORPSE: u64 = 0xF130_0000_0000_0042;
     let world = client.app.world_mut();
-    world.resource_mut::<crate::ui_loot::LootState>().open(
+    let mut loot = world.resource_mut::<crate::ui_loot::LootState>();
+    loot.open(
         CORPSE,
         benilla_protocol::messages::loot_type::CORPSE,
         5,
         vec![],
     );
+    // Open long ago: its `LOOT_OPENED` has fired.
+    loot.signals_fired();
     world.resource_mut::<crate::ui_loot::LootLatch>().0 = Some(CORPSE);
     let _ = client.sent.try_iter().count();
     let world = client.app.world_mut();

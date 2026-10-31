@@ -1533,9 +1533,10 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let open = |world: &mut World, guid: u64| {
-            world
-                .resource_mut::<crate::ui_loot::LootState>()
-                .open(guid, 1, 0, Vec::new());
+            let mut loot = world.resource_mut::<crate::ui_loot::LootState>();
+            loot.open(guid, 1, 0, Vec::new());
+            // Open long ago: its `LOOT_OPENED` has fired.
+            loot.signals_fired();
             world.resource_mut::<crate::ui_loot::LootLatch>().0 = Some(guid);
         };
         let source = |world: &World| world.resource::<crate::ui_loot::LootState>().source();

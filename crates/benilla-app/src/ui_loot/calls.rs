@@ -330,7 +330,7 @@ impl LootSteps<'_, '_> {
             }
             self.loot.unlock_item_source(source);
             if released {
-                self.loot.release_owed = Some(source);
+                self.loot.release_owed.push(source);
             }
             self.loot.unlock_item_source(source);
             self.loot.then.push(Then::Announce);
