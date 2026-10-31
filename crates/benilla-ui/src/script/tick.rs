@@ -72,19 +72,20 @@ impl Model {
     /// Set or clear the client's lock on item `guid` ([`Model::item_locks`]): every write but a
     /// fresh VM's seat comes this way. `LockItem` and `UnlockItem` set the bit before they signal
     /// (`0x495409`, `0x495449`), so each handler reads the locks as its event left them: inside a
-    /// [`verb`] segment the change is recorded with the segment's events, and outside one, made
-    /// while something waits for the host, it waits behind them ([`super::calls::Waiting::Lock`]).
+    /// [`verb`] segment the change is recorded with the segment's events, and outside one it is
+    /// made at once, behind the point that ran what waited for the host, as the host makes it; one
+    /// made ahead of a held handler's point is the census's to refuse
+    /// ([`super::census::vm_write`]).
     pub(crate) fn set_item_lock(&mut self, guid: u64, locked: bool) {
         let was = set_lock_bit(self, guid, locked);
-        match &mut self.verb_events {
-            Some(segment) => segment.push(Raised::Lock { guid, locked, was }),
-            None if !self.script_calls.is_empty() => {
-                #[cfg(debug_assertions)]
+        let Some(segment) = &mut self.verb_events else {
+            #[cfg(debug_assertions)]
+            if !self.script_calls.is_empty() {
                 super::census::vm_write("lock");
-                self.push_waiting(super::calls::Waiting::Lock { guid, locked, was });
             }
-            None => {}
-        }
+            return;
+        };
+        segment.push(Raised::Lock { guid, locked, was });
     }
 
     /// Inside a [`verb`] segment, hand `call` to the host in its place among the segment's
@@ -157,15 +158,11 @@ fn roll_back_locks(model: &mut Model, raised: &[Raised]) {
 /// How [`fan_out`] makes a segment's records.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Fan {
-    /// As made: each record shown; a cursor write made while something waits for the host is
-    /// shown, then waits behind it to be made again ([`super::calls::Waiting::Cursor`]).
+    /// As made: each record shown.
     Now,
     /// For the host, a held segment run late: each cursor write made again against the cursor
     /// as it is now, in a segment of its own, its recorded result and records dropped.
     Again,
-    /// A cursor write's own records, shown in place while it waits: its lock writes are made
-    /// bare, as they are the write's and wait with it.
-    Bare,
 }
 
 /// Run one segment of a Lua verb with the model borrowed, then fire every event it raised, in
@@ -220,30 +217,18 @@ pub(crate) fn fan_out(lua: &Lua, raised: Vec<Raised>, how: Fan) {
                 verb(lua, |model| super::cursor::write(model, write.op));
             }
             Raised::CursorWrite(write) => {
-                let waits = !lua
+                // Made behind what an earlier record's handlers left waiting; one made ahead of a
+                // held handler's point is the census's to refuse.
+                #[cfg(debug_assertions)]
+                if !lua
                     .app_data_ref::<Model>()
                     .expect("model app_data set")
                     .script_calls
-                    .is_empty();
-                if waits {
-                    #[cfg(debug_assertions)]
+                    .is_empty()
+                {
                     super::census::vm_write("cursor");
-                    // Queued ahead of what its handlers leave waiting, as it was made before them.
-                    let raised = write.raised.clone();
-                    lua.app_data_mut::<Model>()
-                        .expect("model app_data set")
-                        .push_waiting(super::calls::Waiting::Cursor { write, shown: true });
-                    fan_out(lua, raised, Fan::Bare);
-                } else {
-                    fan_out(lua, write.raised, how);
                 }
-            }
-            Raised::Lock { guid, locked, .. } if how == Fan::Bare => {
-                set_lock_bit(
-                    &mut lua.app_data_mut::<Model>().expect("model app_data set"),
-                    guid,
-                    locked,
-                );
+                fan_out(lua, write.raised, how);
             }
             Raised::Event(event, args) => fire_event_into(lua, &event, args),
             Raised::Call(call) => {

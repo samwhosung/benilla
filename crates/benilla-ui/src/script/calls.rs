@@ -557,8 +557,7 @@ pub(crate) struct CallRaises {
 }
 
 /// What waits for the host, in the order made: a call, or a handler an engine step fired while
-/// the host was out ([`Held`]), each with the input events running when it was made, and the lock
-/// and cursor writes made among them ([`Waiting::Lock`], [`Waiting::Cursor`]).
+/// the host was out ([`Held`]), each with the input events running when it was made.
 #[derive(Clone, Debug)]
 pub(crate) enum Waiting {
     Call(QueuedCall),
@@ -568,24 +567,6 @@ pub(crate) enum Waiting {
         /// The `PlaySound` suppression depth it was fired under (`0x458f50`): a load's or a
         /// sweep's handlers stay silent though they run once the scope has closed.
         muted: u32,
-    },
-    /// A write of item `guid`'s lock bit made while something waited ([`Model::set_item_lock`]):
-    /// `locked` after it, `was` before it. The take puts the bit back ([`take_waiting`]) and the
-    /// write is made again in its place, so what waited ahead of it reads the lock as it stood
-    /// then, as `UnlockItem` (`0x495420`) signals before the step's next write.
-    Lock {
-        guid: u64,
-        locked: bool,
-        was: bool,
-    },
-    /// A cursor write made while something waited ([`super::cursor::write`]): the take puts the
-    /// cursor back as it found it, so what waited ahead of it reads the cursor as it stood then,
-    /// and its operation runs again in its place against the cursor as it is then, as
-    /// `ClearCursor` (`0x495190`) acts on what the cursor holds when it runs. `shown`: Lua the
-    /// turn ran in place made it and its events fired then, so it is made again without them.
-    Cursor {
-        write: Box<super::cursor::CursorWrite>,
-        shown: bool,
     },
 }
 
@@ -620,6 +601,21 @@ impl super::Model {
     pub(crate) fn push_waiting(&mut self, item: Waiting) {
         self.script_calls.push(item);
     }
+
+    /// Hold `raised`, a write's records made outside a segment while something waits for the
+    /// host, behind it as a segment of its own ([`Held::Segment`]), with the input events running
+    /// now.
+    pub(crate) fn hold_behind(&mut self, raised: Vec<super::tick::Raised>) {
+        let input = self.protected.events();
+        let muted = self.sound_suppression;
+        self.push_waiting(Waiting::Lua {
+            held: Held::Segment(raised),
+            input,
+            muted,
+        });
+        #[cfg(debug_assertions)]
+        super::census::held();
+    }
 }
 
 /// Hold `held` for the host, with the input events running now: an engine step fired it while it
@@ -642,10 +638,9 @@ pub(crate) fn signal_waiting(lua: &Lua) -> bool {
         .any(|item| matches!(item, Waiting::Lua { .. }))
 }
 
-/// Take what waits, with the lock bits and the cursor its writes changed put back, last first:
-/// each item then runs against the locks and the cursor as they stood when it was made, and each
-/// write is made again in its place ([`Waiting::Lock`], [`Waiting::Cursor`], a held segment's
-/// own).
+/// Take what waits, with the lock bits and the cursor its held segments' writes changed put back,
+/// last first: each item then runs against the locks and the cursor as they stood when it was
+/// made, and each segment's write is made again in its place.
 fn take_waiting(lua: &Lua) -> VecDeque<Waiting> {
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     let model = &mut *model;
@@ -654,41 +649,16 @@ fn take_waiting(lua: &Lua) -> VecDeque<Waiting> {
     batch.into()
 }
 
-/// Put back, last first, the lock bits and the cursor `batch`'s writes changed.
+/// Put back, last first, the lock bits and the cursor `batch`'s held segments' writes changed.
 fn rewind_waiting(model: &mut Model, batch: &[Waiting]) {
     for item in batch.iter().rev() {
-        match item {
-            Waiting::Lock { guid, was, .. } => {
-                super::tick::set_lock_bit(model, *guid, *was);
-            }
-            Waiting::Cursor { write, .. } => write.rewind(model),
-            Waiting::Lua {
-                held: Held::Segment(raised),
-                ..
-            } => super::tick::rewind(model, raised),
-            Waiting::Lua { .. } | Waiting::Call(_) => {}
+        if let Waiting::Lua {
+            held: Held::Segment(raised),
+            ..
+        } = item
+        {
+            super::tick::rewind(model, raised);
         }
-    }
-}
-
-/// Make a lock write that waited, in its place.
-fn relock(lua: &Lua, guid: u64, locked: bool) {
-    lua.app_data_mut::<Model>()
-        .expect("model app_data")
-        .set_item_lock(guid, locked);
-}
-
-/// Make a cursor write that waited again, in its place, against the cursor as it is now: as the
-/// engine half made it, outside any segment, or with `shown` silently, its events having fired
-/// as it was first made.
-fn rewrite(lua: &Lua, write: Box<super::cursor::CursorWrite>, shown: bool) {
-    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-    if shown {
-        let outer = model.verb_events.replace(Vec::new());
-        super::cursor::write(&mut model, write.op);
-        model.verb_events = outer;
-    } else {
-        super::cursor::write(&mut model, write.op);
     }
 }
 
@@ -881,8 +851,6 @@ fn drain_within(lua: &Lua) {
                 }
             }
             Waiting::Lua { held, input, muted } => replay(lua, &mut script, held, input, muted),
-            Waiting::Lock { guid, locked, .. } => relock(lua, guid, locked),
-            Waiting::Cursor { write, shown } => rewrite(lua, write, shown),
         }
         drain(lua);
     }
@@ -906,8 +874,6 @@ fn settle_within(lua: &Lua, script: &mut UiScript) {
         }
         match item {
             Waiting::Lua { held, input, muted } => replay(lua, script, held, input, muted),
-            Waiting::Lock { guid, locked, .. } => relock(lua, guid, locked),
-            Waiting::Cursor { write, shown } => rewrite(lua, write, shown),
             call @ Waiting::Call(_) => {
                 requeue(lua, [call]);
                 drain(lua);
@@ -967,8 +933,6 @@ fn refuse_waiting_within(lua: &Lua) -> usize {
                     Waiting::Lua { held, input, muted } => {
                         replay(lua, &mut script, held, input, muted)
                     }
-                    Waiting::Lock { guid, locked, .. } => relock(lua, guid, locked),
-                    Waiting::Cursor { write, shown } => rewrite(lua, write, shown),
                 }
             }
         }

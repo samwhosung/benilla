@@ -355,10 +355,10 @@ pub(crate) enum CursorOp {
     Put(CursorPayload),
 }
 
-/// One cursor write as made: the operation, the cursor state it found, and what it raised. Made
-/// while something waits for the host, the take puts that state back ([`CursorWrite::rewind`])
-/// and the operation runs again in its place, against the cursor as it is then, as the
-/// reference's runs after what came ahead of it: never its recorded result.
+/// One cursor write as made inside a verb segment: the operation, the cursor state it found, and
+/// what it raised. Held for the host with its segment, the take puts that state back
+/// ([`CursorWrite::rewind`]) and the operation runs again in its place, against the cursor as it
+/// is then, as the reference's runs after what came ahead of it: never its recorded result.
 #[derive(Clone, Debug)]
 pub(crate) struct CursorWrite {
     pub(crate) op: CursorOp,
@@ -374,15 +374,19 @@ impl CursorWrite {
     }
 }
 
-/// Make cursor write `op`, recorded whole ([`CursorWrite`]): inside a verb segment as one record,
-/// which its fan-out shows and its replay for the host makes again ([`super::tick::fan_out`]);
-/// outside one while something waits for the host, captured and queued behind it, its events
-/// raised when it is made again. With nothing waiting outside a segment it is just made.
+/// Make cursor write `op`: inside a verb segment as one record ([`CursorWrite`]), which its
+/// fan-out shows and its replay for the host makes again ([`super::tick::fan_out`]); outside one
+/// at once, and while something waits for the host its records wait behind it, held as a segment
+/// of their own ([`super::Model::hold_behind`]); one made ahead of a held handler's point is the
+/// census's to refuse ([`super::census::vm_write`]). With nothing waiting outside a segment it is
+/// just made.
 pub(crate) fn write(model: &mut Model, op: CursorOp) {
     let before = model.cursor_state();
     let start = model.verb_events.as_ref().map(Vec::len);
-    let queued = start.is_none() && !model.script_calls.is_empty();
-    if queued {
+    let behind = start.is_none() && !model.script_calls.is_empty();
+    if behind {
+        #[cfg(debug_assertions)]
+        super::census::vm_write("cursor");
         model.verb_events = Some(Vec::new());
     }
     match op.clone() {
@@ -393,17 +397,15 @@ pub(crate) fn write(model: &mut Model, op: CursorOp) {
         return;
     };
     let raised = segment.split_off(start.unwrap_or(0));
-    let write = Box::new(CursorWrite { op, before, raised });
-    if queued {
-        #[cfg(debug_assertions)]
-        super::census::vm_write("cursor");
+    if behind {
         model.verb_events = None;
-        model.push_waiting(super::calls::Waiting::Cursor {
-            write,
-            shown: false,
-        });
+        model.hold_behind(raised);
     } else {
-        segment.push(super::tick::Raised::CursorWrite(write));
+        segment.push(super::tick::Raised::CursorWrite(Box::new(CursorWrite {
+            op,
+            before,
+            raised,
+        })));
     }
 }
 
