@@ -29,7 +29,7 @@ A setting boots at the reference's default unless it is listed here (`docs/METHO
 
 Each entry is the first sentence of a `Deviation:` comment, linking to where it lives.
 
-- [benilla-app](#benilla-app): 254
+- [benilla-app](#benilla-app): 255
 - [benilla-assets](#benilla-assets): 6
 - [benilla-blp](#benilla-blp): 1
 - [benilla-formats](#benilla-formats): 24
@@ -74,14 +74,15 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### bindings
 
-- A press with Super (Cmd) held runs no binding because that way a system chord such as Cmd+Tab or Cmd+Q never acts in game. The reference has no such modifier and runs the bare key's binding: the Mac enqueues the key with Command held and skips only its text (`0x8a519`), and Windows hands `VK_LWIN`/`VK_RWIN` to the layout arm (`0x42da39`) like any key. ([`src/bindings.rs:19`](../crates/benilla-app/src/bindings.rs#L19))
+- A press with Super (Cmd) held runs no binding because that way a system chord such as Cmd+Tab or Cmd+Q never acts in game. The reference has no such modifier and runs the bare key's binding: the Mac enqueues the key with Command held and skips only its text (`mac:08a51e`), and Windows hands `VK_LWIN`/`VK_RWIN` to the layout arm (`0x42da39`) like any key. ([`src/bindings.rs:19`](../crates/benilla-app/src/bindings.rs#L19))
 - A trackpad's `Pixel` deltas are carried until they make a line, and step at most once per event (`crate::ui_script::Record::Wheel`). The reference steps on every `WM_MOUSEWHEEL`, whatever its delta (`0x76c1a9`); the carry is kept because a carried trackpad does not zoom or scroll at its event rate. ([`src/bindings.rs:637`](../crates/benilla-app/src/bindings.rs#L637))
 - Latches die with the VM that made them, because a latch names a command of that VM's table and releasing it against a new one would run another load's up-half. The reference keeps a held key running through `ReloadUI`; here it re-latches on its next press. The held bits die with it, as the key's Stop would have cleared them. ([`src/bindings.rs:682`](../crates/benilla-app/src/bindings.rs#L682))
-- The Windows key table stops at `VK_F12` and drops later F-keys; they are named here because that way a stored `F13`-`F24` can be pressed. ([`src/bindings/chord.rs:165`](../crates/benilla-app/src/bindings/chord.rs#L165))
-- On the Mac and Linux a key its platform reports no character for keeps its US name too, where the Mac reference drops it (`0x8a4aa`), and a Linux dead key not yet pressed bare stays bindable. ([`src/bindings/layout.rs:116`](../crates/benilla-app/src/bindings/layout.rs#L116))
+- The Z key is named `Z` on a Mac too, because the Mac client uppercases only `a`-`y` (`mac:08a3df`) and so names it `z`, which no binding can press; that fault would leave a binding to `Z`, the stock `TOGGLESHEATH` key, unreachable there. ([`src/bindings/chord.rs:111`](../crates/benilla-app/src/bindings/chord.rs#L111))
+- The Windows key table stops at `VK_F12` and drops later F-keys; they are named here because that way a stored `F13`-`F24` can be pressed. ([`src/bindings/chord.rs:171`](../crates/benilla-app/src/bindings/chord.rs#L171))
+- On the Mac and Linux a key its platform reports no character for keeps its US name too, where the Mac reference drops it (`mac:08a4aa`), and a Linux dead key not yet pressed bare stays bindable. ([`src/bindings/layout.rs:116`](../crates/benilla-app/src/bindings/layout.rs#L116))
 - A character above U+00FF names the key by itself because the reference's `MapVirtualKeyA` returns an ANSI code-page byte, which `0x42da4b` drops past `0xff` and the namer's UTF-8 encoder (`0x41abb0`) otherwise reads as Latin-1, so such a key is mislabelled or dropped; named by what it types, it stays bindable and readable. ([`src/bindings/layout.rs:216`](../crates/benilla-app/src/bindings/layout.rs#L216))
-- A layout that is not ASCII-capable (Hebrew, Greek, Russian, Arabic, Thai) names its keys through the ASCII-capable layout macOS pairs with it, as macOS names its own shortcuts, because the reference reads a non-Roman `KCHR`'s byte as MacRoman (`0x8a40f`), which names no real key. ([`src/bindings/layout.rs:290`](../crates/benilla-app/src/bindings/layout.rs#L290))
-- A character above U+00FF (Czech `ě`, Polish `ł`, Turkish `ş`) names the key by itself because the reference reads `KeyTranslate`'s byte as MacRoman (`0x8a40f`) and keeps it only if it converts to Latin-1 (`CFStringGetBytes`, `0x8a46b`, stored at `0x8a482`), else leaves the slot `-1`, which `0x8a4aa` drops, so such a key is mislabelled or dropped; named by what it types, it stays bindable and readable. ([`src/bindings/layout.rs:295`](../crates/benilla-app/src/bindings/layout.rs#L295))
+- A layout that is not ASCII-capable (Hebrew, Greek, Russian, Arabic, Thai) names its keys through the ASCII-capable layout macOS pairs with it, as macOS names its own shortcuts, because the reference reads a non-Roman `KCHR`'s byte as MacRoman (`mac:08a40f`), which names no real key. ([`src/bindings/layout.rs:290`](../crates/benilla-app/src/bindings/layout.rs#L290))
+- A character above U+00FF (Czech `ě`, Polish `ł`, Turkish `ş`) names the key by itself because the reference reads `KeyTranslate`'s byte as MacRoman (`mac:08a40f`) and keeps it only if it converts to Latin-1 (`CFStringGetBytes`, `mac:08a46b`, stored at `mac:08a482`), else leaves the slot `-1`, which `mac:08a4aa` drops, so such a key is mislabelled or dropped; named by what it types, it stays bindable and readable. ([`src/bindings/layout.rs:295`](../crates/benilla-app/src/bindings/layout.rs#L295))
 - The reference saves a full snapshot (`bindings-cache.wtf`); a diff is stored because a full snapshot would leave every command added later unbound for a saved file. ([`src/bindings/store.rs:13`](../crates/benilla-app/src/bindings/store.rs#L13))
 
 #### blob_shadow
