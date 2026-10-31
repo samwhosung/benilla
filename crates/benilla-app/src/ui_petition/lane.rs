@@ -124,9 +124,3 @@ fn fire(script: &mut UiScript, sink: &mut MessageSink, event: PetitionEvent) {
         }
     }
 }
-
-/// Run the close `core` as a step in its place ([`crate::lanes::step`]): what the lanes hold fires
-/// first, so a close never fires ahead of the open it closes, and its signals fire inside it.
-pub(super) fn behind_lane(world: &mut World, core: impl FnOnce(&mut World)) {
-    crate::lanes::step(world, core);
-}

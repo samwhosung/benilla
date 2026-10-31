@@ -110,12 +110,12 @@ impl LatchedWindow for StableOpen {
 
 /// The close core `0x4cae10`: with a stable open, the latch release (`0x4cae24`), the cell
 /// cleared, then `PET_STABLE_CLOSED` (`0x4cae3a`), held behind what the lane still holds
-/// ([`lane::behind_lane`]).
+/// ([`crate::lanes::step`]).
 pub(crate) fn close_core(world: &mut World) {
     if world.resource::<StableOpen>().npc.is_none() {
         return;
     }
-    lane::behind_lane(world, |world| {
+    crate::lanes::step(world, |world| {
         let Some(npc) = world.resource::<StableOpen>().npc else {
             return;
         };

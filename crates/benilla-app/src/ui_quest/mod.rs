@@ -489,7 +489,7 @@ pub(crate) fn close_core(world: &mut World, report: bool) {
             });
         }
     }
-    lane::behind_lane(world, |world| {
+    crate::lanes::step(world, |world| {
         world.resource_mut::<QuestGiver>().clear();
         crate::ui_session::release(world, giver);
         crate::ui_session::fire(world, |script| {

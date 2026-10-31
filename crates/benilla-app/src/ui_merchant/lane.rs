@@ -122,12 +122,6 @@ fn fire(script: &mut UiScript, sink: &mut MessageSink, event: MerchantEvent) {
     }
 }
 
-/// Run the close `core` as a step in its place ([`crate::lanes::step`]): what the lanes hold fires
-/// first, so a close never fires ahead of the open it closes, and its signals fire inside it.
-pub(super) fn behind_lane(world: &mut World, core: impl FnOnce(&mut World)) {
-    crate::lanes::step(world, core);
-}
-
 /// The item records' callbacks a vendor row's or a buy-back row's answer runs, a record or a
 /// refusal alike: `0x4fb0f0` counts the window's waits down and signals with a vendor open at
 /// the last (a count already 0 signals too: `0x4fb0f7`, `0x4fb101`), and `0x4fb570` signals.

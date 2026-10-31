@@ -476,7 +476,7 @@ pub(crate) fn close_core(world: &mut World) {
     let Some(vendor) = world.resource::<MerchantOpen>().vendor else {
         return;
     };
-    lane::behind_lane(world, |world| {
+    crate::lanes::step(world, |world| {
         crate::ui_session::release(world, vendor);
         world.resource_mut::<MerchantOpen>().clear();
         crate::ui_session::fire(world, |script| {

@@ -64,7 +64,7 @@ impl LatchedWindow for BankOpen {
 /// before the clear, so `OnHide`'s `CloseBankFrame()` re-enters with the cell set. It runs behind
 /// the bank lane, so it never fires ahead of an open still queued there.
 pub(crate) fn close_core(world: &mut World) {
-    lane::behind_lane(world, |world| {
+    crate::lanes::step(world, |world| {
         crate::ui_session::fire(world, |script| {
             script.fire_event("BANKFRAME_CLOSED", vec![]);
         });

@@ -803,7 +803,7 @@ pub(crate) fn close_core(world: &mut World) {
     if world.resource::<TrainerOpen>().trainer.is_none() {
         return;
     }
-    lane::behind_lane(world, |world| {
+    crate::lanes::step(world, |world| {
         crate::ui_session::fire(world, |script| {
             script.fire_event("TRAINER_CLOSED", vec![]);
         });

@@ -119,14 +119,14 @@ impl LatchedWindow for GuildRegistrarState {
 
 /// The close core `0x4f5010` as `0x493310` and the leave-world sweep enter it: with a registrar
 /// open, the latch release (`0x4f5024`), the cell cleared, then `GUILD_REGISTRAR_CLOSED`
-/// (`0x4f503a`), held behind what the lane still holds ([`lane::behind_lane`]).
+/// (`0x4f503a`), held behind what the lane still holds ([`crate::lanes::step`]).
 /// `CloseGuildRegistrar` and `GetTabardInfo` run it inside their calls
 /// ([`crate::script_calls::ScriptCallHost`]).
 pub(crate) fn close_core(world: &mut World) {
     if world.resource::<GuildRegistrarState>().npc().is_none() {
         return;
     }
-    lane::behind_lane(world, |world| {
+    crate::lanes::step(world, |world| {
         let Some(npc) = world.resource::<GuildRegistrarState>().npc() else {
             return;
         };
