@@ -13,13 +13,15 @@ anyhow.workspace = true
 clap.workspace = true
 benilla-srp = { path = "../benilla-srp" }
 flate2 = "1.0"
-# The logon challenge's time-zone bias: `localtime_r` on unix, the CRT's zone on Windows.
-libc = "0.2"
 # The logon's draw among a realmlist's addresses.
 rand = "0.8.6"
 sha1.workspace = true
 # Derives `SessionEventKind`, `SessionEvent`'s fieldless twin that the handler table keys on.
 strum = { version = "0.26", features = ["derive"] }
+
+# The logon challenge's time-zone bias on unix, `localtime_r`'s.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 # The SRP probe example re-derives the handshake by hand, to vary what `benilla-srp` fixes.

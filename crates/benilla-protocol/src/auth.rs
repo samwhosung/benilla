@@ -88,18 +88,51 @@ mod zone {
     }
 }
 
+/// `GetTimeZoneInformation`, declared here rather than through a binding crate.
 #[cfg(windows)]
 mod zone {
-    /// The runtime's `_timezone`, `GetTimeZoneInformation`'s standard bias in seconds west.
-    pub(super) fn standard_offset_east() -> Option<i64> {
-        let mut west: libc::c_long = 0;
-        // SAFETY: `_tzset` only rereads the zone; `_get_timezone` writes the one long it is
-        // handed.
-        let err = unsafe {
-            libc::tzset();
-            libc::get_timezone(&mut west)
+    /// `TIME_ZONE_INFORMATION`: its `Bias`, then the names, dates and biases this reads no
+    /// further, 172 bytes in all, as `0x4297c3` reserves.
+    #[repr(C)]
+    struct TimeZoneInformation {
+        bias: i32,
+        _rest: [u8; 168],
+    }
+
+    /// `TIME_ZONE_ID_INVALID`, the failed call's answer.
+    const TIME_ZONE_ID_INVALID: u32 = u32::MAX;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetTimeZoneInformation(info: *mut TimeZoneInformation) -> u32;
+    }
+
+    #[cfg(test)]
+    thread_local! {
+        /// A test's stand-in for the system's answer: its `Bias`, or `None` for a failed call.
+        pub(super) static HELD: std::cell::Cell<Option<Option<i32>>> =
+            const { std::cell::Cell::new(None) };
+    }
+
+    /// The system zone's `Bias` from `GetTimeZoneInformation` (`0x4297d3`, `0x4297de`), minutes
+    /// west of UTC, never the C runtime's `TZ`; `None` when the call fails (`0x4297dc`).
+    fn bias_west() -> Option<i32> {
+        #[cfg(test)]
+        if let Some(held) = HELD.get() {
+            return held;
+        }
+        let mut info = TimeZoneInformation {
+            bias: 0,
+            _rest: [0; 168],
         };
-        (err == 0).then_some(-i64::from(west))
+        // SAFETY: the pointer is to a live record of the size and layout the call writes.
+        let got = unsafe { GetTimeZoneInformation(&mut info) };
+        (got != TIME_ZONE_ID_INVALID).then_some(info.bias)
+    }
+
+    /// The bias negated (`0x4297e4`), in seconds: neither `StandardBias` nor `DaylightBias`.
+    pub(super) fn standard_offset_east() -> Option<i64> {
+        bias_west().map(|west| -i64::from(west) * 60)
     }
 }
 
@@ -473,28 +506,43 @@ mod tests {
         assert_eq!(spelled(PLATFORM_X86), "x86");
     }
 
-    /// Holds `TZ` for a test: the lock keeps two zone tests apart, the drop restores it.
+    /// Holds the system's zone for a test, the drop putting it back: off Windows the zone `TZ`
+    /// names (`tz`), which `localtime_r` reads, under a lock that keeps two zone tests apart; on
+    /// Windows `GetTimeZoneInformation`'s answer, `west` minutes, which `OsGetTimeZoneBias` reads
+    /// and no `TZ` reaches.
     struct Zone {
+        #[cfg(unix)]
         old: Option<std::ffi::OsString>,
+        #[cfg(unix)]
         _lock: std::sync::MutexGuard<'static, ()>,
     }
 
     impl Zone {
-        fn set(tz: &str) -> Self {
+        #[cfg(unix)]
+        fn set(tz: &str, _west: i32) -> Self {
             static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
             let lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
             let old = std::env::var_os("TZ");
             std::env::set_var("TZ", tz);
             Self { old, _lock: lock }
         }
+
+        #[cfg(windows)]
+        fn set(_tz: &str, west: i32) -> Self {
+            super::zone::HELD.set(Some(Some(west)));
+            Self {}
+        }
     }
 
     impl Drop for Zone {
         fn drop(&mut self) {
+            #[cfg(unix)]
             match self.old.take() {
                 Some(v) => std::env::set_var("TZ", v),
                 None => std::env::remove_var("TZ"),
             }
+            #[cfg(windows)]
+            super::zone::HELD.set(None);
         }
     }
 
@@ -502,20 +550,26 @@ mod tests {
     /// the zone's bias negated, minutes east of UTC, without daylight saving's.
     #[test]
     fn the_challenge_carries_the_time_zone_bias() {
-        let bias = |tz: &str| {
-            let _zone = Zone::set(tz);
+        let bias = |tz: &str, west: i32| {
+            let _zone = Zone::set(tz, west);
             let mut out = Vec::new();
             write_logon_challenge(&mut out, "AB", 5875, LOCALE_TAG_EN_US).unwrap();
             i32::from_le_bytes(out[25..29].try_into().unwrap())
         };
-        assert_eq!(bias("NPT-05:45"), 345);
-        let east_coast = if cfg!(windows) {
-            "EST5EDT"
-        } else {
-            "EST5EDT,M3.2.0,M11.1.0"
-        };
-        assert_eq!(bias(east_coast), -300);
-        assert_eq!(bias("UTC0"), 0);
+        assert_eq!(bias("NPT-05:45", -345), 345);
+        assert_eq!(bias("EST5EDT,M3.2.0,M11.1.0", 300), -300);
+        assert_eq!(bias("UTC0", 0), 0);
+    }
+
+    /// A failed `GetTimeZoneInformation` sends a bias of 0 (`0x4297eb`).
+    #[test]
+    #[cfg(windows)]
+    fn a_failed_zone_query_sends_no_bias() {
+        super::zone::HELD.set(Some(None));
+        let mut out = Vec::new();
+        write_logon_challenge(&mut out, "AB", 5875, LOCALE_TAG_EN_US).unwrap();
+        super::zone::HELD.set(None);
+        assert_eq!(i32::from_le_bytes(out[25..29].try_into().unwrap()), 0);
     }
 
     /// The whole challenge for account `AB` on an enGB install: the locale tag as `0x5b2115` loads
@@ -523,7 +577,7 @@ mod tests {
     /// `net/login#logon-challenge`).
     #[test]
     fn the_challenge_carries_the_locale_tag() {
-        let _zone = Zone::set("UTC0");
+        let _zone = Zone::set("UTC0", 0);
         let mut out = Vec::new();
         write_logon_challenge(&mut out, "AB", 5875, u32::from_be_bytes(*b"enGB")).unwrap();
         let mut want = vec![
