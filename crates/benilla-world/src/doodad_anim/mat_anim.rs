@@ -272,9 +272,10 @@ impl UvAnimEntry {
             } => {
                 let age = now - attached_at;
                 let band_t = playing.map_or(age, |(_, t)| t);
+                // The playing slot's own loop where the slots differ, so a dead slot holds
+                // still; the slot-0 loop only where they do not.
                 seqs.as_ref()
-                    .and_then(|s| s.seq(playing.map(|(seq, _)| seq)))
-                    .or(single.as_deref())
+                    .map_or(single.as_deref(), |s| s.seq(playing.map(|(seq, _)| seq)))
                     .map_or([0.0, 0.0], |l| l.sample(l.clock(band_t, f64::from(age))))
             }
         };
@@ -467,13 +468,9 @@ impl UvAnimEntry {
     fn resolved(&self, playing: Option<(usize, f32)>) -> Option<&benilla_formats::UvAnim> {
         match &self.anim {
             UvLoop::Shared(a) => a.as_deref(),
-            UvLoop::PerSeq { seqs, single, .. } => seqs
+            UvLoop::PerSeq { seqs, single, .. } | UvLoop::Instance { seqs, single, .. } => seqs
                 .as_ref()
                 .map_or(single.as_deref(), |s| s.seq(playing.map(|(seq, _)| seq))),
-            UvLoop::Instance { seqs, single, .. } => seqs
-                .as_ref()
-                .and_then(|s| s.seq(playing.map(|(seq, _)| seq)))
-                .or(single.as_deref()),
         }
     }
 
@@ -1607,6 +1604,27 @@ mod delta_tests {
             "stage 1 holds there too, not on slot 0's loop"
         );
         assert_ne!(at(0)[1].1, still, "slot 0 scrolls");
+    }
+
+    /// The effect lane resolves the playing slot as the per-placement lane does: a slot with no
+    /// loop beside one that scrolls holds still, never on slot 0's loop.
+    #[test]
+    fn a_dead_slot_holds_an_effect_still() {
+        let mut e = fx_entry(0.0);
+        e.anim = UvLoop::Instance {
+            seqs: Some(std::sync::Arc::new(
+                benilla_formats::SeqLoops::new(vec![Some((*uv_loop()).clone()), None])
+                    .expect("slot 0 animates"),
+            )),
+            single: Some(uv_loop()),
+            host: Entity::from_raw_u32(11).expect("a valid test entity"),
+            attached_at: 0.0,
+        };
+        let still = [0.0; 4];
+        assert_eq!(e.delta(5.0, 5.0, Some((1, 0.5))), still, "slot 1 holds");
+        assert!(e.resolved(Some((1, 0.5))).is_none(), "the probe agrees");
+        assert_ne!(e.delta(5.0, 5.0, Some((0, 0.5))), still, "slot 0 scrolls");
+        assert_ne!(e.delta(0.5, 5.0, None), still, "no player yet: slot 0");
     }
 
     /// A batch that turns over a constant translation keeps the translation: the shared lane
