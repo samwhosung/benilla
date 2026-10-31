@@ -401,6 +401,15 @@ mod tests {
         }
     }
 
+    /// The layer chain is the full 256 chain, 256 down to 1 (`0x5a4ac0`).
+    #[test]
+    fn the_layer_chain_runs_to_one_by_one() {
+        assert_eq!(
+            LAYER_MIP_COUNT as usize,
+            benilla_formats::full_mip_count(LAYER_TEX_SIZE, LAYER_TEX_SIZE)
+        );
+    }
+
     #[test]
     fn a_tile_passes_its_blocks_through_only_when_every_clause_holds() {
         let ok = || {

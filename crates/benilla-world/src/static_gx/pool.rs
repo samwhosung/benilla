@@ -208,7 +208,7 @@ impl GxTexturePool {
                         dst,
                         // Rounded up to whole blocks: wgpu-core's `validate_texture_copy_range`
                         // rejects a partial block even for a whole mip, and a BLP chain ends at
-                        // 2x2, under one BC block. Uncompressed blocks are 1x1.
+                        // 1x1, under one BC block. Uncompressed blocks are 1x1.
                         Extent3d {
                             width: (class.size.width >> mip).max(1).div_ceil(block_w) * block_w,
                             height: (class.size.height >> mip).max(1).div_ceil(block_h) * block_h,

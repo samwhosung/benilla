@@ -75,10 +75,14 @@ const PALETTE_SIZE: usize = 256 * 4;
 /// A cap on the header's dimensions, which size the buffers (1.12 art stops at 1024×1024).
 const MAX_DIM: u32 = 8192;
 
+/// The levels from `width` by `height` down to 1 by 1: `0x5a4ac0`, and `0x44ae70` for a TGA's.
+pub fn full_mip_count(width: u32, height: u32) -> usize {
+    width.max(height).max(1).ilog2() as usize + 1
+}
+
 fn mip_chain_count(width: u32, height: u32, has_mipmaps: bool) -> usize {
     if has_mipmaps {
-        // `0x5a4ac0`: halve both sides, each held at 1, counting a level until both are 1.
-        width.max(height).max(1).ilog2() as usize + 1
+        full_mip_count(width, height)
     } else {
         0
     }

@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use benilla_dbc::{DbcParser, FieldType, Schema, SchemaField};
 
 /// The BLP texel forms, re-exported for [`BlpMipChain::texels`].
-pub use benilla_blp::BlpTexels;
+pub use benilla_blp::{full_mip_count, BlpTexels};
 
 mod chain;
 pub use chain::{Chain, ChainEntry};
