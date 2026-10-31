@@ -648,16 +648,38 @@ pub(crate) enum ItemUseRoute {
     /// `0x5d926d`) locally and sends nothing. Only the worn hand the disarm hides (slot 15 or 16)
     /// is refused, and the rung sits above the bind confirm (`0x5d91d6`) and the cast tail.
     CantUseDisarmed,
+    /// Rung 16: a shapeshifted player whose form row bars the item is refused
+    /// `ERR_NO_ITEMS_WHILE_SHAPESHIFTED` (`0x15e`, `0x5d914d`) and nothing is sent. It sits below
+    /// the disarmed refusal and above the toggle scan, the bind ask and the cast tail.
+    NoItemsShapeshifted,
+}
+
+/// `0x5d9105`-`0x5d914d`: whether the player's form refuses an item. A form is shapeshifted
+/// (`IsShapeShifted`, `0x60e9f0`) when the byte is nonzero and its `SpellShapeshiftForm` row is
+/// not a stance (`flags1` bit 0); the row (`+0x2c`) then passes the item with bit `0x8`, or with
+/// bit `0x40` for an equippable one (`0x5d9ff0`, a nonzero inventory type). A form with no row
+/// passes (`0x5d9134`).
+pub(crate) fn form_refuses_item(
+    forms: &std::collections::HashMap<u32, benilla_formats::ShapeshiftForm>,
+    form: u8,
+    equippable: bool,
+) -> bool {
+    form != 0
+        && forms
+            .get(&u32::from(form))
+            .is_some_and(|row| !row.is_stance() && !row.allows_items(equippable))
 }
 
 /// [`ItemUseRoute`]'s decision, in the reference's order: quest offer (`0x5d8dcc`), charter
-/// (`0x5d8f95`), disarmed refusal, toggle scan (`0x5d9157`), cast tail (`0x5d9249`). The toggle
-/// predicate and the disarmed hand are caster state, passed in; a `None` guid cannot address a
+/// (`0x5d8f95`), disarmed refusal, form refusal (`0x5d9105`), toggle scan (`0x5d9157`), cast tail
+/// (`0x5d9249`). The toggle predicate, the disarmed hand and the form refusal are caster state,
+/// passed in; a `None` guid cannot address a
 /// questgiver, so it falls through to the ordinary path.
 pub(crate) fn item_use_route(
     it: ItemUse,
     aura_cancels: impl Fn(u32) -> bool,
     disarmed_hand: Option<u8>,
+    form_refuses: bool,
 ) -> ItemUseRoute {
     if let Some(npc) = it.guid.filter(|_| it.start_quest != 0) {
         return ItemUseRoute::QuestOffer {
@@ -673,6 +695,9 @@ pub(crate) fn item_use_route(
     // scanning the worn guids for the item.
     if disarmed_hand.is_some() && it.bag_index == PLAYER_ARRAY && Some(it.slot) == disarmed_hand {
         return ItemUseRoute::CantUseDisarmed;
+    }
+    if form_refuses {
+        return ItemUseRoute::NoItemsShapeshifted;
     }
     match it.use_spell {
         Some(spell) if aura_cancels(spell) => ItemUseRoute::ToggleCancel(spell),
@@ -742,7 +767,30 @@ pub(crate) fn send_item_use(
     let disarmed_hand = ctx.rel.self_store.and_then(|store| {
         crate::items::disarmed_equipment_slot(store, &ladder.objects, &ladder.items)
     });
-    match item_use_route(it, aura_cancels, disarmed_hand) {
+    // The form test (`0x5d9105`) reads the template's inventory type (`0x5d9ff0`).
+    let form_refuses = {
+        let form = ctx.rel.self_store.map_or(0, |s| s.0.unit_shapeshift_form());
+        let equippable = ladder
+            .items
+            .template(
+                it.entry,
+                it.guid.unwrap_or(0),
+                crate::query_cache::Ask::Read,
+            )
+            .is_some_and(|t| t.inventory_type != 0);
+        ladder
+            .spells
+            .as_ref()
+            .is_some_and(|s| form_refuses_item(&s.forms, form, equippable))
+    };
+    match item_use_route(it, aura_cancels, disarmed_hand, form_refuses) {
+        ItemUseRoute::NoItemsShapeshifted => {
+            debug!("ui_items: item use refused — shapeshifted");
+            ui_errors.push(crate::ui_action::UiError::key(
+                "ERR_NO_ITEMS_WHILE_SHAPESHIFTED",
+            ));
+            false
+        }
         ItemUseRoute::CantUseDisarmed => {
             debug!(
                 "ui_items: item use refused — that hand is disarmed (slot {})",
@@ -1108,12 +1156,12 @@ mod tests {
         let never = |_: u32| false;
 
         assert_eq!(
-            item_use_route(worn(15), never, Some(15)),
+            item_use_route(worn(15), never, Some(15), false),
             ItemUseRoute::CantUseDisarmed
         );
         // A disarmed dual-wielder's other hand is not hidden.
         assert_eq!(
-            item_use_route(worn(16), never, Some(15)),
+            item_use_route(worn(16), never, Some(15), false),
             ItemUseRoute::Cast(8690)
         );
         // The same item in a bag is not worn, so it is never this refusal.
@@ -1124,18 +1172,19 @@ mod tests {
                     ..worn(15)
                 },
                 never,
-                Some(15)
+                Some(15),
+                false
             ),
             ItemUseRoute::Cast(8690)
         );
         // Flag down: nothing is hidden.
         assert_eq!(
-            item_use_route(worn(15), never, None),
+            item_use_route(worn(15), never, None, false),
             ItemUseRoute::Cast(8690)
         );
         // The off hand hidden: the ladder's empty or non-weapon main-hand rung.
         assert_eq!(
-            item_use_route(worn(16), never, Some(16)),
+            item_use_route(worn(16), never, Some(16), false),
             ItemUseRoute::CantUseDisarmed
         );
     }
@@ -1158,25 +1207,25 @@ mod tests {
         };
         let never = |_| false;
         assert_eq!(
-            item_use_route(it(Some(letter), 373, None), never, None),
+            item_use_route(it(Some(letter), 373, None), never, None, false),
             ItemUseRoute::QuestOffer {
                 npc: letter,
                 quest: 373
             }
         );
         assert_eq!(
-            item_use_route(it(Some(letter), 0, Some(8690)), never, None),
+            item_use_route(it(Some(letter), 0, Some(8690)), never, None, false),
             ItemUseRoute::Cast(8690),
             "a hearthstone takes the cast tail"
         );
         assert_eq!(
-            item_use_route(it(Some(letter), 0, None), never, None),
+            item_use_route(it(Some(letter), 0, None), never, None, false),
             ItemUseRoute::Nothing,
             "no ON_USE block — the ref sends nothing"
         );
         // No resolved instance: nothing to address, so the ordinary path runs.
         assert_eq!(
-            item_use_route(it(None, 373, Some(8690)), never, None),
+            item_use_route(it(None, 373, Some(8690)), never, None, false),
             ItemUseRoute::Cast(8690)
         );
     }
@@ -1199,22 +1248,22 @@ mod tests {
         };
         let never = |_| false;
         assert_eq!(
-            item_use_route(it(Some(charter), true, None), never, None),
+            item_use_route(it(Some(charter), true, None), never, None, false),
             ItemUseRoute::ShowPetition { item: charter },
             "the charter opens its petition window"
         );
         // Without the flag, the same item is the reference's silent no-op.
         assert_eq!(
-            item_use_route(it(Some(charter), false, None), never, None),
+            item_use_route(it(Some(charter), false, None), never, None, false),
             ItemUseRoute::Nothing
         );
         // No resolved instance: it falls through, as the quest fork does.
         assert_eq!(
-            item_use_route(it(None, true, None), never, None),
+            item_use_route(it(None, true, None), never, None, false),
             ItemUseRoute::Nothing
         );
         assert_eq!(
-            item_use_route(it(None, true, Some(8690)), never, None),
+            item_use_route(it(None, true, Some(8690)), never, None, false),
             ItemUseRoute::Cast(8690)
         );
     }
@@ -1237,18 +1286,18 @@ mod tests {
         };
         let mounted = |spell: u32| spell == SUMMON_HORSE;
         assert_eq!(
-            item_use_route(it(0, Some(SUMMON_HORSE)), mounted, None),
+            item_use_route(it(0, Some(SUMMON_HORSE)), mounted, None, false),
             ItemUseRoute::ToggleCancel(SUMMON_HORSE),
             "mounted: the click dismounts — CMSG_CANCEL_AURA, no CMSG_USE_ITEM",
         );
         assert_eq!(
-            item_use_route(it(0, Some(SUMMON_HORSE)), |_| false, None),
+            item_use_route(it(0, Some(SUMMON_HORSE)), |_| false, None, false),
             ItemUseRoute::Cast(SUMMON_HORSE),
             "not mounted: the very same click casts",
         );
         // Order: the quest offer forks at `0x5d8dcc`, above the toggle scan at `0x5d9157`.
         assert_eq!(
-            item_use_route(it(373, Some(SUMMON_HORSE)), mounted, None),
+            item_use_route(it(373, Some(SUMMON_HORSE)), mounted, None, false),
             ItemUseRoute::QuestOffer {
                 npc: 0x4000_0000_0000_0BAD,
                 quest: 373
@@ -1256,7 +1305,7 @@ mod tests {
         );
         // An item with no ON_USE block has nothing to cancel, whatever the predicate says.
         assert_eq!(
-            item_use_route(it(0, None), |_| true, None),
+            item_use_route(it(0, None), |_| true, None, false),
             ItemUseRoute::Nothing
         );
     }
@@ -1370,6 +1419,93 @@ mod tests {
         assert_eq!(wire_pos(EQUIPMENT_BAG, 69), Some((255, 68)), "BankBag6");
         assert_eq!(wire_pos(EQUIPMENT_BAG, 63), None, "the doll-space gap");
         assert_eq!(wire_pos(EQUIPMENT_BAG, 70), None, "past the bank bags");
+    }
+    /// The form refusal sits below the quest and charter arms and the disarmed refusal, and above
+    /// the toggle scan and the cast (`0x5d9105`).
+    #[test]
+    fn the_form_refusal_ranks_between_the_disarm_and_the_cast() {
+        let it = ItemUse {
+            entry: 7,
+            guid: Some(1),
+            start_quest: 0,
+            bag_index: 1,
+            slot: 0,
+            spell_index: 0,
+            use_spell: Some(8690),
+            on_object: None,
+            is_charter: false,
+        };
+        let toggling = |_: u32| true;
+        assert_eq!(
+            item_use_route(it, toggling, None, true),
+            ItemUseRoute::NoItemsShapeshifted
+        );
+        assert_eq!(
+            item_use_route(
+                ItemUse {
+                    start_quest: 373,
+                    ..it
+                },
+                toggling,
+                None,
+                true
+            ),
+            ItemUseRoute::QuestOffer { npc: 1, quest: 373 }
+        );
+        assert_eq!(
+            item_use_route(
+                ItemUse {
+                    is_charter: true,
+                    ..it
+                },
+                toggling,
+                None,
+                true
+            ),
+            ItemUseRoute::ShowPetition { item: 1 }
+        );
+        let worn = ItemUse {
+            bag_index: super::PLAYER_ARRAY,
+            slot: 15,
+            ..it
+        };
+        assert_eq!(
+            item_use_route(worn, toggling, Some(15), true),
+            ItemUseRoute::CantUseDisarmed
+        );
+        assert_eq!(
+            item_use_route(it, toggling, None, false),
+            ItemUseRoute::ToggleCancel(8690)
+        );
+    }
+
+    /// The stock forms through the gate (`0x5d9136`-`0x5d914d`), by name.
+    #[test]
+    fn the_shipped_forms_refuse_items_by_their_flags() {
+        let data = benilla_formats::wow_data_or_skip!();
+        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+        let forms =
+            benilla_formats::load_shapeshift_forms(&mut chain).expect("SpellShapeshiftForm.dbc");
+        let refuses = |form: u8, equippable| super::form_refuses_item(&forms, form, equippable);
+        // Cat, Travel, Aquatic, Bear, Dire Bear (flags 0x40 set) and Ghost Wolf: an equippable
+        // item passes, any other is refused.
+        for form in [1, 3, 4, 5, 8, 16] {
+            assert!(refuses(form, false), "form {form}, a potion");
+            assert!(!refuses(form, true), "form {form}, a trinket");
+        }
+        // Tree of Life (flags 0x10) and the unused rows, flags 0: every item is refused.
+        for form in [2, 6, 7, 9, 10, 11, 12, 13, 14, 15, 20, 29, 32] {
+            assert!(refuses(form, false) && refuses(form, true), "form {form}");
+        }
+        // The stances (flags bit 0, `IsShapeShifted` false): Battle, Defensive, Berserker,
+        // Shadowform, Stealth and the rest pass everything.
+        for form in [17, 18, 19, 28, 30, 31] {
+            assert!(!refuses(form, false) && !refuses(form, true), "form {form}");
+        }
+        // No stock form is a shapeshift with flag 0x8, which would pass every item.
+        assert!(forms.values().all(|f| f.is_stance() || f.flags & 0x8 == 0));
+        assert!(!super::form_refuses_item(&forms, 0, false), "no form");
+        assert!(!super::form_refuses_item(&forms, 200, false), "no row");
     }
 }
 

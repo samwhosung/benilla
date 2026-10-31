@@ -44,6 +44,12 @@ impl ShapeshiftForm {
         self.flags & 0x8 != 0
     }
 
+    /// Flag bit `0x8` of `flags1` also lets the form use any item: `CGItem::Use` refuses an item
+    /// in a form without it, unless bit `0x40` and the item is equippable (`0x5d9136`-`0x5d914d`).
+    pub fn allows_items(&self, equippable: bool) -> bool {
+        self.flags & 0x8 != 0 || (self.flags & 0x40 != 0 && equippable)
+    }
+
     /// Clicking the active form's button cancels its aura (`CMSG_CANCEL_AURA`) unless bit `0x2`
     /// makes it a silent no-op (`CastShapeshiftForm` `0x4b4810`, guard at `0x4b4963`); the
     /// warrior stances (`0x7`) set it on 5875.
