@@ -281,10 +281,11 @@ fn parse_server_body(
         opcode::SMSG_AUTH_RESPONSE => {
             // The client's grammar (`0x5b41b0`): `u8 code`; then, for OK or WAIT_QUEUE with 5+
             // bytes left, `u32 billingTimeRemaining, u8 billingPlanFlags, u32 billingTimeRested`;
-            // then, for WAIT_QUEUE, `u32 position`. The 5 guarding a 9-byte group is the client's
-            // and leaves the last dword unread on a 5..=8 byte body, which keeps its old value; matched. Deviation: a body too short
-            // for the position gives `None` where the client redisplays a stale global, because
-            // showing a stale queue position as current is a client bug.
+            // then, for WAIT_QUEUE, `u32 position`. The 5 guarding a 9-byte group is the client's:
+            // a 5..=8 byte tail leaves the last dword unread, keeping its old value; matched.
+            // Deviation: a body too short for the position gives `None` where the client
+            // redisplays a stale global, because showing a stale queue position as current is a
+            // client bug.
             let result = read_u8(&mut r)?;
             let queued = result == super::AUTH_WAIT_QUEUE;
             let mut billing = None;
