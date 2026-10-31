@@ -476,9 +476,10 @@ mod tests {
         assert!((rgb[2] - 0.4).abs() < 1e-4, "blue commits raw: {rgb:?}");
     }
 
-    /// The packed SH block gives `Model2.bls`'s `clamp01(A + D·I·(3 + 16μ + 15μ²)/34)` at each
-    /// intensity rung (2.5 lit, 1.0 mid-band, 0.5 MCSH-shadowed), with ambient in the DC lanes and
-    /// the sun's DC on `grade.yzw`.
+    /// The packed SH block gives `Model2.bls`'s light sum `E = A + D·I·(3 + 16μ + 15μ²)/34` at
+    /// each intensity rung (2.5 lit, 1.0 mid-band, 0.5 MCSH-shadowed), with ambient in the DC lanes
+    /// and the sun's DC on `grade.yzw`. E is unclamped: the program clamps `c28·E + c29`, and E
+    /// itself only with a point light bound.
     #[test]
     fn exterior_lane_reproduces_the_closed_form_at_every_intensity_rung() {
         let ambient = [0.30, 0.32, 0.38];
@@ -495,7 +496,7 @@ mod tests {
                 let lin = c10[0] * n.x + c10[1] * n.y + c10[2] * n.z;
                 let q: f32 = (0..4).map(|k| c13[k] * quad[k]).sum::<f32>()
                     + rows[12][ch] * (n.x * n.x - n.y * n.y);
-                (c10[3] + rows[17][1 + ch] * i + i * (lin + q)).clamp(0.0, 1.0)
+                c10[3] + rows[17][1 + ch] * i + i * (lin + q)
             })
         };
         let u = -sun_dir; // toward-light
@@ -509,7 +510,7 @@ mod tests {
                 let b = (3.0 + 16.0 * mu + 15.0 * mu * mu) / 34.0;
                 let got = eval(n, i);
                 for ch in 0..3 {
-                    let want = (ambient[ch] + diffuse[ch] * i * b).clamp(0.0, 1.0);
+                    let want = ambient[ch] + diffuse[ch] * i * b;
                     assert!(
                         (got[ch] - want).abs() < 1e-5,
                         "I={i} {who}: ch{ch} got {} want {want}",
