@@ -1628,21 +1628,93 @@ fn the_standing_still_arm_reports_moving_and_ignores_swimming() {
     );
 }
 
-/// `IsSelfControlled` (`0x5fa550`) is false only while confused, fleeing or move-disabled, the
-/// `0xc00004` mask, which leaves STUNNED out.
+/// `IsSelfControlled` (`0x5fa550`): the `0xc00004` mask (which leaves STUNNED out) unless bit 0x2
+/// skips it, then the player-type, charmer and 0x1 legs.
 #[test]
 fn self_controlled_is_true_for_an_ordinary_player() {
     use crate::player::self_controlled;
+    use benilla_protocol::field::FIELD_UNIT_FLAGS;
+    use benilla_protocol::ObjectFields;
 
-    assert!(self_controlled(0));
-    assert!(self_controlled(1 << 3), "an ordinary PvP-attackable player");
-    assert!(!self_controlled(0x0040_0000), "confused");
-    assert!(!self_controlled(0x0080_0000), "fleeing");
-    assert!(!self_controlled(0x0000_0004), "move-disabled");
+    let flags = |f: u32| ObjectFields::from_pairs(&[(FIELD_UNIT_FLAGS, f)]);
+    let player = |f: u32| self_controlled((&flags(f), true), |_| None);
+
+    assert!(player(0));
+    assert!(player(1 << 3), "an ordinary PvP-attackable player");
+    assert!(!player(0x0040_0000), "confused");
+    assert!(!player(0x0080_0000), "fleeing");
+    assert!(!player(0x0000_0004), "move-disabled");
     assert!(
-        self_controlled(0x0004_0000),
+        player(0x0004_0000),
         "STUNNED is not in the 0xc00004 mask — it has its own gate"
     );
+    // Bit 0x2 skips the mask test (`0x5fa55e`), and the player leg then passes.
+    assert!(
+        player(0x0000_0002 | 0x0040_0000),
+        "0x2 skips the confused test"
+    );
+    assert!(player(0x0000_0002 | 0x0000_0004 | 0x0080_0000));
+    // Bit 0x1 (`0x5fa5dd`) makes a plain player not self-controlled.
+    assert!(!player(0x0000_0001), "server-controlled");
+    assert!(!player(0x0000_0001 | 0x0000_0002), "0x1 binds with 0x2 too");
+    // A non-player object (`0x5fa5cd`) never is.
+    assert!(!self_controlled((&flags(0), false), |_| None));
+}
+
+/// `UNIT_FIELD_CHARMEDBY` (`+0x10`, fields 10/11) blocks the player leg (`0x5fa5d5`); a possessed
+/// unit answers with its charmer's, else its creator's (`UNIT_FIELD_CREATEDBY`, fields 14/15),
+/// own answer, and false when that unit is not in view (`0x5fa5b6`).
+#[test]
+fn self_controlled_follows_a_possessed_units_controller() {
+    use crate::player::self_controlled;
+    use benilla_protocol::field::FIELD_UNIT_FLAGS;
+    use benilla_protocol::ObjectFields;
+
+    const POSSESSED: u32 = 0x0100_0000;
+    const CHARMER: u64 = 0x11;
+    const CREATOR: u64 = 0x22;
+    let fields = |f: u32, extra: &[(u16, u32)]| {
+        let mut pairs = vec![(FIELD_UNIT_FLAGS, f)];
+        pairs.extend_from_slice(extra);
+        ObjectFields::from_pairs(&pairs)
+    };
+    let charmed_by = |g: u64| [(10, g as u32), (11, (g >> 32) as u32)];
+    let created_by = |g: u64| [(14, g as u32), (15, (g >> 32) as u32)];
+
+    // A charmed plain player is not self-controlled.
+    let charmed = fields(0, &charmed_by(CHARMER));
+    assert!(!self_controlled((&charmed, true), |_| None));
+
+    let free = fields(0, &[]);
+    let confused = fields(0x0040_0000, &[]);
+    let table = |guid: u64| match guid {
+        CHARMER => Some((&free, true)),
+        CREATOR => Some((&confused, true)),
+        _ => None,
+    };
+    // Possessed by an in-view, free charmer: true, though the possessed unit is charmed itself.
+    let possessed = fields(POSSESSED, &charmed_by(CHARMER));
+    assert!(self_controlled((&possessed, true), table));
+    // Possessed with no charmer falls to the creator, whose own flags answer.
+    let by_creator = fields(POSSESSED, &created_by(CREATOR));
+    assert!(!self_controlled((&by_creator, true), table));
+    // The charmer wins over the creator.
+    let both = fields(
+        POSSESSED,
+        &[charmed_by(CHARMER), created_by(CREATOR)].concat(),
+    );
+    assert!(self_controlled((&both, true), table));
+    // The mask test comes first, ahead of the recursion (`0x5fa566`).
+    let feared = fields(POSSESSED | 0x0080_0000, &charmed_by(CHARMER));
+    assert!(!self_controlled((&feared, true), table));
+    // A charmer out of view, or none at all, answers false.
+    let gone = fields(POSSESSED, &charmed_by(0x99));
+    assert!(!self_controlled((&gone, true), table));
+    let nobody = fields(POSSESSED, &[]);
+    assert!(!self_controlled((&nobody, true), table));
+    // The recursion's answer is the charmer's own, so a creature charmer (not player-type) is false.
+    let creature = |g: u64| (g == CHARMER).then_some((&free, false));
+    assert!(!self_controlled((&possessed, true), creature));
 }
 
 // ── the send-side emote gate, `CheckEmoteEligible` (`0x47db40`), on real `EmoteFlags` values ──
