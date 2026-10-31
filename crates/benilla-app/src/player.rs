@@ -58,6 +58,7 @@ mod input;
 pub(crate) mod land;
 mod move_trace;
 mod movement_net;
+pub(crate) use movement_net::send_heartbeat;
 mod posture;
 // A movement command's press or release, run inside the frame's input records.
 mod press;

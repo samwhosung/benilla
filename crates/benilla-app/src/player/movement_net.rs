@@ -441,6 +441,30 @@ fn send_move(
     player.last_pos = wire.pos;
 }
 
+/// A standalone `MSG_MOVE_HEARTBEAT` with the live pose, as a caller outside the movement stream
+/// sends it (`0x600a10` with 0xee, from the area-trigger check at `0x5e221e`): the sent flags, the
+/// position, the fall time and the deck pose now. A send re-arms the heartbeat deadline
+/// (`0x600a30` → `0x615b80`).
+pub(crate) fn send_heartbeat(sender: &Sender<ClientCommand>, player: &mut Player, now: f32) {
+    let facing = player.face_yaw.rem_euclid(std::f32::consts::TAU);
+    let flags = player.move_flags & OUTBOUND_FLAG_MASK;
+    let wire = Wire {
+        flags,
+        pos: bevy_to_wow(player.pos),
+        facing,
+        pitch: player.wire_pitch,
+        fall_time: super::flags::fall_ms(player, now),
+        jump: jump_tail(player, flags, facing),
+        transport: wire_transport(player),
+    };
+    let mut out = Sends {
+        sent: false,
+        precast_ended: false,
+    };
+    send_move(sender, player, &wire, MoveKind::Heartbeat, &mut out);
+    player.last_heartbeat = now;
+}
+
 /// The jump tail, on every airborne packet: the take-off vertical speed and the horizontal
 /// velocity frozen at take-off, in world XY.
 fn jump_tail(player: &Player, wire_flags: u32, facing: f32) -> Option<JumpInfo> {
