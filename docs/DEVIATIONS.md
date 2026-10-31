@@ -531,7 +531,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### shaders
 
 - This is the `specular`/`pixelShaders` = 1 leg the reference install runs; both CVars (`0x6886a0`/`0x688712`) default to 0, where water has no program, no specular, a plain ADD combine and no blend. An active ARB program bypasses the texture environment. ([`src/shaders/liquid.wgsl:18`](../crates/benilla-assets/src/shaders/liquid.wgsl#L18))
-- `min(I, 1)`. The reference bakes I into the SH unclamped (`0x71c4e0`), so a lit entity commits ×2.5 there and ×1.0 here; lifting the cap takes sun-facing surfaces past 1.0. `entity_shade::LIT_T` aims the lit ramp at 1.0 because of it: lift the cap and set `LIT_T` back to 0.0 together. ([`src/shaders/wow_model.wgsl:668`](../crates/benilla-assets/src/shaders/wow_model.wgsl#L668))
+- `min(I, 1)`. The reference bakes I into the SH unclamped (`0x71c4e0`), so a lit entity commits ×2.5 there and ×1.0 here; lifting the cap takes sun-facing surfaces past 1.0. `entity_shade::LIT_T` aims the lit ramp at 1.0 because of it: lift the cap and set `LIT_T` back to 0.0 together. ([`src/shaders/wow_model.wgsl:454`](../crates/benilla-assets/src/shaders/wow_model.wgsl#L454))
 
 #### wmo
 
@@ -928,7 +928,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### shaders
 
-- The `min(I, 1)` cap, as in wow\_model.wgsl, because lifting it takes sun-facing surfaces past 1.0; Matte keeps its own bit so it stays 1.0 if the cap goes. ([`src/shaders/static_gx.wgsl:325`](../crates/benilla-world/src/shaders/static_gx.wgsl#L325))
+- The `min(I, 1)` cap, as in wow\_model.wgsl, because lifting it takes sun-facing surfaces past 1.0; Matte keeps its own bit so it stays 1.0 if the cap goes. ([`src/shaders/static_gx.wgsl:182`](../crates/benilla-world/src/shaders/static_gx.wgsl#L182))
 
 #### sky_order
 
