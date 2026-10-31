@@ -1804,6 +1804,11 @@ mod tests {
         assert!(res::<crate::perf::FpsJournalSetting>(&app).0);
         apply(&mut app, "fpsjournal", "0");
         assert!(!res::<crate::perf::FpsJournalSetting>(&app).0);
+        assert!(res::<SoundConfig>(&app).liquid_sounds);
+        apply(&mut app, "MapWaterSounds", "0");
+        assert!(!res::<SoundConfig>(&app).liquid_sounds);
+        apply(&mut app, "mapwatersounds", "1");
+        assert!(res::<SoundConfig>(&app).liquid_sounds);
         // Enable flags: any nonzero is on, zero is off (the client's int-parse + != 0).
         apply(&mut app, "EnableMusic", "0");
         assert!(!res::<SoundConfig>(&app).music_enabled);

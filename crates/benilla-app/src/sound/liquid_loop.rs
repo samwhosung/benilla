@@ -5,9 +5,10 @@
 //! (`0x458650` → `0x462e10` → `0x462b10`); resurfacing restarts them at full volume.
 //!
 //! The nearest point is the footprint's AABB clamp where the reference walks cells, so a fade-in
-//! can lead by a couple of yards on L-shaped shores; the tick is a frame. The reference's own
-//! `MapWaterSounds` switch (registered at `0x462a40`) is not built; the loops ride the ambience
-//! bucket, so `EnableAmbience` and the ambience slider gate them.
+//! can lead by a couple of yards on L-shaped shores; the tick is a frame. The loops ride the
+//! ambience bucket, so `EnableAmbience` and the ambience slider gate them. `MapWaterSounds` 0
+//! hard-stops all four loops (its handler `0x462af0` → `0x462b10`) and the driver arms none while
+//! it is 0 (`0x462b59`-`0x462b67`): [`silence_liquid_loops`].
 
 use bevy::prelude::*;
 
@@ -73,6 +74,35 @@ fn load_water_sounds(mut commands: Commands, assets: Option<Res<WorldAssets>>) {
     }
 }
 
+/// Whether `MapWaterSounds` lets the driver run (`0x462b59`-`0x462b67`).
+fn liquid_sounds_on(config: Res<SoundConfig>) -> bool {
+    config.liquid_sounds
+}
+
+/// Hard-stop every class loop with no fade and free its emitter (`0x462b10` → `0x462780(1)` →
+/// `Sound::Stop`), as a submerge does.
+fn stop_all_loops(state: &mut LiquidLoopState, out: &mut SoundOutput, commands: &mut Commands) {
+    for slot in &mut state.classes {
+        if let Some(cl) = slot.take() {
+            stop_source_kit(out, cl.emitter, cl.kit);
+            if let Some((old, _)) = cl.retiring {
+                stop_source_kit(out, cl.emitter, old);
+            }
+            commands.entity(cl.emitter).despawn();
+        }
+    }
+}
+
+/// `MapWaterSounds` at 0: the handler's hard stop of every loop. The driver is gated off beside
+/// it, so nothing arms again until the CVar is back.
+fn silence_liquid_loops(
+    mut state: ResMut<LiquidLoopState>,
+    mut out: NonSendMut<SoundOutput>,
+    mut commands: Commands,
+) {
+    stop_all_loops(&mut state, &mut out, &mut commands);
+}
+
 /// The per-frame driver: scan, arm or retire by priority, slew, fade.
 fn drive_liquid_loops(
     mut state: ResMut<LiquidLoopState>,
@@ -99,14 +129,7 @@ fn drive_liquid_loops(
 
     // Submerged: a hard stop with no fade, and the resurface edge restarts at full.
     if world.submersion().is_water() {
-        for slot in &mut state.classes {
-            if let Some(cl) = slot.take() {
-                stop_source_kit(&mut out, cl.emitter, cl.kit);
-                if let Some((old, _)) = cl.retiring {
-                    stop_source_kit(&mut out, cl.emitter, old);
-                }
-            }
-        }
+        stop_all_loops(&mut state, &mut out, &mut commands);
         state.was_underwater = true;
         return;
     }
@@ -299,8 +322,71 @@ pub(super) fn plugin(app: &mut App) {
         .add_systems(
             Update,
             // Before the channel pump, which applies this frame's gains and positions.
-            drive_liquid_loops
+            (
+                silence_liquid_loops.run_if(not(liquid_sounds_on)),
+                drive_liquid_loops.run_if(liquid_sounds_on),
+            )
+                .chain()
                 .in_set(WorldStage::Present)
                 .before(kit::pump_channels),
         );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn output() -> SoundOutput {
+        SoundOutput {
+            mixer: None,
+            channels: Vec::new(),
+            probe: None,
+            zone_streams: 0,
+            glue_streams: 0,
+            cinematic_streams: 0,
+            movie_streams: 0,
+            voices_stolen: 0,
+            voices_denied: 0,
+            copies_dropped: 0,
+        }
+    }
+
+    /// `MapWaterSounds` 0 drops every armed class loop and frees its emitter in the frame it is
+    /// seen (`0x462b10`), and a 1 leaves them (`0x462af0` acts only on 0).
+    #[test]
+    fn map_water_sounds_zero_stops_every_loop() {
+        let mut app = App::new();
+        app.insert_non_send_resource(output())
+            .init_resource::<SoundConfig>()
+            .init_resource::<LiquidLoopState>()
+            .add_systems(Update, silence_liquid_loops.run_if(not(liquid_sounds_on)));
+        let emitters: Vec<Entity> = (0..2).map(|_| app.world_mut().spawn_empty().id()).collect();
+        {
+            let mut state = app.world_mut().resource_mut::<LiquidLoopState>();
+            for (class, emitter) in emitters.iter().enumerate() {
+                state.classes[class] = Some(ClassLoop {
+                    emitter: *emitter,
+                    kit: 7,
+                    gain: 1.0,
+                    retiring: Some((8, 0.5)),
+                });
+            }
+        }
+        app.update();
+        let armed = |app: &App| {
+            app.world()
+                .resource::<LiquidLoopState>()
+                .classes
+                .iter()
+                .flatten()
+                .count()
+        };
+        assert_eq!(armed(&app), 2, "1 leaves the loops");
+        app.world_mut().resource_mut::<SoundConfig>().liquid_sounds = false;
+        app.update();
+        assert_eq!(armed(&app), 0);
+        for emitter in emitters {
+            assert!(app.world().get_entity(emitter).is_err(), "emitter freed");
+        }
+    }
 }

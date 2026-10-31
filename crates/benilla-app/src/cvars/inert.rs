@@ -234,7 +234,6 @@ pub(super) const INERT: &[Registered] = &[
     same("mapObjLightLOD", "0").checked(benilla_ui::script::check_map_obj_light_lod), // 0x6886ec
     same("mapObjOverbright", "1"),          // 0x6886c6
     same("mapShadows", "1"),                // 0x6884fe
-    same("MapWaterSounds", "1"),            // 0x462ac9
     same("MaxLights", "4").checked(benilla_ui::script::check_max_lights), // 0x688596
     same("mouseInvertYaw", "0"),            // 0x50b72d
     same("ObjectSelectionCircle", "1"),     // 0x6146ec

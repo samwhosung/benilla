@@ -459,6 +459,9 @@ pub(crate) const REGISTERED: &[Registered] = &[
     same("SoundListenerAtCharacter", "1"),
     // `EmoteSounds` (`0x4573b9`): the received text-emote voice kit, and only that.
     same("EmoteSounds", "1"),
+    // `MapWaterSounds` (`0x462ac9`, record `[0xb2306c]`, handler `0x462af0`): 0 hard-stops the four
+    // liquid loops and keeps the driver `0x462b50` from arming any (`liquid_loop`).
+    same("MapWaterSounds", "1"),
     // `SoundZoneMusicNoDelay` (`0x4578b3`): `next_track_time`'s immediate path.
     same("SoundZoneMusicNoDelay", "0"),
     // `assistAttack` (`0x48fc50`, record `[0xb4d8f8]`): `/assist` also starts the swing. The "3"

@@ -138,6 +138,11 @@ pub(crate) struct SoundConfig {
     /// `ZoneMusic.dbc` silence interval between plays of one zone's track
     /// ([`zone::next_track_time`], `0x4601f0`). A zone change is immediate either way.
     pub zone_music_no_delay: bool,
+    /// `MapWaterSounds` (default "1", `0x462ac9`): its handler `0x462af0` on 0 hard-stops all four
+    /// liquid-class loops (`0x462b10` → `0x462780(1)` → `Sound::Stop`, no fade), and the loop
+    /// driver `0x462b50` arms nothing while it is 0 (`0x462b59`-`0x462b67`). Read by
+    /// [`liquid_loop`].
+    pub liquid_sounds: bool,
 }
 
 impl SoundConfig {
@@ -176,6 +181,7 @@ impl Default for SoundConfig {
             listener_at_character: true,
             emote_sounds: true,
             zone_music_no_delay: false,
+            liquid_sounds: true,
         }
     }
 }
@@ -351,6 +357,8 @@ pub(crate) fn on_cvar(
         "soundlisteneratcharacter" => sound.listener_at_character = v != 0.0,
         "emotesounds" => sound.emote_sounds = v != 0.0,
         "soundzonemusicnodelay" => sound.zone_music_no_delay = v != 0.0,
+        // The record's integer (`SStrToInt`, `0x462af6`), not its float: "0.5" is off.
+        "mapwatersounds" => sound.liquid_sounds = ev.flag(),
         _ => {}
     }
 }
