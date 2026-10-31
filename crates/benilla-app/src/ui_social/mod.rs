@@ -943,13 +943,15 @@ pub(crate) fn fold_dying_vm_lfg(world: &mut World) {
 }
 
 /// Seat a new in-game VM's looking-for-group list before its load runs. A `/reload` runs only the
-/// teardown and `UI_Init` (`0x495664`, `0x495669`), so its VM keeps the last one's list. A world
-/// entry runs the party init from `InitializeGame` (`0x4e7c70`, at `0x48f59a`), which zeroes the
-/// title counter (`0x4e7cb5`) and allocates the 50 records afresh (`0x4e7cc4`-`0x4e7ce5`).
+/// teardown and `UI_Init` (`0x495664`, `0x495669`), so its VM keeps the whole list, the title
+/// waits included.
 ///
-/// Deviation: a world entry starts with no list, because the reference's getters read undefined
-/// bytes there: its allocation is not zero-filled (`SMemAlloc` flag 0) and nothing resets the
-/// count or the total, which the last session's reply left.
+/// Deviation: a login starts with no list, because 1.12.1's records there are memory the client
+/// never wrote. Its party init (`0x4e7c70`, from `InitializeGame` at `0x48f59a`) zeroes the title
+/// counter (`0x4e7cb5`), allocates the 50 `0xc4`-byte records without zeroing them (`SMemAlloc`
+/// flag 0, `0x4e7cc4`-`0x4e7ce5`), and leaves the count and total (`0xbc7618`, `0xbc761c`) as they
+/// were: a first login reads 0 and 0, and a relog in the same process reads the last session's
+/// count and total over leftover records.
 pub(crate) fn seed_vm_lfg(
     world: &mut World,
     script: &mut benilla_ui::script::UiScript,
