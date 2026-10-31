@@ -1277,6 +1277,55 @@ fn the_arm_tails_refusal_sends_its_cancel_after_its_lines_listeners() {
     assert_eq!(wire, ["chat", "cancel"]);
 }
 
+/// The dead rung (`0x6e4c49`) and the loot rungs (`0x6e4ca2`-`0x6e4d31`) come ahead of the
+/// same-spell bail (`0x6e4d43`), so they refuse a press of the spell in flight, and the report's
+/// tail cancels it (`0x6e2201` → `0x6e2218` → `0x6e4970`) after its line signals
+/// `UI_ERROR_MESSAGE` (`0x6e21dd`): the line's listener sends ahead of the cancel.
+#[test]
+fn a_rung_refusing_the_spell_in_flight_sends_its_cancel_after_its_lines_listeners() {
+    const DISENCHANT: u32 = 13262;
+    for looting in [false, true] {
+        let mut f = frame(false);
+        with_book_spell(
+            &mut f,
+            DISENCHANT,
+            "Disenchant",
+            benilla_formats::SpellDisplay {
+                effects: [99, 0, 0],
+                ..Default::default()
+            },
+        );
+        run_hosted(&mut f, r#"CastSpellByName("Disenchant")"#);
+        if looting {
+            f.app
+                .world_mut()
+                .resource_mut::<crate::ui_loot::LootLatch>()
+                .0 = Some(OLD);
+        } else {
+            dead(&mut f);
+        }
+        run(
+            &mut f,
+            r#"local l = CreateFrame("Frame")
+            l:RegisterEvent("UI_ERROR_MESSAGE")
+            l:SetScript("OnEvent", function() RandomRoll(1, 1) end)"#,
+        );
+        f.rx.try_iter().for_each(drop);
+        run_hosted(&mut f, r#"CastSpellByName("Disenchant")"#);
+        let wire: Vec<&str> =
+            f.rx.try_iter()
+                .filter_map(|c| match c {
+                    ClientCommand::RandomRoll { .. } => Some("roll"),
+                    ClientCommand::CancelCast {
+                        spell_id: DISENCHANT,
+                    } => Some("cancel"),
+                    _ => None,
+                })
+                .collect();
+        assert_eq!(wire, ["roll", "cancel"], "looting: {looting}");
+    }
+}
+
 /// A unit selected at the push's signal (`0x6e5026`) is the arm's candidate (`0x6e539f`), and
 /// `BindTarget`'s merge refuses it out of range (`0x6e6063` → `0x6e6089`): the report's line
 /// signals `UI_ERROR_MESSAGE` (`0x6e21dd`) ahead of its tail's cancel of the pushed spell

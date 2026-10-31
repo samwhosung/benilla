@@ -182,10 +182,15 @@ pub(crate) enum CastStage {
     CursorSent { spell_id: u32, now: Instant },
     /// A cursor's commit past its pop's signal, with nothing left.
     Done,
-    /// The arm tail's refusal past its line's signals (`0x6e21dd`, `0x6e21fc`): the reporter's
-    /// tail (`0x6e2201`), whose cancel of the spell in flight goes on the wire (`0x6e4970`), then
-    /// the tail's signal as it leaves (`0x6e5069`).
-    Refused { fail: CastFail, reaches: bool },
+    /// A refusal past its line's signals (`0x6e21dd`, `0x6e21fc`): the reporter's tail
+    /// (`0x6e2201`), whose cancel of the spell in flight goes on the wire (`0x6e4970`), then for
+    /// the arm tail's (`at_arm`) its signal as it leaves (`0x6e5069`). A rung's leaves silent
+    /// (`0x6e4c6d`).
+    Refused {
+        fail: CastFail,
+        reaches: bool,
+        at_arm: bool,
+    },
 }
 
 /// An attempt parked at `ArmCast`'s word test (`0x6e5338`). Past the signal the arm reads the word
@@ -669,9 +674,15 @@ impl CastLadder<'_, '_> {
                 None
             }
             CastStage::Done => None,
-            CastStage::Refused { fail, reaches } => {
+            CastStage::Refused {
+                fail,
+                reaches,
+                at_arm,
+            } => {
                 self.core().report_tail(fail, false, reaches);
-                self.reports.changed();
+                if at_arm {
+                    self.reports.changed();
+                }
                 None
             }
             CastStage::Sent { spell_id, attempt } => {
@@ -992,7 +1003,11 @@ impl CastLadder<'_, '_> {
                 let reaches =
                     reaches_tail(&fail, self.spells.as_deref(), &self.items, &self.commands);
                 self.core().report_line(fail);
-                return Some(CastStage::Refused { fail, reaches });
+                return Some(CastStage::Refused {
+                    fail,
+                    reaches,
+                    at_arm: true,
+                });
             }
         };
         // `BindTarget` binds the candidate and, the word emptied, signals and sends
@@ -1450,6 +1465,22 @@ fn send_spell_cast(
             return;
         }};
     }
+    // A rung ahead of the same-spell bail (`0x6e4d43`) can refuse the spell in flight, whose
+    // report's tail cancels it with its packet (`0x6e2201` → `0x6e2218` → `0x6e4970`) after the
+    // line's listeners (`0x6e21dd`): the line now, the tail a stage past them.
+    macro_rules! refuse_ahead_of_bail {
+        ($fail:expr) => {{
+            let fail = $fail;
+            let reaches = reaches_tail(&fail, spells, items, commands);
+            core.report_line(fail);
+            *sent = Some(CastStage::Refused {
+                fail,
+                reaches,
+                at_arm: false,
+            });
+            return;
+        }};
+    }
     let now = Instant::now();
     let def = spells.and_then(|s| s.catalog.get(spell_id));
     // TryCast's first branch (`6e4bce`, ahead of every gate): an `Effect[0] == TRADE_SKILL` cast
@@ -1460,7 +1491,7 @@ fn send_spell_cast(
         return;
     }
     if caster_dead(spell_id, def, ctx.rel.self_store) {
-        refuse!(CastFail::local(spell_id, REASON_DEAD));
+        refuse_ahead_of_bail!(CastFail::local(spell_id, REASON_DEAD));
     }
     let player_caster = commit.unit_caster().is_none();
     // The loot rungs, after the Attack short-circuit (`0x6e4ca2`-`0x6e4d31`): with a loot window
@@ -1469,7 +1500,7 @@ fn send_spell_cast(
     if player_caster && loot_guid.is_some_and(|g| g != 0) {
         if let Some(reason) = def.and_then(|d| looting_refusal(d.effects[0])) {
             debug!("ui_action: cast {spell_id} refused locally — looting ({reason:#x})");
-            refuse!(CastFail::local(spell_id, reason));
+            refuse_ahead_of_bail!(CastFail::local(spell_id, reason));
         }
     }
     // TryCast's same-spell test (`6e4d43`): the spell in the in-flight slot bails with no red
