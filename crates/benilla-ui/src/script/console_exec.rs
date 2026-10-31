@@ -170,6 +170,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     Ok(())
 }
 
+impl super::UiScript {
+    /// `ConsoleExec(line)` run by the engine itself, as the console's own executor reaches
+    /// `ConsoleCommandExecute` (`0x63ce00`): the per-frame `repeat` handler (`0x63bd50`) runs its
+    /// stored line this way.
+    pub fn console_exec(&self, line: &str) -> mlua::Result<()> {
+        super::host::unheld(&self.lua, || {
+            let exec: mlua::Function = self.lua.globals().get("ConsoleExec")?;
+            exec.call::<()>(line)
+        })
+    }
+}
+
 /// The key buffer of `bind` (`push 0x20`, `0x4b60d2`): 31 bytes of text.
 const BIND_KEY_BYTES: usize = 0x20;
 
