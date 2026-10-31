@@ -147,7 +147,7 @@ impl ModelForms {
     ) {
         let e = self.entries.entry(key).or_default();
         e.want |= kinds;
-        build_entry(e, kinds, submeshes, meshes, usize::MAX, &mut 0, VERT_BUDGET);
+        build_entry(e, kinds, submeshes, meshes, usize::MAX, &mut 0, usize::MAX);
     }
 
     /// Build every requested form whose asset has landed, with no budget: for a frame that waits
@@ -313,11 +313,64 @@ pub(crate) fn furnish_model_forms(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// One submesh of `verts` vertices.
+    fn submesh(verts: usize) -> ModelSubmesh {
+        ModelSubmesh {
+            geometry: std::sync::Arc::new(benilla_formats::RenderSubmesh {
+                positions: vec![[0.0; 3]; verts],
+                uvs: vec![[0.0; 2]; verts],
+                ..Default::default()
+            }),
+            texture: None,
+            skin_slot: None,
+            geoset_id: 0,
+            char_slot: None,
+            blend: benilla_formats::ModelBlend::Opaque,
+            two_sided: false,
+            interior: false,
+            emissive: false,
+            icon_slot: false,
+            sidn: None,
+            window: false,
+            additive: false,
+            env_map: false,
+            stage1: None,
+            combine: None,
+            no_depth_write: false,
+            no_depth_test: false,
+            fog_policy: Default::default(),
+            billboard: None,
+            alpha_anim: None,
+            uv_anim: None,
+            uv_seq: None,
+            uv_rot_seq: None,
+            uv_scale_seq: None,
+            rgb_anim: None,
+            rgb_seq: None,
+            wmo_batch: None,
+            ground_quad: None,
+        }
+    }
+
+    /// A one-off lane's model builds whole in one call, past the paced vertex budget: the glue
+    /// scene `UI_Human.m2`'s 10,509 vertices count twice in its static and skinned forms.
+    #[test]
+    fn ensure_now_builds_a_model_past_the_paced_budget_whole() {
+        let (mut forms, mut meshes) = (ModelForms::default(), Assets::<Mesh>::default());
+        let key = ModelKey::M2(AssetId::<M2Model>::default());
+        let subs = [submesh(6_000), submesh(6_000)];
+        forms.ensure_now(key, WANT_STATIC | WANT_SKINNED, &subs, &mut meshes);
+        assert_eq!(forms.static_meshes(key).map(<[_]>::len), Some(2));
+        assert_eq!(forms.skinned_meshes(key).map(<[_]>::len), Some(2));
+    }
+
     /// The measured Stormwind crossing burst, ~3200 meshes, lands inside the fog margin at 60 Hz.
     #[test]
     fn a_city_crossing_furnishes_in_under_a_second() {
         let crossing_meshes: usize = 3200;
-        let frames = crossing_meshes.div_ceil(super::MESH_BUDGET);
+        let frames = crossing_meshes.div_ceil(MESH_BUDGET);
         assert!(
             frames <= 40,
             "a city crossing's models must land within ~2/3 s at 60 Hz, got {frames} frames"
