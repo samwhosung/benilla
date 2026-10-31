@@ -590,6 +590,10 @@ pub(crate) struct GlueCore {
     /// credits frame (`CreditsFrame.lua:75`, `CreditsFrame.xml:456`) and the movie frame
     /// (`MovieFrame.lua:36`, `:49`).
     cursor_hidden: bool,
+    /// The device's pointer calls (`0x58b590`) the glue made since the host last took them, in
+    /// order: the verbs' (`0x46db60` shows, `0x46db70` hides) and the build's `SetCursor`
+    /// (`0x46a872`), which shows.
+    pub(super) pointer_calls: Vec<bool>,
     /// The realm list the realm verbs read ([`super::glue_realm`]).
     pub(super) realms: super::glue_realm::GlueRealmList,
     /// The character roster and the select verbs' cells ([`super::glue_select`]).
@@ -642,6 +646,11 @@ impl super::UiScript {
     /// Seat the host's agreement cells, which outlive this VM.
     pub fn set_glue_notices(&mut self, notices: GlueNotices) {
         self.model_mut().glue.notices = notices;
+    }
+
+    /// The pointer calls the glue made since the last take, as shown or not, in order.
+    pub fn take_glue_pointer_calls(&self) -> Vec<bool> {
+        std::mem::take(&mut self.model_mut().glue.pointer_calls)
     }
 
     /// Whether the glue has hidden the pointer (`HideCursor`) and not shown it again.
@@ -1239,10 +1248,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         g.set(
             name,
             lua.create_function(move |lua, _: MultiValue| {
-                lua.app_data_mut::<Model>()
-                    .expect("model app_data")
-                    .glue
-                    .cursor_hidden = hidden;
+                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                model.glue.cursor_hidden = hidden;
+                model.glue.pointer_calls.push(!hidden);
                 Ok(())
             })?,
         )?;
@@ -1823,6 +1831,9 @@ mod tests {
         assert!(s.glue_cursor_hidden());
         s.run("ShowCursor()").unwrap();
         assert!(!s.glue_cursor_hidden());
+        // The build's `SetCursor` with a texture (`0x46a872`) shows first, then each verb in order.
+        assert_eq!(s.take_glue_pointer_calls(), [true, false, true]);
+        assert!(s.take_glue_pointer_calls().is_empty());
         assert!(s.take_errors().is_empty());
     }
 

@@ -875,7 +875,11 @@ impl UiScript {
         let lua = install_framescript(VmKind::Glue)?;
         glue::install(&lua)?;
         object::guard_receivers(&lua)?;
-        Ok(Self::host(lua))
+        let script = Self::host(lua);
+        // The glue build's `CSimpleTop::SetCursor` with the cursor texture (`0x46a872` →
+        // `0x764da6`) shows the pointer.
+        script.model_mut().glue.pointer_calls.push(true);
+        Ok(script)
     }
 
     fn host(lua: Lua) -> UiScript {

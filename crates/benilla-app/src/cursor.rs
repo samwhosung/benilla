@@ -7,8 +7,8 @@
 //! cursor rects and sets the cursor directly; mouselook uses `NSCursor::hide`/`unhide`. Elsewhere
 //! winit's `CursorIcon::Custom` works and hide-on-look is `CursorOptions.visible`.
 //!
-//! The pointer hides for three callers of the device's `0x58b590(0)`: mouselook, a cinematic, and
-//! the glue's `HideCursor` (the credits and the movie frame), read here as [`GluePointerHidden`].
+//! The pointer's visibility is one flag on the device (`[dev+0x2880]`, stored by `0x595c20`), and
+//! the last call of `0x58b590` wins ([`PointerDevice`]).
 
 use benilla_assets::AssetSet;
 use bevy::prelude::*;
@@ -131,30 +131,106 @@ fn cursor_path(stem: &str) -> String {
     format!("Interface\\Cursor\\{stem}.blp")
 }
 
-/// Whether the glue's `HideCursor` has the pointer hidden and `ShowCursor` has not put it back
-/// (`0x46db70`/`0x46db60`, the device's `0x58b590`). Mouselook and a cinematic hide the same
-/// pointer on their own paths.
-#[derive(Resource, Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub(crate) struct GluePointerHidden(pub(crate) bool);
+/// The device's pointer flag (`[dev+0x2880]`, the constructor's 1 at `0x591c64`), which the last
+/// call of `0x58b590` sets and nothing counts (`0x595c20`, `0x595c26`). The census of that
+/// call's eight sites, each with what it stores:
+///
+/// | site | stores | here |
+/// |---|---|---|
+/// | glue `ShowCursor` `0x46db60` / `HideCursor` `0x46db70` | 1 / 0 | the verbs ([`PointerDevice::queue`]) |
+/// | `BeginCinematicUI` `0x48ed70` / `EndCinematic` `0x48f080` | 0 / 1 | a cinematic's start and end |
+/// | `LeaveWorldUI` `0x490a80` | 1 | the leave-world sweep ([`PointerDevice::queue`]) |
+/// | `CameraEnterFreelook` `0x50fe30` / `CameraLeaveFreelook` `0x50fdd0` | 0 / 1 | the look's start and end |
+/// | `CSimpleTop::SetCursor` `0x764d50`, with a texture | 1 | the glue build's (`0x46a872`) |
+///
+/// The other caller of `0x764d50`, `~CSimpleTop` (`0x7644c0`), passes none and does not call.
+/// A frame applies the look's edge, then the cinematic's, then the queued calls in order; the
+/// edges are read from the look and the cinematic, whose own sites have no hook.
+#[derive(Resource, Clone, PartialEq, Eq, Debug)]
+pub(crate) struct PointerDevice {
+    shown: bool,
+    /// The last call was the look's hide: only that hide gives way to the window losing focus.
+    by_look: bool,
+    was_looking: bool,
+    was_playing: bool,
+    queued: Vec<bool>,
+}
 
-/// Read the glue VM's pointer flag. No VM, or the in-game one, is no hide: the glue verbs do not
-/// exist once the world is entered (`0x46de20` unregisters the table), so nothing can show it
-/// again.
-fn read_glue_pointer(
-    script: Option<NonSend<benilla_ui::script::UiScript>>,
-    mut hidden: ResMut<GluePointerHidden>,
-) {
-    let now = script.is_some_and(|s| s.glue_cursor_hidden());
-    if hidden.0 != now {
-        hidden.0 = now;
+impl Default for PointerDevice {
+    fn default() -> Self {
+        Self {
+            shown: true,
+            by_look: false,
+            was_looking: false,
+            was_playing: false,
+            queued: Vec::new(),
+        }
     }
 }
 
-/// `CursorOptions.visible` for a caller that hides the pointer while `hidden` holds, given
-/// whether it hid the pointer itself (`ours`) and what `visible` is now: the value to write, or
+impl PointerDevice {
+    /// A site with a call of its own (`0x58b590(shown)`), applied at the next frame's turn.
+    pub(crate) fn queue(&mut self, shown: bool) {
+        self.queued.push(shown);
+    }
+
+    /// The frame's calls in order: the look's edge, the cinematic's, then the queued ones. A
+    /// look that is held now and was not hides (`0x50fe44`), one that was held and is not shows
+    /// (`0x50fdf2`); a cinematic likewise (`0x48ed88`, `0x48f17e`).
+    pub(crate) fn advance(&mut self, looking: bool, playing: bool) {
+        if looking != self.was_looking {
+            self.shown = !looking;
+            self.by_look = looking;
+            self.was_looking = looking;
+        }
+        if playing != self.was_playing {
+            self.shown = !playing;
+            self.by_look = false;
+            self.was_playing = playing;
+        }
+        if let Some(&last) = self.queued.last() {
+            self.shown = last;
+            self.by_look = false;
+            self.queued.clear();
+        }
+    }
+
+    /// Whether the pointer is hidden. A look's hide gives way while the window is unfocused and
+    /// the look has handed the OS pointer back (`look_released`, platform behaviour: the pointer
+    /// is another app's then).
+    pub(crate) fn hides(&self, look_released: bool) -> bool {
+        !self.shown && !(self.by_look && look_released)
+    }
+}
+
+/// Run the device's calls from the look, the cinematic and the glue VM.
+pub(crate) fn track_pointer_device(
+    script: Option<NonSend<benilla_ui::script::UiScript>>,
+    rig: Option<Res<crate::player::CameraControl>>,
+    cinematic: Option<Res<crate::cinematic::Cinematic>>,
+    mut device: ResMut<PointerDevice>,
+) {
+    if let Some(script) = script {
+        for shown in script.take_glue_pointer_calls() {
+            device.queue(shown);
+        }
+    }
+    let looking = rig.is_some_and(|r| r.is_looking());
+    let playing = cinematic.is_some_and(|c| c.is_playing());
+    device.advance(looking, playing);
+}
+
+/// Whether the look has handed the OS pointer back ([`PointerDevice::hides`]).
+pub(crate) fn look_released(rig: Option<&crate::player::CameraControl>) -> bool {
+    rig.is_some_and(|r| r.is_looking() && !r.holds_cursor())
+}
+
+/// `CursorOptions.visible` (where it, not AppKit, hides the pointer) for a caller that hides the
+/// pointer while `hidden` holds, given whether it hid the pointer itself (`ours`) and what `visible` is now: the value to write, or
 /// `None` to leave it. It puts back only what it took, and writes only on a real change:
 /// `bevy_winit` re-applies `CursorOptions` to AppKit on every change, which can stall the main
 /// thread.
+#[cfg(any(not(target_os = "macos"), test))]
 pub(crate) fn pointer_visibility(hidden: bool, ours: &mut bool, visible: bool) -> Option<bool> {
     if hidden && visible {
         *ours = true;
@@ -332,15 +408,15 @@ impl Plugin for CursorPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DisplayedCursor>()
             .init_resource::<CustomCursorName>()
-            .init_resource::<GluePointerHidden>();
+            .init_resource::<PointerDevice>();
         #[cfg(target_os = "macos")]
         app.add_systems(Startup, macos::setup.after(AssetSet::Open))
             .add_systems(
                 Update,
                 (
-                    read_glue_pointer,
                     drive_displayed_cursor,
                     // After every call, which may move the camera's rig whose look it shows.
+                    track_pointer_device.after(crate::vm_pass::VmPass::End),
                     macos::drive.after(crate::vm_pass::VmPass::End),
                 )
                     .chain()
@@ -356,10 +432,10 @@ impl Plugin for CursorPlugin {
             .add_systems(
                 Update,
                 (
-                    read_glue_pointer,
                     drive_displayed_cursor,
+                    track_pointer_device,
                     other::drive,
-                    other::drive_glue_hide,
+                    other::drive_pointer,
                 )
                     .chain()
                     // After the tick: a FrameXML `SetCursor` made this frame is read here; and
@@ -509,14 +585,17 @@ mod other {
         *last_set = Some(stem);
     }
 
-    /// The glue's `HideCursor`/`ShowCursor` on the window's pointer.
-    pub(super) fn drive_glue_hide(
-        hidden: Res<super::GluePointerHidden>,
+    /// The device's flag on the window's pointer, for the cinematic, the glue and the look's
+    /// release; the look itself hides the pointer as it takes it (`player::camera`).
+    pub(super) fn drive_pointer(
+        device: Res<super::PointerDevice>,
+        rig: Option<Res<crate::player::CameraControl>>,
         mut cursor: Query<&mut bevy::window::CursorOptions, With<PrimaryWindow>>,
         mut ours: Local<bool>,
     ) {
+        let hidden = device.hides(super::look_released(rig.as_deref()));
         if let Ok(mut opts) = cursor.single_mut() {
-            if let Some(visible) = super::pointer_visibility(hidden.0, &mut ours, opts.visible) {
+            if let Some(visible) = super::pointer_visibility(hidden, &mut ours, opts.visible) {
                 opts.visible = visible;
             }
         }
@@ -601,8 +680,7 @@ mod macos {
         custom: Res<super::CustomCursorName>,
         screen: Res<crate::loading_screen::LoadingScreen>,
         rig: Res<CameraControl>,
-        cinematic: Option<Res<crate::cinematic::Cinematic>>,
-        glue_hidden: Res<super::GluePointerHidden>,
+        device: Res<super::PointerDevice>,
         mut focus: MessageReader<bevy::window::WindowFocused>,
         // The `Local`s below remember OS state, which outlives the VM, so none is a
         // [`crate::ui_script::VmMemo`].
@@ -642,11 +720,9 @@ mod macos {
                 }
             }
         }
-        // A cinematic and the glue's `HideCursor` hide the pointer too (`0x58b590`);
-        // `CursorOptions.visible` is inert here, so they join the look's hide/unhide pair, keeping
-        // AppKit's hide counter balanced.
-        let looking =
-            rig.holds_cursor() || cinematic.is_some_and(|c| c.is_playing()) || glue_hidden.0;
+        // The device's one flag decides (`0x595c20`). `CursorOptions.visible` is inert here, so
+        // AppKit's hide and unhide run on its edges only, which keeps the counter balanced.
+        let looking = device.hides(super::look_released(Some(&*rig)));
         let stem = mode.0.stem();
         // Mode 41 shows the picture `SetCursor` loaded, built from its path on first use.
         let custom_key = (mode.0.kind == crate::target::CursorKind::Custom)
@@ -835,21 +911,23 @@ mod tests {
         app.world().resource::<DisplayedCursor>().0
     }
 
-    /// One frame of [`read_glue_pointer`] over a glue VM that ran `lua`.
-    fn glue_pointer_after(lua: &str) -> bool {
+    /// The device flag after one frame over the glue VM `script`, from `device`.
+    fn glue_pointer_after(script: benilla_ui::script::UiScript, device: PointerDevice) -> bool {
         let mut app = App::new();
-        let script = benilla_ui::script::UiScript::new_glue().unwrap();
-        script.run(lua).unwrap();
         app.insert_non_send_resource(script);
-        app.init_resource::<GluePointerHidden>();
+        app.insert_resource(device);
         app.world_mut()
-            .run_system_once(read_glue_pointer)
-            .expect("the glue pointer flag is read");
-        app.world().resource::<GluePointerHidden>().0
+            .run_system_once(track_pointer_device)
+            .expect("the pointer device tracks");
+        app.world().resource::<PointerDevice>().hides(false)
     }
 
-    /// `0x46db70`/`0x46db60` reach the cursor driver: the credits frame's `HideCursor()` hides
-    /// the pointer until its OnHide `ShowCursor()`.
+    fn glue_after(lua: &str) -> bool {
+        let script = benilla_ui::script::UiScript::new_glue().unwrap();
+        script.run(lua).unwrap();
+        glue_pointer_after(script, PointerDevice::default())
+    }
+
     /// `SetCursor` with a 32×32 texture's path shows mode 41 with that path's picture (`0x523c40`).
     #[test]
     fn a_custom_set_cursor_shows_mode_41_with_its_path() {
@@ -877,23 +955,79 @@ mod tests {
         );
     }
 
+    /// `0x46db70`/`0x46db60` reach the device: the credits frame's `HideCursor()` hides the
+    /// pointer until its OnHide `ShowCursor()`.
     #[test]
     fn the_glue_hide_cursor_verb_reaches_the_driver() {
-        assert!(!glue_pointer_after(""));
-        assert!(glue_pointer_after("HideCursor()"));
-        assert!(!glue_pointer_after("HideCursor() ShowCursor()"));
-        assert!(glue_pointer_after("HideCursor() ShowCursor() HideCursor()"));
+        assert!(!glue_after(""));
+        assert!(glue_after("HideCursor()"));
+        assert!(!glue_after("HideCursor() ShowCursor()"));
+        assert!(glue_after("HideCursor() ShowCursor() HideCursor()"));
     }
 
-    /// Without a VM the flag reads down.
+    /// The glue build's `SetCursor` with a texture (`0x46a872`) is a show after a `HideCursor`
+    /// the old glue made (`0x764da6`); the call after the build's wins.
     #[test]
-    fn no_vm_is_no_glue_hide() {
-        let mut app = App::new();
-        app.insert_resource(GluePointerHidden(true));
-        app.world_mut()
-            .run_system_once(read_glue_pointer)
-            .expect("the glue pointer flag is read");
-        assert!(!app.world().resource::<GluePointerHidden>().0);
+    fn a_glue_build_shows_a_pointer_the_old_glue_hid() {
+        let mut hidden = PointerDevice::default();
+        hidden.queue(false);
+        hidden.advance(false, false);
+        assert!(hidden.hides(false));
+        let rebuilt = benilla_ui::script::UiScript::new_glue().unwrap();
+        assert!(!glue_pointer_after(rebuilt, hidden.clone()));
+        let rebuilt = benilla_ui::script::UiScript::new_glue().unwrap();
+        rebuilt.run("HideCursor()").unwrap();
+        assert!(
+            glue_pointer_after(rebuilt, hidden),
+            "the verb after it hides"
+        );
+    }
+
+    /// The last call wins and nothing counts (`0x595c26`): a look that ends during a cinematic
+    /// shows the pointer (`0x50fdf2`), the cinematic's end shows it under a held look
+    /// (`0x48f17e`), and a hide and a show in either order leave the later one.
+    #[test]
+    fn the_last_call_on_the_device_decides() {
+        let mut d = PointerDevice::default();
+        assert!(!d.hides(false), "the constructor's 1 (0x591c64)");
+        d.advance(false, true);
+        assert!(d.hides(false), "a cinematic hides");
+        d.advance(true, true);
+        assert!(d.hides(false), "so does the look beside it");
+        d.advance(false, true);
+        assert!(!d.hides(false), "the look's end shows it mid-shot");
+        d.advance(true, true);
+        assert!(d.hides(false), "the next look hides again");
+        d.advance(true, false);
+        assert!(!d.hides(false), "the shot's end shows it under the look");
+        d.advance(false, false);
+        assert!(!d.hides(false));
+        // Same frame: the look's edge, the cinematic's, then the queued calls.
+        let mut d = PointerDevice::default();
+        d.queue(false);
+        d.queue(true);
+        d.advance(true, false);
+        assert!(!d.hides(false), "a queued show follows the look's hide");
+        d.queue(false);
+        d.advance(true, false);
+        assert!(d.hides(false), "a queued hide lasts");
+        d.queue(true);
+        d.advance(true, false);
+        assert!(
+            !d.hides(false),
+            "the leave-world sweep shows it, whatever held it"
+        );
+    }
+
+    /// A look's hide gives way while the window is unfocused; another caller's hide does not.
+    #[test]
+    fn only_a_looks_hide_gives_way_to_a_lost_focus() {
+        let mut d = PointerDevice::default();
+        d.advance(true, false);
+        assert!(d.hides(false));
+        assert!(!d.hides(true));
+        d.advance(true, true);
+        assert!(d.hides(true), "the cinematic's hide is the last call");
     }
 
     /// A caller puts back only the hide it made, and writes nothing when nothing changes.

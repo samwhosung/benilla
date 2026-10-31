@@ -206,17 +206,12 @@ impl Cinematic {
 #[derive(Component)]
 struct LetterboxBar;
 
-/// What [`drive_letterbox`] switched off at the start, so it puts back only what it took.
-#[derive(Default)]
-struct Takeover {
-    cursor: bool,
-}
-
 pub(crate) struct CinematicPlugin;
 
 impl Plugin for CinematicPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Cinematic>()
+            .init_resource::<crate::cursor::PointerDevice>()
             .add_systems(
                 Startup,
                 (load_catalog.after(AssetSet::Open), spawn_letterbox),
@@ -295,7 +290,7 @@ fn letterbox_bar(width: f32, screen: f32) -> f32 {
     two_to_one.min(screen / 6.0).max(0.0)
 }
 
-/// Hide the cursor and raise the letterbox while a shot is on screen; put both back after.
+/// Raise the letterbox while a shot is on screen; put it back after.
 ///
 /// `CinematicFrame.lua:9` crops to 2:1 (`width/2` capped at the height) only when wider than 4:3;
 /// otherwise the bars keep the XML's `1024 x 128` on the native `1024 x 768` sheet, a sixth of the
@@ -305,24 +300,15 @@ fn drive_letterbox(
     cine: Res<Cinematic>,
     mut bars: Query<(&mut Node, &mut Visibility), With<LetterboxBar>>,
     windows: Query<&Window>,
-    mut cursor: Query<&mut bevy::window::CursorOptions, With<bevy::window::PrimaryWindow>>,
-    mut ours: Local<Takeover>,
     mut logged: Local<f32>,
 ) {
     let playing = cine.is_playing();
     // The HUD is Lua's, as in the reference: `CINEMATIC_START` runs `ShowUIPanel`, whose
     // `area = "full"` routes to `SetFullScreenFrame`, which hides `UIParent`.
 
-    // The hardware cursor hides at StartCinematic and returns at EndCinematic and the leave-world
-    // teardown (`0x58b590(0)`/`(1)`); nothing else hides it while the view is detached.
-    if let Ok(mut opts) = cursor.single_mut() {
-        if let Some(visible) =
-            crate::cursor::pointer_visibility(playing, &mut ours.cursor, opts.visible)
-        {
-            opts.visible = visible;
-        }
-    }
-
+    // The pointer's device flag takes the shot's start as a hide and its end as a show
+    // (`0x58b590(0)` at `0x48ed94`, `(1)` at `0x48f189`); the last call decides, so a later call
+    // from the look or the glue shows it mid-shot ([`crate::cursor::PointerDevice`]).
     let height = playing
         .then(|| windows.iter().next())
         .flatten()
@@ -761,7 +747,10 @@ fn abandon_cinematic_on_leave_world(
     mut hosted_vm: crate::script_calls::HostedVm,
     mut cine: ResMut<Cinematic>,
     mut fade: ResMut<crate::screen_fade::ScreenFade>,
+    mut pointer: ResMut<crate::cursor::PointerDevice>,
 ) {
+    // `0x490bb6`-`0x490bbb`: the sweep's last act shows the pointer, whatever held it.
+    pointer.queue(true);
     hosted_vm.run(|script| {
         if !cine.is_playing() {
             return;
@@ -1010,6 +999,7 @@ mod ack_ledger {
         app.insert_resource(Cinematic::playing_for_test())
             .insert_resource(net)
             .init_resource::<crate::screen_fade::ScreenFade>()
+            .init_resource::<crate::cursor::PointerDevice>()
             .add_sweep_leg(
                 crate::ui_script::SweepLeg::Cinematic,
                 abandon_cinematic_on_leave_world,

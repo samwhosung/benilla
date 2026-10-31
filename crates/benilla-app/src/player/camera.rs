@@ -631,9 +631,8 @@ impl CameraControl {
         self.look.is_some()
     }
 
-    /// True while a look session holds the OS cursor, hidden and locked: looking, and focused.
-    /// Read by the macOS cursor hide, the one platform that hides the cursor itself.
-    #[cfg(any(target_os = "macos", test))]
+    /// True while a look session holds the OS cursor, locked: looking, and focused. Read by the
+    /// pointer's device flag, which gives a look's hide up while the OS cursor is free.
     pub(crate) fn holds_cursor(&self) -> bool {
         self.look.is_some() && !self.cursor_released
     }
