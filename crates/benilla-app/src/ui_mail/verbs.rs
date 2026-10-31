@@ -31,9 +31,11 @@ impl MailVerbs<'_> {
         self.mail.as_deref().and_then(|m| m.mailbox)
     }
 
-    /// The mailbox a use asked to open ([`super::MailOpen::use_mailbox`]), taken.
+    /// The mailbox a use asked to open ([`super::MailOpen::use_mailbox`]), taken. The cell is
+    /// lent mutably only when a use left one, so a use that opened no mailbox writes nothing.
     pub(crate) fn take_used(&mut self) -> Option<u64> {
-        self.mail.as_deref_mut().and_then(|m| m.used.take())
+        let mail = self.mail.as_mut().filter(|m| m.used.is_some())?;
+        mail.used.take()
     }
 
     /// The open's cell (`0x4acd27`).

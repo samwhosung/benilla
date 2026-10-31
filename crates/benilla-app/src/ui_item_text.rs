@@ -1218,10 +1218,11 @@ impl ItemTextSteps<'_, '_> {
         self.session().map(|s| s.object_guid)
     }
 
-    /// The next read a click or a bag use asked for, in order.
+    /// The next read a click or a bag use asked for, in order. The reader is lent mutably only
+    /// when a read waits, so a use that read nothing writes nothing.
     pub(crate) fn next_read(&mut self) -> Option<QueuedRead> {
-        let open = self.open.as_deref_mut()?;
-        (!open.reads.is_empty()).then(|| open.reads.remove(0))
+        let open = self.open.as_mut().filter(|o| !o.reads.is_empty())?;
+        Some(open.reads.remove(0))
     }
 
     /// The reader's cell `[0xbc3fa0]` and its read, as the read core tests it (`0x4e330c`).

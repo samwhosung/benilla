@@ -84,6 +84,26 @@ fn an_engine_deselects_strike_cancel_report_runs_ahead_of_the_bars_usable_refres
     assert_eq!(writes_after(), Vec::<String>::new());
 }
 
+/// A bag use whose cast report waits for its point (`0x5d9258` → `0x6e5a90`) and that opens no
+/// mailbox (`0x5f6820`) and no letter (`0x4e32e0`) writes neither window's cell after that
+/// report's listeners.
+#[test]
+fn an_item_use_that_opens_no_window_writes_none_after_its_held_report() {
+    let mut f = frame(false);
+    let mut t = crate::items::test_template("Trinket");
+    t.use_spell = Some(benilla_protocol::messages::ItemUseSpell {
+        spell_id: 4321,
+        cooldown_ms: -1,
+        category: 0,
+        category_cooldown_ms: -1,
+    });
+    with_potion(&mut f, t);
+    let _watch = listening(&mut f);
+    run(&mut f, "UseContainerItem(0, 1)");
+    shows_no_send();
+    assert_eq!(writes_after(), Vec::<String>::new());
+}
+
 /// The selection, cast, attack and chat verbs send and write nothing after a handler they
 /// signalled that waits.
 #[test]
