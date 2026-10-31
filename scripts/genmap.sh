@@ -163,38 +163,6 @@ LC_ALL=C grep -rIlE 'Deviation:' crates 2>/dev/null | LC_ALL=C sort | grep -vE '
   | xargs env LC_ALL=C awk -v list="$tmp/testmods" '
   function indent_of(s,   t) { t = s; sub(/[^ \t].*$/, "", t); return length(t) }
   function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
-  # The first sentence of a joined comment: to the first `.`/`?`/`!` that is followed by an
-  # uppercase word or the end, outside backticks and parentheses, and not an abbreviation.
-  function first_sentence(t,   len, k, ch, tick, par, nx, rest, pre) {
-    len = length(t); tick = 0; par = 0
-    for (k = 1; k <= len; k++) {
-      ch = substr(t, k, 1)
-      if (ch == "`") { tick = !tick; continue }
-      if (tick) continue
-      if (ch == "(") par++
-      else if (ch == ")") { if (par > 0) par-- }
-      else if ((ch == "." || ch == "?" || ch == "!") && par == 0) {
-        nx = substr(t, k + 1, 1)
-        if (nx == "") return substr(t, 1, k)
-        if (nx != " ") continue
-        rest = substr(t, k + 2); sub(/^ +/, "", rest)
-        if (rest != "" && substr(rest, 1, 1) !~ /[A-Z]/) continue
-        pre = tolower(substr(t, 1, k - 1))
-        if (pre ~ /(^|[^a-z])(vs|cf|ca)$/ || pre ~ /(e\.g|i\.e)$/) continue
-        return substr(t, 1, k)
-      }
-    }
-    return t
-  }
-  # The sentence, and the next one too while it is a fragment (`min(I, 1)`, `returns nothing`).
-  function lead(t,   s, rest) {
-    s = first_sentence(t)
-    while (length(s) < 70 && length(s) < length(t)) {
-      rest = substr(t, length(s) + 1); sub(/^ +/, "", rest)
-      s = s " " first_sentence(rest)
-    }
-    return s
-  }
   # Where a `Deviation:` label starts in a comment, 0 if none: one inside backticks is a mention.
   function label_at(c,   at, off, rest) {
     off = 0; rest = c
@@ -275,7 +243,8 @@ LC_ALL=C grep -rIlE 'Deviation:' crates 2>/dev/null | LC_ALL=C sort | grep -vE '
         text = text " " cont
       }
       full = trim(text); gsub(/\t/, " ", full)
-      text = trim(lead(trim(text)))
+      # The whole paragraph is written, so the list carries the reference fact with the reason.
+      text = trim(text)
       gsub(/\t/, " ", text)
       # A rustdoc link [`x`] or [`x`](path) reads as `x`.
       while (match(text, /\[`[^`]*`\]\([^)]*\)/)) { q = index(substr(text, RSTART), "]("); text = substr(text, 1, RSTART - 1) substr(text, RSTART + 1, q - 2) substr(text, RSTART + RLENGTH) }
