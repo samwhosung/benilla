@@ -1,13 +1,12 @@
 //! Entity ground shade: a unit, player or GameObject re-samples the terrain MCSH under it as it
-//! moves, rather than baking it at spawn, and ramps its light node's intensity between the
-//! reference's 2.5 lit and 0.5 shadowed (`0x69e770`, step `[0x810808]` = 3.3333/s).
+//! moves, and its light node's intensity ramps toward the reference's target: 2.5 lit, 0.5 in the
+//! chunk's shadow, 1.0 as an interior (`0x69e280`, `0x69e496`, `0x69e4ad`, `0x69e36b`).
 //!
-//! The reference lights a unit through the node only once registered (`0x672a20`, `[model+0x3c0]`;
-//! `0x6a7300` scales the diffuse by `[+0xa4]`), which a model-set does (`0x6716f0` from
-//! `0x613cf0`/`0x613d80`: equip, display id, shapeshift); a unit born unregistered (`0x670db0`,
-//! from `0x613e10`) commits the raw day/night pair at ×1.0. Every drawn unit has had its display
-//! model set, so only the registered state is modelled; which units stay unregistered is untraced
-//! (reference frames show a standing player at ×2.5 and a running one at ×1.0).
+//! The reference registers the node at creation (`0x670db0` from `0x613e10`) with intensity
+//! `+0xa4` and target `+0xf8` both 1.0 (`0x670e75`, `0x670e7b`); its first sync sets the target.
+//! Each loaded tick steps `+0xa4` toward the target by 3.3333333 x the previous frame's time
+//! (`0x69e770`, `[0x810808]`) and stops on it, so a unit appears at 1.0 and ramps to 2.5 over about
+//! 0.45 s, never snapping. `0x6a7300` scales the diffuse by `+0xa4`, unclamped.
 //!
 //! [`GroundShade`] sits on the net entity root (the `[obj+0xe0]` node) and its byte goes to every
 //! M2 part below it, so a held weapon dims with its wielder: the reference lights attachments from
@@ -21,9 +20,11 @@ use crate::interior::{classify_entity_interior, InteriorLit};
 use crate::mesh_tag::{exterior_payload, shade_of, with_shade, InteriorProbePayload};
 use crate::terrain_stream::{doodad_ground_shade, ShadeResolve, TerrainStreamer};
 
-/// The rate of `t` (0 = intensity 2.5, 1 = 0.5): the reference's linear step `[0x810808]` =
-/// 3.3333 intensity units/s over the mix's 2.0-wide span.
-const SHADE_RAMP_PER_SEC: f32 = 3.3333 / 2.0;
+/// The reference's intensity step per second, `[0x810808]` = 0x40555555 (`0x69e880`).
+const INTENSITY_STEP_PER_SEC: f32 = 3.333_333_3;
+
+/// The rate of `t` (0 = intensity 2.5, 1 = 0.5) over the mix's 2.0-wide span.
+const SHADE_RAMP_PER_SEC: f32 = INTENSITY_STEP_PER_SEC / 2.0;
 
 /// Squared distance (yd²) a root moves before the MCSH bit is re-sampled, about one MCSH texel.
 const RESAMPLE_DIST_SQ: f32 = 0.25;
@@ -31,14 +32,12 @@ const RESAMPLE_DIST_SQ: f32 = 0.25;
 /// The ambient word's rate, `[0x810804]` = 2.0 colour units/s (`[+0x9c]` → `[+0xf4]`).
 const AMBIENT_RAMP_PER_SEC: f32 = 2.0;
 
-/// `t` at the day/night intensity 1.0, an indoor node's target (`[+0xf8]` = 1.0 at `0x69e36b`,
-/// behind the `[+0xc] & 2` interior gate). The unregistered fallback's ×1.0 is another law.
+/// `t` at intensity 1.0: a new node's intensity and target (`0x670e75`, `0x670e7b`), and an
+/// interior's target (`[+0xf8]` = 1.0 at `0x69e36b`, behind the `[+0xc] & 2` interior gate).
 const DAYNIGHT_T: f32 = 0.75;
 
-/// Deviation: the lit outdoor target is intensity 1.0, not the reference's 2.5, because
-/// `wow_model.wgsl` caps the intensity at 1.0 (`min(I, 1)`) and a chase through the capped span
-/// would stall unseen. Back to 0.0 together with lifting that cap.
-const LIT_T: f32 = 0.75;
+/// `t` at the lit outdoor target, intensity 2.5 (`[0x810a68]`, `0x69e4ad`).
+const LIT_T: f32 = 0.0;
 
 /// The settled-ramp epsilon on `t` and each ambient channel, under half a byte.
 const RAMP_EPS: f32 = 1.0 / 640.0;
@@ -49,11 +48,11 @@ const RAMP_EPS: f32 = 1.0 / 640.0;
 pub struct GroundShade {
     /// The mix, 1 being intensity 0.5: the parts' tag byte and the bake fold's diffuse scale.
     t: f32,
-    /// The last MCSH sample's target, [`LIT_T`] or 1.
+    /// The last MCSH sample's target, [`LIT_T`] or 1; a new node's is [`DAYNIGHT_T`] until sampled.
     target: f32,
     /// Root position at the last sample (the movement gate).
     last_pos: Vec3,
-    /// Whether the first sample landed; it snaps `t`, so a spawn never ramps in.
+    /// Whether the first sample landed (a node holds 1.0 until its first sync sets the target).
     sampled: bool,
     /// The interior classifier's verdict; indoors [`DAYNIGHT_T`] overrides the MCSH sample.
     pub(crate) indoor: bool,
@@ -74,8 +73,8 @@ pub struct GroundShade {
 impl Default for GroundShade {
     fn default() -> Self {
         Self {
-            t: LIT_T,
-            target: LIT_T,
+            t: DAYNIGHT_T,
+            target: DAYNIGHT_T,
             last_pos: Vec3::ZERO,
             sampled: false,
             indoor: false,
@@ -92,6 +91,18 @@ impl GroundShade {
     /// The committed intensity (`[node+0xa4]`), which the bake fold multiplies its diffuse word by.
     pub(crate) fn intensity(&self) -> f32 {
         2.5 - 2.0 * self.t
+    }
+
+    /// The sample's verdict: the lit or shadowed target (`0x69e496`, `0x69e4ad`).
+    fn on_sample(&mut self, shadowed: bool, pos: Vec3) {
+        self.target = if shadowed { 1.0 } else { LIT_T };
+        self.last_pos = pos;
+        self.sampled = true;
+    }
+
+    /// One tick of the intensity chase toward the effective target, never past it (`0x69e770`).
+    fn step_intensity(&mut self, step: f32) {
+        self.t = ramp_toward(self.t, self.effective_target(), step);
     }
 
     /// The chase's target: day/night indoors, lit on a WMO surface, else the kept MCSH sample, for
@@ -288,12 +299,7 @@ pub(crate) fn update_ground_shade(
         if !shade.sampled || pos.distance_squared(shade.last_pos) >= RESAMPLE_DIST_SQ {
             match doodad_ground_shade(&streamer, &adt_tiles, pos) {
                 ShadeResolve::Ready(shadowed) => {
-                    shade.target = if shadowed { 1.0 } else { LIT_T };
-                    shade.last_pos = pos;
-                    if !shade.sampled {
-                        shade.t = shade.effective_target();
-                        shade.sampled = true;
-                    }
+                    shade.on_sample(shadowed, pos);
                 }
                 // The tile is still decoding: keep the last state and retry next frame.
                 ShadeResolve::Pending => {}
@@ -314,12 +320,7 @@ pub(crate) fn update_ground_shade(
             );
             shade.logged_target = target;
         }
-        // Linear toward the target, never past it (`0x69e770`).
-        shade.t = if shade.t < target {
-            (shade.t + step).min(target)
-        } else {
-            (shade.t - step).max(target)
-        };
+        shade.step_intensity(step);
         let a = shade.ambient;
         let at = shade.ambient_target;
         shade.ambient = Vec3::new(
@@ -522,5 +523,58 @@ mod tests {
             "the MOUNT's byte"
         );
         assert_eq!(resolve(&mut world, &map, Some(mount)), Some(9));
+    }
+
+    /// A new node holds intensity 1.0, takes its first sample's target, and steps toward it at
+    /// 3.3333333 x dt without snapping (`0x670e75`, `0x69e770`, `0x69e880`).
+    #[test]
+    fn a_new_node_ramps_from_1_to_its_target() {
+        let mut n = GroundShade::default();
+        assert_eq!(n.intensity(), 1.0, "created at 1.0");
+        n.step_intensity(SHADE_RAMP_PER_SEC * 0.1);
+        assert_eq!(n.intensity(), 1.0, "unsampled: target 1.0 holds it");
+        n.on_sample(false, Vec3::ZERO);
+        let dt = 1.0 / 60.0;
+        n.step_intensity(SHADE_RAMP_PER_SEC * dt);
+        let want = (1.0 + 3.333_333_3 * dt).min(2.5);
+        assert!(
+            (n.intensity() - want).abs() < 1e-5,
+            "{} vs {want}",
+            n.intensity()
+        );
+        assert!(n.intensity() < 2.5, "no snap to the target");
+        for _ in 0..60 {
+            n.step_intensity(SHADE_RAMP_PER_SEC * dt);
+        }
+        assert_eq!(n.intensity(), 2.5, "settles on the lit target");
+    }
+
+    /// The three targets: 2.5 lit, 0.5 in the chunk's shadow, 1.0 as an interior.
+    #[test]
+    fn the_targets_are_2_5_lit_0_5_shadowed_1_interior() {
+        let at = |n: &GroundShade| 2.5 - 2.0 * n.effective_target();
+        let mut n = GroundShade::default();
+        n.on_sample(false, Vec3::ZERO);
+        assert_eq!(at(&n), 2.5);
+        n.on_sample(true, Vec3::ZERO);
+        assert_eq!(at(&n), 0.5);
+        n.indoor = true;
+        assert_eq!(at(&n), 1.0);
+    }
+
+    /// The entity family's intensity reaches the SH unclamped (`0x71c4e0`): the shader's lit
+    /// entity expression carries no `min(I, 1)`.
+    #[test]
+    fn the_entity_intensity_is_not_capped_in_the_shader() {
+        let src = include_str!("../../benilla-assets/src/shaders/wow_model.wgsl");
+        let line = src
+            .lines()
+            .find(|l| l.trim_start().starts_with("let intensity ="))
+            .expect("the intensity line");
+        assert!(line.contains("mix(2.5, 0.5, shade_t)"), "{line}");
+        assert!(
+            !line.contains("min("),
+            "a lit entity packs above 1.0: {line}"
+        );
     }
 }
