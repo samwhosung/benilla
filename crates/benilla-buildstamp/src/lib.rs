@@ -1,14 +1,20 @@
 //! The build stamp: the `build.rs` body the `benilla` and `benilla-worldview` launcher shims
-//! share. It stays a build-dependency of the shims, never of `benilla-app`: cargo rebuilds the
-//! package that owns a `rerun-if-changed` path whenever that path's mtime moves, and these paths
-//! move on every commit, rebase and checkout.
+//! share, and every launcher a crate on top builds the same way. It stays a build-dependency of
+//! the shims, never of `benilla-app`: cargo rebuilds the package that owns a `rerun-if-changed`
+//! path whenever that path's mtime moves, and these paths move on every commit, rebase and
+//! checkout.
 
 use std::path::Path;
 use std::process::Command;
 
-/// Stamp the commit this binary was built from into the calling package as six `rustc-env`
-/// vars, which its `main.rs` reads back with `env!` into a `BuildId`, beside its own
-/// `CARGO_PKG_VERSION`:
+/// The main thread's stack on Windows, in bytes: what Linux and macOS give it.
+const MAIN_THREAD_STACK: u32 = 8 << 20;
+
+/// Stamp the commit this binary was built from into the calling package, and give its executables
+/// the main-thread stack the app needs on Windows.
+///
+/// The stamp is six `rustc-env` vars, which its `main.rs` reads back with `env!` into a
+/// `BuildId`, beside its own `CARGO_PKG_VERSION`:
 ///
 /// - `BENILLA_GIT_SHA`: the full sha.
 /// - `BENILLA_GIT_SHORT`: git's own abbreviation of it.
@@ -94,6 +100,34 @@ pub fn emit() {
         String::new()
     };
     println!("cargo::rustc-env=BENILLA_PROJECT_DIR={project}");
+
+    main_thread_stack();
+}
+
+/// The app runs on the main thread, where the windowing event loop must live, and needs more than
+/// the 1 MB the MSVC linker reserves for it by default (2 MB on mingw): the login screen overflows
+/// it. So the package's Windows executables reserve [`MAIN_THREAD_STACK`] through
+/// `rustc-link-arg`, which cargo passes to every target it links and, unlike
+/// `rustc-link-arg-bins`, takes from a package that has no binary.
+fn main_thread_stack() {
+    let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+    if let Some(arg) = stack_link_arg(&os, &env) {
+        println!("cargo::rustc-link-arg={arg}");
+    }
+}
+
+/// The linker's spelling of the main-thread reserve for a target: `/STACK` on MSVC, `--stack`
+/// through the compiler driver on mingw; none off Windows, where the system gives 8 MB already.
+fn stack_link_arg(target_os: &str, target_env: &str) -> Option<String> {
+    if target_os != "windows" {
+        return None;
+    }
+    match target_env {
+        "msvc" => Some(format!("/STACK:{MAIN_THREAD_STACK}")),
+        "gnu" => Some(format!("-Wl,--stack,{MAIN_THREAD_STACK}")),
+        _ => None,
+    }
 }
 
 /// The workspace root of the package at `manifest_dir`: the nearest folder up from it holding
@@ -133,6 +167,23 @@ mod tests {
             root.display()
         );
         std::fs::remove_dir_all(&bare).ok();
+    }
+
+    /// A Windows binary reserves 8 MB for its main thread in the linker's own spelling; no other
+    /// target is asked to.
+    #[test]
+    fn a_windows_binary_reserves_the_main_threads_8_mb() {
+        assert_eq!(
+            stack_link_arg("windows", "msvc").as_deref(),
+            Some("/STACK:8388608")
+        );
+        assert_eq!(
+            stack_link_arg("windows", "gnu").as_deref(),
+            Some("-Wl,--stack,8388608")
+        );
+        for (os, env) in [("macos", ""), ("linux", "gnu"), ("windows", "")] {
+            assert_eq!(stack_link_arg(os, env), None, "{os} {env}");
+        }
     }
 
     /// benilla's own launchers stamp the checkout, the folder a dev build always used.

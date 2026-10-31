@@ -10,8 +10,9 @@
 //! `AddOns/` folder in [`benilla_app::config_dir`], where an addon the crate ships is written.
 //!
 //! A crate of its own copies the `benilla` launcher (`crates/benilla`): a build script that stamps
-//! its commit, a `main` like this one that reads the stamp back as `crates/benilla/src/main.rs`
-//! does, and a manifest that takes benilla as the workspace does:
+//! its commit and gives its binary the 8 MB main-thread stack the app needs on Windows, a `main`
+//! like this one that reads the stamp back as `crates/benilla/src/main.rs` does, and a manifest
+//! that takes benilla as the workspace does:
 //!
 //! ```toml
 //! [features]
@@ -45,7 +46,7 @@
 //! ```
 //!
 //! ```text
-//! // build.rs
+//! // build.rs: the stamp, and on Windows the main-thread stack of every binary in the package
 //! fn main() {
 //!     benilla_buildstamp::emit();
 //! }
