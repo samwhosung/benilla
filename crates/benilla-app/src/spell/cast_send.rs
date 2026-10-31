@@ -490,11 +490,12 @@ impl CastLadder<'_, '_> {
         });
     }
 
-    /// `BindTarget`'s bind of a unit on an arm that left bits in the word (`0x6e60c1`): the unit
-    /// written into the record's target (`0x6e5cdc`), the arm's bits cleared from the standing
-    /// word, and no signal and no send.
-    pub(crate) fn bind_partial(&mut self, unit: u64, word: u16) {
-        self.pending.bind_target(unit);
+    /// `BindTarget`'s bind on an arm that left bits in the word (`0x6e60c1`): the unit or corpse
+    /// written into the record's target (`0x6e5cdc`, `0x6e5fbe`) and its bit into the mask
+    /// (`0x6e5e13`, `0x6e5fc7`, `0x6e600c`), the arm's bits cleared from the standing word, and no
+    /// signal and no send.
+    pub(crate) fn bind_partial(&mut self, object: u64, mask_bit: u16, word: u16) {
+        self.pending.hold_target(object, mask_bit);
         self.ground.narrow(word);
     }
 
@@ -519,10 +520,25 @@ impl CastLadder<'_, '_> {
         {
             self.pending.bind_target(guid);
         }
+        // Over bits a held bind wrote, the record's whole mask goes out (`0x7e4e10`).
+        let held = match self.pending.record_mask() {
+            0 => None,
+            mask => Some(
+                benilla_protocol::messages::HeldTargets {
+                    mask,
+                    object: self.pending.record_target().unwrap_or(0),
+                    ..Default::default()
+                }
+                .with(bound.block()),
+            ),
+        };
         self.pending.set_record_send(CastSend {
             spell_id,
             commit,
-            packet: record_packet(spell_id, commit, Some(bound)),
+            packet: match held {
+                Some(held) => held_packet(spell_id, commit, held),
+                None => record_packet(spell_id, commit, Some(bound)),
+            },
         });
         self.ground.clear();
         self.reports.changed();
@@ -986,7 +1002,7 @@ impl CastLadder<'_, '_> {
                         self.ground.hold_slot();
                     }
                 }
-                self.bind_partial(unit, word);
+                self.bind_partial(unit, 0x0002, word);
                 self.reports.changed();
                 return None;
             }
@@ -1418,6 +1434,35 @@ fn record_packet(spell_id: u32, commit: CastCommit, bound: Option<TargetedBind>)
             caster_guid: caster,
             spell_id,
             target: bound.map_or(UseItemTarget::SelfImplicit, TargetedBind::block),
+        },
+    }
+}
+
+/// [`record_packet`] for a record whose mask more than one bind wrote: the whole gathered block
+/// under the commit's opcode.
+fn held_packet(
+    spell_id: u32,
+    commit: CastCommit,
+    held: benilla_protocol::messages::HeldTargets,
+) -> ClientCommand {
+    let target = UseItemTarget::Held(held);
+    match commit {
+        CastCommit::Spell => ClientCommand::CastSpellTargets { spell_id, target },
+        CastCommit::Item {
+            bag_index,
+            slot,
+            spell_index,
+            ..
+        } => ClientCommand::UseItem {
+            bag_index,
+            slot,
+            spell_index,
+            target,
+        },
+        CastCommit::Pet { caster } => ClientCommand::PetCastSpell {
+            caster_guid: caster,
+            spell_id,
+            target,
         },
     }
 }

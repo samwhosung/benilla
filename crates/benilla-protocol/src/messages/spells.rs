@@ -357,6 +357,15 @@ pub fn cast_spell_corpse(spell_id: u32, target: CorpseTarget, corpse_guid: u64) 
     body
 }
 
+/// Body of `CMSG_CAST_SPELL` with any targets block (`0x7e4e10`): the shape a spell's record
+/// gathered over more than one bind ([`super::items::HeldTargets`]).
+pub fn cast_spell_targets(spell_id: u32, target: super::UseItemTarget) -> Vec<u8> {
+    let mut body = Vec::with_capacity(32);
+    body.extend_from_slice(&spell_id.to_le_bytes());
+    super::items::write_cast_targets(&mut body, target);
+    body
+}
+
 /// Body of `CMSG_CAST_SPELL` at an item, such as an enchant or poison: `TARGET_FLAG_ITEM` and the
 /// item's packed guid (`SpellCastTargetsInfo.cpp:159-160`).
 pub fn cast_spell_item(spell_id: u32, item_guid: u64) -> Vec<u8> {
@@ -413,6 +422,43 @@ pub fn cancel_aura(spell_id: u32) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `0x7e4e10` over a mask two binds wrote: a held unit's `0x2` and the corpse's `0x8000` put
+    /// one guid, the last object bound; an item and both points follow it, in that order.
+    #[test]
+    fn cast_spell_targets_writes_a_gathered_mask_golden() {
+        use super::super::{HeldTargets, UseItemTarget};
+        const CORPSE: u64 = 0xF101_0000_0000_002A;
+        let held = HeldTargets {
+            mask: 0x8002,
+            object: CORPSE,
+            ..Default::default()
+        };
+        // spell 2006, mask 0x8002, packed guid (mask 0xc1, bytes 2a 01 f1).
+        assert_eq!(
+            cast_spell_targets(2006, UseItemTarget::Held(held)),
+            [0xd6, 0x07, 0x00, 0x00, 0x02, 0x80, 0xc1, 0x2a, 0x01, 0xf1]
+        );
+        let gathered = HeldTargets {
+            mask: 0x0002,
+            object: 0x51,
+            ..Default::default()
+        }
+        .with(UseItemTarget::Corpse(CorpseTarget::Ally, CORPSE));
+        assert_eq!(gathered, held, "a held unit, then the corpse");
+        let all = HeldTargets {
+            mask: 0x0072,
+            object: 0x10,
+            item: 0x20,
+            src: [1.0, 2.0, 3.0],
+            dest: [4.0, 5.0, 6.0],
+        };
+        let mut want = vec![0x01, 0x00, 0x00, 0x00, 0x72, 0x00, 0x01, 0x10, 0x01, 0x20];
+        for c in [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0] {
+            want.extend_from_slice(&c.to_le_bytes());
+        }
+        assert_eq!(cast_spell_targets(1, UseItemTarget::Held(all)), want);
+    }
 
     #[test]
     fn cast_spell_gameobject_body_golden() {

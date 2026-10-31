@@ -750,7 +750,7 @@ fn bind_target_unit(
     };
     let range = checks.range_refusal(spell_id, commit, entity);
     if rest != 0 && range.is_none() {
-        ladder.bind_partial(guid, rest);
+        ladder.bind_partial(guid, 0x0002, rest);
         return;
     }
     merge(
@@ -787,6 +787,8 @@ fn merge(
     if let Some(reason) = range {
         debug!("ui_action: cast {spell_id} not bound at {bound:x?} — range ({reason:#x})");
         let word = ladder.ground.pending().map(|(_, _, word)| word);
+        // A held spell stands with no cursor mode, which its re-arm keeps.
+        let shown = ladder.ground.shown();
         // The hold the report's cancel pops: the cursor's, or at the arm's signal the attempt's
         // push (`0x6e5026`), which the arm's word stands over without holding.
         let in_slot = ladder
@@ -798,7 +800,9 @@ fn merge(
         // A report that cancelled nothing (a record never pushed) leaves the word and the caster
         // as the reference restores them (`0x6e6096`).
         if let (Some(word), false) = (word, ladder.ground.active()) {
-            ladder.core().rearm_cursor(spell_id, commit, word, in_slot);
+            ladder
+                .core()
+                .rearm_cursor(spell_id, commit, word, in_slot, shown);
         }
         return;
     }
@@ -1151,6 +1155,30 @@ mod tests {
         assert!(!world.resource::<SpellTargeting>().active());
         let selection = world.resource::<crate::target::Selection>();
         assert_eq!((selection.target, selection.guid), (Some(ally), Some(ALLY)));
+    }
+
+    /// The merge's range refusal re-arms a held spell as it stood: a spell holding on the rest of
+    /// its word has no cursor mode (`0x6e503f` → `0x6e51b5`), and its re-arm leaves it off.
+    #[test]
+    fn an_out_of_range_click_re_arms_a_held_spell_without_the_cursor() {
+        let (mut world, rx, _) = unit_world(40.0);
+        {
+            let mut targeting = world.resource_mut::<SpellTargeting>();
+            targeting.arm_word(HEAL, super::super::cast_send::CastCommit::Spell, 0x0002);
+            targeting.hold_slot();
+        }
+        world
+            .resource_mut::<crate::spell::PendingCast>()
+            .fill_record();
+        spell_target_unit(&mut world, "target");
+        assert!(rx.try_recv().is_err());
+        assert_eq!(
+            errors(&mut world),
+            vec![crate::ui_action::CastFail::local(HEAL, 0x59)]
+        );
+        let targeting = world.resource::<SpellTargeting>();
+        assert!(targeting.active(), "re-armed");
+        assert!(!targeting.shown(), "with no cursor mode");
     }
 
     /// `SpellTargetUnit` takes a `target` chain as the resolver does (`0x6e6de1` into `0x515970`):

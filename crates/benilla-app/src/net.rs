@@ -1649,6 +1649,12 @@ pub(crate) enum ClientCommand {
         spell_id: u32,
         slot: u8,
     },
+    /// `CMSG_CAST_SPELL` with the targets block a held record gathered over more than one bind
+    /// ([`benilla_protocol::messages::HeldTargets`]).
+    CastSpellTargets {
+        spell_id: u32,
+        target: benilla_protocol::messages::UseItemTarget,
+    },
     /// `CMSG_LOOT` on a unit; the server rejects a GameObject guid, which loots by `GameObjUse`.
     Loot {
         guid: u64,

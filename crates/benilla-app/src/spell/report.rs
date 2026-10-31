@@ -210,14 +210,17 @@ impl CastCore<'_> {
     }
 
     /// The merge's range refusal re-arms the cursor as its attempt left it
-    /// ([`super::targeting`]'s `merge`, a deviation): the word, the caster, and its spell over
-    /// whatever the cancel's pop restored when the attempt had pushed it, unsignalled.
+    /// ([`super::targeting`]'s `merge`, a deviation): the word, the cursor mode as it stood
+    /// (`shown`, off for a held spell), the caster, and its spell over whatever the cancel's pop
+    /// restored when the attempt had pushed it, unsignalled. The record's mask is the one the
+    /// refused bind's restore puts back (`0x6e609d`).
     pub(crate) fn rearm_cursor(
         &mut self,
         spell_id: u32,
         commit: super::CastCommit,
         word: u16,
         in_slot: bool,
+        shown: bool,
     ) {
         if in_slot {
             let strike = match self.slot() {
@@ -227,7 +230,12 @@ impl CastCore<'_> {
             self.queued_melee.push(strike, None);
         }
         self.ground.enter_as(spell_id, commit, word, in_slot);
+        if !shown {
+            self.ground.hide();
+        }
+        let mask = self.pending.record_mask();
         self.pending.fill_record();
+        self.pending.restore_mask(mask);
         self.pending.fill_record_item(commit.item_guid());
     }
 

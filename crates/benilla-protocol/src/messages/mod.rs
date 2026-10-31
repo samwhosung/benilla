@@ -157,8 +157,8 @@ pub use instance::{
 };
 pub use items::{
     auto_equip_item, auto_store_bag_item, destroy_item, item_name_query, item_query, open_item,
-    read_item, set_ammo, split_item, swap_inv_item, swap_item, use_item, wrap_item, ItemDamage,
-    ItemInfo, ItemSpellEntry, ItemUseSpell, UseItemTarget, BAG_PLAYER_INVENTORY,
+    read_item, set_ammo, split_item, swap_inv_item, swap_item, use_item, wrap_item, HeldTargets,
+    ItemDamage, ItemInfo, ItemSpellEntry, ItemUseSpell, UseItemTarget, BAG_PLAYER_INVENTORY,
     ITEM_DYNFLAG_UNLOCKED, ITEM_DYNFLAG_WRAPPED, ITEM_FLAG_LOOTABLE, ITEM_FLAG_PLAYERCAST,
     ITEM_FLAG_WRAPPER, SLOT_BAG_FIRST, SLOT_PACK_FIRST,
 };
@@ -237,8 +237,8 @@ pub use social::{
 pub use spellbook::SpellCooldown;
 pub use spells::{
     cancel_aura, cast_spell, cast_spell_at_dest, cast_spell_at_source, cast_spell_corpse,
-    cast_spell_gameobject, cast_spell_item, cast_spell_trade_item, CastOutcome, CorpseTarget,
-    SpellCastTargets, SpellChainTargets, SpellGo, SpellGoMiss, SpellStart,
+    cast_spell_gameobject, cast_spell_item, cast_spell_targets, cast_spell_trade_item, CastOutcome,
+    CorpseTarget, SpellCastTargets, SpellChainTargets, SpellGo, SpellGoMiss, SpellStart,
 };
 pub use stable::{
     buy_stable_slot, list_stabled_pets, stable_pet, stable_result, stable_swap_pet, unstable_pet,

@@ -509,6 +509,62 @@ pub enum UseItemTarget {
     /// A corpse bit and the corpse's packed guid: Goblin Jumper Cables' Defibrillate
     /// (`Targets 0x8000`) on a released player's corpse.
     Corpse(super::spells::CorpseTarget, u64),
+    /// The record's whole mask, which more than one bind wrote: a spell that held on part of its
+    /// word (`0x6e60c1`) and bound the rest later ([`HeldTargets`]).
+    Held(HeldTargets),
+}
+
+/// A targets block as the record's mask (`0xceac5c`) gathered it over binds, every binder or-ing
+/// its bit (`0x6e5e13`, `0x6e5fc7`). `0x7e4e10` writes the mask, then the object's packed guid
+/// for any bit in `0x8a02` (`+0x18`), the item's for `0x1010` (`+0x20`), the source point for
+/// `0x20` (`+0x30`) and the destination for `0x40` (`+0x3c`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct HeldTargets {
+    pub mask: u16,
+    pub object: u64,
+    pub item: u64,
+    pub src: [f32; 3],
+    pub dest: [f32; 3],
+}
+
+impl HeldTargets {
+    /// `target`'s bind written over the record: its bit or-ed into the mask, its guid or point in
+    /// its slot, the object slot taking the last object bound.
+    pub fn with(mut self, target: UseItemTarget) -> Self {
+        match target {
+            UseItemTarget::SelfImplicit => {}
+            UseItemTarget::Unit(guid) => {
+                self.mask |= TARGET_FLAG_UNIT;
+                self.object = guid;
+            }
+            UseItemTarget::Object(guid) => {
+                self.mask |= TARGET_FLAG_GAMEOBJECT;
+                self.object = guid;
+            }
+            UseItemTarget::Corpse(corpse, guid) => {
+                self.mask |= corpse.target_flag();
+                self.object = guid;
+            }
+            UseItemTarget::Item(guid) => {
+                self.mask |= TARGET_FLAG_ITEM;
+                self.item = guid;
+            }
+            UseItemTarget::TradeItem(slot) => {
+                self.mask |= TARGET_FLAG_TRADE_ITEM;
+                self.item = u64::from(slot);
+            }
+            UseItemTarget::Dest(dest) => {
+                self.mask |= TARGET_FLAG_DEST_LOCATION;
+                self.dest = dest;
+            }
+            UseItemTarget::Source(src) => {
+                self.mask |= TARGET_FLAG_SOURCE_LOCATION;
+                self.src = src;
+            }
+            UseItemTarget::Held(held) => self = held,
+        }
+        self
+    }
 }
 
 /// Body of `CMSG_USE_ITEM` (opcode 171): bag index (a bag's player-array slot 19-22, or
@@ -564,8 +620,35 @@ pub(super) fn write_cast_targets(body: &mut Vec<u8>, target: UseItemTarget) {
             }
             return;
         }
+        UseItemTarget::Held(held) => {
+            write_held_targets(body, held);
+            return;
+        }
     };
     crate::wire::write_packed_guid(guid, body).expect("write to Vec cannot fail");
+}
+
+/// `0x7e4e10` over a gathered mask: the mask (`0x7e4e25`), the object's packed guid for a bit in
+/// `0x8a02` (`0x7e4e2a`), the item's for `0x1010` (`0x7e4e48`), the source point for `0x20`
+/// (`0x7e4e66`) and the destination for `0x40` (`0x7e4e8d`), in that order.
+fn write_held_targets(body: &mut Vec<u8>, held: HeldTargets) {
+    body.extend_from_slice(&held.mask.to_le_bytes());
+    if held.mask & 0x8a02 != 0 {
+        crate::wire::write_packed_guid(held.object, body).expect("write to Vec cannot fail");
+    }
+    if held.mask & 0x1010 != 0 {
+        crate::wire::write_packed_guid(held.item, body).expect("write to Vec cannot fail");
+    }
+    for (bit, point) in [
+        (TARGET_FLAG_SOURCE_LOCATION, held.src),
+        (TARGET_FLAG_DEST_LOCATION, held.dest),
+    ] {
+        if held.mask & bit != 0 {
+            for c in point {
+                body.extend_from_slice(&c.to_le_bytes());
+            }
+        }
+    }
 }
 
 /// Body of `CMSG_OPEN_ITEM` (opcode 172, `Server/Packets/Spell.h:36-45`): bag index and slot, as

@@ -40,6 +40,9 @@ pub(crate) struct PendingCast {
     caster_is_player: bool,
     record_spell: u32,
     record_target: Option<u64>,
+    /// The bits a bind that left the word standing or-ed into the record's mask (`0xceac5c`,
+    /// `0x6e5e13`, `0x6e5fc7`), which the send writes beside the last bind's (`0x7e4e10`).
+    record_mask: u16,
     /// The record's source (`0xceac48 + 0x00`) when it is an item, which the item's deactivate
     /// compares ([`Self::record_item`]).
     record_item: Option<u64>,
@@ -124,6 +127,7 @@ impl PendingCast {
     /// The fill's zero of the record (`rep stos` at `0x6e4f80`).
     fn refill(&mut self) {
         self.record_target = None;
+        self.record_mask = 0;
         self.record_item = None;
         self.record_send = None;
         self.fills = self.fills.wrapping_add(1);
@@ -194,6 +198,23 @@ impl PendingCast {
     /// `0x6e5f77`, `0x6e5fbe`), or the arm's parked guid (`0x6e5454`); an item goes to `+0x20`.
     pub(crate) fn bind_target(&mut self, guid: u64) {
         self.record_target = Some(guid);
+    }
+
+    /// A bind that left the word standing (`0x6e60c1`): its object written into the record's
+    /// target, as [`Self::bind_target`], and its bit into the mask.
+    pub(crate) fn hold_target(&mut self, guid: u64, mask_bit: u16) {
+        self.record_target = Some(guid);
+        self.record_mask |= mask_bit;
+    }
+
+    /// The bits held binds wrote into the record's mask, 0 when none has.
+    pub(crate) fn record_mask(&self) -> u16 {
+        self.record_mask
+    }
+
+    /// The mask a refused bind's restore puts back (`0x6e609d`), over a refill.
+    pub(crate) fn restore_mask(&mut self, mask: u16) {
+        self.record_mask = mask;
     }
 }
 

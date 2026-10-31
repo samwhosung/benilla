@@ -126,13 +126,11 @@ impl super::SpellTargeting {
 }
 
 /// `BindTarget 0x6e5b40`'s corpse arm for the world click (`0x493540` at `4935d5`): a corpse no
-/// arm binds leaves the cursor up; otherwise the merge's range test and the commit, with the
-/// corpse's guid and its bit (`0x7e4e10` writes the guid for any mask bit in `0x8a02`).
-///
-/// The reference sends only once the word is empty (`6e60c1`), so a word the corpse bit does not
-/// empty waits for another click with the corpse parked. No player spell has one (every shipped
-/// `0x8000` word with another bit is an NPC or test spell), and as the unit arm does, this binds
-/// only a click that empties the word.
+/// arm binds leaves the cursor up; otherwise the merge's range test (`6e602c`), then the commit
+/// of an emptied word with the corpse's guid and its bit (`0x7e4e10` writes the guid for any mask
+/// bit in `0x8a02`). A word the corpse bit does not empty holds, as the unit arm's does: the corpse
+/// parked in the record with its bit in the mask (`6e5fbe`, `6e5fc7`, `6e5fda`), nothing sent,
+/// and the cursor up for the rest (`6e60c1`).
 pub(super) fn bind_target_corpse(
     ladder: &mut crate::spell::CastLadder,
     checks: &super::BindChecks,
@@ -148,10 +146,12 @@ pub(super) fn bind_target_corpse(
     else {
         return;
     };
-    if word & !bit.target_flag() != 0 {
+    let rest = word & !bit.target_flag();
+    let range = checks.corpse_range_refusal(spell_id, commit, entity);
+    if rest != 0 && range.is_none() {
+        ladder.bind_partial(guid, bit.target_flag(), rest);
         return;
     }
-    let range = checks.corpse_range_refusal(spell_id, commit, entity);
     super::merge(
         ladder,
         spell_id,
