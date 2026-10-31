@@ -163,20 +163,32 @@ fn site() -> String {
     frames.join("<")
 }
 
-/// With a survey running, a frame that hears every event and does nothing, so each signal an
-/// apply makes is held for a listener and the suite's every test is swept, not only those that
-/// register one. A test that counts frames or registrations may fail under it: the survey is not a
-/// verdict.
+/// With a survey running, a frame that hears every event and does nothing ([`listen_to_all`]), so
+/// each signal an apply makes is held for a listener and the suite's every test is swept, not only
+/// those that register one. A test that counts frames or registrations may fail under it: the
+/// survey is not a verdict.
 pub(crate) fn survey_listener(lua: &mlua::Lua) {
     if std::env::var_os("BENILLA_SEND_CENSUS").is_none() {
         return;
     }
+    listen_to_all(lua);
+}
+
+/// A frame that hears every event and does nothing, hidden at the highest level, where no
+/// stratum's levels count it: a hidden frame's level grows no bound (`0x764882`, reached only for a
+/// visible frame, `0x76a541`), and the compaction counts and moves only the levels below the bound
+/// (`0x764f4c`), so no raise sees it. `SignalEvent`'s walk tests no visibility (`0x703ee0`-
+/// `0x703f02`), so it hears every event hidden.
+fn listen_to_all(lua: &mlua::Lua) {
     let _ = lua
-        .load(
+        .load(format!(
             r#"local all = CreateFrame("Frame")
+            all:Hide()
+            all:SetFrameLevel({})
             all:RegisterAllEvents()
             all:SetScript("OnEvent", function() end)"#,
-        )
+            u16::MAX
+        ))
         .exec();
 }
 
@@ -436,6 +448,50 @@ mod tests {
             s.fire_event("PLAYER_TARGET_CHANGED", vec![]);
             sent.set(sent.get() + 1);
         });
+    }
+
+    /// The survey's listener, hidden, holds each signal for its handler: a send made while it
+    /// waits is refused.
+    #[test]
+    #[should_panic(expected = "census: `ClearTarget` sent 1 while a handler it signalled was held")]
+    fn the_survey_listener_holds_every_signal() {
+        let mut s = UiScript::new().unwrap();
+        super::listen_to_all(s.lua());
+        let sent = Rc::new(Cell::new(0));
+        let probe = sent.clone();
+        super::probe(move || probe.get());
+        super::take();
+        let _ = s.hosted(&mut Sending { sent, point: false }, |s| {
+            s.run("ClearTarget()")
+        });
+    }
+
+    /// The survey's listener is no frame a raise counts: two overlapping windows shown in turn
+    /// land on the levels they take without it.
+    #[test]
+    fn the_survey_listener_is_no_frame_a_raise_counts() {
+        let raised = |survey: bool| {
+            let mut s = UiScript::new().unwrap();
+            if survey {
+                super::listen_to_all(s.lua());
+            }
+            s.set_screen_size(800.0, 600.0);
+            s.run(
+                r#"for i, name in ipairs({ "A", "B" }) do
+                    local f = CreateFrame("Frame", name)
+                    f:SetPoint("BOTTOMLEFT", 100 * i, 100 * i)
+                    f:SetWidth(300); f:SetHeight(300)
+                    f:SetToplevel(true)
+                end"#,
+            )
+            .unwrap();
+            s.resolve();
+            s.run("A:Hide() A:Show() B:Hide() B:Show() A:Hide() A:Show()")
+                .unwrap();
+            s.eval::<(i64, i64)>("return A:GetFrameLevel(), B:GetFrameLevel()")
+                .unwrap()
+        };
+        assert_eq!(raised(true), raised(false));
     }
 
     /// A host whose apply writes in lends, reported to the census as the host would: one before
