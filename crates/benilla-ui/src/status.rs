@@ -29,6 +29,8 @@ fn buffered(mut text: String) -> Option<String> {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Status {
     lines: Vec<String>,
+    /// Each line's severity (`+4` of its entry), which a merge passes on as it re-adds the line.
+    severities: Vec<u8>,
     max: u8,
 }
 
@@ -42,13 +44,20 @@ impl Status {
             return;
         };
         self.lines.push(text);
+        self.severities.push(severity);
         self.max = self.max.max(severity);
     }
 
-    /// Merge `other` in after this record's own lines, as `0x41a100` re-reports each entry.
+    /// Merge `other` in after this record's own lines, as `0x41a100` does: each line is added
+    /// again through this record's Add with its text as the format and no arguments
+    /// (`0x41a129`-`0x41a133`), so a `%%` becomes `%` at every level a line passes up, the cut
+    /// and the empty drop apply again, and the maximum rises with the lines that remain. A
+    /// conversion needing an argument stays as written, where the client reads the words above
+    /// its call (a fault benilla does not copy), through [`crate::strings::fill`].
     pub fn merge(&mut self, other: Status) {
-        self.lines.extend(other.lines);
-        self.max = self.max.max(other.max);
+        for (line, severity) in other.lines.into_iter().zip(other.severities) {
+            self.report(severity, crate::strings::fill(&line, &[]));
+        }
     }
 
     /// Close one level into its caller: its banner goes first (a prepend at severity 0) when
@@ -59,6 +68,7 @@ impl Status {
             // The prepend formats into the same 256-byte buffer (`0x419ed3`, `0x419f19`).
             if let Some(banner) = buffered(banner) {
                 self.lines.insert(0, banner);
+                self.severities.insert(0, TRACE);
             }
         }
         parent.merge(self);
@@ -76,6 +86,7 @@ impl Status {
     /// The lines, leaving the record empty.
     pub fn take_lines(&mut self) -> Vec<String> {
         self.max = TRACE;
+        self.severities.clear();
         std::mem::take(&mut self.lines)
     }
 }
@@ -182,6 +193,31 @@ mod tests {
         assert_eq!(lines[0], "x".repeat(255));
         assert_eq!(lines[1], "y".repeat(255));
         assert_eq!(lines[2], "z".repeat(254));
+    }
+
+    /// A merge adds each line again with its text as the format (`0x41a129`-`0x41a133`): `%%`
+    /// becomes `%` at every level up, a conversion that needs an argument stays as written, a
+    /// lone `%` stays, and the severity each line carries is the one that rises.
+    #[test]
+    fn a_merge_formats_each_line_again() {
+        let mut file = Status::default();
+        file.report(WARNING, "100%% of %s, %d%");
+        file.report(TRACE, "a%%%%b");
+        let mut toc = Status::default();
+        file.close_into(&mut toc, false, "banner".into());
+        assert_eq!(toc.lines(), ["banner", "100% of %s, %d%", "a%%b"]);
+        let mut addon = Status::default();
+        toc.close_into(&mut addon, false, "toc".into());
+        assert_eq!(addon.lines(), ["toc", "banner", "100% of %s, %d%", "a%b"]);
+        // The severity travels with the line: a trace-only level adds no banner.
+        let mut quiet = Status::default();
+        quiet.report(TRACE, "t%%");
+        let mut parent = Status::default();
+        quiet.close_into(&mut parent, false, "never".into());
+        assert_eq!(parent.lines(), ["t%"]);
+        let mut top = Status::default();
+        parent.close_into(&mut top, false, "never".into());
+        assert_eq!(top.lines(), ["t%"], "a trace raised nothing: no banner");
     }
 
     /// The install's own log shape (the reference's `Logs\FrameXML.log`, `FrameXML_Debug` 0): the
