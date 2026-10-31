@@ -173,6 +173,11 @@ fn group_notification_smsg_wire() {
         other => panic!("group decline decode: {other:?}"),
     }
 
+    // SMSG_GROUP_CANCEL (0x5e6770): a name is read and dropped; the event carries nothing.
+    let p = messages::parse_server(opcode::SMSG_GROUP_CANCEL, &hx("426f6200")).unwrap();
+    assert!(matches!(p, ServerPacket::GroupCancel));
+    assert!(matches!(decode(p).as_slice(), [SessionEvent::GroupCancel]));
+
     // SMSG_GROUP_SET_LEADER (Group.cpp:150-153): one cstring, the new leader's name.
     let p = messages::parse_server(opcode::SMSG_GROUP_SET_LEADER, &hx("426f6200")).unwrap();
     match &p {

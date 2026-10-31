@@ -205,6 +205,7 @@ fn fire_signal(
             script.ready_check_request(we_lead);
             return;
         }
+        GroupSignal::InviteCancel => ("PARTY_INVITE_CANCEL", vec![]),
         GroupSignal::ReadyCheck => ("READY_CHECK", vec![]),
         GroupSignal::RaidRebuilt { gone } => {
             script.raid_roster_rebuilt(gone);
@@ -2730,6 +2731,12 @@ mod tests {
             ["PARTY_INVITE_REQUEST:Bob"],
             "unanswered, asked again"
         );
+        // `SMSG_GROUP_CANCEL` (`0x5e6784` → `0x48f440`) signals the cancel with no argument.
+        app.world_mut()
+            .resource_mut::<GroupState>()
+            .apply_invite_cancelled();
+        frame(&mut app);
+        assert_eq!(invites(&mut app), ["PARTY_INVITE_CANCEL:nil"], "the cancel");
     }
 
     /// The group events a VM heard, in order, once [`hear_group_events`] is installed.

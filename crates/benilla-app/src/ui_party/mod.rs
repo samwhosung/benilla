@@ -258,9 +258,10 @@ pub(crate) enum GroupSignal {
     /// clears the board (`0x4ba5db`).
     RaidTargetUpdate,
     /// `PARTY_INVITE_REQUEST` with the inviter: every `SMSG_GROUP_INVITE` (`0x5e6747` →
-    /// `0x48f420`, event `0x118`). Its partner `PARTY_INVITE_CANCEL` is `SMSG_GROUP_CANCEL`'s
-    /// alone (`0x5e6784` → `0x48f440`), which vmangos never sends and benilla does not read.
+    /// `0x48f420`, event `0x118`). Its partner is [`GroupSignal::InviteCancel`].
     InviteRequest(String),
+    /// `PARTY_INVITE_CANCEL`, no argument: every `SMSG_GROUP_CANCEL` (`0x5e6784` → `0x48f440`).
+    InviteCancel,
     /// `PARTY_MEMBER_ENABLE` with the member's 1-based party slot: a party member's player object
     /// created (`CGPlayer_C::PostInit`, `0x5dec35`) or brought back (`0x5deca1`), through
     /// `0x4e85d0` mode 1 (`0x4e86b6`).
@@ -934,6 +935,12 @@ impl GroupState {
     pub fn apply_invited(&mut self, inviter: &str) {
         self.pending_invite = Some(inviter.to_string());
         self.signal(GroupSignal::InviteRequest(inviter.to_string()));
+    }
+
+    /// `SMSG_GROUP_CANCEL` (`0x5e6770`): `PARTY_INVITE_CANCEL`, no argument (`0x5e6784` →
+    /// `0x48f440`, event `0x119`); it leaves the pending invite as it is.
+    pub fn apply_invite_cancelled(&mut self) {
+        self.signal(GroupSignal::InviteCancel);
     }
 
     /// A handler's line, shown where it shows it (`0x496720`), among its signals; returned too.

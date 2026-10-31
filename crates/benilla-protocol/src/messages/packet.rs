@@ -991,6 +991,8 @@ pub enum ServerPacket {
     GroupInvite {
         inviter: String,
     },
+    /// `SMSG_GROUP_CANCEL`: the inviter withdrew; the body (a name) is read and dropped (`0x5e6770`).
+    GroupCancel,
     /// `SMSG_GROUP_DECLINE`: an invite we sent was declined.
     GroupDecline {
         name: String,
@@ -1598,6 +1600,7 @@ impl ServerPacket {
                 format!("SMSG_FORCE_{kind:?}_SPEED_CHANGE")
             }
             ServerPacket::GroupInvite { .. } => "SMSG_GROUP_INVITE".into(),
+            ServerPacket::GroupCancel => "SMSG_GROUP_CANCEL".into(),
             ServerPacket::GroupDecline { .. } => "SMSG_GROUP_DECLINE".into(),
             ServerPacket::GroupUninvited => "SMSG_GROUP_UNINVITE".into(),
             ServerPacket::GroupLeaderChanged { .. } => "SMSG_GROUP_SET_LEADER".into(),

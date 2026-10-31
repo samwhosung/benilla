@@ -538,6 +538,7 @@ pub fn decode(packet: ServerPacket) -> Vec<SessionEvent> {
             launch,
         }],
         ServerPacket::GroupInvite { inviter } => vec![SessionEvent::GroupInvite { inviter }],
+        ServerPacket::GroupCancel => vec![SessionEvent::GroupCancel],
         ServerPacket::GroupDecline { name } => vec![SessionEvent::GroupDecline { name }],
         ServerPacket::GroupUninvited => vec![SessionEvent::GroupUninvited],
         ServerPacket::GroupLeaderChanged { name } => {

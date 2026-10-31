@@ -27,6 +27,7 @@ const INVITE_ACCEPT_SOUND: &str = "igPlayerInviteAccept";
 pub(super) fn register(app: &mut App) {
     use SessionEventKind as K;
     app.net_handler(K::GroupInvite, on_invite)
+        .net_handler(K::GroupCancel, on_cancel)
         .net_handler(K::GroupDecline, on_decline)
         .net_handler(K::GroupUninvited, on_uninvited)
         .net_handler(K::GroupLeaderChanged, on_leader_changed)
@@ -47,6 +48,13 @@ pub(super) fn register(app: &mut App) {
 fn on_invite(In(ev): In<SessionEvent>, mut group: ResMut<GroupState>) {
     if let SessionEvent::GroupInvite { inviter } = ev {
         group.apply_invited(&inviter);
+    }
+}
+
+/// `SMSG_GROUP_CANCEL` (`0x5e6770`): the popup's hide, `PARTY_INVITE_CANCEL` (`0x5e6784`).
+fn on_cancel(In(ev): In<SessionEvent>, mut group: ResMut<GroupState>) {
+    if let SessionEvent::GroupCancel = ev {
+        group.apply_invite_cancelled();
     }
 }
 

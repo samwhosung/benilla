@@ -949,6 +949,7 @@ pub const MSG_PETITION_RENAME: u16 = 0x02C1; // 705
 
 pub const CMSG_GROUP_INVITE: u16 = 0x006E; // 110
 pub const SMSG_GROUP_INVITE: u16 = 0x006F; // 111
+pub const SMSG_GROUP_CANCEL: u16 = 0x0071; // 113
 pub const CMSG_GROUP_ACCEPT: u16 = 0x0072; // 114
 pub const CMSG_GROUP_DECLINE: u16 = 0x0073; // 115
 pub const SMSG_GROUP_DECLINE: u16 = 0x0074; // 116

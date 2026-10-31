@@ -1053,6 +1053,8 @@ pub enum SessionEvent {
     },
     /// Someone invited us to their group (`SMSG_GROUP_INVITE`): the invite popup.
     GroupInvite { inviter: String },
+    /// The inviter withdrew our invite (`SMSG_GROUP_CANCEL`): `PARTY_INVITE_CANCEL`.
+    GroupCancel,
     /// An invite we sent was declined (`SMSG_GROUP_DECLINE`).
     GroupDecline { name: String },
     /// We were removed from our group (`SMSG_GROUP_UNINVITE`, empty body), kicked or left.
