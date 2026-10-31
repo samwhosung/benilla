@@ -19,6 +19,7 @@ use benilla_formats::{
     load_world_map_area_catalog, load_world_map_continent_catalog, load_world_map_overlay_catalog,
     load_zone_map, WorldMapArea,
 };
+use benilla_ui::script::origin::{within, Origin};
 use benilla_ui::script::{
     UiScript, WorldMapContinentView, WorldMapLandmarkSource, WorldMapLevel, WorldMapOverlayView,
     WorldMapSheetRow, WorldMapZoneView,
@@ -512,9 +513,15 @@ pub(crate) fn project_on_displayed(
 /// Hand the engine `GetWorldLocMapPosition`'s projection (`0x4a7360`) over a copy of the catalog.
 fn install_world_loc_projector(script: &mut UiScript, data: &WorldMapUiData) {
     let copy = data.clone();
-    script.set_world_loc_projector(Box::new(move |selection, map, x, y| {
-        project_on_displayed(&copy, selection, map, x, y)
-    }));
+    // Its first landmark list queues `WORLD_MAP_UPDATE`: the projector's install.
+    within(
+        Origin::Allowed("ui_world_map::install_world_loc_projector"),
+        || {
+            script.set_world_loc_projector(Box::new(move |selection, map, x, y| {
+                project_on_displayed(&copy, selection, map, x, y)
+            }))
+        },
+    );
 }
 
 /// [`feed_world_map`]'s memos under one [`crate::ui_script::VmMemo`], so a new VM resets them all.
@@ -838,7 +845,10 @@ fn feed_world_map(
             if let Some(sel) = world_enter_selection(memo.map_synced, top_zone, player_sel) {
                 memo.map_synced = true;
                 let (c, z) = sel.zone.unwrap_or((0, 0));
-                script.sync_world_map_to_player_zone(c, z, sel.direct);
+                // The first world enter's selection, its signal queued (the module's deviation).
+                within(Origin::Allowed("ui_world_map::feed_world_map"), || {
+                    script.sync_world_map_to_player_zone(c, z, sel.direct)
+                });
             }
         }
 

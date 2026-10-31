@@ -169,6 +169,7 @@ use std::cell::{Ref, RefCell, RefMut};
 use std::rc::Rc;
 
 use benilla_protocol::{Character, LoginRefusal, LoginStage, RealmInfo, RosterCause};
+use benilla_ui::script::origin::{within, Origin};
 use benilla_ui::script::{
     GlueCall, GlueCharacter, GlueHost, GlueNotice, GlueRealm, GlueRealmCells, GlueRequest,
     GlueSelectCells, GlueSignal, GlueText as Text, NoticeState, ScriptValue, UiScript, VmKind,
@@ -2122,7 +2123,10 @@ pub(crate) fn drive_glue_mgr(
             // holds the list for the next one.
             if let Some(s) = script.as_deref_mut() {
                 s.note_addon_info_records(super::addons::addon_replies(&msg.records));
-                s.fire_event("ADDON_LIST_UPDATE", Vec::new());
+                within(
+                    Origin::Allowed("ui_script::glue_mgr::drive_glue_mgr"),
+                    || s.fire_event("ADDON_LIST_UPDATE", Vec::new()),
+                );
             }
         }
 
@@ -2132,6 +2136,16 @@ pub(crate) fn drive_glue_mgr(
             classes: sources.classes.as_deref().map(|c| &c.0),
             creatures: sources.creatures.as_deref(),
         };
+        // What the manager raised signals into the glue VM at its frame, `CGlueMgr::Update`
+        // (`0x46b930`), outside any packet.
+        let pump_here =
+            |script: Option<&mut UiScript>,
+             roster: Option<&mut crate::glue_session::roster::Roster>| {
+                within(
+                    Origin::Allowed("ui_script::glue_mgr::drive_glue_mgr"),
+                    || pump(&shared, script, realmlist, now_ms, &names, roster),
+                )
+            };
 
         let (lists, latched) = {
             let mut mgr = shared.get_mut();
@@ -2159,14 +2173,7 @@ pub(crate) fn drive_glue_mgr(
             (lists, latched)
         };
         if latched {
-            pump(
-                &shared,
-                script.as_deref_mut(),
-                realmlist,
-                now_ms,
-                &names,
-                asks.roster.as_deref_mut(),
-            );
+            pump_here(script.as_deref_mut(), asks.roster.as_deref_mut());
         }
         let auth_waits = {
             let mut mgr = shared.get_mut();
@@ -2191,14 +2198,7 @@ pub(crate) fn drive_glue_mgr(
             mgr.auth_waits
         };
         if auth_waits {
-            pump(
-                &shared,
-                script.as_deref_mut(),
-                realmlist,
-                now_ms,
-                &names,
-                asks.roster.as_deref_mut(),
-            );
+            pump_here(script.as_deref_mut(), asks.roster.as_deref_mut());
             shared.get_mut().finish_auth();
         }
         {
@@ -2224,14 +2224,7 @@ pub(crate) fn drive_glue_mgr(
         }
         // What the news raised runs out before the frame's arm, as the reference's network handlers
         // signal inside the net pump, ahead of `CGlueMgr::Update`.
-        pump(
-            &shared,
-            script.as_deref_mut(),
-            realmlist,
-            now_ms,
-            &names,
-            asks.roster.as_deref_mut(),
-        );
+        pump_here(script.as_deref_mut(), asks.roster.as_deref_mut());
         {
             let mut mgr = shared.get_mut();
             mgr.tick();
@@ -2248,14 +2241,7 @@ pub(crate) fn drive_glue_mgr(
                 }
             }
         }
-        pump(
-            &shared,
-            script.as_deref_mut(),
-            realmlist,
-            now_ms,
-            &names,
-            asks.roster.as_deref_mut(),
-        );
+        pump_here(script.as_deref_mut(), asks.roster.as_deref_mut());
         let mut mgr = shared.get_mut();
         if let Some(s) = script.as_deref() {
             mgr.select_cells = s.glue_select_cells();

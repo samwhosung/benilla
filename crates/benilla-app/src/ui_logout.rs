@@ -15,6 +15,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use benilla_ui::script::origin::{within, Origin};
 use benilla_ui::script::SessionRequest;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -349,7 +350,10 @@ pub(crate) fn leave_world(
     if called_off {
         vm.run(|script| {
             if let Some(script) = script {
-                script.fire_event("LOGOUT_CANCEL", Vec::new());
+                // `SetInWorld(0)` signals in place (`0x5aae97`), the teardown timer's first call.
+                within(Origin::Allowed("ui_logout::leave_world"), || {
+                    script.fire_event("LOGOUT_CANCEL", Vec::new())
+                });
             }
         });
     }

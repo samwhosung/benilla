@@ -4,10 +4,12 @@
 //! raise here is right inside a script call (a verb segment, a handler, the host's apply of a
 //! call), a lane's firing or the VM's own tick. One made anywhere else is a system raising at its
 //! own place in the frame, which the source scans cannot see when it goes through a helper in
-//! another module: it fails, naming its caller, unless a frame of its stack is on the host's allow
-//! list with its reason. Each raise is judged where it enters the VM, at one of its two doors: the
-//! fire (`tick::fire_event_into`) or the push onto the host queue (`Model::queue_event`); a queued
-//! one fires later inside the tick, and a held one inside the host's drain.
+//! another module: it fails, naming its caller, unless the scope open around it is a site on the
+//! host's allow list ([`Origin::Allowed`]), which names it with its reason. The verdict reads only
+//! the open scopes, never the stack, so it is the same in every build profile. Each raise is
+//! judged where it enters the VM, at one of its two doors: the fire (`tick::fire_event_into`) or
+//! the push onto the host queue (`Model::queue_event`); a queued one fires later inside the tick,
+//! and a held one inside the host's drain.
 //!
 //! The check runs only while the host has armed it ([`arm`]), around its frame's schedules, so a
 //! test that drives a VM by hand is not judged. How an unlisted raise fails is the host's
@@ -24,14 +26,19 @@ pub enum Origin {
     Lane,
     /// The VM's own tick: the queued events, the `OnUpdate` walk and the pump.
     Tick,
+    /// A site on the host's allow list, by its row's key ([`Allow::site`]): a system that raises
+    /// at its own place in the frame, around the part that raises. A raise inside it passes only
+    /// while the armed list holds the key.
+    Allowed(&'static str),
 }
 
-/// An origin outside the three [`Origin`]s that may raise: a stack frame's function path, matched
-/// as a suffix of a frame's symbol (`ui_world_map::feed_landmarks`), with why it may.
+/// A row of the host's allow list: a site outside a script call, a lane and the tick that may
+/// raise, by the key its scope opens ([`Origin::Allowed`]), with why it may.
 #[derive(Clone, Copy, Debug)]
 pub struct Allow {
-    /// The function, by a suffix of its path.
-    pub frame: &'static str,
+    /// The site's key: the path of the function that opens its scope, as
+    /// `ui_world_map::feed_world_map`.
+    pub site: &'static str,
     /// Why it raises at its own place: a reference fact, or the guard row that names it.
     pub why: &'static str,
 }
@@ -90,28 +97,37 @@ mod imp {
         let Some((allow, failure)) = ARMED.get() else {
             return;
         };
-        if current().is_some() {
-            return;
-        }
+        // The innermost open origin decides; an allowed site only while the armed list holds it.
+        let unlisted = match current() {
+            Some(Origin::Allowed(site)) if !allow.iter().any(|a| a.site == site) => Some(site),
+            Some(_) => return,
+            None => None,
+        };
         // A Rust function a script called: what it raises is the script call's.
         if lua.is_some_and(|lua| lua.inspect_stack(0, |_| ()).is_some()) {
             return;
         }
+        let at = std::panic::Location::caller();
+        // The stack only names the callers: without debug info an inlined one has no frame.
         let trace = std::backtrace::Backtrace::force_capture().to_string();
         let symbols: Vec<&str> = trace
             .lines()
             .map(str::trim)
             .filter_map(|l| l.split_once(": ").map(|(_, s)| s))
             .collect();
-        if allow.iter().any(|a| allowed(a.frame, &symbols)) {
-            return;
-        }
-        let at = std::panic::Location::caller();
         let from = callers(&symbols);
+        let head = match unlisted {
+            Some(site) => format!(
+                "`{event}` was raised inside the site `{site}`, which the host's allow list lacks"
+            ),
+            None => format!(
+                "`{event}` was raised outside every script call, lane firing, tick and allowed site"
+            ),
+        };
         let line = format!(
-            "`{event}` was raised outside every script call, lane firing and tick, at {at}, \
-             from {from}: put it on a lane or inside the call that causes it, or give its origin \
-             a row on the host's allow list with its reason"
+            "{head}, at {at}, from {from}: put it on a lane or inside the call that causes it, or \
+             give its site a row on the host's allow list with its reason and open that site's \
+             scope (`Origin::Allowed`) around the raise"
         );
         match failure {
             Failure::Panic => panic!("{line}"),
@@ -125,14 +141,6 @@ mod imp {
                 }
             }
         }
-    }
-
-    /// Whether a frame of `symbols` is `frame`'s function, or a closure inside it.
-    pub(super) fn allowed(frame: &str, symbols: &[&str]) -> bool {
-        symbols.iter().any(|s| {
-            let s = path_of(s);
-            s.strip_suffix(frame).is_some_and(|p| p.ends_with("::"))
-        })
     }
 
     /// A symbol's function path: its generic arguments, its closures and its hash cut.
@@ -270,21 +278,6 @@ pub(crate) fn check(event: &str, lua: Option<&mlua::Lua>) {
     let _ = (event, lua);
 }
 
-/// Whether one of `symbols` (a backtrace's frame symbols) is `frame`'s function or a closure in
-/// it, as the allow list matches.
-#[cfg(test)]
-fn frame_matches(frame: &str, symbols: &[&str]) -> bool {
-    #[cfg(debug_assertions)]
-    {
-        imp::allowed(frame, symbols)
-    }
-    #[cfg(not(debug_assertions))]
-    {
-        let _ = (frame, symbols);
-        false
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -353,33 +346,40 @@ mod tests {
         s.queue_event("PLAYER_MONEY", Vec::new());
     }
 
-    /// A raise whose stack holds an allowed function passes.
+    /// An allowed site's raise passes inside its scope and fails outside it, though both are made
+    /// from the very function the row's key names: a verdict that reads the stack passes the one
+    /// outside, and fails the site wherever the function is inlined away (a build with no debug
+    /// info). A scope whose key the armed list lacks fails too, naming it.
     #[test]
     #[cfg_attr(not(debug_assertions), ignore = "the check compiles out")]
-    fn an_allowed_frame_passes() {
+    fn an_allowed_site_passes_by_its_scope_never_by_the_stack() {
+        const SITE: &str =
+            "script::origin::tests::an_allowed_site_passes_by_its_scope_never_by_the_stack";
         const ALLOW: &[Allow] = &[Allow {
-            frame: "origin::tests::an_allowed_frame_passes",
+            site: SITE,
             why: "the test's own",
         }];
-        let s = UiScript::new().unwrap();
+        let mut s = UiScript::new().unwrap();
         let _armed = arm(ALLOW, Failure::Panic);
-        fire_event_into(&s.lua, "PLAYER_MONEY", Vec::new());
-    }
-
-    #[test]
-    #[cfg_attr(not(debug_assertions), ignore = "the check compiles out")]
-    fn a_frame_matches_its_function_and_its_closures_by_path_suffix() {
-        let symbols = [
-            "std::rt::lang_start",
-            "benilla_app::ui_world_map::feed_landmarks::{{closure}}",
-            "benilla_app::lanes::fire_in_order::h0123456789abcdef",
-            "benilla_app::script_calls::hosted::<(), benilla_app::ui_social::feed::feed_social::{closure#0}>::{closure#0}",
-        ];
-        assert!(frame_matches("script_calls::hosted", &symbols));
-        assert!(!frame_matches("ui_social::feed::feed_social", &symbols));
-        assert!(frame_matches("ui_world_map::feed_landmarks", &symbols));
-        assert!(frame_matches("lanes::fire_in_order", &symbols));
-        assert!(!frame_matches("map::feed_landmarks", &symbols));
-        assert!(!frame_matches("ui_world_map::feed", &symbols));
+        within(Origin::Allowed(SITE), || {
+            fire_event_into(&s.lua, "PLAYER_MONEY", Vec::new());
+            s.queue_event("PLAYER_MONEY", Vec::new());
+        });
+        let message = |f: &dyn Fn()| {
+            let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+                .expect_err("a raise outside its site passed");
+            failed.downcast_ref::<String>().cloned().unwrap_or_default()
+        };
+        let outside = message(&|| fire_event_into(&s.lua, "PLAYER_MONEY", Vec::new()));
+        assert!(outside.contains("outside every"), "{outside}");
+        let unlisted = message(&|| {
+            within(Origin::Allowed("script::origin::tests::unlisted"), || {
+                fire_event_into(&s.lua, "PLAYER_MONEY", Vec::new())
+            })
+        });
+        assert!(
+            unlisted.contains("`script::origin::tests::unlisted`"),
+            "{unlisted}"
+        );
     }
 }

@@ -27,6 +27,7 @@
 
 use bevy::prelude::*;
 
+use benilla_ui::script::origin::{within, Origin};
 use benilla_ui::script::UiScript;
 
 /// The windows `0x493310` tests, in its order (`0x493341` to `0x4934de`): the first whose cell
@@ -343,7 +344,10 @@ fn walk(world: &mut World, left: usize) {
         .into_iter()
         .find(|e| (e.cell)(world) == Some(guid))
     {
-        (e.dispatched)(world);
+        // The close core signals inside the walk (`0x493310`), the watchdog's every frame.
+        within(Origin::Allowed("ui_session::latch::walk"), || {
+            (e.dispatched)(world)
+        });
     }
     debug_assert_one_holder(world, guid, left);
 }

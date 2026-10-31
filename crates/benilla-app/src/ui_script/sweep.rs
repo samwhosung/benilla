@@ -26,6 +26,7 @@ use bevy::ecs::schedule::{ExecutorKind, ScheduleConfigs, ScheduleLabel};
 use bevy::ecs::system::ScheduleSystem;
 use bevy::prelude::*;
 
+use benilla_ui::script::origin::{within, Origin};
 use benilla_ui::script::UiScript;
 
 /// The world latch, the reference's `[0xb4b424]`: set at `0x4908ce` in the world-enter cascade
@@ -282,7 +283,11 @@ pub(crate) fn sweep_on_worldport(world: &mut World) {
         .get_resource::<crate::net::PendingWorldports>()
         .is_some_and(|p| p.is_posted())
     {
-        run_leave_world_sweep(world);
+        // The teardown timer's sweep signals in place (`0x490b4d`).
+        within(
+            Origin::Allowed("ui_script::sweep::sweep_on_worldport"),
+            || run_leave_world_sweep(world),
+        );
     }
 }
 

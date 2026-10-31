@@ -29,6 +29,7 @@ use benilla_formats::{tile_to_world, world_to_tile, MinimapTranslate};
 
 use interior::{interior_drawable, wmo_minimap_stem, InteriorWindow};
 
+use benilla_ui::script::origin::{within, Origin};
 use benilla_ui::widget::{MinimapArt, MinimapArtSlot, MINIMAP_DEFAULT_ZOOM};
 
 use crate::player::Player;
@@ -748,7 +749,10 @@ fn feed_minimap_inside(
         if *was_inside.get(script) != Some(inside) {
             script.set_minimap_inside(inside);
             *was_inside.get(script) = Some(inside);
-            script.fire_event("MINIMAP_UPDATE_ZOOM", vec![]);
+            // The update signals the change itself, at frame time (`0x6d95b8`).
+            within(Origin::Allowed("minimap::feed_minimap_inside"), || {
+                script.fire_event("MINIMAP_UPDATE_ZOOM", vec![])
+            });
         }
     })
 }

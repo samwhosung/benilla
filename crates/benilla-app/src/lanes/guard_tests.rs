@@ -2084,13 +2084,11 @@ fn every_call_that_queues_for_the_tick_is_listed() {
 }
 
 /// Each entry of the raise check's allow list ([`crate::ui_script::raise_origin::RAISES_AT_THEIR_OWN_PLACE`])
-/// names a function that exists and gives its reason; one that cites a guard list has that list's
-/// row for it; and every call that queues for the tick has its entry, as each raises at its own
-/// place in the frame.
+/// gives its reason; one that cites a guard list has that list's row for it; and every call that
+/// queues for the tick has its entry, as each raises at its own place in the frame.
 #[test]
 fn every_raise_origin_allowed_names_its_function_and_its_row() {
     use crate::ui_script::raise_origin::{RAISES_AT_THEIR_OWN_PLACE, ROW_LISTS};
-    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let module = |file: &str| file.trim_end_matches(".rs").replace('/', "::");
     let queued: BTreeSet<String> = QUEUED_FOR_THE_TICK
         .iter()
@@ -2101,27 +2099,16 @@ fn every_raise_origin_allowed_names_its_function_and_its_row() {
         .collect();
     let mut wrong = Vec::new();
     for a in RAISES_AT_THEIR_OWN_PLACE {
-        let (path, func) = a.frame.rsplit_once("::").expect("a `module::fn` frame");
-        let dir = path.replace("::", "/");
-        let found = [format!("{dir}.rs"), format!("{dir}/mod.rs")]
-            .iter()
-            .filter_map(|f| std::fs::read_to_string(src.join(f)).ok())
-            .any(|code| {
-                code.contains(&format!("fn {func}(")) || code.contains(&format!("fn {func}<"))
-            });
-        if !found {
-            wrong.push(format!("{}: no such function", a.frame));
-        }
         if a.why.trim().is_empty() {
-            wrong.push(format!("{}: no reason", a.frame));
+            wrong.push(format!("{}: no reason", a.site));
         }
         let Some((list, _)) = a.why.split_once(':').filter(|(l, _)| ROW_LISTS.contains(l)) else {
             continue;
         };
-        let suffix = format!("::{}", a.frame);
+        let suffix = format!("::{}", a.site);
         let named = a.why.split('`').nth(1).filter(|n| n.starts_with("::"));
         let has_row = match list {
-            "QUEUED_FOR_THE_TICK" => queued.contains(a.frame),
+            "QUEUED_FOR_THE_TICK" => queued.contains(a.site),
             "AT_THEIR_OWN_PLACE" => AT_THEIR_OWN_PLACE.iter().any(|(s, _)| s.ends_with(&suffix)),
             "NOT_YET_ON_A_LANE" => NOT_YET_ON_A_LANE
                 .iter()
@@ -2129,12 +2116,40 @@ fn every_raise_origin_allowed_names_its_function_and_its_row() {
             _ => false,
         };
         if !has_row {
-            wrong.push(format!("{}: {list} has no row for it", a.frame));
+            wrong.push(format!("{}: {list} has no row for it", a.site));
         }
     }
     for q in &queued {
-        if !RAISES_AT_THEIR_OWN_PLACE.iter().any(|a| a.frame == q) {
+        if !RAISES_AT_THEIR_OWN_PLACE.iter().any(|a| a.site == q) {
             wrong.push(format!("{q}: queues for the tick and has no allow entry"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// Each row of the raise check's allow list has its scope (`Origin::Allowed`) opened inside the
+/// function its key names, and every scope the shipped code opens names a row by a literal key, so
+/// neither the list nor its sites can drift from the other.
+#[test]
+fn every_allow_row_has_its_scope_and_every_scope_its_row() {
+    use crate::ui_script::raise_origin::RAISES_AT_THEIR_OWN_PLACE;
+    let scopes = crate::ui_script::fire_scan::allowed_scopes();
+    let mut wrong = Vec::new();
+    for s in &scopes {
+        match s.site.as_deref() {
+            None => wrong.push(format!("{}: a scope whose key is no literal", s.at)),
+            Some(site) if !RAISES_AT_THEIR_OWN_PLACE.iter().any(|a| a.site == site) => {
+                wrong.push(format!("{}: `{site}` has no row on the allow list", s.at));
+            }
+            Some(site) if s.function != site => {
+                wrong.push(format!("{}: `{site}` opens in `{}`", s.at, s.function));
+            }
+            Some(_) => {}
+        }
+    }
+    for a in RAISES_AT_THEIR_OWN_PLACE {
+        if !scopes.iter().any(|s| s.site.as_deref() == Some(a.site)) {
+            wrong.push(format!("{}: no scope opens it", a.site));
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));

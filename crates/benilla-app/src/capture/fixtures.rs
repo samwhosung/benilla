@@ -2,6 +2,7 @@
 
 use super::*;
 use benilla_protocol::messages::trainer_spell_state;
+use benilla_ui::script::origin::{within, Origin};
 use benilla_ui::script::UiScript;
 
 /// The `vplates` fixture's wolf, the reference screenshot's subject (vmangos `creature_template`
@@ -1759,7 +1760,11 @@ pub(super) fn seed_ui_fixture(
     if let Some(lua) = lua {
         vm.run(|script| {
             if let Some(script) = script {
-                lua(script);
+                // A capture's fixture, dev tooling outside any session, signals as it seeds.
+                within(
+                    Origin::Allowed("capture::fixtures::seed_ui_fixture"),
+                    || lua(script),
+                );
             }
         });
     }
@@ -1790,9 +1795,15 @@ fn open_character_fixture(
         let open = s.map(|s| {
             s.set_player_record(record);
             s.seat_player_guid(me);
-            s.fire_event(
-                "UNIT_INVENTORY_CHANGED",
-                vec![benilla_ui::script::ScriptValue::Str("player".into())],
+            // The items' creates' signal, in place (`0x5d8606`).
+            within(
+                Origin::Allowed("capture::fixtures::open_character_fixture"),
+                || {
+                    s.fire_event(
+                        "UNIT_INVENTORY_CHANGED",
+                        vec![benilla_ui::script::ScriptValue::Str("player".into())],
+                    )
+                },
             );
             s.run("ToggleCharacter(\"PaperDollFrame\")")
         });
