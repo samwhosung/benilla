@@ -283,10 +283,13 @@ enum Step {
     /// `UPDATE_MASTER_LOOT_LIST`, the name callback `0x4c2fb0` a candidate's lookup registered,
     /// at its name's answer (`0x4c2fba`).
     CandidateNamed(Window),
-    /// The unlocks of a close a packet asked for (`0x48f2bd`, `0x4c1d36`), signalled in their
-    /// place: after the removal's `LOOT_SLOT_CLEARED`, before the close's `LOOT_CLOSED`. Each is
-    /// flagged when it needs a live item object.
-    Unlocks(Vec<(u64, bool)>, Window),
+    /// An `UnlockItem` (`0x495420`) signalled in its place: a close's own (`0x48f2bd`) or its
+    /// teardown's (`0x4c1d36`), after the removal's `LOOT_SLOT_CLEARED` and before the close's
+    /// `LOOT_CLOSED`, or a refusal's. Flagged when it needs a live item object.
+    Unlock(u64, bool, Window),
+    /// A close's `CMSG_LOOT_RELEASE` (`0x48f311`), past its own unlock's `ITEM_LOCK_CHANGED`
+    /// (`0x48f2bd`) and ahead of its teardown's (`0x4c1d36`).
+    Release(u64),
     /// A response's copier (`0x4c1cb0`): the cells its teardown leaves, the ended session's with
     /// the source zeroed (`0x4c1da0`), its `LOOT_CLOSED` while that window is open
     /// ([`Cells::open`]), then the window it fills, and whether its end ran inside its packet,
@@ -352,6 +355,9 @@ pub(crate) struct LootState {
     /// object. Every other close and the copier's ending put theirs on the lane at their place
     /// ([`close_interaction`], [`Self::open`]), as a refusal's does ([`Self::unlock_item_here`]).
     item_unlocks: Vec<(u64, bool)>,
+    /// The `CMSG_LOOT_RELEASE` such a close owes (`0x48f311`), sent once its own unlock's
+    /// `ITEM_LOCK_CHANGED` listeners have run ([`calls::Then::Release`]).
+    release_owed: Option<u64>,
     /// The response's copier end, `LOOT_OPENED` or the sweep, waits on its item records: the
     /// copier returns with a fetch outstanding (`0x4c1ea6`) and the cache callback ends it at the
     /// last arrival (`0x4c2afc`).
@@ -376,7 +382,7 @@ impl LootState {
         // ahead of the step whose firing signals the ended session's `LOOT_CLOSED` (`0x4c1dac`),
         // and clears the money line's flag (`0x4c1d95`).
         if let Some(old) = self.window.source {
-            self.queue_source_unlocks(old, 1, Source::CheckedAtTheFire);
+            self.queue_source_unlock(old, Source::CheckedAtTheFire);
             self.coin_line_shown = false;
         }
         let ended = Window {
@@ -517,32 +523,33 @@ impl LootState {
 
     /// A close a call makes on a step's window whose session a later packet's handler closed
     /// ([`Self::closed_since`]): the reference made it here, before that packet arrived, whose
-    /// close then found no window (`0x48f23f`). So it takes that close's unlocks and `LOOT_CLOSED`
-    /// off the lane, queued ahead of the next response; whether they were still there, else they
-    /// have signalled and this close finds no window either.
-    fn take_queued_close(&mut self, source: u64) -> bool {
+    /// close then found no window (`0x48f23f`). So it takes that close's unlocks, its release and
+    /// `LOOT_CLOSED` off the lane, queued ahead of the next response: whether it took a release,
+    /// `None` when they were gone, signalled, and this close finds no window either.
+    fn take_queued_close(&mut self, source: u64) -> Option<bool> {
         let end = self
             .steps
             .iter()
             .position(|(_, s)| matches!(s, Step::Opened { .. }))
             .unwrap_or(self.steps.len());
-        let Some(at) = self
+        let mut at = self
             .steps
             .iter()
             .take(end)
-            .position(|(_, s)| matches!(s, Step::Closed(_)))
-        else {
-            return false;
-        };
+            .position(|(_, s)| matches!(s, Step::Closed(_)))?;
         self.steps.remove(at);
-        let unlocks = at.checked_sub(1).filter(|&u| {
-            matches!(&self.steps[u].1, Step::Unlocks(us, _)
-                if !us.is_empty() && us.iter().all(|&(g, _)| g == source))
-        });
-        if let Some(u) = unlocks {
-            self.steps.remove(u);
+        // Ahead of it, the teardown's unlock, the release and the close's own unlock.
+        let mut released = false;
+        while let Some(before) = at.checked_sub(1) {
+            match self.steps[before].1 {
+                Step::Unlock(g, ..) if g == source => {}
+                Step::Release(g) if g == source && !released => released = true,
+                _ => break,
+            }
+            self.steps.remove(before);
+            at = before;
         }
-        true
+        Some(released)
     }
 
     /// Whether a later response's copier is queued: the steps ahead of it ran on the cells their
@@ -718,7 +725,7 @@ impl LootState {
     /// zero guid unlocks nothing (`0x49542d`).
     pub(crate) fn unlock_item_here(&mut self, guid: u64) {
         if guid != 0 {
-            self.queue(Step::Unlocks(vec![(guid, false)], self.window.clone()));
+            self.queue(Step::Unlock(guid, false, self.window.clone()));
         }
     }
 
@@ -735,8 +742,22 @@ impl LootState {
     pub(crate) fn take_queued_unlocks(&mut self) -> Vec<(u64, bool)> {
         let mut out = Vec::new();
         self.steps.retain(|(_, s)| match s {
-            Step::Unlocks(u, _) => {
-                out.extend(u.iter().copied());
+            Step::Unlock(g, live, _) => {
+                out.push((*g, *live));
+                false
+            }
+            _ => true,
+        });
+        out
+    }
+
+    /// The lane's queued release steps, taken unsent, in order.
+    #[cfg(test)]
+    pub(crate) fn take_queued_releases(&mut self) -> Vec<u64> {
+        let mut out = Vec::new();
+        self.steps.retain(|(_, s)| match s {
+            Step::Release(g) => {
+                out.push(*g);
                 false
             }
             _ => true,
@@ -750,10 +771,9 @@ impl LootState {
         self.steps
             .iter()
             .filter_map(|(_, s)| match s {
-                Step::Unlocks(u, _) => Some(u.iter().map(|&(g, _)| g)),
+                Step::Unlock(g, ..) => Some(*g),
                 _ => None,
             })
-            .flatten()
             .collect()
     }
 
@@ -766,20 +786,30 @@ impl LootState {
         }
     }
 
-    /// `n` of the window teardown's `UnlockItem`s on its source, on the lane at the caller's
-    /// place, ahead of what it queues next: each runs only while the source resolves as a live
-    /// item object (`0x48f299`/`0x48f2ab`, `0x4c1cdf`/`0x4c1d23`), checked as the step fires
-    /// unless the caller knows it does ([`Source`]).
-    fn queue_source_unlocks(&mut self, guid: u64, n: usize, source: Source) {
+    /// The window teardown's `UnlockItem` on its source, on the lane at the caller's place, ahead
+    /// of what it queues next: it runs only while the source resolves as a live item object
+    /// (`0x48f299`/`0x48f2ab`, `0x4c1cdf`/`0x4c1d23`), checked as the step fires unless the
+    /// caller knows it does ([`Source`]).
+    fn queue_source_unlock(&mut self, guid: u64, source: Source) {
         if benilla_protocol::guid::is_item(guid) {
             let checked = source == Source::CheckedAtTheFire;
-            self.queue(Step::Unlocks(vec![(guid, checked); n], self.window.clone()));
+            self.queue(Step::Unlock(guid, checked, self.window.clone()));
         }
     }
 
-    /// The owed unlocks, in order, each flagged when it needs a live item object.
-    pub(crate) fn take_item_unlocks(&mut self) -> Vec<(u64, bool)> {
-        std::mem::take(&mut self.item_unlocks)
+    /// A close's own unlock, its release when it sends one, and its teardown's unlock, on the
+    /// lane at its place, each signalling or sending past the one before ([`Step::Release`]).
+    fn queue_source_close(&mut self, guid: u64, source: Source, release: bool) {
+        self.queue_source_unlock(guid, source);
+        if release {
+            self.queue(Step::Release(guid));
+        }
+        self.queue_source_unlock(guid, source);
+    }
+
+    /// The next owed unlock, flagged when it needs a live item object.
+    fn take_item_unlock(&mut self) -> Option<(u64, bool)> {
+        (!self.item_unlocks.is_empty()).then(|| self.item_unlocks.remove(0))
     }
 
     /// The last push queued, taken off the lane.
@@ -1383,13 +1413,16 @@ fn fire_step(vm: &mut LootVm, reads: &LootReads, step: Step) {
                 }
             });
         }),
-        Step::Unlocks(unlocks, at) => on_its_window(vm, at, |vm| {
+        Step::Unlock(guid, live, at) => on_its_window(vm, at, |vm| {
             vm.turn(|script, (steps, _)| {
                 if let Some(script) = script {
-                    fire_unlocks(script, unlocks, &steps.objects);
+                    fire_unlock(script, (guid, live), &steps.objects);
                 }
             });
         }),
+        Step::Release(guid) => {
+            let _ = vm.own().0.net.0.send(ClientCommand::LootRelease { guid });
+        }
         Step::Opened {
             ended,
             window: w,
@@ -1838,20 +1871,27 @@ fn close_with(
     if let Some(items) = items {
         items.cancel_waits(crate::items::RecordCallback::LootRow);
     }
-    if let Some(commands) = release {
+    // An item source unlocks twice, each with its `ITEM_LOCK_CHANGED`: the close's own
+    // `UnlockItem` (`0x48f2bd`), ahead of the release (`0x48f311`), then the frame teardown's
+    // (`0x4c1d36`), ahead of its `LOOT_CLOSED` (`0x4c1dac`). So an item's release waits for the
+    // first unlock's listeners; any other's goes now. A move-start close, the one with `dl` set,
+    // returns before both and never reaches here with an item.
+    let item = benilla_protocol::guid::is_item(source);
+    if let (Some(commands), false) = (release, item) {
         let _ = commands.0.send(ClientCommand::LootRelease { guid: source });
     }
-    // An item source unlocks twice, each with its `ITEM_LOCK_CHANGED`: the close's own
-    // `UnlockItem` (`0x48f2bd`), then the frame teardown's (`0x4c1d36`), both ahead of the
-    // teardown's `LOOT_CLOSED` (`0x4c1dac`). A move-start close, the one with `dl` set, returns
-    // before both and never reaches here with an item.
     match unlocks {
         Unlocks::OnTheLane(live) => {
-            loot.queue_source_unlocks(source, 2, live);
+            if item {
+                loot.queue_source_close(source, live, release.is_some());
+            }
             loot.clear();
         }
         Unlocks::InPlace => {
             loot.unlock_item_source(source);
+            if item && release.is_some() {
+                loot.release_owed = Some(source);
+            }
             loot.unlock_item_source(source);
         }
     }
@@ -1890,21 +1930,31 @@ pub(crate) fn close_loot_on_leave_world(mut vm: VmWith<(LootSteps<'static, 'stat
             }
             return None;
         }
-        let closed = close_interaction_in_place(
+        close_interaction_in_place(
             &mut steps.loot,
             &mut steps.latch,
             Some(&steps.net),
             Some(&steps.items),
-        )?;
-        if let Some(script) = script {
-            unlock_closed_source(script, &mut steps.loot, &steps.objects);
-        }
-        Some(closed)
+        )
     });
     run_then(&mut vm);
     if closed.is_none() {
         return;
     }
+    // The close's own unlock, its release, then the teardown's unlock, each past the one before.
+    let unlock = |vm: &mut LootVm| {
+        vm.turn(|script, (mut steps, _)| {
+            if let Some(script) = script {
+                unlock_closed_source(script, &mut steps.loot, &steps.objects);
+            }
+        })
+    };
+    unlock(&mut vm);
+    {
+        let (mut steps, _) = vm.own();
+        send_owed_release(&mut steps.loot, &steps.net);
+    }
+    unlock(&mut vm);
     vm.turn(|script, (mut steps, _)| {
         match script {
             Some(script) => steps.loot.tear_down_here(script),
@@ -1927,25 +1977,33 @@ pub(crate) fn tell_loot_closed(mut vm: VmWith<()>) {
     })
 }
 
-/// The VM's half of a close that signals in place, first: an item source's
-/// two unlocks (`0x48f2bd`, `0x4c1d36`), each resolved as the close's own lookup (`0x48f29e`). Both
-/// come before the teardown zeroes the source (`0x4c1cb0`), so their handlers read the window
-/// open, and run as this turn ends, ahead of [`announce_loot_closed`].
+/// The VM's half of a close that signals in place: the next of an item source's two unlocks
+/// (`0x48f2bd`, `0x4c1d36`), each resolved as the close's own lookup (`0x48f29e`). Both come
+/// before the teardown zeroes the source (`0x4c1cb0`), so their handlers read the window open,
+/// and each runs as its own turn or tail ends, the first ahead of the release
+/// ([`LootState::release_owed`]), the second ahead of [`announce_loot_closed`].
 fn unlock_closed_source(
     script: &mut UiScript,
     loot: &mut LootState,
     objects: &crate::net::Objects,
 ) {
-    fire_unlocks(script, loot.take_item_unlocks(), objects);
+    if let Some(unlock) = loot.take_item_unlock() {
+        fire_unlock(script, unlock, objects);
+    }
 }
 
-/// `UnlockItem` (`0x495420`) on each guid, with its `ITEM_LOCK_CHANGED`; one flagged as a
-/// window source's only while it resolves as a live item object.
-fn fire_unlocks(script: &mut UiScript, unlocks: Vec<(u64, bool)>, objects: &crate::net::Objects) {
-    for (guid, live) in unlocks {
-        if !live || objects.object(guid).is_some_and(|f| f.is_item()) {
-            script.unlock_item(guid);
-        }
+/// A close's owed release (`0x48f311`), past its own unlock's listeners.
+fn send_owed_release(loot: &mut LootState, net: &NetCommands) {
+    if let Some(guid) = loot.release_owed.take() {
+        let _ = net.0.send(ClientCommand::LootRelease { guid });
+    }
+}
+
+/// `UnlockItem` (`0x495420`) on a guid, with its `ITEM_LOCK_CHANGED`; one flagged as a window
+/// source's only while it resolves as a live item object.
+fn fire_unlock(script: &mut UiScript, (guid, live): (u64, bool), objects: &crate::net::Objects) {
+    if !live || objects.object(guid).is_some_and(|f| f.is_item()) {
+        script.unlock_item(guid);
     }
 }
 
@@ -3650,8 +3708,8 @@ mod tests {
     }
 
     /// The precast end's release at rest, `0x48f200(1, 0, 0)` (`0x60d10b`): with `dl` clear an
-    /// item's loot closes with its release and both unlocks (`0x48f2b5` falls through to
-    /// `0x48f2bd`), and a disenchant window with rows left owes its sweep (`0x48f264`), where the
+    /// item's loot closes with both unlocks (`0x48f2b5` falls through to `0x48f2bd`) and its
+    /// release between them (`0x48f311`), on the lane at the close, and a disenchant window with rows left owes its sweep (`0x48f264`), where the
     /// move-start close keeps both. Beside a move-start close after it, it decides alike, as the two
     /// commute.
     #[test]
@@ -3676,14 +3734,13 @@ mod tests {
             step(&mut app, move_start);
             assert_eq!(app.world().resource::<LootState>().source(), None);
             assert!(
-                matches!(rx.try_recv(), Ok(ClientCommand::LootRelease { guid }) if guid == LOCKBOX),
-                "an item's loot is released (beside a move start: {move_start})"
+                rx.try_recv().is_err(),
+                "an item's release waits for its own unlock (beside a move start: {move_start})"
             );
-            assert!(rx.try_recv().is_err(), "once");
+            let mut loot = app.world_mut().resource_mut::<LootState>();
+            assert_eq!(loot.take_queued_releases(), [LOCKBOX], "released once");
             assert_eq!(
-                app.world_mut()
-                    .resource_mut::<LootState>()
-                    .take_queued_unlocks(),
+                loot.take_queued_unlocks(),
                 vec![(LOCKBOX, true), (LOCKBOX, true)],
                 "the close's unlock and the teardown's, on the lane at the close"
             );

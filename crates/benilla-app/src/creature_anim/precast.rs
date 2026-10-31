@@ -460,7 +460,8 @@ mod tests {
         let other = world.spawn_empty().id();
         let rx = seat_loot(&mut world);
         // The close the tail reports, each run against a corpse's window, which any close takes,
-        // and a lockbox's, which only the full one does, each released as it closes.
+        // and a lockbox's, which only the full one does, each released as it closes: the
+        // lockbox's on the lane behind its own unlock (`0x48f2bd`, `0x48f311`).
         let case = |world: &mut World,
                     flags: u32,
                     unit: Entity,
@@ -485,7 +486,14 @@ mod tests {
                     Some(TailClose::AtRest) => true,
                 };
                 assert_eq!(!loot_open(world), closes, "{source:#x}: {made:?}");
-                let released: Vec<_> = rx.try_iter().collect();
+                let mut released: Vec<_> = rx.try_iter().collect();
+                released.extend(
+                    world
+                        .resource_mut::<crate::ui_loot::LootState>()
+                        .take_queued_releases()
+                        .into_iter()
+                        .map(|guid| crate::net::ClientCommand::LootRelease { guid }),
+                );
                 assert_eq!(
                     released.len(),
                     usize::from(closes),

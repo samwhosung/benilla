@@ -1386,6 +1386,42 @@ fn close_loots_unlock_handlers_read_the_window_open() {
     );
 }
 
+/// `EndLootWindow` unlocks an item source with its `ITEM_LOCK_CHANGED` (`0x48f2bd` → `0x495420`)
+/// before it sends `CMSG_LOOT_RELEASE` (`0x48f311`), and its teardown unlocks it again after
+/// (`0x48f33d` → `0x4c1d36`): the first unlock's listener sends ahead of the release and the
+/// second's after it, for a `CloseLoot`, the last row's removal and the leave-world sweep.
+#[test]
+fn a_lockboxs_close_unlocks_it_ahead_of_its_release() {
+    for how in ["CloseLoot", "removal", "sweep"] {
+        let mut l = client();
+        run(
+            &mut l,
+            r#"local f = CreateFrame("Frame")
+            f:RegisterEvent("ITEM_LOCK_CHANGED")
+            f:SetScript("OnEvent", function() RandomRoll(1, 1) end)"#,
+        );
+        open(&mut l, LOCKBOX, 1, 0, vec![row(0, LINEN)]);
+        l.rx.try_iter().for_each(drop);
+        match how {
+            "CloseLoot" => run(&mut l, "CloseLoot()"),
+            "removal" => {
+                packets(&mut l, vec![SessionEvent::LootRemoved { slot: 0 }]);
+                feed(&mut l);
+            }
+            _ => crate::ui_script::sweep_test::sweep_in_place(&mut l.app),
+        }
+        let wire: Vec<&str> =
+            l.rx.try_iter()
+                .filter_map(|c| match c {
+                    ClientCommand::RandomRoll { .. } => Some("roll"),
+                    ClientCommand::LootRelease { guid: LOCKBOX } => Some("release"),
+                    _ => None,
+                })
+                .collect();
+        assert_eq!(wire, ["roll", "release", "roll"], "{how}");
+    }
+}
+
 /// `OnItemPush` signals `ITEM_PUSH` in the push's handler (`0x491be8`), which touches no loot
 /// window, so its handlers read the window as the packets before it left it: none, here, for a
 /// push ahead of the response.

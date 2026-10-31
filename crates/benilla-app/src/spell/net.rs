@@ -3030,7 +3030,8 @@ mod tests {
         use crate::ui_loot::{LootLatch, LootState};
         use benilla_formats::{SpellCatalog, SpellDisplay};
         const LOCKBOX: u64 = 0x4000_0000_0000_0007;
-        /// Whether `packet` closes a lockbox's window open ahead of it, released.
+        /// Whether `packet` closes a lockbox's window open ahead of it, released: on the lane
+        /// behind its own unlock (`0x48f2bd`, `0x48f311`).
         fn closes(s: &mut CastSeq, packet: impl FnOnce(&mut CastSeq)) -> bool {
             let world = s.app.world_mut();
             let mut loot = world.resource_mut::<LootState>();
@@ -3045,9 +3046,16 @@ mod tests {
             let _ = s.sent.try_iter().count();
             packet(s);
             let closed = s.app.world().resource::<LootState>().source().is_none();
-            let released = s.sent.try_iter().any(
+            let sent = s.sent.try_iter().any(
                 |c| matches!(c, crate::net::ClientCommand::LootRelease { guid } if guid == LOCKBOX),
             );
+            let queued = s
+                .app
+                .world_mut()
+                .resource_mut::<LootState>()
+                .take_queued_releases()
+                .contains(&LOCKBOX);
+            let released = sent || queued;
             assert_eq!(closed, released, "a close is released at its packet");
             closed
         }

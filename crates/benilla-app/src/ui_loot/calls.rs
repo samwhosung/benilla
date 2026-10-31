@@ -51,9 +51,11 @@ pub(super) enum Then {
     /// The coin click after its `LOOT_SLOT_CLEARED` (`0x4c286a`-`0x4c287c`): the close with
     /// release when nothing is left.
     CloseIfEmpty,
-    /// A close's two unlocks (`0x48f2bd`, `0x4c1d36`), after the line its flag shows
-    /// (`0x48f27b`).
-    Unlocks,
+    /// The next of a close's two unlocks (`0x48f2bd`, `0x4c1d36`), the first after the line its
+    /// flag shows (`0x48f27b`).
+    Unlock,
+    /// A close's release past its own unlock's listeners (`0x48f311`).
+    Release,
     /// A close's teardown after its unlocks' signals: the source zeroed and `LOOT_CLOSED`
     /// (`0x4c1da0`, `0x4c1dac`).
     Announce,
@@ -310,23 +312,27 @@ impl LootSteps<'_, '_> {
     /// window's: nothing with no window (`0x48f23f`); a disenchant window with contents is swept
     /// with the flag (`0x48f24f`, `0x48f264`); else `ERR_LOOT_NO_UI` for a set flag (`0x48f27b`),
     /// the release and the teardown. The line, which a call signals as it returns, comes before
-    /// the unlocks ([`Then::Unlocks`]), and those before the window goes ([`Then::Announce`]).
+    /// the unlocks ([`Then::Unlock`]), an item's release between them ([`Then::Release`]), and
+    /// those before the window goes ([`Then::Announce`]).
     pub(super) fn end_window(&mut self, script: &mut UiScript, failed: bool) {
         let Some(source) = self.loot.source() else {
             return;
         };
         if self.loot.window_closed_since() {
             // Its release went at the later packet: the close's signals alone, if still owed.
-            if !self.loot.take_queued_close(source) {
+            let Some(released) = self.loot.take_queued_close(source) else {
                 return;
-            }
+            };
             if failed {
                 self.errors.push(UiError::key("ERR_LOOT_NO_UI"));
             }
             self.loot.unlock_item_source(source);
+            if released {
+                self.loot.release_owed = Some(source);
+            }
             self.loot.unlock_item_source(source);
             self.loot.then.push(Then::Announce);
-            self.loot.then.push(Then::Unlocks);
+            self.owe_unlocks();
             return;
         }
         if self.loot.disenchant_hold(&self.objects) {
@@ -347,7 +353,15 @@ impl LootSteps<'_, '_> {
             self.loot.then.push(Then::Deselect(source));
         }
         self.loot.then.push(Then::Announce);
-        self.loot.then.push(Then::Unlocks);
+        self.owe_unlocks();
+    }
+
+    /// A close's own unlock, its release and its teardown's unlock, each run once the one before
+    /// has signalled ([`Then::Unlock`], [`Then::Release`]).
+    fn owe_unlocks(&mut self) {
+        self.loot.then.push(Then::Unlock);
+        self.loot.then.push(Then::Release);
+        self.loot.then.push(Then::Unlock);
     }
 
     /// `GiveMasterLoot` (`0x4c2fd0`): the candidate at the 1-based index of the list packet's
@@ -504,7 +518,8 @@ impl LootSteps<'_, '_> {
                     self.end_window(script, false);
                 }
             }
-            Then::Unlocks => unlock_closed_source(script, &mut self.loot, &self.objects),
+            Then::Unlock => unlock_closed_source(script, &mut self.loot, &self.objects),
+            Then::Release => super::send_owed_release(&mut self.loot, &self.net),
             Then::Announce => self.loot.tear_down_here(script),
             Then::Deselect(source) => self.dead.deselect(source),
             Then::OpenItem(open) => self.send_open_item(script, open),

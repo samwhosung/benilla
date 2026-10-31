@@ -3611,12 +3611,18 @@ mod tests {
                     closes,
                     "rooted={rooted}, ours={ours}, {source:#x}: the loot release"
                 );
+                // An item's release waits on the lane behind its own unlock (`0x48f2bd`,
+                // `0x48f311`).
+                let queued = w
+                    .resource_mut::<crate::ui_loot::LootState>()
+                    .take_queued_releases();
                 assert_eq!(
                     rx.try_iter()
                         .filter(
                             |c| matches!(c, ClientCommand::LootRelease { guid } if *guid == source)
                         )
-                        .count(),
+                        .count()
+                        + queued.iter().filter(|&&g| g == source).count(),
                     usize::from(closes),
                     "rooted={rooted}, ours={ours}, {source:#x}: released once as it closes"
                 );
