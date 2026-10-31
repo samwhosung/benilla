@@ -408,11 +408,6 @@ pub(crate) struct Model {
     /// or the targeting cursor made while it was out, and the handlers an engine step fired then
     /// ([`super::host::holding`]), for it to run as soon as it is back.
     pub(crate) script_calls: Vec<super::calls::Waiting>,
-    /// What deferred stretches left waiting, parked by key until the app runs them
-    /// ([`super::UiScript::park_since`]).
-    pub(crate) parked: HashMap<u64, Vec<super::calls::Waiting>>,
-    /// The next key [`Self::parked`] hands out.
-    pub(crate) next_parked: u64,
     /// How many drains of [`Self::script_calls`] are running, each inside a call the one outside
     /// it applied ([`super::calls::submit`]).
     pub(crate) call_depth: u8,
@@ -1437,8 +1432,6 @@ impl Model {
             unit_guids: Default::default(),
             tracking: None,
             script_calls: Vec::new(),
-            parked: HashMap::new(),
-            next_parked: 0,
             call_depth: 0,
             kept_calls: None,
             call_raises: Default::default(),

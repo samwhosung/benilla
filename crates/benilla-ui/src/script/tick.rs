@@ -190,7 +190,6 @@ fn verb_segment<R>(lua: &Lua, body: impl FnOnce(&mut Model) -> R) -> R {
         (out, model.verb_events.take().unwrap_or_default())
     };
     if super::host::holding(lua) {
-        let raised = super::calls::apply_split_calls(lua, raised);
         super::calls::hold_segment(lua, raised);
         return out;
     }

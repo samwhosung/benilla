@@ -349,7 +349,7 @@ pub use guild::{
 };
 pub use guild_read::{GuildAnswer, GuildRead, OwnGuild, UnitGuildRead};
 pub use held::{BagGuidQuery, BagHead, BagItemsQuery, BagQuery, BagSlotQuery, HasKeyQuery};
-pub use host::{CallHost, CallTail, Deferring, LiveReader};
+pub use host::{CallHost, CallTail, LiveReader};
 pub use input_verbs::{
     BindingInput, ClickCall, ClickMode, ClickPress, FiredInput, HeldInput, LookCall,
     MouselookingQuery, PostureCall, ViewAxis,
