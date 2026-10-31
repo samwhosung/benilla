@@ -8,7 +8,9 @@
 //!
 //! Off macOS, each keyboard message whose logical key is a named key other than its physical one
 //! takes that named key's code, before Bevy's input collection, so every reader (the bindings,
-//! the text boxes, the glue screens, `ButtonInput<KeyCode>`) sees the layout's key. The Mac client
+//! the text boxes, the glue screens, `ButtonInput<KeyCode>`) sees the layout's key. The key is
+//! rewritten on both streams winit feeds: the typed `KeyboardInput` messages and the window's
+//! `WindowEvent` stream, from which the UI's input records are read in arrival order. The Mac client
 //! reads its non-character keys off a fixed table on the physical keycode (`0x5bf320`), so macOS
 //! keeps them physical. A letter, digit or punctuation key keeps its code too: 1.12 names it by
 //! the virtual key the layout makes it, a digit as itself (`0x42d81c`) and a letter or punctuation
@@ -32,13 +34,27 @@ impl Plugin for LayoutKeysPlugin {
     fn build(&self, _app: &mut App) {}
 }
 
-/// Gives each new keyboard message the code of the named key its layout made it.
-#[cfg(not(target_os = "macos"))]
-fn remap(mut keys: bevy::ecs::message::MessageMutator<bevy::input::keyboard::KeyboardInput>) {
+/// Gives each new keyboard message, typed or on the window's stream, the code of the named key
+/// its layout made it.
+#[cfg(any(not(target_os = "macos"), test))]
+fn remap(
+    mut keys: bevy::ecs::message::MessageMutator<bevy::input::keyboard::KeyboardInput>,
+    mut window: bevy::ecs::message::MessageMutator<bevy::window::WindowEvent>,
+) {
     for key in keys.read() {
-        if let Some(code) = layout_code(key.key_code, &key.logical_key) {
-            key.key_code = code;
+        remap_key(key);
+    }
+    for event in window.read() {
+        if let bevy::window::WindowEvent::KeyboardInput(key) = event {
+            remap_key(key);
         }
+    }
+}
+
+#[cfg(any(not(target_os = "macos"), test))]
+fn remap_key(key: &mut bevy::input::keyboard::KeyboardInput) {
+    if let Some(code) = layout_code(key.key_code, &key.logical_key) {
+        key.key_code = code;
     }
 }
 
@@ -147,6 +163,51 @@ mod tests {
             layout_code(KeyCode::Escape, &Key::CapsLock),
             Some(KeyCode::CapsLock)
         );
+    }
+
+    /// The UI's input records read the window's stream, not the typed messages: Caps Lock under
+    /// `caps:escape` must be Escape on both.
+    #[test]
+    fn both_streams_carry_the_layout_key() {
+        use bevy::input::keyboard::KeyboardInput;
+        use bevy::input::ButtonState;
+        use bevy::window::WindowEvent;
+
+        let caps = KeyboardInput {
+            key_code: KeyCode::CapsLock,
+            logical_key: Key::Escape,
+            state: ButtonState::Pressed,
+            text: None,
+            repeat: false,
+            window: Entity::PLACEHOLDER,
+        };
+        let mut app = App::new();
+        app.add_message::<KeyboardInput>()
+            .add_message::<WindowEvent>()
+            .add_systems(Update, remap);
+        app.world_mut().write_message(caps.clone());
+        app.world_mut()
+            .write_message(WindowEvent::KeyboardInput(caps));
+        app.update();
+
+        // The update's swap moved them out of the current buffer: drain takes both.
+        let typed: Vec<_> = app
+            .world_mut()
+            .resource_mut::<Messages<KeyboardInput>>()
+            .drain()
+            .map(|k| k.key_code)
+            .collect();
+        assert_eq!(typed, [KeyCode::Escape]);
+        let window: Vec<_> = app
+            .world_mut()
+            .resource_mut::<Messages<WindowEvent>>()
+            .drain()
+            .filter_map(|e| match e {
+                WindowEvent::KeyboardInput(k) => Some(k.key_code),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(window, [KeyCode::Escape]);
     }
 
     #[test]
