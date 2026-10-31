@@ -700,8 +700,9 @@ fn unit_word_binds(word: u16, is_self: bool, rel: &TargetRelations) -> bool {
 
 /// Whether `BindTarget 0x6e5b40`'s unit branch binds this unit under the standing word: the gates
 /// ([`bind_gates`]), then the relation checks. The initial selection, the `autoSelfCast` fallback,
-/// a world click, `SpellTargetUnit` and the hover verdict all ask this one predicate. An unknown
-/// spell has no row to gate on and leaves the relation checks alone.
+/// a world click and `SpellTargetUnit` all ask this one predicate; the hover verdict asks
+/// [`unit_can_target`]. An unknown spell has no row to gate on and leaves the relation checks
+/// alone.
 pub(super) fn unit_binds(
     def: Option<&SpellDisplay>,
     word: u16,
@@ -709,6 +710,20 @@ pub(super) fn unit_binds(
     rel: &TargetRelations,
 ) -> bool {
     def.is_none_or(|def| bind_gates(def, word, is_self, rel)) && unit_word_binds(word, is_self, rel)
+}
+
+/// Whether `SpellCanTargetObject 0x6e6460` passes this unit (before its range test): the same
+/// gates, then the first arm that holds returns at once (`0x6e668c`) with no test that the word
+/// empties, which only the bind commits on (`0x6e60c1`). Revive's `0x8002` at a live unit passes
+/// the `0x2` arm here and binds nothing there.
+pub(super) fn unit_can_target(
+    def: Option<&SpellDisplay>,
+    word: u16,
+    is_self: bool,
+    rel: &TargetRelations,
+) -> bool {
+    def.is_none_or(|def| bind_gates(def, word, is_self, rel))
+        && bind_arm(word, is_self, rel).is_some()
 }
 
 /// The wire target for casting `def`. An unknown spell sends the selection as is, or no target
@@ -1394,6 +1409,14 @@ mod tests {
         let me = unit(&[(2, 0x19), (22, 100)]);
         assert_eq!(bind_arm(0x0102, true, &rel(&me)), Some(0x0002));
         assert!(!unit_word_binds(0x0102, true, &rel(&me)));
+        // `SpellCanTargetObject` passes on that same arm (`0x6e668c`) without the empty word: the
+        // bind commits nothing for Revive (0x8002) at a live unit, the target check says yes.
+        assert!(!unit_word_binds(0x8002, false, &rel(&plain)));
+        assert!(unit_can_target(None, 0x8002, false, &rel(&plain)));
+        assert!(unit_can_target(None, 0x0102, true, &rel(&me)));
+        // No arm holds: neither answers yes.
+        assert!(!unit_can_target(None, 0x2, false, &rel(&immune)));
+        assert!(!unit_can_target(None, 0x400, false, &rel(&corpse)));
     }
 
     fn rel_none() -> TargetRelations<'static> {

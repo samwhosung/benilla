@@ -134,6 +134,47 @@ impl BindChecks<'_, '_> {
         word: u16,
         entity: Entity,
     ) -> bool {
+        self.ask_unit(
+            spell_id,
+            commit,
+            word,
+            entity,
+            super::cast_target::unit_binds,
+        )
+    }
+
+    /// `SpellCanTargetObject 0x6e6460`'s unit leg before its range test: the bind's gates and
+    /// arms, passing on any arm that holds ([`super::cast_target::unit_can_target`]).
+    fn unit_can_target(
+        &self,
+        spell_id: u32,
+        commit: super::cast_send::CastCommit,
+        word: u16,
+        entity: Entity,
+    ) -> bool {
+        self.ask_unit(
+            spell_id,
+            commit,
+            word,
+            entity,
+            super::cast_target::unit_can_target,
+        )
+    }
+
+    /// `ask` over this unit's relations to the cast's caster.
+    fn ask_unit(
+        &self,
+        spell_id: u32,
+        commit: super::cast_send::CastCommit,
+        word: u16,
+        entity: Entity,
+        ask: fn(
+            Option<&benilla_formats::SpellDisplay>,
+            u16,
+            bool,
+            &super::cast_target::TargetRelations,
+        ) -> bool,
+    ) -> bool {
         let target_store = self.stores.get(entity).ok();
         let owner_store =
             |store| super::cast_target::owner_store(store, self.index.as_deref(), &self.stores);
@@ -160,7 +201,7 @@ impl BindChecks<'_, '_> {
             },
         };
         let def = self.spells.as_deref().and_then(|s| s.catalog.get(spell_id));
-        super::cast_target::unit_binds(def, word, self.is_caster(entity, commit), &rel)
+        ask(def, word, self.is_caster(entity, commit), &rel)
     }
 
     /// The spell's min/max range from the cast's caster against this unit, through the one
@@ -440,12 +481,12 @@ impl SpellTargeting {
 
     /// `SpellCanTargetObject 0x6e6460`, its unit leg, with the range flag both callers pass (the
     /// world hover `0x4828d0` at `48290b`, the Lua `SpellCanTargetUnit 0x6e6d00`):
-    /// `BindTarget`'s gates and relation checks (`6e6507`–`6e65ab`), then min² ≤ d² ≤ max²
+    /// `BindTarget`'s gates and relation checks, any arm passing (`6e6507`–`6e668c`), then min² ≤ d² ≤ max²
     /// (`6e677c`–`6e6802`), so a unit inside the minimum is out too. There is no line-of-sight
     /// test.
     pub(crate) fn can_target_unit(&self, entity: Entity, checks: &BindChecks) -> bool {
         self.0.as_ref().is_some_and(|t| {
-            checks.unit_binds(t.spell_id, t.commit, t.word, entity)
+            checks.unit_can_target(t.spell_id, t.commit, t.word, entity)
                 && checks.range_refusal(t.spell_id, t.commit, entity).is_none()
         })
     }
@@ -1260,10 +1301,11 @@ mod tests {
         }
     }
 
-    /// The press (`resolve_cast_target`), the click and `SpellTargetUnit` ([`bind_target_unit`]) and
-    /// the hover verdict (`SpellCanTargetUnit`) all ask [`crate::spell::cast_target::unit_binds`],
-    /// so one table of units decides all three: `BindTarget`'s gates refuse the same units at
-    /// each, and the control row beside each refusal binds at each.
+    /// The press (`resolve_cast_target`), the click and `SpellTargetUnit` ([`bind_target_unit`]) ask
+    /// [`crate::spell::cast_target::unit_binds`] and the hover verdict (`SpellCanTargetUnit`)
+    /// [`crate::spell::cast_target::unit_can_target`], which share `BindTarget`'s gates. On a word
+    /// with one arm bit the two answer alike, so one table of units decides all three: the gates
+    /// refuse the same units at each, and the control row beside each refusal binds at each.
     #[test]
     fn the_press_the_click_and_the_hover_bind_the_same_units() {
         use crate::names::{CreatureRecord, NameCache};
@@ -1494,6 +1536,28 @@ mod tests {
                 "{label}: the press ({pressed:?})"
             );
         }
+    }
+
+    /// `SpellCanTargetObject` (`0x6e6460`) answers yes on the first arm that holds (`0x6e668c`),
+    /// where `BindTarget` commits only a word the arm left empty (`0x6e60c1`): Revive's `0x8002`
+    /// at a live unit passes the `0x2` arm, so the hover says yes while the click binds nothing
+    /// and leaves the cursor up.
+    #[test]
+    fn the_hover_passes_a_unit_whose_arm_leaves_the_word_standing() {
+        let (mut world, rx, _) = unit_world(10.0);
+        arm(&mut world, HEAL, 0x8002);
+        publish_guids(&mut world);
+        world
+            .run_system_cached(feed_targeting_to_input)
+            .expect("the feed runs");
+        let hover = world
+            .non_send_resource::<UiScript>()
+            .eval::<bool>("return SpellCanTargetUnit(\"target\") == 1")
+            .expect("a boolean");
+        assert!(hover, "the hover verdict");
+        spell_target_unit(&mut world, "target");
+        assert!(rx.try_recv().is_err(), "the click binds nothing");
+        assert!(world.resource::<SpellTargeting>().active(), "still armed");
     }
 
     /// The party word (target 35) and the raid word (target 57) over the same three surfaces: the
