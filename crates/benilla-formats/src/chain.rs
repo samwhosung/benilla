@@ -41,14 +41,26 @@ fn is_patch_glob_match(name: &str) -> bool {
 /// [`VANILLA_BASE_ORDER`] archives, `patch.MPQ`, every `patch-?.MPQ` by case-folded name (the
 /// reference sorts descending with `strnicmp` and walks backwards), then `speech2.MPQ`. Names
 /// match case-insensitively and come back as found on disk.
-fn mount_order(dir_names: &[String]) -> Vec<String> {
+///
+/// A base archive missing from the listing is an error naming it, as the reference's open loop
+/// (`0x4038b5`-`0x403912`, the table `0x82e12c`, `model` first) ends the process on the first base
+/// archive that does not open (`0x4038ef` → `0x64d0e0`, Error #134); `speech2.MPQ` and the patches
+/// are optional.
+fn mount_order(dir_names: &[String]) -> Result<Vec<String>> {
     let find = |want: &str| {
         dir_names
             .iter()
             .find(|n| n.eq_ignore_ascii_case(want))
             .cloned()
     };
-    let mut order: Vec<String> = VANILLA_BASE_ORDER.iter().filter_map(|b| find(b)).collect();
+    let mut order = Vec::with_capacity(VANILLA_BASE_ORDER.len());
+    for base in VANILLA_BASE_ORDER.iter().rev() {
+        let Some(name) = find(base) else {
+            bail!("Failed to open archive Data\\{base}: the file is not there");
+        };
+        order.push(name);
+    }
+    order.reverse();
     order.extend(find("patch.MPQ"));
     let mut patches: Vec<String> = dir_names
         .iter()
@@ -58,7 +70,7 @@ fn mount_order(dir_names: &[String]) -> Vec<String> {
     patches.sort_by_key(|n| n.to_ascii_lowercase());
     order.extend(patches);
     order.extend(find("speech2.MPQ"));
-    order
+    Ok(order)
 }
 
 impl Chain {
@@ -82,14 +94,13 @@ impl Chain {
                 .collect();
             // read_dir order is arbitrary; sort so case-variant ties resolve deterministically.
             names.sort();
-            for name in mount_order(&names) {
+            let order = mount_order(&names)
+                .with_context(|| format!("mounting the archives in {}", path.display()))?;
+            for name in order {
                 let mpq = path.join(&name);
                 archives.push(
                     Archive::open(&mpq).with_context(|| format!("opening {}", mpq.display()))?,
                 );
-            }
-            if archives.is_empty() {
-                bail!("no known vanilla MPQs found in {}", path.display());
             }
         } else {
             archives.push(
@@ -387,14 +398,10 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        for archive in [
-            "interface.MPQ",
-            "model.MPQ",
-            "dbc.MPQ",
-            "patch.MPQ",
-            "patch-2.MPQ",
-            "speech2.MPQ",
-        ] {
+        for archive in VANILLA_BASE_ORDER
+            .iter()
+            .chain(&["patch.MPQ", "patch-2.MPQ", "speech2.MPQ"])
+        {
             let line = format!("X\\{archive}\r\nY\\{archive}\r\n");
             std::fs::write(
                 dir.join(archive),
@@ -433,50 +440,106 @@ mod tests {
         assert!(!is_patch_glob_match("mypatch-2.MPQ"));
     }
 
+    /// The ten base archives, in the reference's mount order, with `extra` beside them.
+    fn with_bases(extra: &[&str]) -> Vec<String> {
+        let mut v: Vec<String> = VANILLA_BASE_ORDER.iter().map(|n| n.to_string()).collect();
+        v.extend(extra.iter().map(|n| n.to_string()));
+        v
+    }
+
     #[test]
     fn mount_order_is_the_carved_law() {
         // base.MPQ is telemetry-only in the reference and never mounts.
-        let dir = owned(&[
+        let mut dir = with_bases(&[
             "patch-2.MPQ",
             "backup.MPQ",
-            "model.MPQ",
             "base.MPQ",
-            "dbc.MPQ",
             "patch.MPQ",
             "eula.html",
             "patch-3.MPQ",
             "speech2.MPQ",
-            "texture.MPQ",
         ]);
+        dir.reverse();
+        let got = mount_order(&dir).unwrap();
+        assert_eq!(&got[..10], &with_bases(&[])[..]);
         assert_eq!(
-            mount_order(&dir),
-            owned(&[
-                "dbc.MPQ",
-                "texture.MPQ",
-                "model.MPQ",
-                "patch.MPQ",
-                "patch-2.MPQ",
-                "patch-3.MPQ",
-                "speech2.MPQ",
-            ])
+            &got[10..],
+            &owned(&["patch.MPQ", "patch-2.MPQ", "patch-3.MPQ", "speech2.MPQ"])[..]
         );
     }
 
     #[test]
     fn patch_sort_is_ascending_and_case_folded() {
-        let dir = owned(&["patch-B.MPQ", "patch-3.MPQ", "patch-a.MPQ", "patch-2.MPQ"]);
+        let dir = with_bases(&["patch-B.MPQ", "patch-3.MPQ", "patch-a.MPQ", "patch-2.MPQ"]);
         assert_eq!(
-            mount_order(&dir),
-            owned(&["patch-2.MPQ", "patch-3.MPQ", "patch-a.MPQ", "patch-B.MPQ"])
+            &mount_order(&dir).unwrap()[10..],
+            &owned(&["patch-2.MPQ", "patch-3.MPQ", "patch-a.MPQ", "patch-B.MPQ"])[..]
         );
     }
 
     #[test]
     fn base_archives_are_found_case_insensitively() {
-        let dir = owned(&["DBC.mpq", "Model.MPQ", "PATCH.mpq"]);
-        assert_eq!(
-            mount_order(&dir),
-            owned(&["DBC.mpq", "Model.MPQ", "PATCH.mpq"])
+        let dir: Vec<String> = VANILLA_BASE_ORDER
+            .iter()
+            .map(|n| n.to_ascii_uppercase())
+            .chain(["PATCH.mpq".to_string()])
+            .collect();
+        let got = mount_order(&dir).unwrap();
+        assert_eq!(got.len(), 11);
+        assert_eq!(got[0], "DBC.MPQ");
+        assert_eq!(got[10], "PATCH.mpq");
+    }
+
+    /// A missing base archive ends the mount at once (`0x4038ef`, Error #134), naming the first
+    /// the reference's loop (`model` down to `dbc`) fails to open; a missing `speech2.MPQ`, `patch`
+    /// or `patch-?` is not an error.
+    #[test]
+    fn a_missing_base_archive_is_an_error_naming_it() {
+        for missing in VANILLA_BASE_ORDER {
+            let dir: Vec<String> = with_bases(&["patch.MPQ"])
+                .into_iter()
+                .filter(|n| n != missing)
+                .collect();
+            let err = mount_order(&dir).expect_err(missing).to_string();
+            assert!(
+                err.contains(&format!("Failed to open archive Data\\{missing}")),
+                "{err}"
+            );
+        }
+        // Two missing: the one the reference tries first, `model`, is the one named.
+        let dir: Vec<String> = with_bases(&[])
+            .into_iter()
+            .filter(|n| n != "dbc.MPQ" && n != "model.MPQ")
+            .collect();
+        assert!(mount_order(&dir)
+            .unwrap_err()
+            .to_string()
+            .contains("model.MPQ"));
+        assert!(
+            mount_order(&[]).is_err(),
+            "an empty Data folder mounts nothing"
         );
+        assert!(
+            mount_order(&with_bases(&[])).is_ok(),
+            "no patch, no speech2"
+        );
+    }
+
+    /// The error reaches `Chain::open`'s caller (the boot's fatal dialog) with the folder.
+    #[test]
+    fn open_of_a_folder_missing_a_base_archive_names_it() {
+        let dir = std::env::temp_dir().join(format!("benilla_chain_nobase_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("patch.MPQ"), b"x").unwrap();
+        let err = match Chain::open(&dir) {
+            Err(e) => format!("{e:#}"),
+            Ok(_) => panic!("a folder with no base archive must not open"),
+        };
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            err.contains("Failed to open archive Data\\model.MPQ"),
+            "{err}"
+        );
+        assert!(err.contains(&dir.display().to_string()), "{err}");
     }
 }
