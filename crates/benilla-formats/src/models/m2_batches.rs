@@ -417,7 +417,7 @@ pub fn parse_m2_render_submeshes(
             let uv = (!env_map).then(|| {
                 tex_anim::bake_stage(
                     model,
-                    batch.texture_transform_combo_index as usize + 1,
+                    model.stage_transform(bytes, batch, 1),
                     seq0_slot,
                     &seq_slots,
                 )
@@ -512,7 +512,7 @@ pub fn parse_m2_render_submeshes(
             uv_scale_seq,
         } = tex_anim::bake_stage(
             model,
-            batch.texture_transform_combo_index as usize,
+            model.stage_transform(bytes, batch, 0),
             seq0_slot,
             &seq_slots,
         );

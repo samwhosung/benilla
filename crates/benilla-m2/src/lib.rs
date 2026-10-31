@@ -455,6 +455,8 @@ pub fn parse_m2(cursor: &mut Cursor<&[u8]>) -> Result<M2Format> {
             },
             texture_transforms,
             texture_transform_lookup,
+            texture_transform_lookup_at: (tex_anim_lookup_arr.0 != 0)
+                .then_some(tex_anim_lookup_arr.1 as usize),
             global_sequences,
             bones: bone_list,
             cameras: parse_cameras(b),

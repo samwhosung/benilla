@@ -240,8 +240,12 @@ pub struct M2Model {
     /// [`Self::stage_combine`]. Empty in version 0x100.
     pub texture_combiners: Vec<u16>,
     /// The texture-animation lookup (header `0xac`, u16): `texture_transform_combo_index`
-    /// (`0x70b897`) to [`Self::texture_transforms`], `0xffff` for none.
+    /// (`0x70b897`) to [`Self::texture_transforms`], `0xffff` for none. A stage reads it through
+    /// [`Self::stage_transform`].
     pub texture_transform_lookup: Vec<u16>,
+    /// The file offset of [`Self::texture_transform_lookup`], `None` for an empty table, which the
+    /// fixup leaves a null pointer (`0x71d17d`).
+    pub(crate) texture_transform_lookup_at: Option<usize>,
     /// Global-sequence durations (header `0x14`, ms): the clocks `gseq` tracks wrap on.
     pub global_sequences: Vec<u32>,
     pub bones: Vec<M2Bone>,
@@ -284,6 +288,25 @@ impl M2Model {
         }
         let at = self.texture_unit_lookup_at?.checked_add(idx * 2)?;
         bytes.u16_at(at)
+    }
+
+    /// The texture transform `batch`'s stage `stage` moves by: the texAnimLookup entry at
+    /// `texture_transform_combo_index + stage`, which the draw reads unchecked as it does the
+    /// coordinate entry (`0x70b8aa`), so past the table it reads the file's next u16s. An entry
+    /// at or above the transform count (header `+0x74`) is the identity (`0x70b8ff`-`0x70b90b`),
+    /// as are an empty table and a read past the file's end.
+    pub fn stage_transform(
+        &self,
+        bytes: &[u8],
+        batch: &crate::SkinBatch,
+        stage: u16,
+    ) -> Option<&M2TextureTransform> {
+        let idx = batch.texture_transform_combo_index as usize + stage as usize;
+        let ti = match self.texture_transform_lookup.get(idx) {
+            Some(&v) => v,
+            None => bytes.u16_at(self.texture_transform_lookup_at?.checked_add(idx * 2)?)?,
+        };
+        self.texture_transforms.get(usize::from(ti))
     }
 
     /// Whether `batch`'s stage `stage` takes generated environment coordinates: a coordinate entry
