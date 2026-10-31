@@ -13,8 +13,8 @@ use bevy::render::render_resource::{Buffer, Face};
 use crate::materials::{WowModelExt, WowModelMaterial, VANILLA_ALPHA_KEY_REF};
 use crate::SpatialCache;
 use benilla_formats::{
-    blp_to_rgba, makes_device_texture, read_texture_native_chain, tga_texture_size, tga_to_rgba,
-    Chain, ModelBlend, TGA_GATE_PREFIX,
+    blp_to_rgba, makes_device_texture, tga_texture_size, tga_to_rgba, Chain, ModelBlend,
+    TGA_GATE_PREFIX,
 };
 pub use benilla_formats::{LooseFile, LooseIndex, LooseIndexCell, LooseOpen};
 
@@ -670,6 +670,25 @@ impl<T> LockRecover<T> for Mutex<T> {
     }
 }
 
+/// The chain a model texture name resolves to, as `TextureCreate` resolves it (`0x449d90`): the
+/// first of [`sprite_candidates`] that makes a texture ([`makes_texture`]). A `.tga` takes the
+/// levels of the files beside it ([`crate::tga_chain`]).
+fn model_texture_chain(chain: &Chain, path: &str) -> Option<benilla_formats::BlpMipChain> {
+    sprite_candidates(path).iter().find_map(|candidate| {
+        let bytes = chain.read(candidate).ok()?;
+        if !makes_texture(candidate, &bytes) {
+            return None;
+        }
+        if !is_tga_name(candidate) {
+            return benilla_formats::blp_bytes_to_native_chain(&bytes).ok();
+        }
+        let stem = candidate.strip_suffix(".tga").unwrap_or(candidate);
+        crate::tga_chain::tga_texture_chain(&bytes, |n| {
+            chain.read(&crate::tga_chain::mip_file_name(stem, n)).ok()
+        })
+    })
+}
+
 impl WorldAssets {
     /// Open the store over an opened patch chain. `shared_light` is a raw `Buffer`, not the
     /// client's `SharedLightBuffer`, which keeps this crate below the renderer.
@@ -714,19 +733,21 @@ impl WorldAssets {
         self.cache.sync(generation);
     }
 
-    /// Decode and upload a BLP once per path and wrap; later requests share the handle.
+    /// Decode and upload a model texture once per name and wrap; later requests share the handle.
+    /// The name resolves as `TextureCreate` resolves it (`0x449d90`): [`sprite_candidates`], keyed
+    /// on [`sprite_key`], the first candidate that makes a texture ([`makes_texture`]) being it.
     pub fn texture(
         &mut self,
         path: &str,
         wrap: (bool, bool),
         images: &mut Assets<Image>,
     ) -> Option<Handle<Image>> {
-        let key = (normalize_path(path), wrap.0, wrap.1);
+        let key = (sprite_key(path), wrap.0, wrap.1);
         if let Some(handle) = self.textures.fetch(&key) {
             return Some(handle);
         }
-        // World art uploads as the BLP stores it; nothing reads it main-side.
-        let chain = read_texture_native_chain(&mut self.chain.lock_recover(), &key.0).ok()?;
+        // World art uploads as the file stores it; nothing reads it main-side.
+        let chain = model_texture_chain(&self.chain.lock_recover(), path)?;
         let handle = images.add(repeat_texture_authored(crate::for_upload(chain), wrap));
         self.textures.insert(key, handle.clone());
         Some(handle)
@@ -1037,6 +1058,24 @@ pub enum AssetSet {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A model texture the clutter and skybox loads name resolves whatever extension it spells.
+    #[test]
+    fn a_world_asset_texture_resolves_through_the_texturecreate_chain() {
+        let data = benilla_formats::wow_data_or_skip!();
+        let chain = Chain::open(&data).expect("open the chain");
+        let blp = model_texture_chain(&chain, "Environments\\Stars\\Stars.blp")
+            .expect("the stock spelling resolves");
+        for raw in [
+            "Environments\\Stars\\Stars",
+            "Environments\\Stars\\Stars.tga",
+        ] {
+            let got = model_texture_chain(&chain, raw).unwrap_or_else(|| panic!("{raw}"));
+            assert_eq!((got.width, got.height), (blp.width, blp.height), "{raw}");
+            assert_eq!(got.mips.len(), blp.mips.len(), "{raw}");
+        }
+        assert!(model_texture_chain(&chain, "Environments\\Stars\\NoSuchStars").is_none());
+    }
 
     #[test]
     fn loose_addon_file_maps_addon_paths_case_insensitively() {
