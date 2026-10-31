@@ -441,18 +441,12 @@ pub(crate) fn book_cmp(a: &BookKey, b: &BookKey) -> std::cmp::Ordering {
     })
 }
 
-/// `items` in [`book_cmp`] order, stable. That comparator is not a total order where one spell
-/// parses to 0 (a rank and a level both 0), which `slice::sort_by` may reject, so this is an
-/// insertion sort over books of a few hundred spells.
+/// `items` in [`book_cmp`] order, by the CRT `qsort` the book sort runs (`0x4b2fd0` →
+/// `0x73f727`): the comparator is no total order where one spell parses to 0 (a rank and a level
+/// both 0), so where such spells land is the quicksort's.
 pub(crate) fn sort_book<T>(items: &mut Vec<T>, key: impl Fn(&T) -> BookKey) {
     let mut keyed: Vec<(BookKey, T)> = items.drain(..).map(|t| (key(&t), t)).collect();
-    for i in 1..keyed.len() {
-        let mut j = i;
-        while j > 0 && book_cmp(&keyed[j - 1].0, &keyed[j].0).is_gt() {
-            keyed.swap(j - 1, j);
-            j -= 1;
-        }
-    }
+    benilla_ui::crt::qsort(&mut keyed, |a, b| book_cmp(&a.0, &b.0) as i32);
     items.extend(keyed.into_iter().map(|(_, t)| t));
 }
 
