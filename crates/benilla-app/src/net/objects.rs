@@ -19,8 +19,9 @@ use benilla_world::vis_chain::VisChainOnly;
 
 use super::motion::{
     catch_up, create_spline, far_stop, gameobject_rotation, monster_move_spline, pose_transform,
-    resolve_facing, set_raw_facing, smoothed, trace_create_spline, trace_move_snap, wire_yaw,
-    write_pose, HeldSpline, MoverWorld, SplineStopped, ROOT_APPLY_WIPE,
+    resolve_facing, ridden_create_path, set_raw_facing, smoothed, snap_from_three_yards,
+    trace_create_spline, trace_move_snap, wire_yaw, write_pose, HeldSpline, MoverWorld,
+    SplineStopped, ROOT_APPLY_WIPE,
 };
 use super::{
     ActiveMover, FieldChanged, Guid, GuidIndex, NetCommands, NetEntity, NetHandlerApp, ObjectStore,
@@ -995,7 +996,27 @@ fn object_create(
     // `WOW_CREATE_SPLINE=off` run still records what the wire offered.
     trace_create_spline(guid, spline.as_ref());
     let carries_path = spline.is_some();
+    // A path already ridden ends on the unit off the deck: at its last point from 3 yd, facing
+    // its end ([`ridden_create_path`]); a target not found leaves the leg's heading (`0x61a8b7`).
+    let ridden = spline
+        .as_ref()
+        .filter(|_| rider.is_none())
+        .and_then(|s| ridden_create_path(s).map(|end| (end, s.facing)));
     let walk = spline.and_then(create_spline);
+    let (position, end_facing) = match ridden {
+        Some(((last, leg), facing)) => {
+            let at = snap_from_three_yards(position, last);
+            let target_pos = |g: u64| {
+                sc.index
+                    .0
+                    .get(&g)
+                    .and_then(|&te| sc.transforms.get(te).ok())
+                    .map(|t| bevy_to_wow(t.translation))
+            };
+            (at, resolve_facing(facing, at, target_pos).or(leg))
+        }
+        None => (position, None),
+    };
     // A unit's status applies forced (`0x619320` → `0x618c30`): the mover takes the block's pose
     // and its flags word (`new & 0x75a07dff` over the word `0x61936e` cleared), and its replay
     // chain re-seeds from the block's stamp and the clock, on its own ring, which a held unit
@@ -1050,7 +1071,7 @@ fn object_create(
                 relay.seed_at_create(m.time, now_ms);
                 RemoteMotion {
                     wow_pos: position,
-                    orientation: seat.map_or(orientation, |(_, yaw)| yaw),
+                    orientation: end_facing.unwrap_or(seat.map_or(orientation, |(_, yaw)| yaw)),
                     flags,
                     pitch: m.pitch,
                     speed: 0.0,

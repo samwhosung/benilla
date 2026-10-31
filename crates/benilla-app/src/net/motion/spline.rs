@@ -254,11 +254,7 @@ pub(in crate::net) fn far_stop(
 /// [`CreateSpline::time_passed_ms`]; `None` for a degenerate path, a zero duration, a finished
 /// ride, or anything under `WOW_CREATE_SPLINE=off`.
 pub(in crate::net) fn create_spline(spline: CreateSpline) -> Option<Spline> {
-    if !create_spline_enabled()
-        || spline.duration_ms == 0
-        || spline.path.len() < 2
-        || spline.time_passed_ms >= spline.duration_ms
-    {
+    if !create_spline_enabled() || ridden(&spline) {
         return None;
     }
     let passed = Duration::from_millis(u64::from(spline.time_passed_ms));
@@ -276,6 +272,48 @@ pub(in crate::net) fn create_spline(spline: CreateSpline) -> Option<Spline> {
         deck: None,
         final_facing: spline.facing,
     })
+}
+
+/// A create's path with nothing left to ride: a finished ride, a zero duration or a lone point.
+fn ridden(spline: &CreateSpline) -> bool {
+    spline.duration_ms == 0 || spline.path.len() < 2 || spline.time_passed_ms >= spline.duration_ms
+}
+
+/// Where a create's ridden path ([`create_spline`] declines it) ends: the reference installs any
+/// path the block carries (`0x619371` → `0x619387`), whose next tick finds it at its end
+/// (`0x7c5490`, u = 1), stops the mover (`0x61a863`), places it at the last point from 3 yd
+/// (`0x61a874` → [`snap_from_three_yards`]) and writes the end facing (`0x61a882`-`0x61a8db`).
+/// The last point, and the heading the follower leaves there (its tangent, `0x7c5490`), which a
+/// found final facing overrides. `None` for a path still being ridden, an empty one, and every
+/// path under `WOW_CREATE_SPLINE=off`, a lever that drops the path whole.
+pub(in crate::net) fn ridden_create_path(spline: &CreateSpline) -> Option<([f32; 3], Option<f32>)> {
+    if !create_spline_enabled() || !ridden(spline) || spline.path.is_empty() {
+        return None;
+    }
+    let now = Instant::now();
+    let path = Spline {
+        points: spline.path.clone(),
+        start: now,
+        duration: Duration::ZERO,
+        id: spline.id,
+        grounded: !spline.flying,
+        run_mode: spline.run_mode,
+        deck: None,
+        final_facing: spline.facing,
+    };
+    let (end, leg, _) = path.sample(now + Duration::from_secs(1));
+    Some((end, leg))
+}
+
+/// `0x616d60`: `point` replaces `at` when it lies 3 yd or more off, NaN included; a nearer one
+/// leaves `at`.
+pub(in crate::net) fn snap_from_three_yards(at: [f32; 3], point: [f32; 3]) -> [f32; 3] {
+    let d = [0, 1, 2].map(|i| f64::from(point[i]) - f64::from(at[i]));
+    if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < 9.0 {
+        at
+    } else {
+        point
+    }
 }
 
 /// One `csp` trace line per create block with a live spline, in either `WOW_CREATE_SPLINE` leg;
@@ -1434,6 +1472,42 @@ mod tests {
         assert!(create_spline(spline(5_000, 5_000, straight.clone())).is_none());
         assert!(create_spline(spline(0, 0, straight)).is_none());
         assert!(create_spline(spline(0, 5_000, vec![[1.0, 2.0, 3.0]])).is_none());
+    }
+
+    /// A ridden create path ends at its last point, heading down its last leg (`0x7c5490`), and
+    /// the end places a unit there only from 3 yd (`0x616d60`).
+    #[test]
+    fn a_ridden_create_path_ends_at_its_last_point_from_three_yards() {
+        let ridden = CreateSpline {
+            path: vec![[10.0, -10.0, 0.0], [10.0, 10.0, 0.0]],
+            id: 1,
+            time_passed_ms: 5_000,
+            duration_ms: 5_000,
+            flying: false,
+            cyclic: false,
+            run_mode: true,
+            facing: MonsterMoveFacing::None,
+        };
+        let (end, leg) = super::ridden_create_path(&ridden).expect("ridden");
+        assert_eq!(end, [10.0, 10.0, 0.0]);
+        let leg = leg.expect("a leg");
+        assert!((leg - std::f32::consts::FRAC_PI_2).abs() < 1e-5, "{leg}");
+        let riding = CreateSpline {
+            time_passed_ms: 1_000,
+            ..ridden
+        };
+        assert!(super::ridden_create_path(&riding).is_none(), "still riding");
+        let snap = super::snap_from_three_yards;
+        assert_eq!(
+            snap([0.0; 3], [3.0, 0.0, 0.0]),
+            [3.0, 0.0, 0.0],
+            "3 yd moves"
+        );
+        assert_eq!(snap([0.0; 3], [2.9, 0.0, 0.0]), [0.0; 3], "nearer stays");
+        assert!(
+            snap([0.0; 3], [f32::NAN, 0.0, 0.0])[0].is_nan(),
+            "NaN moves"
+        );
     }
 
     /// Near a hairpin the doubled angle passes π/2 and the bank snaps to a full ±π roll.

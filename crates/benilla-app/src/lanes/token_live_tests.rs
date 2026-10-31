@@ -1369,6 +1369,46 @@ fn a_listener_reads_a_member_created_at_its_paths_end_where_it_stood() {
     assert_eq!(seen, ["0.5000,0.6000"]);
 }
 
+/// A member created on a path already ridden stands at the path's end, facing down its last leg,
+/// where a later packet's listener reads it: the create installs the path (`0x619387`), whose
+/// end places the mover at the last point from 3 yd (`0x61a874` → `0x616d60`) and leaves the
+/// follower's heading (`0x7c5490`). Created at (500, 600), the path ends 14.1 yd off at
+/// (510, 610), heading +y.
+#[test]
+fn a_listener_reads_a_member_created_on_a_ridden_path_at_its_end() {
+    let mut c = client();
+    map_spy(&mut c, "party1");
+    fine_map_spy(&mut c, "party1");
+    let mut create = living(mate_created([500.0, 600.0, 0.0], None), FORWARD, 0);
+    if let SessionEvent::ObjectCreate { spline, .. } = &mut create {
+        *spline = Some(benilla_protocol::CreateSpline {
+            path: vec![[510.0, 590.0, 0.0], [510.0, 610.0, 0.0]],
+            id: 6,
+            time_passed_ms: 2000,
+            duration_ms: 2000,
+            flying: false,
+            cyclic: false,
+            run_mode: true,
+            facing: benilla_protocol::MonsterMoveFacing::None,
+        });
+    }
+    c.frame(vec![vec![create]]);
+    c.frame(vec![vec![member_at(MATE, 20, ELWYNN, (100, 200))]]);
+    let seen: Vec<String> = c.eval(false, "return Fine");
+    assert_eq!(seen, ["0.5100,0.6100"]);
+    let mate = c.app.world().resource::<crate::net::GuidIndex>().0[&MATE];
+    let facing = c
+        .app
+        .world()
+        .get::<crate::net::RemoteMotion>(mate)
+        .expect("mover state")
+        .orientation;
+    assert!(
+        (facing - std::f32::consts::FRAC_PI_2).abs() < 1e-5,
+        "down the last leg: {facing}"
+    );
+}
+
 /// A member created a second into a fall from rest starts its arc g/2, 9.6455 yd, above where it
 /// is created: the create's apply puts `z + D(ms)` at the mover's `+0x7c` (`0x618e1b` →
 /// `0x7c6490` → `0x7c5f30`), the height its landing measures its fall from.
