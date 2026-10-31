@@ -8,8 +8,8 @@
 //! the monitor alone. Distinct from `WOW_STALL_INJECT` (`crate::perf::stall`), one watchdog sleep.
 //!
 //! `STALL_HIT` prints three clocks: `wall_dt`, [`Instant`] across the main-schedule pass (the
-//! clock `transport::Transport::cycle_ms` runs on); `real_dt`, `Time<Real>`, which under pipelined
-//! rendering is stamped from an `Instant` the render world sends and lags a frame or two;
+//! clock `transport::Transport::cycle_ms` runs on); `real_dt`, `Time<Real>`, stamped on the main
+//! thread at the start of each frame (`benilla_world::frame_pace`), so a stall shows in the next;
 //! `virt_dt`, after the frame pacer and the 250 ms `max_delta` clamp (`clamped=1`).
 
 use core::time::Duration;

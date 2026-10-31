@@ -1,9 +1,10 @@
 //! Frame pacing: the frame's time step follows the presentation cadence, not the CPU loop. Under
 //! `PresentMode::Fifo` frames are shown on refresh boundaries, but `Time<Real>` is stamped where
-//! the main thread waits on the render thread, so two frames shown 16.67 ms apart can measure
-//! 26.4 and 8.0 ms, and every bone of a standing model jitters at once. When recent deltas look
-//! vsync'd, each is snapped to a whole number of refresh periods and the remainder carried, so
-//! elapsed time still matches the wall clock; otherwise (uncapped, a real stall) it passes through.
+//! the main thread starts its frame (see [`main_thread_clock`]), after it waits on the render
+//! thread, so two frames shown 16.67 ms apart can measure 26.4 and 8.0 ms, and every bone of a
+//! standing model jitters at once. When recent deltas look vsync'd, each is snapped to a whole
+//! number of refresh periods and the remainder carried, so elapsed time still matches the wall
+//! clock; otherwise (uncapped, a real stall) it passes through.
 //!
 //! The paced step is [`FrameStep`], the one the interface sees: 1.12.1 hands every `OnUpdate` the
 //! loop's frame time unclamped (`0x420f70` → `0x442330` → `0x442350` → `0x764330` → `0x76b2c0`).
@@ -305,7 +306,21 @@ pub fn plugin(app: &mut App) {
     }
     app.init_resource::<FramePacer>()
         .init_resource::<FrameStep>()
+        .add_systems(PreStartup, main_thread_clock)
         .add_systems(First, pace_frame_time.after(TimeSystems));
+}
+
+/// Stamps `Time<Real>` on the main thread, at the start of each frame, as 1.12.1's loop reads its
+/// frame time once per tick (`0x420f70`). Under pipelined rendering Bevy's `time_system` otherwise
+/// takes the instant the render world sends after presenting, and that render ran beside the
+/// previous main frame: a main-thread stall in frame F reaches `Time<Real>` only at F+2, so every
+/// clock built on it, [`FrameStep`] and with it `GetTime()`, aura stamps and the session clock,
+/// sits the stall behind the wall for a frame, and a timer reading `GetTime()` in that frame loses
+/// the stall whole. Without the receiver `time_system` reads `Instant::now()`, and the render
+/// world's send fails as disconnected, which it ignores. The receiver is inserted when the render
+/// plugin builds, so it is gone before the first `First`.
+fn main_thread_clock(world: &mut World) {
+    world.remove_resource::<bevy::time::TimeReceiver>();
 }
 
 #[cfg(test)]
