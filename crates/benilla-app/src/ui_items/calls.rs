@@ -386,8 +386,9 @@ fn replay(script: &mut UiScript, rec: crate::ui_bind_confirm::PendingEquip, on_t
 
 /// Apply the item calls and the container uses a harness's VM kept
 /// ([`UiScript::keep_calls`]), in call order, as the app's host applies each inside its verb;
-/// an open goes through the loot window's applier. A call kept while one applies (a send the
-/// accept hands over in place) applies after, until none is kept.
+/// an open goes through the loot window's applier, its tail and the loot calls it leaves run
+/// after it. A call kept while one applies (a send the accept hands over in place) applies
+/// after, until none is kept.
 #[cfg(test)]
 pub(crate) fn apply_kept_calls(world: &mut World) {
     use benilla_ui::script::ScriptCall;
@@ -410,13 +411,20 @@ pub(crate) fn apply_kept_calls(world: &mut World) {
                             ScriptCall::UseContainerItem(call) => {
                                 if let Some(open) = set.p0().use_container_item(&mut script, call)
                                 {
-                                    let _ = set.p2().open_item(&mut script, open);
+                                    if let Some(tail) = set.p2().open_item(&mut script, open) {
+                                        tail(&mut script);
+                                    }
                                 }
                             }
                             ScriptCall::Item(ItemCall::BindOnUse { may_cast }) => {
                                 set.p0().confirm_bind_on_use(&mut script, may_cast);
                             }
                             ScriptCall::Item(call) => set.p1().apply(&mut script, call),
+                            ScriptCall::Loot(call) => {
+                                if let Some(tail) = set.p2().apply(&mut script, call) {
+                                    tail(&mut script);
+                                }
+                            }
                             _ => {}
                         }
                     }

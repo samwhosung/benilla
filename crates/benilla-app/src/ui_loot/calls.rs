@@ -198,14 +198,16 @@ impl LootSteps<'_, '_> {
 
     /// `OpenItem 0x5edc80` from its `SetAutoLoot` (`0x5edcb6`) on, the call having chosen the
     /// item: the byte from Shift as the call saw it, which with a window open sweeps it, then,
-    /// once that sweep's listeners have run, the item held as the loot target, its lock and
-    /// `CMSG_OPEN_ITEM` ([`Self::send_open_item`]).
+    /// once that sweep's listeners have run (its `LOOT_OPENED`, `0x4c2240`), the item held as the
+    /// loot target, its lock and `CMSG_OPEN_ITEM` (`0x5edcd9`, `0x5edd26`;
+    /// [`Self::send_open_item`]), in the call's tail whenever the sweep ran.
     pub(crate) fn open_item(&mut self, script: &mut UiScript, open: OpenItem) -> Option<CallTail> {
         let owed = self.loot.then.len();
         self.loot.then.push(Then::OpenItem(open));
         let byte = interaction_byte(&self.cfg, script.shift_key_down());
+        let sweeps = byte && self.latch.0.is_some();
         self.set_auto_loot(script, byte);
-        if self.loot.then.len() == owed + 1 {
+        if !sweeps && self.loot.then.len() == owed + 1 {
             self.loot.then.pop();
             self.send_open_item(script, open);
             return None;
