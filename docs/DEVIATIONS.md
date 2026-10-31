@@ -30,14 +30,14 @@ A setting boots at the reference's default unless it is listed here (`docs/METHO
 Each entry is the first sentence of a `Deviation:` comment, linking to where it lives.
 
 - [benilla-app](#benilla-app): 255
-- [benilla-assets](#benilla-assets): 6
+- [benilla-assets](#benilla-assets): 5
 - [benilla-blp](#benilla-blp): 1
 - [benilla-formats](#benilla-formats): 24
 - [benilla-lua](#benilla-lua): 11
 - [benilla-protocol](#benilla-protocol): 29
 - [benilla-srp](#benilla-srp): 2
 - [benilla-ui](#benilla-ui): 135
-- [benilla-world](#benilla-world): 49
+- [benilla-world](#benilla-world): 47
 
 ### benilla-app
 
@@ -533,7 +533,6 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### shaders
 
 - This is the `specular`/`pixelShaders` = 1 leg the reference install runs; both CVars (`0x6886a0`/`0x688712`) default to 0, where water has no program, no specular, a plain ADD combine and no blend. An active ARB program bypasses the texture environment. ([`src/shaders/liquid.wgsl:18`](../crates/benilla-assets/src/shaders/liquid.wgsl#L18))
-- `min(I, 1)`. The reference bakes I into the SH unclamped (`0x71c4e0`), so a lit entity commits ×2.5 there and ×1.0 here; lifting the cap takes sun-facing surfaces past 1.0. `entity_shade::LIT_T` aims the lit ramp at 1.0 because of it: lift the cap and set `LIT_T` back to 0.0 together. ([`src/shaders/wow_model.wgsl:470`](../crates/benilla-assets/src/shaders/wow_model.wgsl#L470))
 
 #### wmo
 
@@ -885,10 +884,6 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - Every instance scrolls in one phase, where the reference phases a band loop per arm and a gseq loop from each instance's attach (`CM2Model+0x68`), because one uniform serves the material and a seamless scroll looks the same at any phase. ([`src/doodad_anim/mat_anim.rs:186`](../crates/benilla-world/src/doodad_anim/mat_anim.rs#L186))
 - This runs for every resident host, where the reference stops a doodad culled out of its scene list (`[CM2Scene+0x20]`) and re-arms it at once on re-link (`0x7074b0`, `0x683f80`), because gating it so would re-roll the whole field on the frame the camera turns back. ([`src/doodad_anim/mod.rs:339`](../crates/benilla-world/src/doodad_anim/mod.rs#L339))
 
-#### entity_shade
-
-- The lit outdoor target is intensity 1.0, not the reference's 2.5, because `wow_model.wgsl` caps the intensity at 1.0 (`min(I, 1)`) and a chase through the capped span would stall unseen. Back to 0.0 together with lifting that cap. ([`src/entity_shade.rs:38`](../crates/benilla-world/src/entity_shade.rs#L38))
-
 #### exterior_cull
 
 - The reference tests one AABB per object, but its submeshes are tested one by one here because a doodad placement has no root entity; a submesh outside a doorway's window drops where the reference draws the doodad whole. A body has a root and is tested once. ([`src/exterior_cull.rs:29`](../crates/benilla-world/src/exterior_cull.rs#L29))
@@ -927,10 +922,6 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - `AlphaTest` maps to `Alpha`, because flat `Spells\` quads are blend batches and a cutout would bite a soft decal's fade; and the part draws unlit, as no lit ground-fx part is known. ([`src/particles/buffer.rs:57`](../crates/benilla-world/src/particles/buffer.rs#L57))
 - `w` is the frame dt clamped to 0.1 s, because we do not substep as the reference does at 0.1 s (`0x81d828`, `0x7b58e7`); they differ only on a hitch. ([`src/particles/sim.rs:162`](../crates/benilla-world/src/particles/sim.rs#L162))
 - In model mode the reference adds the raw world vector to local coordinates; we fold it into the local frame, because our world axes are Bevy's, not WoW's. ([`src/particles/sim.rs:753`](../crates/benilla-world/src/particles/sim.rs#L753))
-
-#### shaders
-
-- The `min(I, 1)` cap, as in wow\_model.wgsl, because lifting it takes sun-facing surfaces past 1.0; Matte keeps its own bit so it stays 1.0 if the cap goes. ([`src/shaders/static_gx.wgsl:182`](../crates/benilla-world/src/shaders/static_gx.wgsl#L182))
 
 #### sky_order
 
