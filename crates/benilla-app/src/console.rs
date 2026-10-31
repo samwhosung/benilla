@@ -11,7 +11,7 @@
 //! Each CVar is also a command under its own name (`0x63dde0`): a bare name prints
 //! `CVar "%s" is "%s"` here, looked up after the registered commands; with a value it was a write,
 //! which `ConsoleExec` ran. The built-ins here are `ConsoleVar.cpp`'s `cvarlist` and the registry's
-//! `help`, which also lists the commands `ConsoleExec` runs (`CVAR_COMMANDS`).
+//! `help`, which also lists the commands `ConsoleExec` runs (`VM_COMMANDS`).
 //!
 //! What a command prints goes to the log ([`ConsoleSteps::run`]): the reference's `ConsoleWrite` (`0x63cb50`)
 //! only links a line into the console screen's list, which opens only with `-console`
@@ -318,19 +318,22 @@ fn register<'a>(
     app
 }
 
-/// `ConsoleVar.cpp`'s commands that write a CVar, which `ConsoleExec` runs on the VM's mirror
-/// inside the call (`benilla_ui::script`'s `console_exec`): listed by `help`, never run here.
-/// Registered in category 5 with these helps (`0x63d3d0`-`0x63d40d`).
-const CVAR_COMMANDS: [(&str, &str); 3] = [
-    ("set", "Set the value of a CVar"),
+/// The commands `ConsoleExec` runs inside the call on the VM's state, listed by `help` and never
+/// run here: `ConsoleVar.cpp`'s three that write a CVar (`0x63d3d0`-`0x63d40d`, category 5 with
+/// these helps) and `gxRestart` (`0x63b360`-`0x63b36e`, category 1, no help).
+const VM_COMMANDS: [(&str, ConsoleCategory, Option<&str>); 4] = [
+    ("set", DEFAULT, Some("Set the value of a CVar")),
     (
         "cvar_reset",
-        "Set the value of a CVar to it's startup value",
+        DEFAULT,
+        Some("Set the value of a CVar to it's startup value"),
     ),
     (
         "cvar_default",
-        "Set the value of a CVar to it's coded default value",
+        DEFAULT,
+        Some("Set the value of a CVar to it's coded default value"),
     ),
+    ("gxRestart", GRAPHICS, None),
 ];
 
 /// The built-ins: `ConsoleVar.cpp`'s `cvarlist` (`0x63d423`), then `RegisterBuiltinCommands`'
@@ -499,10 +502,10 @@ fn help(steps: &mut ConsoleSteps, args: &str) -> Vec<String> {
             .filter(|c| c.category == category)
             .map(|c| c.name)
             .chain(
-                CVAR_COMMANDS
+                VM_COMMANDS
                     .iter()
-                    .filter(|_| category == DEFAULT)
-                    .map(|(name, _)| *name),
+                    .filter(|(_, c, _)| *c == category)
+                    .map(|(name, ..)| *name),
             );
         let rows = cvars
             .0
@@ -521,11 +524,11 @@ fn help(steps: &mut ConsoleSteps, args: &str) -> Vec<String> {
     }
     let help = if let Some(command) = table.get(args) {
         Some(command.help)
-    } else if let Some((_, help)) = CVAR_COMMANDS
+    } else if let Some((.., help)) = VM_COMMANDS
         .iter()
-        .find(|(name, _)| name.eq_ignore_ascii_case(args))
+        .find(|(name, ..)| name.eq_ignore_ascii_case(args))
     {
-        Some(Some(*help))
+        Some(*help)
     } else {
         cvars
             .row(args)
@@ -807,6 +810,25 @@ mod tests {
             .map(|c| c.window)
             .collect();
         assert_eq!(asked, [window], "the primary window is asked to close");
+    }
+
+    /// `gxRestart` registers in category 1 with no help (`0x63b36e`), so `help` lists and answers
+    /// it though `ConsoleExec` runs it.
+    #[test]
+    fn help_knows_gx_restart() {
+        let mut app = console_app();
+        let graphics = run(&mut app, "help graphics");
+        assert!(graphics[1..]
+            .iter()
+            .any(|l| l.split(", ").any(|n| n == "gxRestart")));
+        let default = run(&mut app, "help default");
+        assert!(!default[1..]
+            .iter()
+            .any(|l| l.split(", ").any(|n| n == "gxRestart")));
+        assert_eq!(
+            run(&mut app, "help GXRESTART"),
+            ["Help for command GXRESTART:", "     GXRESTART No help yet"]
+        );
     }
 
     #[test]

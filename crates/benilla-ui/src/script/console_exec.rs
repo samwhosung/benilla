@@ -8,6 +8,8 @@
 //! they print goes with the change callbacks' lines to the host's log. Every other line (a bare
 //! CVar name, `cvarlist`, the host's registered commands, an unknown word) goes to the host's
 //! executor, which reads it with the same [`console_word`].
+//!
+//! `gxRestart` (`0x639f60`) runs here too, the restart Lua's `RestartGx()` raises.
 
 use mlua::{Lua, Value};
 
@@ -142,6 +144,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 && !super::protected::gate(lua, super::protected::Tag::RELOAD)
             {
                 return Ok(());
+            }
+            // `gxRestart` (`0x639f60`) reads no argument and prints nothing.
+            if word.eq_ignore_ascii_case("gxrestart") {
+                return super::cvars::restart_gx(lua);
             }
             let ran = {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -369,6 +375,17 @@ mod tests {
             s.take_cvar_console_lines(),
             ["console: no CVar named 'nosuch'", "No such cvar \"nosuch\""]
         );
+    }
+
+    /// `gxRestart` (`0x639f60`) is the restart `RestartGx()` raises, whatever follows it.
+    #[test]
+    fn gx_restart_raises_the_restart_inside_the_call() {
+        let mut s = UiScript::new().unwrap();
+        s.run("ConsoleExec('gxRestart') ConsoleExec('GXRESTART now')")
+            .unwrap();
+        assert_eq!(s.take_restart_gx_asks(), 2);
+        s.run("RestartGx()").unwrap();
+        assert_eq!(s.take_restart_gx_asks(), 1);
     }
 
     fn seeded(name: &str, value: &str, default: &str) -> crate::script::SeededCvar {

@@ -856,7 +856,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 /// `RestoreVideoDefaults`, which calls it directly (`0x639a51`). The host commits the latched rows
 /// (`0x639ec0`) before the verb goes on. With no host open (a bare VM) it is
 /// counted for the host's frame drain.
-fn restart_gx(lua: &Lua) -> mlua::Result<()> {
+pub(super) fn restart_gx(lua: &Lua) -> mlua::Result<()> {
     if super::host::open(lua) {
         return super::calls::submit(lua, super::ScriptCall::RestartGx);
     }
