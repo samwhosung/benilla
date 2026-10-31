@@ -59,7 +59,7 @@ use bevy::prelude::*;
 /// The inputs of `BindTarget 0x6e5b40`'s unit and corpse arms and of their read-only mirror
 /// `0x6e6460` ([`SpellTargeting::can_target_unit`], [`bind_target_unit`],
 /// [`SpellTargeting::can_target_corpse`], [`corpse::bind_target_corpse`]): the gates and relation
-/// checks the cast arm's selection bind runs ([`super::cast_target::unit_binds`]), the corpse's two
+/// checks the cast arm's selection bind runs ([`super::cast_target::unit_bind`]), the corpse's two
 /// facts, and the pre-send range gate's inputs ([`super::cast_target::RangeInputs`]), read as
 /// [`super::cast_target::CastTargeting`] reads them.
 #[derive(bevy::ecs::system::SystemParam)]
@@ -124,22 +124,22 @@ impl BindChecks<'_, '_> {
             .is_some_and(|(caster, _)| caster == entity)
     }
 
-    /// `BindTarget 0x6e5b40`'s unit branch: whether this unit binds the word under this spell,
-    /// its gates and then its relation checks ([`super::cast_target::unit_binds`]) from the
-    /// cast's caster. An unknown spell has no row to gate on.
-    fn unit_binds(
+    /// `BindTarget 0x6e5b40`'s unit branch: the word this unit leaves when it binds under this
+    /// spell, its gates and then its relation checks ([`super::cast_target::unit_bind`]) from the
+    /// cast's caster; `None` binds nothing. An unknown spell has no row to gate on.
+    fn unit_bind(
         &self,
         spell_id: u32,
         commit: super::cast_send::CastCommit,
         word: u16,
         entity: Entity,
-    ) -> bool {
+    ) -> Option<u16> {
         self.ask_unit(
             spell_id,
             commit,
             word,
             entity,
-            super::cast_target::unit_binds,
+            super::cast_target::unit_bind,
         )
     }
 
@@ -162,7 +162,7 @@ impl BindChecks<'_, '_> {
     }
 
     /// `ask` over this unit's relations to the cast's caster.
-    fn ask_unit(
+    fn ask_unit<T>(
         &self,
         spell_id: u32,
         commit: super::cast_send::CastCommit,
@@ -173,8 +173,8 @@ impl BindChecks<'_, '_> {
             u16,
             bool,
             &super::cast_target::TargetRelations,
-        ) -> bool,
-    ) -> bool {
+        ) -> T,
+    ) -> T {
         let target_store = self.stores.get(entity).ok();
         let owner_store =
             |store| super::cast_target::owner_store(store, self.index.as_deref(), &self.stores);
@@ -384,8 +384,9 @@ impl PickBind<'_, '_> {
 /// The targeting word, `Some` while the flag_word `0xcecac0` is nonzero, and the cursor mode it
 /// may stand under. `ArmCast` writes the word (`0x6e525e`) ahead of its signal and its bind leg;
 /// the cast tail's cursor entry raises the cursor over it (`0x6e50ab`,
-/// [`super::cast_target::CastWireTarget::Targeting`]); a bind or a cancel clears it, and a send
-/// lowers the cursor alone (`0x6e5547`).
+/// [`super::cast_target::CastWireTarget::Targeting`]); a bind that empties it or a cancel clears
+/// it, a bind that leaves bits narrows it (`0x6e60c1`), and a send lowers the cursor alone
+/// (`0x6e5547`).
 #[derive(Resource, Default)]
 pub(crate) struct SpellTargeting(Option<Targeting>);
 
@@ -591,6 +592,21 @@ impl SpellTargeting {
         }
     }
 
+    /// `BindTarget`'s clear of the bits its arm bound where bits are left (`0x6e60c1`): the rest
+    /// of the word stands, the cursor mode as it was.
+    pub(crate) fn narrow(&mut self, word: u16) {
+        if let Some(t) = &mut self.0 {
+            t.word = word;
+        }
+    }
+
+    /// The in-flight slot its attempt's push took (`0x6e5026`), held by the standing word.
+    pub(crate) fn hold_slot(&mut self) {
+        if let Some(t) = &mut self.0 {
+            t.in_slot = true;
+        }
+    }
+
     /// The word cleared, by a commit or a cancel ([`crate::spell::CastCore::cancel`]).
     pub(crate) fn clear(&mut self) {
         self.0 = None;
@@ -717,7 +733,9 @@ fn push_targeting_view(
 
 /// `BindTarget 0x6e5b40`'s unit arm, for the world click (`0x493540` at `4935d5`) and
 /// `SpellTargetUnit` (`0x6e5b10`): a unit the gates or the relation checks refuse binds nothing
-/// and the cursor stays up; otherwise the merge. The player's selection never moves.
+/// and the cursor stays up; otherwise the merge's range test (`0x6e6063`), then the send of an
+/// emptied word, or, with bits left, the word narrowed and the cursor still up (`0x6e60c1`). The
+/// player's selection never moves.
 fn bind_target_unit(
     ladder: &mut crate::spell::CastLadder,
     checks: &BindChecks,
@@ -727,10 +745,14 @@ fn bind_target_unit(
     let Some((spell_id, commit, word)) = ladder.ground.pending() else {
         return;
     };
-    if !checks.unit_binds(spell_id, commit, word, entity) {
+    let Some(rest) = checks.unit_bind(spell_id, commit, word, entity) else {
+        return;
+    };
+    let range = checks.range_refusal(spell_id, commit, entity);
+    if rest != 0 && range.is_none() {
+        ladder.bind_partial(guid, rest);
         return;
     }
-    let range = checks.range_refusal(spell_id, commit, entity);
     merge(
         ladder,
         spell_id,
@@ -1302,9 +1324,9 @@ mod tests {
     }
 
     /// The press (`resolve_cast_target`), the click and `SpellTargetUnit` ([`bind_target_unit`]) ask
-    /// [`crate::spell::cast_target::unit_binds`] and the hover verdict (`SpellCanTargetUnit`)
+    /// [`crate::spell::cast_target::unit_bind`] and the hover verdict (`SpellCanTargetUnit`)
     /// [`crate::spell::cast_target::unit_can_target`], which share `BindTarget`'s gates. On a word
-    /// with one arm bit the two answer alike, so one table of units decides all three: the gates
+    /// with one arm bit any bind empties it, so one table of units decides all three: the gates
     /// refuse the same units at each, and the control row beside each refusal binds at each.
     #[test]
     fn the_press_the_click_and_the_hover_bind_the_same_units() {
@@ -1539,9 +1561,9 @@ mod tests {
     }
 
     /// `SpellCanTargetObject` (`0x6e6460`) answers yes on the first arm that holds (`0x6e668c`),
-    /// where `BindTarget` commits only a word the arm left empty (`0x6e60c1`): Revive's `0x8002`
-    /// at a live unit passes the `0x2` arm, so the hover says yes while the click binds nothing
-    /// and leaves the cursor up.
+    /// and `BindTarget` binds on it, sending only a word the arm left empty (`0x6e60c1`): Revive's
+    /// `0x8002` at a live unit passes the `0x2` arm, so the hover says yes, and the click binds the
+    /// unit, keeps `0x8000` in the word and leaves the cursor up with nothing sent.
     #[test]
     fn the_hover_passes_a_unit_whose_arm_leaves_the_word_standing() {
         let (mut world, rx, _) = unit_world(10.0);
@@ -1556,8 +1578,21 @@ mod tests {
             .expect("a boolean");
         assert!(hover, "the hover verdict");
         spell_target_unit(&mut world, "target");
-        assert!(rx.try_recv().is_err(), "the click binds nothing");
-        assert!(world.resource::<SpellTargeting>().active(), "still armed");
+        assert!(rx.try_recv().is_err(), "the click sends nothing");
+        let targeting = world.resource::<SpellTargeting>();
+        assert_eq!(
+            targeting.pending().map(|(_, _, word)| word),
+            Some(0x8000),
+            "the 0x2 arm binds and the word keeps 0x8000"
+        );
+        assert!(targeting.shown(), "the cursor stays up");
+        assert_eq!(
+            world
+                .resource::<crate::spell::PendingCast>()
+                .record_target(),
+            Some(ALLY),
+            "the bound unit is the record's target"
+        );
     }
 
     /// The party word (target 35) and the raid word (target 57) over the same three surfaces: the

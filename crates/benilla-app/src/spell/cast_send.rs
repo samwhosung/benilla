@@ -490,6 +490,14 @@ impl CastLadder<'_, '_> {
         });
     }
 
+    /// `BindTarget`'s bind of a unit on an arm that left bits in the word (`0x6e60c1`): the unit
+    /// written into the record's target (`0x6e5cdc`), the arm's bits cleared from the standing
+    /// word, and no signal and no send.
+    pub(crate) fn bind_partial(&mut self, unit: u64, word: u16) {
+        self.pending.bind_target(unit);
+        self.ground.narrow(word);
+    }
+
     /// A bind's merge into the record (`BindTarget 0x6e5b40`, `BindLocation 0x6e60f0`, the trade
     /// slot's `0x6e6900`): the target written, the word emptied, and its signal ahead of the send
     /// (`0x6e60cb`, `0x6e615d`, `0x6e6939`).
@@ -820,7 +828,7 @@ impl CastLadder<'_, '_> {
         // attempt's own gate already did for the unit it found (`0x6e4440`): out of range it
         // reports (`0x6e6089`), restores the word and binds nothing (`0x6e6096`-`0x6e60ba`).
         let refusal = match leg {
-            CastWireTarget::Unit(guid)
+            CastWireTarget::Unit(guid) | CastWireTarget::Partial { unit: guid, .. }
                 if (on != ArmWord::Own || leg != park.leg)
                     && Some(guid) == ctx.selection_guid
                     && Some(guid) != ctx.self_guid =>
@@ -965,6 +973,23 @@ impl CastLadder<'_, '_> {
                 return self.run_stage(send);
             }
             CastWireTarget::Unit(guid) => TargetedBind::Unit(guid),
+            // `BindTarget` bound the candidate on an arm that left bits in the word: the target
+            // written, the rest standing, nothing sent (`0x6e60c1`), and 1 returned (`0x6e60de`),
+            // so the attempt passes its tail's refusals and its cursor (`0x6e503f` → `0x6e51b5`).
+            // Its own word takes the slot its push took, as the cursor would, with no cursor mode;
+            // a listener's cursor keeps its own. The attempt signals as it returns (`0x6e51e3`).
+            CastWireTarget::Partial { unit, word } => {
+                if on == ArmWord::Own {
+                    let in_slot = self.core().slot().map(Inflight::spell_id) == Some(spell_id);
+                    self.pending.clear_if(spell_id);
+                    if in_slot {
+                        self.ground.hold_slot();
+                    }
+                }
+                self.bind_partial(unit, word);
+                self.reports.changed();
+                return None;
+            }
             // The main-hand auto-pick: not a unit, so the merge's range test skips it (`0x6e47b0`
             // tests `SPELLCAST+0x14 & 0x8202`).
             CastWireTarget::Item(guid) => TargetedBind::Item(guid),
@@ -1651,7 +1676,8 @@ fn send_spell_cast(
         refuse!(CastFail::local(spell_id, reason));
     }
     let target = match leg {
-        cast_target::CastWireTarget::Unit(guid) => Some(guid),
+        cast_target::CastWireTarget::Unit(guid)
+        | cast_target::CastWireTarget::Partial { unit: guid, .. } => Some(guid),
         _ => None,
     };
     // The range gate (`CanTargetUnit 0x6e4440` → `IsTargetInRange 0x6e47b0`, before the commit):
@@ -2015,6 +2041,72 @@ mod tests {
                 ladder.send_at_object(spell_id, &ctx(), go_guid);
             })
             .expect("the ladder runs as a one-shot system");
+    }
+
+    /// A press whose bind leaves bits in the word holds there (`0x6e60c1`, `0x6e60de`): Revive's
+    /// `0x8002` at a live selection binds it on the `0x2` arm, so the spell waits on `0x8000` with
+    /// its target written, nothing sent, no `autoSelfCast` fallback and no cursor mode
+    /// (`0x6e503f` → `0x6e51b5`), holding the slot its push took.
+    #[test]
+    fn a_press_whose_bind_leaves_bits_holds_the_spell() {
+        use benilla_formats::SpellDisplay;
+        const REVIVE: u32 = 24341;
+        const ALLY: u64 = 0x51;
+        let (mut world, rx) = world();
+        let mut spells = crate::ui_action::Spells::empty_for_tests();
+        spells.catalog = benilla_formats::SpellCatalog::from_displays(
+            [(
+                REVIVE,
+                SpellDisplay {
+                    targets: 0x8002,
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+        );
+        world.insert_resource(spells);
+        world
+            .run_system_once(move |mut ladder: CastLadder| {
+                // Fields 2 `OBJECT_FIELD_TYPE` (a player) and 22 health.
+                let live = crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                    (2, 0x19),
+                    (22, 100),
+                ]));
+                let base = ctx();
+                let ctx = cast_target::CastContext {
+                    selected: true,
+                    selection_guid: Some(ALLY),
+                    auto_self_cast: true,
+                    rel: cast_target::TargetRelations {
+                        target_store: Some(&live),
+                        self_store: Some(&live),
+                        ..base.rel
+                    },
+                    ..base
+                };
+                ladder.send(REVIVE, &ctx, CastCommit::Spell);
+            })
+            .expect("the ladder runs as a one-shot system");
+        assert!(
+            !rx.try_iter()
+                .any(|c| matches!(c, ClientCommand::CastSpell { .. })),
+            "nothing sent"
+        );
+        let targeting = world.resource::<crate::spell::SpellTargeting>();
+        assert_eq!(
+            targeting.pending().map(|(spell, _, word)| (spell, word)),
+            Some((REVIVE, 0x8000))
+        );
+        assert!(!targeting.shown(), "no cursor mode");
+        assert_eq!(targeting.in_slot(), Some(REVIVE), "the push's slot");
+        assert_eq!(
+            world
+                .resource::<crate::spell::PendingCast>()
+                .record_target(),
+            Some(ALLY),
+            "the selection, not the player behind autoSelfCast"
+        );
     }
 
     /// The attempt fills its record with the player as the caster once every rung has passed

@@ -89,6 +89,11 @@ pub(crate) enum CastWireTarget {
     Parked(u64),
     /// Mask `TARGET_FLAG_UNIT` (0x2) and this guid, possibly the player's own.
     Unit(u64),
+    /// `BindTarget` bound this unit on an arm that left bits in the word: the target is written
+    /// and `word` stands, nothing is sent (`0x6e60c1`), and the bind returns 1 (`0x6e60de`), so
+    /// `ArmCast` does too (`0x6e53c3`) and the attempt passes its tail's refusals and its cursor
+    /// (`0x6e503f` → `0x6e51b5`): the spell waits on the rest of its word, with no cursor mode.
+    Partial { unit: u64, word: u16 },
     /// Mask `TARGET_FLAG_ITEM` (0x10) and this item guid, sent on the press: only the main-hand
     /// imbue binds an item from the cast itself; every other item target comes from a click.
     Item(u64),
@@ -692,30 +697,28 @@ fn bind_arm(word: u16, is_self: bool, rel: &TargetRelations) -> Option<u16> {
     None
 }
 
-/// Whether an arm binds this unit and leaves the standing word empty, which commits the cast
-/// (`0x6e60c1`).
-fn unit_word_binds(word: u16, is_self: bool, rel: &TargetRelations) -> bool {
-    word & UNIT_BITS != 0 && bind_arm(word, is_self, rel) == Some(0)
-}
-
-/// Whether `BindTarget 0x6e5b40`'s unit branch binds this unit under the standing word: the gates
-/// ([`bind_gates`]), then the relation checks. The initial selection, the `autoSelfCast` fallback,
-/// a world click and `SpellTargetUnit` all ask this one predicate; the hover verdict asks
-/// [`unit_can_target`]. An unknown spell has no row to gate on and leaves the relation checks
-/// alone.
-pub(super) fn unit_binds(
+/// `BindTarget 0x6e5b40`'s unit branch under the standing word: the gates ([`bind_gates`]), then
+/// the relation checks, and the word the arm that bound leaves; `None` binds nothing. The bind
+/// returns 1 for any arm that binds (`0x6e60de`) and sends only a word it emptied (`0x6e60c1`).
+/// The initial selection, the `autoSelfCast` fallback, a world click and `SpellTargetUnit` all ask
+/// this one walk; the hover verdict asks [`unit_can_target`]. An unknown spell has no row to gate
+/// on and leaves the relation checks alone.
+pub(super) fn unit_bind(
     def: Option<&SpellDisplay>,
     word: u16,
     is_self: bool,
     rel: &TargetRelations,
-) -> bool {
-    def.is_none_or(|def| bind_gates(def, word, is_self, rel)) && unit_word_binds(word, is_self, rel)
+) -> Option<u16> {
+    if !def.is_none_or(|def| bind_gates(def, word, is_self, rel)) {
+        return None;
+    }
+    bind_arm(word, is_self, rel)
 }
 
 /// Whether `SpellCanTargetObject 0x6e6460` passes this unit (before its range test): the same
-/// gates, then the first arm that holds returns at once (`0x6e668c`) with no test that the word
-/// empties, which only the bind commits on (`0x6e60c1`). Revive's `0x8002` at a live unit passes
-/// the `0x2` arm here and binds nothing there.
+/// gates, then the first arm that holds returns at once (`0x6e668c`), as the bind returns 1 for it
+/// (`0x6e60de`). Revive's `0x8002` at a live unit passes the `0x2` arm here, and the bind binds it
+/// there with `0x8000` left in the word.
 pub(super) fn unit_can_target(
     def: Option<&SpellDisplay>,
     word: u16,
@@ -818,8 +821,8 @@ pub(crate) fn bind_leg(
     // gates or the relation checks refuse, binds nothing, so the fallback below gets its turn.
     if let Some(guid) = cand.selection.filter(|_| cand.selection_held && binds) {
         let is_self = cand.caster == Some(guid);
-        if unit_binds(record, word, is_self, rel) {
-            return CastWireTarget::Unit(guid);
+        if let Some(rest) = unit_bind(record, word, is_self, rel) {
+            return bound_unit(guid, rest);
         }
     }
     // The fallback: the active player (`0x6e53d7`), behind autoSelfCast, through the same gates,
@@ -835,8 +838,8 @@ pub(crate) fn bind_leg(
                 },
                 ..*rel
             };
-            if unit_binds(record, word, cand.caster == Some(guid), &self_rel) {
-                return CastWireTarget::Unit(guid);
+            if let Some(rest) = unit_bind(record, word, cand.caster == Some(guid), &self_rel) {
+                return bound_unit(guid, rest);
             }
         }
     }
@@ -855,9 +858,25 @@ pub(crate) fn bind_leg(
     }
 }
 
+/// A unit `BindTarget` bound with `rest` left in the word: an empty word sends (`0x6e60c1`), any
+/// other stands ([`CastWireTarget::Partial`]).
+fn bound_unit(unit: u64, rest: u16) -> CastWireTarget {
+    if rest == 0 {
+        CastWireTarget::Unit(unit)
+    } else {
+        CastWireTarget::Partial { unit, word: rest }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Whether an arm binds this unit and leaves the standing word empty, which sends the cast
+    /// (`0x6e60c1`).
+    fn unit_word_binds(word: u16, is_self: bool, rel: &TargetRelations) -> bool {
+        bind_arm(word, is_self, rel) == Some(0)
+    }
 
     /// Selection and caster candidates, the caster the active player, with an empty main hand.
     fn cands(selection: Option<u64>, caster: Option<u64>) -> CastCandidates<'static> {
@@ -1409,14 +1428,66 @@ mod tests {
         let me = unit(&[(2, 0x19), (22, 100)]);
         assert_eq!(bind_arm(0x0102, true, &rel(&me)), Some(0x0002));
         assert!(!unit_word_binds(0x0102, true, &rel(&me)));
-        // `SpellCanTargetObject` passes on that same arm (`0x6e668c`) without the empty word: the
-        // bind commits nothing for Revive (0x8002) at a live unit, the target check says yes.
+        // Revive's 0x8002 at a live unit binds on the 0x2 arm with 0x8000 left, so it sends
+        // nothing (`0x6e60c1`), and `SpellCanTargetObject` passes on that arm (`0x6e668c`).
         assert!(!unit_word_binds(0x8002, false, &rel(&plain)));
+        assert_eq!(unit_bind(None, 0x8002, false, &rel(&plain)), Some(0x8000));
         assert!(unit_can_target(None, 0x8002, false, &rel(&plain)));
         assert!(unit_can_target(None, 0x0102, true, &rel(&me)));
         // No arm holds: neither answers yes.
         assert!(!unit_can_target(None, 0x2, false, &rel(&immune)));
         assert!(!unit_can_target(None, 0x400, false, &rel(&corpse)));
+    }
+
+    /// `BindTarget` returns 1 for any arm that binds (`0x6e60de`), so `ArmCast` returns at the first
+    /// candidate it binds (`0x6e53c3`): Revive's `0x8002` at a live selection binds it with `0x8000`
+    /// left, and the player behind `autoSelfCast` is never tried (`0x6e53d7`). A selection no arm
+    /// takes falls to the player, who binds the same way; with the fallback off, the cursor comes
+    /// up on the whole word.
+    #[test]
+    fn a_bind_that_leaves_bits_holds_at_the_press() {
+        use benilla_protocol::ObjectFields;
+        const ME: u64 = 0x10;
+        const ALLY: u64 = 0x20;
+        let revive = spell(0x8002, 0);
+        // Fields 2 `OBJECT_FIELD_TYPE` (a player), 22 health, 46 `UNIT_FIELD_FLAGS`.
+        let live = ObjectStore(ObjectFields::from_pairs(&[(2, 0x19), (22, 100)]));
+        let immune = ObjectStore(ObjectFields::from_pairs(&[
+            (2, 0x19),
+            (22, 100),
+            (46, 0x100),
+        ]));
+        let press = |selection: &ObjectStore, auto: bool| {
+            let rel = TargetRelations {
+                target_store: Some(selection),
+                self_store: Some(&live),
+                ..rel_none()
+            };
+            let cand = CastCandidates {
+                auto_self_store: Some(&live),
+                ..cands(Some(ALLY), Some(ME))
+            };
+            resolve_cast_target(Some(&revive), &cand, auto, &rel)
+        };
+        for auto in [false, true] {
+            assert_eq!(
+                press(&live, auto),
+                CastWireTarget::Partial {
+                    unit: ALLY,
+                    word: 0x8000
+                },
+                "the selection, autoSelfCast {auto}"
+            );
+        }
+        assert_eq!(
+            press(&immune, true),
+            CastWireTarget::Partial {
+                unit: ME,
+                word: 0x8000
+            },
+            "the fallback"
+        );
+        assert_eq!(press(&immune, false), CastWireTarget::Targeting(0x8002));
     }
 
     fn rel_none() -> TargetRelations<'static> {

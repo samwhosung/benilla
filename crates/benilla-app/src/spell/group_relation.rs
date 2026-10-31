@@ -214,7 +214,7 @@ mod tests {
     use super::*;
     use crate::net::Reputations;
     use crate::spell::cast_target::{
-        cast_target_mask, resolve_cast_target, unit_binds, CastCandidates, CastWireTarget,
+        cast_target_mask, resolve_cast_target, unit_bind, CastCandidates, CastWireTarget,
     };
     use crate::spell::targeting::corpse_fixture as fx;
     use benilla_formats::SpellDisplay;
@@ -507,7 +507,7 @@ mod tests {
                     roster: Some(&roster),
                 },
             };
-            unit_binds(None, word, is_self, &rel)
+            unit_bind(None, word, is_self, &rel) == Some(0)
         };
         // (label, guid, store, owner, binds under the party word, under the raid word)
         type Case<'a> = (
