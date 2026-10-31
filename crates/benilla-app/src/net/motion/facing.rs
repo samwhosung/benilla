@@ -218,7 +218,7 @@ fn filter_step(cur: f32, goal: f32, hist: &mut [f32; 4]) -> f32 {
 /// | 4 | [`UNIT_FLAG_STUNNED`] | raw |
 /// | 5 | the combat override `+0xc58 & 1` to `+0xcac` (writer `0x624f10`) | not built |
 /// | 6 | [`UNIT_FLAG_PLAYER_CONTROLLED`] and the player type bit (`0x600df6`-`0x600e08`) | raw, shown at once ([`smoothed`]) |
-/// | 7 | `UNIT_FIELD_TARGET` resolves | bearing to that unit |
+/// | 7 | `UNIT_FIELD_TARGET` is nonzero | bearing to that unit, or raw when it is not found |
 /// | 9 | this unit is the interaction NPC | bearing to the local player |
 /// | - | none of the above | raw |
 ///
@@ -279,15 +279,23 @@ pub(crate) fn drive_display_facing(
             continue;
         };
         let unit_pos = bevy_to_wow(unit_t.translation);
-        // Row 7.
-        let target = fields
-            .unit_target()
-            .and_then(|g| index.0.get(&g).copied())
-            .and_then(|te| transforms.get(te).ok())
-            .and_then(|t| bearing(unit_pos, bevy_to_wow(t.translation)));
-        if let Some(goal) = target {
-            goals.push((e, Some(goal), GoalSource::Target, raw));
-            continue;
+        // Row 7: a nonzero target is looked up (`0x600e18` → `0x600e4a` → `0x468460`), and one
+        // that is not found leaves the raw facing (`0x600e62` je `0x600ea5`); only a zero target
+        // goes on to row 9.
+        if let Some(g) = fields.unit_target() {
+            let found = index
+                .0
+                .get(&g)
+                .and_then(|&te| transforms.get(te).ok())
+                .map(|t| bevy_to_wow(t.translation));
+            let Some(at) = found else {
+                goals.push((e, None, GoalSource::Raw, raw));
+                continue;
+            };
+            if let Some(goal) = bearing(unit_pos, at) {
+                goals.push((e, Some(goal), GoalSource::Target, raw));
+                continue;
+            }
         }
         // Row 9: `InteractNpc` stands for the client's global `[0xb4e2d0]`, the open NPC window.
         let facing_me = (interact_npc == Some(e))
@@ -519,6 +527,45 @@ mod tests {
         assert!(
             crate::creature_anim::wrap_pi(back - 0.0).abs() <= DEAD_BAND,
             "the vendor swings back to its authored heading, got {back}"
+        );
+    }
+
+    /// A nonzero target the client cannot find leaves the raw facing, even with the unit's window
+    /// open: the lookup's failure goes to the raw goal (`0x600e62` je `0x600ea5`), and only a zero
+    /// target reaches the interaction row.
+    #[test]
+    fn an_npc_whose_target_is_not_found_keeps_its_raw_facing_at_its_window() {
+        use benilla_protocol::ObjectFields;
+        let mut app = App::new();
+        app.init_resource::<GuidIndex>()
+            .init_resource::<crate::ui_session::InteractNpc>()
+            .add_systems(Update, drive_display_facing);
+        // Us at the origin; the vendor 5 yd along +x, facing +x, away from us, its target guid
+        // 99, which nothing here holds.
+        app.world_mut()
+            .spawn((SelfPlayer, ActiveMover, Transform::default()));
+        let npc = app
+            .world_mut()
+            .spawn((
+                NetEntity {
+                    kind: EntityKind::Unit,
+                    display_id: None,
+                    scale: 1.0,
+                },
+                ObjectStore(ObjectFields::from_pairs(&[(16, 99), (17, 0)])),
+                Transform::from_translation(wow_to_bevy([5.0, 0.0, 0.0])),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<crate::ui_session::InteractNpc>()
+            .0 = Some(npc);
+        for _ in 0..16 {
+            app.update();
+        }
+        let yaw = yaw_of(app.world().entity(npc).get::<Transform>().unwrap().rotation);
+        assert!(
+            crate::creature_anim::wrap_pi(yaw).abs() <= DEAD_BAND,
+            "the vendor keeps its raw facing, not ours (pi): {yaw}"
         );
     }
 
