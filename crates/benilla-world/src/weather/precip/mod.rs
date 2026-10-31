@@ -206,7 +206,7 @@ fn setup_precip(
         return;
     }
     // Streaks keep their mips; the splash and mist cut-outs load mip 0 only, as their thin arms
-    // collapse under the chain; the flake keeps its 7 mips, drawn 4.5× to 64× minified.
+    // collapse under the chain; the flake keeps its authored mips, drawn 4.5× to 64× minified.
     let effect = |s: &mut benilla_assets::BlpLoaderSettings| {
         s.variant = benilla_assets::BlpVariant::Effect;
     };
