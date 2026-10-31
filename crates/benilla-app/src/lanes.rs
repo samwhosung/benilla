@@ -518,7 +518,9 @@ pub(crate) fn flush(world: &mut World) -> bool {
 /// listener runs where its signal fires inside the step, and what the step pushes fires after it,
 /// ahead of what was stamped after its place. The reference's handler signals inside itself,
 /// every listener before the signal returns (`0x703e50`), so the step's next leg, and the
-/// handler's, act after them. Inside a drain, what was stamped before it has fired already.
+/// handler's, act after them. Inside a drain the lanes are out and nothing fires first: what was
+/// stamped before the step and still waits, such as what the item firing pushed ahead of it (a
+/// refusal walk's reports along its lane), fires after the step, as the drain goes on.
 pub(crate) fn step<R>(world: &mut World, f: impl FnOnce(&mut World) -> R) -> R {
     let at = stamp();
     fire_before(world, at);
