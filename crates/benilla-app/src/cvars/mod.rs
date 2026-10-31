@@ -1338,7 +1338,7 @@ mod tests {
     }
 
     /// The three register sites that pick their default by locale (`0x603368`, `0x63a738`), at
-    /// all eight indices: AutoInteract is "1" on koKR (1) alone, gxWindow and gxMaximize "1" on
+    /// all eight indices: AutoInteract is "1" on koKR (1) alone, violenceLevel "1" there and "2" elsewhere, gxWindow and gxMaximize "1" on
     /// zhCN (4) alone, and every other row boots the same on every locale. The table and `Cvars`
     /// agree at each index, and the default the registry restores is the locale's.
     #[test]
@@ -1351,11 +1351,17 @@ mod tests {
             benilla_formats::Locale::from_index(4).unwrap().name(),
             "zhCN"
         );
-        let on_at = [("AutoInteract", 1), ("gxWindow", 4), ("gxMaximize", 4)];
+        // `violenceLevel` is the locale's cap, koKR's "1" (`0x86c3f8`) and "2" elsewhere.
+        let on_at = [
+            ("AutoInteract", 1, "1", "0"),
+            ("gxWindow", 4, "1", "0"),
+            ("gxMaximize", 4, "1", "0"),
+            ("violenceLevel", 1, "1", "2"),
+        ];
         for locale in 0..8 {
             let cvars = Cvars::for_locale(locale);
-            for (name, on) in on_at {
-                let want = if locale == on { "1" } else { "0" };
+            for (name, on, yes, no) in on_at {
+                let want = if locale == on { yes } else { no };
                 assert_eq!(cvars.get(name), Some(want), "{name} at locale {locale}");
                 assert_eq!(
                     cvars.default_of(name),
@@ -1364,7 +1370,7 @@ mod tests {
                 );
                 assert_eq!(registered_default(name, locale), Some(want));
             }
-            for row in all_rows().filter(|r| !on_at.iter().any(|(n, _)| *n == r.name)) {
+            for row in all_rows().filter(|r| !on_at.iter().any(|(n, ..)| *n == r.name)) {
                 assert_eq!(
                     row.default_for(locale),
                     row.default,
@@ -1782,6 +1788,17 @@ mod tests {
         assert_eq!(res::<crate::blob_shadow::ShadowSettings>(&app).bias, 0.25);
         apply(&mut app, "shadowbias", "0");
         assert_eq!(res::<crate::blob_shadow::ShadowSettings>(&app).bias, 0.0);
+        // `violenceLevel` stores its integer, and out of 0..=2 (this test's locale caps at 2) the cap.
+        use crate::creature_anim::blood::ViolenceLevel;
+        assert_eq!(*res::<ViolenceLevel>(&app), ViolenceLevel(2));
+        apply(&mut app, "violenceLevel", "1");
+        assert_eq!(*res::<ViolenceLevel>(&app), ViolenceLevel(1));
+        apply(&mut app, "violencelevel", "0");
+        assert_eq!(*res::<ViolenceLevel>(&app), ViolenceLevel(0));
+        apply(&mut app, "violenceLevel", "7");
+        assert_eq!(*res::<ViolenceLevel>(&app), ViolenceLevel(2));
+        apply(&mut app, "violenceLevel", "-1");
+        assert_eq!(*res::<ViolenceLevel>(&app), ViolenceLevel(2));
         assert!(!res::<crate::perf::FpsJournalSetting>(&app).0);
         apply(&mut app, "fpsJournal", "1");
         assert!(res::<crate::perf::FpsJournalSetting>(&app).0);
@@ -2859,6 +2876,7 @@ mod tests {
             .init_resource::<crate::text_filter::TextFilterSwitches>()
             .init_resource::<crate::game_tip::GameTipSetting>()
             .init_resource::<crate::blob_shadow::ShadowSettings>()
+            .init_resource::<crate::creature_anim::blood::ViolenceLevel>()
             .init_resource::<crate::player::Approach>()
             .add_plugins(CvarPlugin);
         app.insert_non_send_resource(UiScript::new().unwrap());

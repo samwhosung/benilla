@@ -259,6 +259,5 @@ pub(super) const INERT: &[Registered] = &[
     same("triangleStrips", "1"),            // 0x68888e
     same("unitDrawDist", "300.0").checked(benilla_ui::script::check_unit_draw_dist), // 0x68875e
     same("UnitNameRenderMode", "2"),        // 0x48fdc3
-    same("violenceLevel", "2"),             // 0x6c5ae1
     same("waterLOD", "0").checked(benilla_ui::script::check_water_lod), // 0x688784
 ];

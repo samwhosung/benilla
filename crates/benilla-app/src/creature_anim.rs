@@ -947,7 +947,7 @@ pub(crate) use precast::install_visuals_for_tests;
 pub(crate) use precast::{end_precast, precast_at_send, Precast, PrecastTail};
 
 /// The melee blood spurt.
-mod blood;
+pub(crate) mod blood;
 mod env_damage;
 pub(crate) mod net;
 pub(crate) mod spell_visual;
@@ -1207,6 +1207,8 @@ impl Plugin for CreatureAnimPlugin {
             // The pending-morph latch, the reference's per-unit `[+0xd54]`.
             .init_resource::<MorphLatch>()
             .init_resource::<DeathStamps>()
+            // `violenceLevel`'s stored word, read by the blood spurt (`0x60a39d`).
+            .init_resource::<blood::ViolenceLevel>()
             .add_systems(
                 Startup,
                 (

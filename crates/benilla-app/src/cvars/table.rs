@@ -695,6 +695,10 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // `0x6d7480` (the selection ring and the blob shadow) biases depth by `2 * bias / 32767` while
     // it is nonzero. The handler refuses outside 0..=1 and says "Shadow bias set to %f".
     same("shadowBias", "0.1").checked(benilla_ui::script::check_shadow_bias),
+    // `violenceLevel` (`0x6c5ae1`, flags 0, record `[0xce8534]`): registered at the locale's cap
+    // from the table `0x86c3f8` (`0x6c5aa0`), "2" but koKR's "1". The callback `0x6c5af0` stores
+    // the level clamped to the cap; the blood spurt indexes `UnitBloodLevels` by it (`0x60a39d`).
+    same_by_locale("violenceLevel", "2", &[(KO_KR, "1")]),
     // `doodadAnim` (`0x6884d8`, "1", flags 1, callback `0x688a10`, record `[0xc7f354]`), behind
     // `Get/SetDoodadAnim`: the callback toggles bit `0x8000` of `[0xc7b2a4]` and calls `0x6953d0`,
     // a bare `ret`, so no animation reads it. `hwDetect` sets 0 or 1 by CPU tier.
