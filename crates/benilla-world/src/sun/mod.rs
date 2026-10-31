@@ -6,7 +6,8 @@
 //! LightIntBand sub-9, alpha 0xFF) tints every disc and glare but moon02, which has no colour
 //! writer; the white moon's teal rim is the dome's night bands (sub-3..6) through its feathered
 //! edge. Every body takes the sky's far-depth pin. The bodies are placed in plain world space, so
-//! they project through our camera's 45° fovy, where the reference's is 44.1° at 16:9.
+//! they project through the world camera's fovy, which follows the aspect as the reference's does
+//! (`0x5c3cc0`).
 
 use bevy::pbr::MaterialPlugin;
 use bevy::prelude::*;

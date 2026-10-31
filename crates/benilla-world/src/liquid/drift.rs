@@ -715,9 +715,10 @@ mod tests {
     #[test]
     fn the_cull_never_clips_a_mote_that_is_on_screen() {
         for aspect in [4.0 / 3.0, 16.0 / 10.0, 16.0 / 9.0, 21.0 / 9.0, 32.0 / 9.0] {
-            let (tx, ty) = cull_limits(crate::view::CAM_FOVY, aspect);
-            let frustum_x = (crate::view::CAM_FOVY * 0.5).tan() * aspect;
-            let frustum_y = (crate::view::CAM_FOVY * 0.5).tan();
+            let fovy = crate::view::world_fovy(aspect);
+            let (tx, ty) = cull_limits(fovy, aspect);
+            let frustum_x = (fovy * 0.5).tan() * aspect;
+            let frustum_y = (fovy * 0.5).tan();
             assert!(
                 tx >= frustum_x,
                 "aspect {aspect}: cull {tx} < frustum {frustum_x}"
@@ -728,10 +729,17 @@ mod tests {
             );
         }
         // At the aspects the reference ran at, the limit is its 90° cone exactly.
-        assert_eq!(cull_limits(crate::view::CAM_FOVY, 4.0 / 3.0), (1.0, 1.0));
-        assert_eq!(cull_limits(crate::view::CAM_FOVY, 16.0 / 9.0), (1.0, 1.0));
-        let (tx, ty) = cull_limits(crate::view::CAM_FOVY, 32.0 / 9.0);
-        assert!(tx > 1.0 && ty == 1.0);
+        assert_eq!(
+            cull_limits(crate::view::world_fovy(4.0 / 3.0), 4.0 / 3.0),
+            (1.0, 1.0)
+        );
+        assert_eq!(
+            cull_limits(crate::view::world_fovy(16.0 / 9.0), 16.0 / 9.0),
+            (1.0, 1.0)
+        );
+        let (tx, ty) = cull_limits(crate::view::world_fovy(32.0 / 9.0), 32.0 / 9.0);
+        // The reference's relation keeps the frustum inside its cone at any aspect.
+        assert_eq!((tx, ty), (1.0, 1.0));
     }
 
     #[test]

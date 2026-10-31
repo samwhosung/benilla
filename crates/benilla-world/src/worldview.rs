@@ -47,9 +47,6 @@ const VIEW_OPEN_Z: f32 = 100.0;
 /// Near plane in yards: the `nearclip` CVar's default, since the viewer has no CVar table.
 const NEAR: f32 = crate::view::NEARCLIP_DEFAULT;
 
-/// Vertical FOV in radians (70°), wider than the client camera's [`crate::view::CAM_FOVY`].
-const FOVY: f32 = 1.221_730_5;
-
 /// Builds and runs the world viewer; `build` is the launcher shim's compile-time git stamp.
 pub fn run(build: BuildId) -> AppExit {
     // The install resolves from the launcher's folder when its stamp names one, as the client's
@@ -273,7 +270,8 @@ fn spawn_view_camera(mut commands: Commands, msaa: Res<crate::view::MsaaSetting>
         Projection::from(PerspectiveProjection {
             far,
             near: NEAR,
-            fov: FOVY,
+            // The client camera's relation, kept current by `view::stamp_world_fov`.
+            fov: crate::view::world_fovy(16.0 / 9.0),
             ..default()
         }),
         Hdr,

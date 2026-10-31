@@ -290,7 +290,7 @@ const SORTED_LEAKS: &[(&str, &str)] = &[
     ),
     ("terrain_stream::point_light", "CLOSE/absorb"),
     ("terrain_stream::spawn_model_entities", "CLOSE/move-engine"),
-    ("view::CAM_FOVY", "CLOSE/absorb"),
+    ("view::FovZoom", "CLOSE/absorb"),
     ("view::FARCLIP_RANGE", "CLOSE/absorb"),
     ("view::NEARCLIP_DEFAULT", "CLOSE/absorb"),
     ("wmo_portal::UnitWmoRoom", "CLOSE/absorb"),

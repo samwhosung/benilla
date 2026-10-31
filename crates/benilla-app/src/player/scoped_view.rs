@@ -6,15 +6,14 @@
 //! `0x8` makes `SetCameraView` return early), with `[camera+0x40] = n × π/180`; removal restores
 //! `π/2` and unlocks. The Ornate Spyglass (item 5507, spell 12883) passes 15, a 6× zoom.
 //!
-//! The ratio is applied, not the degrees: `[camera+0x40]` defaults to 90°, while our [`CAM_FOVY`]
-//! is the effective vertical field of view, 45° against the reference's measured 44.1°.
+//! The ratio is applied to `[camera+0x40]`, which defaults to 90°; the world projection then turns
+//! it into the vertical field of view by the frame's aspect (`0x5c3cc0`, [`benilla_world::view`]).
 
-use bevy::camera::{PerspectiveProjection, Projection};
 use bevy::prelude::*;
 
 use crate::net::{ObjectStore, SelfPlayer};
 use crate::ui_action::Spells;
-use benilla_world::view::{WorldCamera, CAM_FOVY};
+use benilla_world::view::FovZoom;
 
 /// `0x4c`, the aura name the reference's effect walk matches.
 const SPELL_AURA_FAR_SIGHT: u32 = 76;
@@ -43,7 +42,7 @@ pub(super) fn apply_scoped_view(
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     spells: Option<Res<Spells>>,
     mut scoped: ResMut<ScopedView>,
-    mut projections: Query<&mut Projection, With<WorldCamera>>,
+    mut fov_zoom: ResMut<FovZoom>,
 ) {
     let catalog = spells.as_ref().map(|s| &s.catalog);
     scoped.zoom = self_q
@@ -64,14 +63,10 @@ pub(super) fn apply_scoped_view(
         .filter(|&deg| deg > 0.0)
         .map(|deg| deg / REFERENCE_DEFAULT_DEGREES);
 
-    let Ok(mut projection) = projections.single_mut() else {
-        return;
-    };
-    let want = CAM_FOVY * scoped.zoom.unwrap_or(1.0);
-    if let Projection::Perspective(PerspectiveProjection { fov, .. }) = &mut *projection {
-        if (*fov - want).abs() > f32::EPSILON {
-            *fov = want;
-        }
+    // `stamp_world_fov` turns it into the field of view at the frame's aspect.
+    let want = scoped.zoom.unwrap_or(1.0);
+    if fov_zoom.0 != want {
+        fov_zoom.0 = want;
     }
 }
 
@@ -81,25 +76,27 @@ mod tests {
 
     #[test]
     fn the_spyglass_narrows_our_own_field_of_view_six_fold() {
+        use benilla_world::view::world_fovy;
         let scoped = ScopedView {
             zoom: Some(15.0 / REFERENCE_DEFAULT_DEGREES),
         };
-        let fov = CAM_FOVY * scoped.zoom.unwrap();
+        let normal = world_fovy(16.0 / 9.0);
+        let fov = normal * scoped.zoom.unwrap();
         assert!(
-            (fov - CAM_FOVY / 6.0).abs() < 1e-6,
-            "the spyglass is a 6x zoom off whatever our normal FOV is, not a literal 15 degrees"
+            (fov - normal / 6.0).abs() < 1e-6,
+            "the spyglass is a 6x zoom off whatever the normal FOV is, not a literal 15 degrees"
         );
         assert!(
-            (fov.to_degrees() - 7.5).abs() < 1e-4,
-            "…which lands at 7.5 degrees vertical for our 45 degree default, not 15"
+            (fov.to_degrees() - 44.1 / 6.0).abs() < 0.02,
+            "…which lands at a sixth of the 16:9 field of view, not 15"
         );
         assert!(scoped.active());
 
         let none = ScopedView { zoom: None };
         assert_eq!(
-            CAM_FOVY * none.zoom.unwrap_or(1.0),
-            CAM_FOVY,
-            "unscoped restores OUR default, never the reference's stored 90"
+            none.zoom.unwrap_or(1.0),
+            1.0,
+            "unscoped restores the reference's 90, never a stored default"
         );
         assert!(!none.active());
     }

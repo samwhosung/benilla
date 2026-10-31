@@ -404,7 +404,7 @@ fn push_precip(
             world_per_px: match proj {
                 Projection::Perspective(p) => (p.fov * 0.5).tan(),
                 // The reference has no orthographic mode; this keeps the sprites sane.
-                _ => (crate::view::CAM_FOVY * 0.5).tan(),
+                _ => (crate::view::world_fovy(16.0 / 9.0) * 0.5).tan(),
             } / SNOW_PX_REF_HEIGHT,
         });
     let spec = |texture: &Handle<Image>, blend: EffectBlend, fog: EffectFog| EffectDrawSpec {
