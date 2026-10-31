@@ -1476,8 +1476,8 @@ pub(crate) fn arm_aura_state_fx(
 
 /// Each unit's death stamp, the reference's `+0xcb4`: set as its Death clip ends (`0x5fc920` at
 /// `0x5fc95a`), as it is created dead (`0x5fba26`) or as it comes back dead (`0x5fbe64`), never in
-/// the update it dies in; cleared as it comes back to life (`0x5fef70` at `0x5fef85`). The loot
-/// sparkle and the dynamic-flags watcher's release wait on it.
+/// the update it dies in; cleared as it comes back to life (`0x5fef70` at `0x5fef85`). The
+/// dynamic-flags watcher's release waits on it, and the loot sparkle hangs as it is set.
 #[derive(Resource, Default)]
 pub(crate) struct DeathStamps {
     stamped: EntityHashSet,
@@ -1499,131 +1499,188 @@ impl DeathStamps {
     }
 }
 
-/// Arm and reap the loot sparkle on a dead lootable unit and on a corpse object with
-/// `CORPSE_FIELD_DYNAMIC_FLAGS` bit 0 (`0x5d6de0`): the `"HARDCODED Loot Art"` row at `0x13`.
-/// Edge-driven (`0x600440`) with no viewer or distance logic, since the server strips the flag per
-/// viewer; the falling edge reaps with no fade (`0x600680`). A unit's sparkle waits for its death
-/// stamp ([`DeathStamps`]): it hangs as the stamp is set, or at a dynamic-flags write once it is.
+/// The loot sparkle, the `"HARDCODED Loot Art"` row at `0x13`, on a unit or a corpse object whose
+/// dynamic flags carry bit 0 (`UNIT_DYNAMIC_FLAGS` for a unit, `CORPSE_FIELD_DYNAMIC_FLAGS`,
+/// `0x5d6de0`), with no viewer or distance logic, since the server strips the flag per viewer.
 ///
-/// Here too the unit's effects are released at once (`ReleaseEffects`, `0x614120`), at its two
-/// watcher sites, in wire order: the health watcher's death runs `OnDied` (`0x6047a3` →
+/// A unit's sparkle follows the reference's calls, not the flag's level. `AddLootSparkle`
+/// (`0x6005d0`) hangs one if bit 0 is set and none hangs: as the death stamp is set ([`DeathStamps`];
+/// `0x5fc962`, `0x5fba33`, `0x5fbe6d`), on the model's `$DTH` with no stamp test (`0x5fffb4` →
+/// `0x6247d0` → `0x624aa4`), and at a dynamic-flags write once the death is stamped (`0x60058e`).
+/// `RemoveLootSparkle` (`0x600680`) takes it with no fade only as bit 0 falls (`0x60047b`), or as
+/// the unit leaves, whose release frees it with the rest. A return to life takes nothing.
+///
+/// The unit's effects are released at once (`ReleaseEffects`, `0x614120`), the sparkle with them,
+/// at the two watcher sites, in wire order: the health watcher's death runs `OnDied` (`0x6047a3` →
 /// `0x605860`), which releases at `0x605922`; the dynamic-flags watcher, on any write that leaves
-/// bit 0x1 set on a unit whose death is stamped (`+0xcb4` above 0, `0x600574`, `0x60057c`),
-/// releases (`0x600587`) and hangs the sparkle again (`0x60058e`).
+/// bit 0 set on a unit whose death is stamped (`+0xcb4` above 0, `0x600574`, `0x60057c`), releases
+/// (`0x600587`) and hangs the sparkle again (`0x60058e`).
 #[allow(clippy::too_many_arguments)] // one Bevy system's full input set
 pub(super) fn arm_loot_fx(
-    // Re-read on an edge of any of the four fields and on first sight (armed at build, `0x5d6e30`).
     units: Query<(Entity, &ObjectStore, &crate::net::NetEntity)>,
     arrived: Query<Entity, (Added<ObjectStore>, Without<ItemObject>)>,
     mut edges: MessageReader<FieldChanged>,
+    mut model_events: MessageReader<super::AnimSoundEvent>,
     visuals: Option<Res<SpellVisuals>>,
     mut fx: MessageWriter<SpellKitFx>,
     mut sounds: MessageWriter<SpellKitSound>,
     mut stamps: ResMut<DeathStamps>,
+    // Who has a sparkle hanging, the reference's effect flagged `0x8` on `+0xb4`.
     mut armed: Local<EntityHashSet>,
 ) {
     use benilla_protocol::field::{
         FIELD_CORPSE_DYNAMIC_FLAGS, FIELD_UNIT_DYNAMIC_FLAGS, FIELD_UNIT_HEALTH,
-        FIELD_UNIT_MAXHEALTH,
     };
     let full_sweep = visuals.as_ref().is_some_and(|v| v.is_changed());
     let art = visuals.as_ref().and_then(|v| v.0.loot_art_effect());
-    let mut loot_at: EntityHashMap<crate::lanes::Stamp> = EntityHashMap::default();
-    let mut due: EntityHashSet = arrived.iter().collect();
-    let mut rehang = EntityHashSet::default();
-    let mut release = |entity: Entity, at: crate::lanes::Stamp| {
-        fx.write(SpellKitFx::Release {
-            entity,
-            at: Some(at),
-        });
-        sounds.write(SpellKitSound::Release { entity, at });
+    let unit = |entity: Entity| {
+        units
+            .get(entity)
+            .ok()
+            .filter(|(_, _, net)| matches!(net.kind, EntityKind::Unit | EntityKind::Player))
     };
+    // `AddLootSparkle` (`0x6005d0`): bit 0 set and none hanging.
+    let add = |entity: Entity,
+               at: Option<crate::lanes::Stamp>,
+               fx: &mut MessageWriter<SpellKitFx>,
+               armed: &mut EntityHashSet| {
+        let Some(art) = art else {
+            return; // no client data or no such row
+        };
+        if unit(entity).is_some_and(|(_, store, _)| store.0.unit_lootable()) && armed.insert(entity)
+        {
+            fx.write(sparkle(entity, art, FxStage::Relive, at));
+        }
+    };
+    let mut corpses: EntityHashMap<Option<crate::lanes::Stamp>> = arrived
+        .iter()
+        .filter(|&e| {
+            units
+                .get(e)
+                .is_ok_and(|(_, _, n)| n.kind == EntityKind::Corpse)
+        })
+        .map(|e| (e, None))
+        .collect();
     for e in edges.read() {
+        if e.kind == benilla_protocol::messages::ObjectType::Corpse
+            && e.index == FIELD_CORPSE_DYNAMIC_FLAGS
+        {
+            corpses.insert(e.entity, Some(e.at));
+            continue;
+        }
+        let release = |sounds: &mut MessageWriter<SpellKitSound>,
+                       fx: &mut MessageWriter<SpellKitFx>,
+                       armed: &mut EntityHashSet| {
+            fx.write(SpellKitFx::Release {
+                entity: e.entity,
+                at: Some(e.at),
+            });
+            sounds.write(SpellKitSound::Release {
+                entity: e.entity,
+                at: e.at,
+            });
+            armed.remove(&e.entity);
+        };
         if e.unit_died() {
-            release(e.entity, e.at);
+            release(&mut sounds, &mut fx, &mut armed);
         }
         // The health watcher's return to life clears the stamp (`0x6047ee` → `0x5fef70`).
         if e.unit_field(FIELD_UNIT_HEALTH) && e.old as i32 <= 0 && e.new as i32 > 0 {
             stamps.stamped.remove(&e.entity);
             stamps.fresh.remove(&e.entity);
         }
-        let watched = e.unit_field(FIELD_UNIT_DYNAMIC_FLAGS)
-            || e.unit_field(FIELD_UNIT_HEALTH)
-            || e.unit_field(FIELD_UNIT_MAXHEALTH)
-            || (e.kind == benilla_protocol::messages::ObjectType::Corpse
-                && e.index == FIELD_CORPSE_DYNAMIC_FLAGS);
-        if !watched {
+        if !e.unit_field(FIELD_UNIT_DYNAMIC_FLAGS) {
             continue;
         }
-        due.insert(e.entity);
-        // The last of the fields to move, after which the unit reads dead and lootable.
-        let at = loot_at.entry(e.entity).or_insert(e.at);
-        *at = (*at).max(e.at);
-        if e.unit_field(FIELD_UNIT_DYNAMIC_FLAGS) && e.new & 0x1 != 0 && stamps.settled(e.entity) {
-            release(e.entity, e.at);
-            rehang.insert(e.entity);
+        if e.old & 0x1 != 0 && e.new & 0x1 == 0 {
+            if armed.remove(&e.entity) {
+                fx.write(SpellKitFx::Reap {
+                    entity: e.entity,
+                    spell_id: LOOT_FX_KEY,
+                    class: FxClass::Hold,
+                    force: true,
+                    at: Some(e.at),
+                });
+            }
+        } else if e.new & 0x1 != 0 && stamps.settled(e.entity) {
+            release(&mut sounds, &mut fx, &mut armed);
+            add(e.entity, Some(e.at), &mut fx, &mut armed);
         }
     }
+    for ev in model_events.read().filter(|ev| &ev.ident == b"$DTH") {
+        add(ev.entity, None, &mut fx, &mut armed);
+    }
     // A unit created or brought back dead is stamped (`0x5fba1d`-`0x5fba26`, `0x5fbe51`-`0x5fbe64`).
-    for (entity, store, net) in arrived.iter().filter_map(|e| units.get(e).ok()) {
-        let unit = matches!(
-            net.kind,
-            benilla_protocol::EntityKind::Unit | benilla_protocol::EntityKind::Player
-        );
-        if unit && store.0.unit_is_dead() {
+    for entity in arrived.iter() {
+        if unit(entity).is_some_and(|(_, store, _)| store.0.unit_is_dead()) {
             stamps.stamp(entity);
         }
     }
-    due.extend(stamps.fresh.drain());
-    let scan = if full_sweep {
-        units.iter().collect::<Vec<_>>()
+    let fresh: Vec<Entity> = if full_sweep {
+        // The art arrived late: hang what the stamps already settled.
+        stamps.fresh.clear();
+        stamps.stamped.iter().copied().collect()
     } else {
-        due.into_iter().filter_map(|e| units.get(e).ok()).collect()
+        stamps.fresh.drain().collect()
     };
-    // Streamed units despawn on range-out; drop their rows.
+    for entity in fresh {
+        add(entity, None, &mut fx, &mut armed);
+    }
+    // Streamed objects despawn on range-out; drop their rows.
     armed.retain(|e| units.contains(*e));
     stamps.stamped.retain(|e| units.contains(*e));
-    let Some((effect, path)) = art else {
+    let Some(art) = art else {
         return; // no client data or no such row
     };
-    for (entity, store, net) in scan {
-        // A corpse object's sparkle: bit 0 rising calls `0x5d6e30`, the same row at the same tag.
-        let lootable = if net.kind == benilla_protocol::EntityKind::Corpse {
-            store.0.corpse_lootable()
-        } else {
-            stamps.settled(entity) && store.0.unit_lootable()
+    // A corpse object's sparkle: bit 0 rising calls `0x5d6e30`, falling `0x5d6e80`.
+    if full_sweep {
+        corpses.extend(
+            (units.iter())
+                .filter(|(_, _, n)| n.kind == EntityKind::Corpse)
+                .map(|(e, _, _)| (e, None)),
+        );
+    }
+    for (entity, at) in corpses {
+        let Ok((_, store, _)) = units.get(entity) else {
+            continue;
         };
-        // A release took the sparkle with the rest; the watcher hangs it again.
-        if lootable && (armed.insert(entity) | rehang.contains(&entity)) {
-            fx.write(SpellKitFx::Begin {
-                entity,
-                spell_id: LOOT_FX_KEY,
-                persistent: true,
-                class: FxClass::Hold,
-                // A unit's loot art loops its first sequence (`0x600640`). A corpse's is a bare
-                // model with no sequence armed (`0x5d6e30`); this plumbing has no such instance, so
-                // it runs `OneShot` persistent.
-                stage: if net.kind == benilla_protocol::EntityKind::Corpse {
-                    FxStage::OneShot
-                } else {
-                    FxStage::Relive
-                },
-                effects: vec![FxSlot {
-                    tag: HARDCODED_FX_ATTACH,
-                    effect,
-                    path: path.to_string(),
-                }],
-                at: loot_at.get(&entity).copied(),
-            });
-        } else if !lootable && armed.remove(&entity) {
+        if store.0.corpse_lootable() {
+            if armed.insert(entity) {
+                // A bare model with no sequence armed (`0x5d6e30`); this plumbing has no such
+                // instance, so it runs `OneShot` persistent.
+                fx.write(sparkle(entity, art, FxStage::OneShot, at));
+            }
+        } else if armed.remove(&entity) {
             fx.write(SpellKitFx::Reap {
                 entity,
                 spell_id: LOOT_FX_KEY,
                 class: FxClass::Hold,
                 force: true,
-                at: loot_at.get(&entity).copied(),
+                at,
             });
         }
+    }
+}
+
+/// The loot sparkle's play: a unit's loops its first sequence (`0x600640`).
+fn sparkle(
+    entity: Entity,
+    (effect, path): (u32, &str),
+    stage: FxStage,
+    at: Option<crate::lanes::Stamp>,
+) -> SpellKitFx {
+    SpellKitFx::Begin {
+        entity,
+        spell_id: LOOT_FX_KEY,
+        persistent: true,
+        class: FxClass::Hold,
+        stage,
+        effects: vec![FxSlot {
+            tag: HARDCODED_FX_ATTACH,
+            effect,
+            path: path.to_string(),
+        }],
+        at,
     }
 }
 
