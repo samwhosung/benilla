@@ -63,6 +63,9 @@ pub(super) enum Then {
     Deselect(u64),
     /// `OpenItem` past its `SetAutoLoot` (`0x5edcbb` on), once a sweep that made has run.
     OpenItem(OpenItem),
+    /// `OpenItem`'s `CMSG_OPEN_ITEM` past its lock's `ITEM_LOCK_CHANGED` (`0x5edd26` after
+    /// `0x495415`).
+    SendOpenItem(OpenItem),
 }
 
 /// The loot window's state and what its functions send and signal through: the engine half of
@@ -200,7 +203,7 @@ impl LootSteps<'_, '_> {
     /// item: the byte from Shift as the call saw it, which with a window open sweeps it, then,
     /// once that sweep's listeners have run (its `LOOT_OPENED`, `0x4c2240`), the item held as the
     /// loot target, its lock and `CMSG_OPEN_ITEM` (`0x5edcd9`, `0x5edd26`;
-    /// [`Self::send_open_item`]), in the call's tail whenever the sweep ran.
+    /// [`Self::lock_open_item`]), in the call's tail whenever a signal ran.
     pub(crate) fn open_item(&mut self, script: &mut UiScript, open: OpenItem) -> Option<CallTail> {
         let owed = self.loot.then.len();
         self.loot.then.push(Then::OpenItem(open));
@@ -209,21 +212,29 @@ impl LootSteps<'_, '_> {
         self.set_auto_loot(script, byte);
         if !sweeps && self.loot.then.len() == owed + 1 {
             self.loot.then.pop();
-            self.send_open_item(script, open);
-            return None;
+            self.lock_open_item(script, open);
         }
         self.resume_tail(owed)
     }
 
     /// `OpenItem`'s end: the item becomes the loot target (`0x5edcc0`), which the type-1 answer's
-    /// admission asks for (`0x5ebb3f`), it locks (`0x5edcd9`; `LockItem` signals nothing for a
-    /// guid that is no item object, `0x495407`), and `CMSG_OPEN_ITEM` goes out.
-    fn send_open_item(&mut self, script: &mut UiScript, open: OpenItem) {
+    /// admission asks for (`0x5ebb3f`), and it locks (`0x5edcd9`), whose `ITEM_LOCK_CHANGED`
+    /// (`0x495415`) runs its listeners before `CMSG_OPEN_ITEM` goes out (`0x5edd26`), so the send
+    /// is owed past them ([`Then::SendOpenItem`]); `LockItem` signals nothing for a guid that is
+    /// no item object (`0x495407`), and the send goes at once.
+    fn lock_open_item(&mut self, script: &mut UiScript, open: OpenItem) {
         debug!("ui_loot: open item {:#x}", open.guid);
         self.latch.0 = Some(open.guid);
         if self.objects.object(open.guid).is_some_and(|f| f.is_item()) {
             script.lock_item(open.guid);
+            self.loot.then.push(Then::SendOpenItem(open));
+            return;
         }
+        self.send_open_item(open);
+    }
+
+    /// `OpenItem`'s `CMSG_OPEN_ITEM` (`0x5edd26`).
+    fn send_open_item(&self, open: OpenItem) {
         let _ = self.net.0.send(ClientCommand::OpenItem {
             bag_index: open.bag_index,
             slot: open.slot,
@@ -524,7 +535,8 @@ impl LootSteps<'_, '_> {
             Then::Release => super::send_owed_release(&mut self.loot, &self.net),
             Then::Announce => self.loot.tear_down_here(script),
             Then::Deselect(source) => self.dead.deselect(source),
-            Then::OpenItem(open) => self.send_open_item(script, open),
+            Then::OpenItem(open) => self.lock_open_item(script, open),
+            Then::SendOpenItem(open) => self.send_open_item(open),
         }
     }
 }
