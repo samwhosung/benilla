@@ -45,7 +45,10 @@ pub(crate) fn pet_book(
         })
         .collect();
     // `0x4b2fd0`'s re-sort, with the player book's own comparator.
-    slots.sort_by_key(|s| crate::ui_spellbook::spell_sort_key_of(&s.name, s.rank.as_deref()));
+    crate::ui_spellbook::sort_book(&mut slots, |s| {
+        let level = catalog.get(s.spell_id).map_or(0, |d| d.spell_level);
+        crate::ui_spellbook::spell_sort_key_of(&s.name, s.rank.as_deref(), level)
+    });
     PetBookState { token, slots }
 }
 

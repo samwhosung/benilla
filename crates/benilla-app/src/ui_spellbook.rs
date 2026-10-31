@@ -304,7 +304,7 @@ pub(crate) fn book_order(
     let mut order = BookOrder::default();
     for (line_id, name, texture, mut spell_ids) in lines {
         order.tab_lines.push(line_id);
-        spell_ids.sort_by_cached_key(|&a| spell_sort_key(catalog, a));
+        sort_book(&mut spell_ids, |&a| spell_sort_key(catalog, a));
         order.tabs.push(SpellTabView {
             name,
             texture,
@@ -378,32 +378,82 @@ fn build_book(
     )
 }
 
-/// `0x4b30c0`'s tail: name, then the parsed rank number, then the rank string. The rank is the
-/// first digit run of `NameSubtext` (`0x4b3c30`), so any localized prefix parses.
-fn spell_sort_key(catalog: &SpellCatalog, spell_id: u32) -> (String, u32, String) {
+/// One booked spell's place in the comparator `0x4b30c0` sorts a book with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct BookKey {
+    name: String,
+    /// `ParseSpellRank`'s answer ([`parse_spell_rank`]).
+    number: u32,
+    rank: String,
+}
+
+/// The key of the spell `spell_id`: [`spell_sort_key_of`] over its record.
+fn spell_sort_key(catalog: &SpellCatalog, spell_id: u32) -> BookKey {
     let d = catalog.get(spell_id);
     spell_sort_key_of(
         d.map(|d| d.name.as_str()).unwrap_or_default(),
         d.and_then(|d| d.rank.as_deref()),
+        d.map_or(0, |d| d.spell_level),
     )
 }
 
-/// [`spell_sort_key`] over a resolved `(name, rank)`, shared with the pet book: `0x4b2fd0` sorts
-/// both books with `0x4b30c0`.
-pub(crate) fn spell_sort_key_of(name: &str, rank: Option<&str>) -> (String, u32, String) {
-    let rank_str = rank.unwrap_or_default().to_string();
-    (name.to_string(), leading_number(&rank_str), rank_str)
+/// [`spell_sort_key`] over a resolved `(name, rank, spell level)`, shared with the pet book:
+/// `0x4b2fd0` sorts both books with `0x4b30c0`.
+pub(crate) fn spell_sort_key_of(name: &str, rank: Option<&str>, spell_level: u32) -> BookKey {
+    let rank = rank.unwrap_or_default();
+    BookKey {
+        name: name.to_string(),
+        number: parse_spell_rank(rank, spell_level),
+        rank: rank.to_string(),
+    }
 }
 
-/// The first ASCII digit run as a number, else 0: the reference's rank parse (`0x4b3c30`).
-fn leading_number(s: &str) -> u32 {
-    s.chars()
-        .skip_while(|c| !c.is_ascii_digit())
-        .take_while(|c| c.is_ascii_digit())
-        .fold(None::<u32>, |acc, c| {
-            Some(acc.unwrap_or(0) * 10 + c.to_digit(10).unwrap())
-        })
-        .unwrap_or(0)
+/// `ParseSpellRank` (`0x4b3c30`): the rank string's digits accumulate (`0x4b3c60`-`0x4b3c78`),
+/// zeros and non-digits before the first nonzero one are skipped, and the number is returned at the
+/// first non-digit after it (`0x4b3c7e`-`0x4b3c80`) or the string's end; 0 returns the spell's
+/// level (`record+0x74`, `0x4b3c94`).
+fn parse_spell_rank(rank: &str, spell_level: u32) -> u32 {
+    let mut number = 0u32;
+    for byte in rank.bytes() {
+        if byte.is_ascii_digit() {
+            number = number.wrapping_mul(10).wrapping_add(u32::from(byte - b'0'));
+        } else if number != 0 {
+            return number;
+        }
+    }
+    if number != 0 {
+        number
+    } else {
+        spell_level
+    }
+}
+
+/// `0x4b30c0` past its skill-line test: the names (`0x4b3143`), then the two parsed numbers where
+/// both are nonzero (`0x4b315c`-`0x4b3164`), which equal compare equal, else the rank strings
+/// (`0x4b3193`).
+pub(crate) fn book_cmp(a: &BookKey, b: &BookKey) -> std::cmp::Ordering {
+    a.name.cmp(&b.name).then_with(|| {
+        if a.number != 0 && b.number != 0 {
+            a.number.cmp(&b.number)
+        } else {
+            a.rank.cmp(&b.rank)
+        }
+    })
+}
+
+/// `items` in [`book_cmp`] order, stable. That comparator is not a total order where one spell
+/// parses to 0 (a rank and a level both 0), which `slice::sort_by` may reject, so this is an
+/// insertion sort over books of a few hundred spells.
+pub(crate) fn sort_book<T>(items: &mut Vec<T>, key: impl Fn(&T) -> BookKey) {
+    let mut keyed: Vec<(BookKey, T)> = items.drain(..).map(|t| (key(&t), t)).collect();
+    for i in 1..keyed.len() {
+        let mut j = i;
+        while j > 0 && book_cmp(&keyed[j - 1].0, &keyed[j].0).is_gt() {
+            keyed.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    items.extend(keyed.into_iter().map(|(_, t)| t));
 }
 
 /// `CastSpell(id, "spell", onSelf)` and `CastSpellByName(name, onSelf)` (`0x4b3300`'s player leg),
@@ -471,14 +521,52 @@ mod tests {
     use benilla_ui::script::SpellBookState;
     use std::collections::HashMap;
 
+    /// `ParseSpellRank` (`0x4b3c30`): zeros are digits that add nothing and a non-digit ends the
+    /// number only once it is nonzero; a rank that parses to 0 takes the spell's level.
     #[test]
-    fn leading_number_scans_the_first_digit_run() {
-        assert_eq!(leading_number("Rank 1"), 1);
-        assert_eq!(leading_number("Rank 10"), 10);
-        assert_eq!(leading_number("Rank 2"), 2);
-        assert_eq!(leading_number(""), 0);
-        assert_eq!(leading_number("Racial"), 0); // digit-less: the reference uses SpellLevel
-        assert_eq!(leading_number("Apprentice"), 0);
+    fn parse_spell_rank_skips_zeros_and_falls_back_to_the_level() {
+        assert_eq!(parse_spell_rank("Rank 1", 9), 1);
+        assert_eq!(parse_spell_rank("Rank 10", 9), 10);
+        assert_eq!(parse_spell_rank("Rank 05", 9), 5);
+        assert_eq!(parse_spell_rank("Rank 0, 3", 9), 3, "past a zero run");
+        assert_eq!(
+            parse_spell_rank("1a2", 9),
+            1,
+            "the first nonzero run ends at a non-digit"
+        );
+        assert_eq!(parse_spell_rank("", 9), 9);
+        assert_eq!(parse_spell_rank("Apprentice", 9), 9);
+        assert_eq!(parse_spell_rank("Rank 0", 9), 9);
+    }
+
+    /// `0x4b30c0` compares the numbers only where both are nonzero, else the rank strings.
+    #[test]
+    fn same_name_spells_sort_by_level_where_the_rank_has_no_number() {
+        let key = |rank: &str, level| spell_sort_key_of("Summon", Some(rank), level);
+        let (apprentice, journeyman) = (key("Apprentice", 5), key("Journeyman", 3));
+        assert!(
+            book_cmp(&journeyman, &apprentice).is_lt(),
+            "by level, not by string"
+        );
+        // Equal numbers are equal, whatever the strings.
+        assert!(book_cmp(&key("Rank 2", 0), &key("Rang 2", 0)).is_eq());
+        // A zero on either side compares the strings.
+        assert!(book_cmp(&key("Apprentice", 0), &key("Journeyman", 9)).is_lt());
+        assert!(book_cmp(&key("Rank 2", 0), &key("Rank 10", 0)).is_lt());
+
+        let mut map = HashMap::new();
+        for (id, rank, level) in [(1, "Apprentice", 5), (2, "Journeyman", 3), (3, "Expert", 8)] {
+            let mut d = spell("Summon", Some(rank), 0);
+            d.spell_level = level;
+            map.insert(id, d);
+        }
+        let catalog = SpellCatalog::from_displays(map);
+        let known: BTreeSet<u32> = [1, 2, 3].into_iter().collect();
+        let book = build_book(&known, &catalog, None, 1, 1, None, None).0;
+        assert_eq!(
+            book.slots.iter().map(|s| s.spell_id).collect::<Vec<_>>(),
+            [2, 1, 3]
+        );
     }
 
     /// A minimal `SpellDisplay`: `attributes` drives the gate, `rank` the sort.
