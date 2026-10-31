@@ -58,6 +58,8 @@ pub(crate) struct ItemDisplays {
     pub(crate) catalog: ItemDisplayCatalog,
     /// Keyed by model kind too: a helm display has a file per race and sex, a shoulder a pair.
     pub(super) models: HashMap<(u32, ItemModelKind), DisplayModel>,
+    /// `ChrRaces.dbc`, whose client prefix names a helm's model per race (`0x479a21`).
+    pub(crate) races: benilla_formats::ChrRaces,
 }
 
 #[cfg(test)]
@@ -66,6 +68,7 @@ impl ItemDisplays {
         ItemDisplays {
             catalog,
             models: HashMap::new(),
+            races: benilla_formats::ChrRaces::default(),
         }
     }
 }
@@ -372,6 +375,21 @@ pub(crate) const ATTACH_SLOT_NAMES: [&str; ATTACH_SLOTS] = [
 /// (`0x47a200`) and the ranged and ammo builder pass the display's visual.
 const NO_GLOW: i32 = 0;
 
+/// A helm display's model file for a race and sex: `<stem>_<prefix><M|F>.m2`, the prefix the
+/// `ChrRaces` row's client prefix (`+0x18`, `0x479a21`, formatted at `0x479a41`). A race with no
+/// row has no model, and `0x4799a0` attaches no helm (`0x4799cc`, `0x4799d8`, `0x4799e9`).
+fn helm_model_name(
+    model: &str,
+    races: &benilla_formats::ChrRaces,
+    race: u8,
+    sex: u8,
+) -> Option<String> {
+    let prefix = races.client_prefix(u32::from(race))?;
+    let letter = if sex == 1 { 'F' } else { 'M' };
+    let stem = model.strip_suffix(".m2").unwrap_or(model);
+    Some(format!("{stem}_{prefix}{letter}.m2"))
+}
+
 /// Ensure `display` has a [`DisplayModel`] for `kind`; its texture is the BLP the display row
 /// names, never derived from the model name.
 pub(in crate::entities) fn ensure_item_model(
@@ -407,12 +425,13 @@ pub(in crate::entities) fn ensure_item_model(
         Some(d) if d.model[col].is_some() => {
             let mut model = d.model[col].clone().unwrap();
             if let ItemModelKind::Helm { race, sex } = kind {
-                // Race 1-8 is Hu Or Dw Ni Sc Ta Gn Tr, sex M or F.
-                const RACE_PREFIX: [&str; 8] = ["Hu", "Or", "Dw", "Ni", "Sc", "Ta", "Gn", "Tr"];
-                let prefix = RACE_PREFIX[(race.clamp(1, 8) - 1) as usize];
-                let letter = if sex == 1 { 'F' } else { 'M' };
-                let stem = model.strip_suffix(".m2").unwrap_or(&model).to_string();
-                model = format!("{stem}_{prefix}{letter}.m2");
+                // `0x4799a0` names the model by the `ChrRaces` row's client prefix, and a race
+                // with no row attaches no helm.
+                let Some(named) = helm_model_name(&model, &held.races, race, sex) else {
+                    held.models.insert((display, kind), super::empty_display());
+                    return;
+                };
+                model = named;
             }
             let disp_id = display;
             debug!(
@@ -430,4 +449,50 @@ pub(in crate::entities) fn ensure_item_model(
         _ => super::empty_display(),
     };
     held.models.insert((display, kind), dm);
+}
+
+#[cfg(test)]
+mod helm_model_tests {
+    use super::helm_model_name;
+    use benilla_formats::ChrRaces;
+
+    fn races() -> ChrRaces {
+        ChrRaces::from_rows([
+            (1, "Human", "Human"),
+            (8, "Troll", "Troll"),
+            (9, "Goblin", "Goblin"),
+        ])
+        .with_client_prefix(1, "Hu")
+        .with_client_prefix(8, "Tr")
+        .with_client_prefix(9, "Gb")
+    }
+
+    /// The prefix is the race row's, so race 9 gets its own model and not the Troll one a clamp to
+    /// eight gave it; a race with no row, 0 included, has none (`0x4799cc`-`0x4799e9`).
+    #[test]
+    fn a_helm_takes_its_races_prefix_and_a_race_without_a_row_has_none() {
+        let races = races();
+        let name = |race, sex| helm_model_name("Helm_Plate.m2", &races, race, sex);
+        assert_eq!(name(1, 0).as_deref(), Some("Helm_Plate_HuM.m2"));
+        assert_eq!(name(8, 1).as_deref(), Some("Helm_Plate_TrF.m2"));
+        assert_eq!(name(9, 0).as_deref(), Some("Helm_Plate_GbM.m2"));
+        assert_eq!(name(10, 0), None);
+        assert_eq!(name(0, 0), None);
+    }
+
+    /// The shipped `ChrRaces.dbc` through the same read: the eight playable prefixes in race
+    /// order, `Gb` for the goblin, nothing past the nine rows.
+    #[test]
+    fn the_shipped_races_name_their_helm_models() {
+        let data = benilla_formats::wow_data_or_skip!();
+        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+        let races = benilla_formats::load_chr_races(&mut chain).expect("ChrRaces.dbc");
+        let prefixes: Vec<_> = (1..=9).map(|r| races.client_prefix(r)).collect();
+        assert_eq!(
+            prefixes,
+            ["Hu", "Or", "Dw", "Ni", "Sc", "Ta", "Gn", "Tr", "Gb"].map(Some)
+        );
+        assert_eq!(races.client_prefix(0), None);
+        assert_eq!(races.client_prefix(10), None);
+    }
 }

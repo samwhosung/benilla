@@ -20,6 +20,10 @@ const CHR_RACES: &str = "DBFilesClient\\ChrRaces.dbc";
 /// The shipped copy's column count, which `benilla-dbc` enforces as the reference loader does.
 const CHR_RACES_FIELDS: usize = 29;
 
+/// Field 6, the client prefix (`+0x18`), the `%s` of a helm model's `<stem>_<prefix><sex>.m2`
+/// (`0x479a21`).
+const PREFIX_FIELD: usize = 0x18 / 4;
+
 /// Field 15, the file string (`+0x3c`).
 const FILE_FIELD: usize = 0x3c / 4;
 
@@ -34,6 +38,8 @@ const NAME_FIELD: usize = 0x44 / 4;
 struct Row {
     name: String,
     file: String,
+    /// The client prefix (`+0x18`), `Hu`, `Or`, ..., `Gb`.
+    prefix: String,
     /// `CinematicSequenceID` (`+0x40`).
     intro: u32,
 }
@@ -49,8 +55,16 @@ impl ChrRaces {
             rows.into_iter()
                 .map(|(id, name, file)| {
                     let (name, file) = (name.to_string(), file.to_string());
-                    let intro = 0;
-                    (id, Row { name, file, intro })
+                    let (intro, prefix) = (0, String::new());
+                    (
+                        id,
+                        Row {
+                            name,
+                            file,
+                            prefix,
+                            intro,
+                        },
+                    )
                 })
                 .collect(),
         )
@@ -75,6 +89,18 @@ impl ChrRaces {
         self.0.get(&race).map(|r| r.intro)
     }
 
+    /// The race row's client prefix (`+0x18`, `0x479a21`) that a helm model's name is built with;
+    /// a race with no row has none, and `0x4799a0` attaches no helm for it (`0x4799cc`-`0x4799e9`).
+    pub fn client_prefix(&self, race: u32) -> Option<&str> {
+        self.0.get(&race).map(|r| r.prefix.as_str())
+    }
+
+    /// A table for tests of what reads the client prefix: `race` holds `prefix`.
+    pub fn with_client_prefix(mut self, race: u32, prefix: &str) -> Self {
+        self.0.entry(race).or_default().prefix = prefix.to_string();
+        self
+    }
+
     /// A table for tests of what reads the intro column: `race` holds `sequence`.
     #[cfg(test)]
     pub(crate) fn with_intro_sequence(mut self, race: u32, sequence: u32) -> Self {
@@ -90,7 +116,8 @@ impl ChrRaces {
 fn schema() -> Schema {
     let mut s = Schema::new("ChrRaces");
     for i in 0..CHR_RACES_FIELDS {
-        let ty = if i == FILE_FIELD
+        let ty = if i == PREFIX_FIELD
+            || i == FILE_FIELD
             || (NAME_FIELD..NAME_FIELD + 8).contains(&i)
             || (26..=28).contains(&i)
         {
@@ -122,6 +149,7 @@ fn table_from_bytes(bytes: &[u8], locale: Locale) -> Result<ChrRaces> {
             Row {
                 name: loc_str(&rs, r, NAME_FIELD, locale).unwrap_or_default(),
                 file: str_at(&rs, r, FILE_FIELD).unwrap_or_default(),
+                prefix: str_at(&rs, r, PREFIX_FIELD).unwrap_or_default(),
                 intro: u32_at(r, INTRO_FIELD).unwrap_or(0),
             },
         );

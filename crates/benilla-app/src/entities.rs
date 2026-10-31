@@ -974,9 +974,13 @@ fn setup_entities(
     match load_item_display_catalog(&mut chain) {
         Ok(catalog) => {
             info!("item display catalog: {} entries", catalog.len());
+            let races = benilla_formats::load_chr_races(&mut chain)
+                .map_err(|e| warn!("ChrRaces.dbc unavailable, no helm shows: {e:#}"))
+                .unwrap_or_default();
             commands.insert_resource(ItemDisplays {
                 catalog,
                 models: HashMap::new(),
+                races,
             });
         }
         Err(e) => warn!("item displays unavailable, units hold nothing: {e:#}"),
