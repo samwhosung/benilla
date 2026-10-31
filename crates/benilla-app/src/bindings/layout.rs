@@ -4,8 +4,8 @@
 //! outside its fixed table, `VK_A`-`VK_Z` and `VK_OEM_*` among them, to
 //! `MapVirtualKeyA(vk, MAPVK_VK_TO_CHAR)` (`0x42da39`), which returns `VK_A`-`VK_Z`'s own letter
 //! whatever the layout types there. The Mac client fills its letter and punctuation keys from the
-//! live layout, `KeyTranslate` (`0x8a3c3`) on the current `KCHR` (re-read when it changes,
-//! `0x8a345`), and fixes its digits by position (`0x5bf320`). Bevy's `KeyboardInput` carries the
+//! live layout, `KeyTranslate` (`mac:08a3c3`) on the current `KCHR` (re-read when it changes,
+//! `mac:08a345`), and fixes its digits by position (`mac:5bf320`). Bevy's `KeyboardInput` carries the
 //! physical key and a `logical_key` with Shift applied, so each platform's name is read off the
 //! raw winit key messages here, before any `Update` reader.
 
@@ -35,7 +35,7 @@ impl Position {
 /// The keys a layout names: the letters, the digits, the punctuation, the ISO and JIS extras and
 /// the keypad comma. Windows sends `VK_OEM_102`, `VK_ABNT_C2` and `VK_SEPARATOR` to the layout arm
 /// like any `VK_OEM_*` key, and the Mac client's table leaves the ISO key `0x0A` and keypad comma
-/// `0x5F` to `KeyTranslate` (`-1` at `0x5bf320`). winit 0.30 cannot deliver those on a Mac, as on
+/// `0x5F` to `KeyTranslate` (`-1` at `mac:5bf320`). winit 0.30 cannot deliver those on a Mac, as on
 /// main: it reports `0x0A` as `Backquote` (whose scancode it gives back as `0x32`) and leaves
 /// `0x5E` and `0x5F` unidentified, so the `IntlBackslash`, `IntlRo` and `NumpadComma` arms never
 /// fire there.
@@ -114,7 +114,7 @@ impl LayoutNames {
     /// reported (a headless run) keeps its US name.
     ///
     /// Deviation: on the Mac and Linux a key its platform reports no character for keeps its US
-    /// name too, where the Mac reference drops it (`0x8a4aa`), and a Linux dead key not yet pressed
+    /// name too, where the Mac reference drops it (`mac:08a4aa`), and a Linux dead key not yet pressed
     /// bare stays bindable.
     pub(crate) fn name(&self, key: KeyCode) -> Option<LayoutName> {
         let position = position(key)?;
@@ -289,13 +289,13 @@ mod windows {
 ///
 /// Deviation: a layout that is not ASCII-capable (Hebrew, Greek, Russian, Arabic, Thai) names its
 /// keys through the ASCII-capable layout macOS pairs with it, as macOS names its own shortcuts,
-/// because the reference reads a non-Roman `KCHR`'s byte as MacRoman (`0x8a40f`), which names no
+/// because the reference reads a non-Roman `KCHR`'s byte as MacRoman (`mac:08a40f`), which names no
 /// real key.
 ///
 /// Deviation: a character above U+00FF (Czech `ě`, Polish `ł`, Turkish `ş`) names the key by itself
-/// because the reference reads `KeyTranslate`'s byte as MacRoman (`0x8a40f`) and keeps it only if
-/// it converts to Latin-1 (`CFStringGetBytes`, `0x8a46b`, stored at `0x8a482`), else leaves the
-/// slot `-1`, which `0x8a4aa` drops, so such a key is mislabelled or dropped; named by what it
+/// because the reference reads `KeyTranslate`'s byte as MacRoman (`mac:08a40f`) and keeps it only if
+/// it converts to Latin-1 (`CFStringGetBytes`, `mac:08a46b`, stored at `mac:08a482`), else leaves the
+/// slot `-1`, which `mac:08a4aa` drops, so such a key is mislabelled or dropped; named by what it
 /// types, it stays bindable and readable.
 #[cfg(any(target_os = "macos", test))]
 fn mac_name(

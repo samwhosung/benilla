@@ -18,7 +18,7 @@
 //!
 //! Deviation: a press with Super (Cmd) held runs no binding because that way a system chord such as
 //! Cmd+Tab or Cmd+Q never acts in game. The reference has no such modifier and runs the bare key's
-//! binding: the Mac enqueues the key with Command held and skips only its text (`0x8a519`), and
+//! binding: the Mac enqueues the key with Command held and skips only its text (`mac:08a51e`), and
 //! Windows hands `VK_LWIN`/`VK_RWIN` to the layout arm (`0x42da39`) like any key.
 //!
 //! Persistence: `benilla-config/bindings/account.txt` and `<Realm>-<Char>.txt` ([`store`]); the

@@ -9,7 +9,7 @@
 //! Off macOS, each keyboard message whose logical key is a named key other than its physical one
 //! takes that named key's code, before Bevy's input collection, so every reader (the bindings,
 //! the text boxes, the glue screens, `ButtonInput<KeyCode>`) sees the layout's key. The Mac client
-//! reads its non-character keys off a fixed table on the physical keycode (`0x5bf320`), so macOS
+//! reads its non-character keys off a fixed table on the physical keycode (`mac:5bf320`), so macOS
 //! keeps them physical. A letter, digit or punctuation key keeps its code too: 1.12 names it by
 //! the virtual key the layout makes it, a digit as itself (`0x42d81c`) and a letter or punctuation
 //! key through `MapVirtualKeyA` (`0x42da39`), which the game's key namer reads, not by a named

@@ -107,6 +107,10 @@ impl Chord {
 pub(crate) fn key_token(k: KeyCode, layout: &LayoutNames) -> Option<KeyName> {
     match layout.name(k) {
         // The lookup folds `a`-`z` up (`0x64b419`), so Turkish `VK_OEM_7`'s `i` is `I`'s key.
+        //
+        // Deviation: the Z key is named `Z` on a Mac too, because the Mac client uppercases only
+        // `a`-`y` (`mac:08a3df`) and so names it `z`, which no binding can press; that fault would
+        // leave a binding to `Z`, the stock `TOGGLESHEATH` key, unreachable there.
         Some(LayoutName::Char(c)) => Some(KeyName::Char(c.to_ascii_uppercase())),
         Some(LayoutName::Dropped) => None,
         None => fixed_name(k),
@@ -119,7 +123,9 @@ pub(crate) fn key_token(k: KeyCode, layout: &LayoutNames) -> Option<KeyName> {
 /// codes the table cannot name, `0x210` and `0x211` (ScrollLock and Pause, and F14 and F15 on a
 /// Mac). Every other key without a name never reaches the walk: the Windows key table drops it
 /// where `MapVirtualKeyA` answers 0 (`0x42da39`: the Windows and Menu keys, media keys, a key the
-/// layout drops), the Mac client's table `0x5bf320` has -1 for Command and fn. Unlike
+/// layout drops), the Mac client's table `mac:5bf320` has -1 for Command and fn, and its modifier handler queues
+/// only Shift, Control and Option (`mac:08a06c`, `mac:08a0d3`, `mac:08a13a`), so Caps Lock queues
+/// nothing. Unlike
 /// [`key_token`], which is a binding's, a modifier still gets a down and an up.
 pub(crate) fn walk_name(k: KeyCode, layout: &LayoutNames) -> Option<String> {
     if let Some(name) = key_token(k, layout) {
@@ -157,23 +163,27 @@ fn fixed_name(k: KeyCode) -> Option<KeyName> {
         F10 => Word("F10"),
         F11 => Word("F11"),
         F12 => Word("F12"),
-        // On a Mac F13 is print-screen: the Mac client's key table `0x5bf320` maps keycode
-        // `0x69` to `0x212`, `PRINTSCREEN`, and macOS has no PrintScreen keycode.
+        // On a Mac F13 is print-screen: the Mac client's key table `mac:5bf320` maps keycode
+        // `0x69` to `0x212`, which the namer calls `PRINTSCREEN` (`mac:1de30e`), and macOS has no PrintScreen keycode.
         #[cfg(target_os = "macos")]
         F13 => Word("PRINTSCREEN"),
         // `IsValidBindingKeyString` accepts `F` + any digits (`0x846c04`) and the Mac table maps
-        // keycode `0x6A` to `F16` (`0x30d`). Deviation: the Windows key table stops at `VK_F12`
+        // keycode `0x6A` to `0x30d`, which the namer calls `F16` (`mac:1de48a`). Deviation: the Windows key table stops at `VK_F12`
         // and drops later F-keys; they are named here because that way a stored `F13`-`F24` can be
         // pressed.
         #[cfg(not(target_os = "macos"))]
         F13 => Word("F13"),
         // On a Mac F14 and F15 are ScrollLock and Pause: keycodes `0x6B` and `0x71` map to
-        // `0x210` and `0x211`, which the namer calls `UNKNOWN`, so they stay unbindable there.
+        // `0x210` and `0x211`, which the namer calls `UNKNOWN` (`mac:5bf320`, `mac:1de334`), so they stay
+        // unbindable there.
         #[cfg(not(target_os = "macos"))]
         F14 => Word("F14"),
         #[cfg(not(target_os = "macos"))]
         F15 => Word("F15"),
         F16 => Word("F16"),
+        // The Mac table leaves keycodes 0x40, 0x4f, 0x50 and 0x5a (F17-F20) at -1 (`mac:5bf320`),
+        // which `KeyTranslate` fills from the layout (`mac:08a3c3`), so the reference's name for
+        // them depends on the OS; these are benilla's.
         F17 => Word("F17"),
         F18 => Word("F18"),
         F19 => Word("F19"),
@@ -218,6 +228,9 @@ fn fixed_name(k: KeyCode) -> Option<KeyName> {
         PrintScreen => Word("PRINTSCREEN"),
         // No ScrollLock or Pause: the namer (`0x4b66b0`) calls `0x210`/`0x211` `UNKNOWN`, and
         // `IsValidBindingKeyString` (`0x4b7890`) has neither name.
+        // The Mac client queues no Caps Lock key (`mac:08a06c`): its modifier handler tests only
+        // Shift, Control and Option, though the table `mac:5bf320` maps keycode 0x39 to `0x20e`.
+        #[cfg(not(target_os = "macos"))]
         CapsLock => Word("CAPSLOCK"),
         _ => return None,
     })
@@ -391,7 +404,6 @@ mod tests {
             KeyCode::PageUp,
             KeyCode::PageDown,
             KeyCode::NumLock,
-            KeyCode::CapsLock,
             KeyCode::PrintScreen,
             KeyCode::Minus,
             KeyCode::Equal,
@@ -462,13 +474,15 @@ mod tests {
                 "PAGEUP",
                 "PAGEDOWN",
                 "NUMLOCK",
-                "CAPSLOCK",
                 "PRINTSCREEN",
                 "MOUSEWHEELDOWN",
                 "MOUSEWHEELUP",
             ]
             .map(str::to_string),
         );
+        // The Mac client queues no Caps Lock key (`mac:08a06c`).
+        #[cfg(not(target_os = "macos"))]
+        tokens.push("CAPSLOCK".to_string());
         tokens.extend(
             "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-=[]\\;',./`"
                 .chars()
@@ -484,6 +498,24 @@ mod tests {
             assert!(
                 Chord::parse(&token).is_some(),
                 "'{token}' is a key SetBinding stores and this codec cannot press"
+            );
+        }
+    }
+
+    /// Caps Lock is a key on Windows and Linux (`CAPSLOCK`); the Mac client's modifier handler
+    /// queues only Shift, Control and Option (`mac:08a06c`), so it names and binds nothing there.
+    #[test]
+    fn caps_lock_is_a_key_only_off_the_mac() {
+        let us = LayoutNames::default();
+        let named = key_token(KeyCode::CapsLock, &us);
+        let parsed = Chord::parse("CAPSLOCK");
+        if cfg!(target_os = "macos") {
+            assert_eq!((named, parsed), (None, None));
+        } else {
+            assert_eq!(named, Some(KeyName::Word("CAPSLOCK")));
+            assert_eq!(
+                parsed.map(|c| c.key),
+                Some(BindKey::Key(KeyName::Word("CAPSLOCK")))
             );
         }
     }
