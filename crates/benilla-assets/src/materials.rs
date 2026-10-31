@@ -543,7 +543,7 @@ mod tests {
             ),
             (
                 "an M2's `c28` multiplies E inside the one clamp",
-                "return clamp(vcol.rgb * anim_tint * tint * e + highlight, vec3<f32>(0.0), vec3<f32>(1.0));",
+                "return clamp(c * e + highlight, vec3<f32>(0.0), vec3<f32>(1.0));",
             ),
             (
                 "E clamps first only with a point light bound",
@@ -586,6 +586,49 @@ mod tests {
         // The one clamp still saturates a full colour.
         assert!(close(ffp(1.0, 1.388, 0.0), 1.0));
         assert!(close(model2(1.0, 1.4, 0, 0.0), 1.0));
+    }
+
+    /// A ground-clutter tuft's vertex colour, `0xffc0c0c0` on baked shadow and white elsewhere
+    /// (`0x6b260e`/`0x6b2615`), is the FFP's lit material: the detail-doodad pass commits the
+    /// chunk's lights (`0x681656`) and draws with colour material on ambient and diffuse
+    /// (`0x59cfec`), so the grey multiplies the light sum inside the one clamp.
+    #[test]
+    fn a_clutter_tufts_grey_is_lit_inside_the_clamp() {
+        let src = include_str!("shaders/wow_model.wgsl");
+        let at = |needle: &str| {
+            src.find(needle)
+                .unwrap_or_else(|| panic!("`{needle}` is gone"))
+        };
+        let light = &src[at("fn vertex_light(")..at("@vertex")];
+        let fragment = &src[at("@fragment")..];
+        assert!(
+            light.contains(
+                "return clamp(c * (sum_nl + point_lit.rgb) + highlight, vec3<f32>(0.0), vec3<f32>(1.0));"
+            ),
+            "the tuft's grey left the clamp of its light sum"
+        );
+        assert!(
+            light.contains("let c = vcol.rgb * anim_tint * body_tint(fade_tag);"),
+            "the tuft's material colour is its vertex colour"
+        );
+        assert!(
+            !fragment.contains("albedo * in.primary"),
+            "the fragment multiplies the grey outside the clamp again"
+        );
+
+        /// The FFP on one channel: the grey times the light sum, clamped once.
+        fn tuft(grey: f32, ambient: f32, diffuse: f32, ndotl: f32) -> f32 {
+            (grey * (ambient + diffuse * ndotl)).clamp(0.0, 1.0)
+        }
+        let shadow = 192.0 / 255.0;
+        // Durotar's noon red, ambient 140 and sun 255, at N·L 0.6: 0.865 of the texel, where the
+        // light clamped first left a shadowed tuft at 0.753.
+        let red = tuft(shadow, 140.0 / 255.0, 1.0, 0.6);
+        assert!((red - 0.8653).abs() < 1e-3, "{red}");
+        assert!(red > shadow);
+        // Full brightness once the sum reaches 1/0.753 ≈ 1.33; a lit tuft is the plain clamp.
+        assert_eq!(tuft(shadow, 0.33, 1.0, 1.0), 1.0);
+        assert_eq!(tuft(1.0, 0.549, 1.0, 0.6), 1.0);
     }
 
     /// The reference fact `vertex_light` follows, read from the install's `Model2.bls`: every

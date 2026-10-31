@@ -2,7 +2,7 @@
 //   M2:      color = clamp(C·E + highlight) × tex, E = A + D·I·(4/17)(0.375 + 2μ + 1.875μ²) + the
 //            point lights, μ = N·L, E clamped to [0, 1] first when a point light is bound
 //   WMO:     color = clamp(MOCV·(ambient + diffuse·max(N·L, 0)) + emission) × tex
-//   clutter: color = clamp(ambient + diffuse·max(N·L, 0)) × tex × tint
+//   clutter: color = clamp(grey·(ambient + diffuse·max(N·L, 0) + the point lights)) × tex
 //   stage 1: color = combine(color, tex1), tex1 at the generated coordinate (presets below)
 //   fog:     color = mix(fog_color, color, fog_factor); out = color, raw gamma
 // The M2 law is the order-2 SH lobe of `Shaders\Vertex\Model2.bls` (cvar `M2UseShaders`, default
@@ -431,13 +431,15 @@ fn vertex_light(
         let sidn_e = m.sidn.rgb * (wow_light.grade.x * sidn_w);
         return clamp(vcol.rgb * sum_wmo + sidn_e + highlight, vec3<f32>(0.0), vec3<f32>(1.0));
     }
-    let tint = body_tint(fade_tag);
+    // `c28`, and the FFP's material colour: the vertex colour (an M2's static M2Color, a
+    // clutter tuft's MCSH grey `0xffc0c0c0` or white, `0x6b260e`/`0x6b2615`) × the animated
+    // M2Color (`m.tint` plus its mat-anim delta) × the body tint.
+    let anim_tint = m.tint.rgb + wow_light.matanim[u32(m.anim_slots.y)].xyz;
+    let c = vcol.rgb * anim_tint * body_tint(fade_tag);
     if (is_clutter) {
-        return clamp(
-            tint * (clamp(sum_nl, vec3<f32>(0.0), vec3<f32>(1.0)) + point_lit.rgb) + highlight,
-            vec3<f32>(0.0),
-            vec3<f32>(1.0),
-        );
+        // The detail-doodad pass lights by the FFP (`0x6813d0` commits the chunk's lights at
+        // `0x681656`), so the grey multiplies the whole light sum inside the one clamp.
+        return clamp(c * (sum_nl + point_lit.rgb) + highlight, vec3<f32>(0.0), vec3<f32>(1.0));
     }
     // The order-2 SH basis, shared by the exterior lobe and the interior probes.
     let quad = vec4<f32>(n_lit.x * n_lit.y, n_lit.y * n_lit.z, n_lit.z * n_lit.z, n_lit.x * n_lit.z);
@@ -504,10 +506,8 @@ fn vertex_light(
         e = clamp(e, vec3<f32>(0.0), vec3<f32>(1.0));
     }
     // `c28` is the model colour `[model+0x1a0]` (the body tint) × the batch's M2Color
-    // (`0x70c60a`-`0x70c654`), written at `0x70c712`; the static M2Color rides the vertex colour,
-    // the animated one `m.tint` plus its mat-anim delta. `c29` holds the highlight.
-    let anim_tint = m.tint.rgb + wow_light.matanim[u32(m.anim_slots.y)].xyz;
-    return clamp(vcol.rgb * anim_tint * tint * e + highlight, vec3<f32>(0.0), vec3<f32>(1.0));
+    // (`0x70c60a`-`0x70c654`), written at `0x70c712`; `c29` holds the highlight.
+    return clamp(c * e + highlight, vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
 // Bevy 0.18's `mesh.wgsl` vertex stage plus our skinning and point lights. A `MaterialExtension`
@@ -803,17 +803,14 @@ fn fragment(in: WowVsOut, @builtin(front_facing) is_front: bool) -> WowFragOut {
 #ifdef VERTEX_COLORS
     vcol = in.color;
 #endif
-    // Gamma-space albedo: lighting runs on the authored byte values. `m.tint` plus its mat-anim
-    // delta is the animated M2Color tint.
+    // Gamma-space colours: lighting runs on the authored byte values. `m.tint` plus its mat-anim
+    // delta is the animated M2Color tint; `albedo` is a WMO's unlit `tex × MOCV`.
     let anim_tint = m.tint.rgb + wow_light.matanim[u32(m.anim_slots.y)].xyz;
     let albedo = base.rgb * vcol.rgb * anim_tint;
     // An unlit batch replaces the lit path: fullbright, with only the highlight added (below).
     let is_emissive = m.model_flags.w > 0.5;
     let highlight = highlight_add(raw_tag);
     var lit_rgb = base.rgb * in.primary;
-    if (m.clutter_fade.w > 0.5) {
-        lit_rgb = albedo * in.primary;
-    }
     if (is_wmo) {
         lit_rgb = base.rgb * m.tint.rgb * in.primary;
         if (is_interior && m.tint.w > 1.5) {

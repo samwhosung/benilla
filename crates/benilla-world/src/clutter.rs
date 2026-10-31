@@ -338,10 +338,8 @@ fn build_chunk_clutter(
                 let rot = Quat::from_rotation_y(d.yaw);
                 // The reference's random per-tuft scale, in [0.9, 1.1].
                 let inst_scale = d.scale;
-                // One tint per tuft. The reference makes the grey the lit material (colour material
-                // on ambient and diffuse, `0x59cfec`), `clamp(grey × light) × texture`; the shader
-                // multiplies it outside the clamp, `texture × grey × clamp(light)`, so under light
-                // above 1.0 a shadowed tuft comes out darker than the reference's.
+                // One tint per tuft, the lit material (colour material on ambient and diffuse,
+                // `0x59cfec`): `wow_model.wgsl` lights `clamp(grey × light) × texture`.
                 let tint = [sp.tint, sp.tint, sp.tint, 1.0];
                 for (i, p) in sub.positions.iter().enumerate() {
                     positions.push((rot * (wow_to_bevy(*p) * inst_scale) + origin).to_array());
