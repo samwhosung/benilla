@@ -158,14 +158,25 @@ fn survey(kind: &str, n: usize, site: &str) {
 /// The three nearest frames of the app crate on the stack, as `file:line` joined by `<`.
 fn site() -> String {
     let trace = std::backtrace::Backtrace::force_capture().to_string();
-    let frames: Vec<&str> = trace
+    let frames: Vec<String> = trace
         .lines()
         .filter_map(|l| l.trim().strip_prefix("at "))
+        .map(|at| at.replace('\\', "/"))
         .filter(|at| at.starts_with("./src/") || at.contains("benilla-app/src/"))
         .take(3)
-        .map(|at| at.rsplit_once("src/").map_or(at, |(_, rest)| rest))
+        .map(|at| under_src(&at))
         .collect();
     frames.join("<")
+}
+
+/// `path` past its last `src` folder, its parts joined by `/` whichever separator the platform
+/// wrote: a Windows path reads `crates\benilla-ui\src\script\census.rs`.
+fn under_src(path: &str) -> String {
+    let path = path.replace('\\', "/");
+    match path.rsplit_once("src/") {
+        Some((_, rest)) => rest.to_string(),
+        None => path,
+    }
 }
 
 /// With a survey running, a frame that hears every event and does nothing ([`listen_to_all`]), so
@@ -251,9 +262,7 @@ impl Applying {
 
     /// An engine turn called from `at`, counted as `turn@` and its file and line under `src/`.
     pub(crate) fn turn(at: &std::panic::Location) -> Self {
-        let file = at.file();
-        let file = file.rsplit_once("src/").map_or(file, |(_, rest)| rest);
-        Self::kind(format!("turn@{file}:{}", at.line()))
+        Self::kind(format!("turn@{}:{}", under_src(at.file()), at.line()))
     }
 
     fn kind(kind: String) -> Self {
@@ -453,6 +462,21 @@ mod tests {
             s.fire_event("PLAYER_TARGET_CHANGED", vec![]);
             sent.set(sent.get() + 1);
         });
+    }
+
+    /// A site is named by its path under `src/` with `/` on every platform, so a Windows build's
+    /// `\` paths (`Location::file`, a backtrace's frames) name it as a unix build's do.
+    #[test]
+    fn a_site_is_its_path_under_src_with_forward_slashes() {
+        for path in [
+            "crates/benilla-ui/src/script/census.rs",
+            r"crates\benilla-ui\src\script\census.rs",
+            r"D:\a\benilla\crates\benilla-ui\src\script\census.rs",
+            r".\src\script\census.rs",
+        ] {
+            assert_eq!(super::under_src(path), "script/census.rs", "{path}");
+        }
+        assert_eq!(super::under_src(r"build\out.rs"), "build/out.rs");
     }
 
     /// A live debug build panics over a count by default, and `BENILLA_SEND_CENSUS_PANIC=0` alone
