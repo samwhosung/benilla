@@ -523,10 +523,15 @@ pub fn guild_leader(name: &str) -> Vec<u8> {
     }
 }
 
-/// Body of `CMSG_GUILD_MOTD` (`Server/Packets/Guild.cpp:38-42`): the new MOTD; `""`, a lone NUL,
-/// clears it.
+/// Body of `CMSG_GUILD_MOTD` (`Server/Packets/Guild.cpp:38-42`): the new MOTD. `GuildSetMOTD`
+/// (`0x48b270`) writes the text only when its first byte is not NUL (`0x48b2c1` jumps past the
+/// write at `0x48b2d5`) and sends either way (`0x48b2e0`), so `""` is an empty body.
 pub fn guild_motd(motd: &str) -> Vec<u8> {
-    cstring_body(motd)
+    if motd.is_empty() {
+        Vec::new()
+    } else {
+        cstring_body(motd)
+    }
 }
 
 /// Body of `CMSG_GUILD_RANK` (`Server/Packets/Guild.cpp:78-83`): rank id, rights, name. Both are

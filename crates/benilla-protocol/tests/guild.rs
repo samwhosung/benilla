@@ -139,16 +139,16 @@ fn cmsg_bodies_golden() {
     );
 }
 
-/// An empty MOTD is a one-byte empty cstring; vmangos (`Server/Packets/Guild.cpp:38-42`) reads a
-/// zero-byte body as a clear too.
+/// An empty MOTD is an empty body: `GuildSetMOTD` skips the string write for a NUL first byte
+/// (`0x48b2c1` → `0x48b2da`) and sends all the same (`0x48b2e0`).
 #[test]
-fn guild_motd_clears_with_an_empty_cstring_not_an_empty_body() {
+fn guild_motd_clears_with_an_empty_body() {
     assert_eq!(
         messages::guild_motd(""),
-        hx("00"),
+        Vec::<u8>::new(),
         "CMSG_GUILD_MOTD body, cleared"
     );
-    assert_eq!(messages::guild_motd("").len(), 1, "one NUL, not zero bytes");
+    assert_eq!(messages::guild_motd("Hi"), hx("486900"), "a set MOTD");
 }
 
 /// `SMSG_GUILD_QUERY_RESPONSE` always carries ten rank-name cstrings, not a counted list (vmangos

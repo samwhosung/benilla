@@ -194,7 +194,7 @@ pub enum GuildCall {
     Leave,
     /// `GuildDisband()`.
     Disband,
-    /// `GuildSetMOTD(text)`; an empty string clears it.
+    /// `GuildSetMOTD(text)`; an empty string clears it (sent as an empty body, `0x48b2c1`).
     SetMotd(String),
     /// `SetGuildInfoText(text)`.
     SetInfoText(String),
@@ -783,7 +783,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // GuildSetMOTD(text) (`0x48b270`) / SetGuildInfoText(text) (`0x4d2380`): a non-string raises
     // `Usage: GuildSetMOTD("message")` (`0x8428e0`) or `Usage: SetGuildInfoText(text)`
-    // (`0x849cd4`); any string is sent.
+    // (`0x849cd4`); any string is sent, but `GuildSetMOTD` writes it only when non-empty
+    // (`0x48b2c1`), so "" is an empty body.
     for (global, usage, make) in [
         (
             "GuildSetMOTD",
