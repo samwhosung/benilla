@@ -152,9 +152,44 @@ impl MpqAssetReader {
     }
 }
 
+/// `CM2Scene::CreateModel` (`0x707350`) opens [`ERROR_CUBE`] when the requested model fails to
+/// open (`0x70737f`), for every lane that creates through it (units `0x613e43`, GameObjects
+/// `0x5f7bde`, items, spell effects, `Model:SetModel` `0x76cd01`). So a model path whose file is
+/// missing reads the cube's bytes, from the archives with open flag 0; any other miss, and the
+/// cube's own, stays a miss.
+fn or_error_cube(
+    path: &Path,
+    read: Result<Vec<u8>, AssetReaderError>,
+    cube: impl FnOnce(&str) -> Result<Option<Vec<u8>>, AssetReaderError>,
+) -> Result<Vec<u8>, AssetReaderError> {
+    let Err(AssetReaderError::NotFound(_)) = &read else {
+        return read;
+    };
+    let is_m2 = path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("m2"));
+    let Some(file) = benilla_formats::m2_file_name(ERROR_CUBE) else {
+        return read;
+    };
+    if !is_m2
+        || path
+            .to_str()
+            .is_some_and(|p| p.eq_ignore_ascii_case(&file.replace('\\', "/")))
+    {
+        return read;
+    }
+    match cube(&file) {
+        Ok(Some(bytes)) => Ok(bytes),
+        _ => read,
+    }
+}
+
 impl AssetReader for MpqAssetReader {
     async fn read<'a>(&'a self, path: &'a Path) -> Result<impl Reader + 'a, AssetReaderError> {
-        Ok(VecReader::new(self.read_bytes(path)?))
+        let bytes = or_error_cube(path, self.read_bytes(path), |cube| {
+            self.read_candidate(cube)
+        })?;
+        Ok(VecReader::new(bytes))
     }
 
     async fn read_meta<'a>(&'a self, path: &'a Path) -> Result<impl Reader + 'a, AssetReaderError> {
@@ -193,7 +228,7 @@ impl AssetReader for LooseAssetReader {
     async fn read<'a>(&'a self, path: &'a Path) -> Result<impl Reader + 'a, AssetReaderError> {
         // The URL holds `/` where the model's name held `\` ([`m2_url`] writes every separator
         // as `/`), so it is turned back for the index.
-        let bytes = first_candidate(path, |name| {
+        let found = first_candidate(path, |name| {
             let name = name.replace('/', "\\");
             match self.loose.find(&name, LooseOpen::Index) {
                 // A loose file that will not open is a miss, with no turn to the chain
@@ -201,7 +236,8 @@ impl AssetReader for LooseAssetReader {
                 Some(file) => Ok(file.read()),
                 None => self.mpq.read_candidate(&name),
             }
-        })?;
+        });
+        let bytes = or_error_cube(path, found, |cube| self.mpq.read_candidate(cube))?;
         Ok(VecReader::new(bytes))
     }
 
@@ -381,6 +417,35 @@ mod tests {
     use super::*;
     use bevy::camera::primitives::MeshAabb;
     use bevy::tasks::block_on;
+
+    /// `0x70737f`: a model that fails to open stands the error cube; nothing else does.
+    #[test]
+    fn a_missing_model_reads_the_error_cube() {
+        let missing = || Err(AssetReaderError::NotFound("x".into()));
+        let cube = |name: &str| {
+            assert_eq!(name, "spells\\errorcube.m2");
+            Ok(Some(vec![7u8]))
+        };
+        let m2 = Path::new("creature/crystalspider/crystalspider.m2");
+        assert_eq!(or_error_cube(m2, missing(), cube).unwrap(), vec![7u8]);
+        assert_eq!(
+            or_error_cube(m2, Ok(vec![1u8]), cube).unwrap(),
+            vec![1u8],
+            "a model that opens is its own"
+        );
+        assert!(
+            or_error_cube(Path::new("creature/x/x.blp"), missing(), cube).is_err(),
+            "a texture miss is not a model miss"
+        );
+        assert!(
+            or_error_cube(Path::new("spells/errorcube.m2"), missing(), cube).is_err(),
+            "no cube behind the cube"
+        );
+        assert!(
+            or_error_cube(m2, missing(), |_| Ok(None)).is_err(),
+            "an install without the cube keeps the miss"
+        );
+    }
 
     /// `0x706a50`'s extension rule: the last dot's `.mdx`/`.mdl` in any case is `.m2`, `.m2`
     /// stands, and anything else stands the error cube from the archives (`0x70737f`).

@@ -574,6 +574,61 @@ fn model_dir(model_path: &str) -> &str {
 mod tests {
     use super::*;
 
+    /// `CreatureDisplayInfo` 4 names `CrystalSpider.mdx`, which does not ship: the model load
+    /// stands `Spells\ErrorCube.mdx` (`0x707350`, `0x70737f`) rather than drawing nothing.
+    #[test]
+    fn a_display_whose_model_file_is_missing_resolves_to_the_error_cube() {
+        use benilla_assets::{
+            m2_url, register_asset_loaders, register_mpq_source, M2Model, ERROR_CUBE,
+        };
+        let data = benilla_formats::wow_data_or_skip!();
+        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+        let catalog = benilla_formats::load_creature_catalog(&mut chain).expect("creatures");
+        let path = catalog.model(4).expect("display 4").model_path;
+        assert!(
+            path.to_ascii_lowercase().contains("crystalspider"),
+            "{path}"
+        );
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        register_mpq_source(&mut app, &data).expect("register mpq source");
+        app.add_plugins(bevy::asset::AssetPlugin::default());
+        app.init_asset::<Image>();
+        app.init_asset::<Mesh>();
+        app.init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
+        app.init_asset::<bevy::animation::AnimationClip>();
+        app.init_asset::<bevy::animation::graph::AnimationGraph>();
+        register_asset_loaders(&mut app);
+        let server = app.world().resource::<AssetServer>().clone();
+        let display = new_creature_display(&catalog, 4, &server);
+        assert!(display.names_a_model());
+        let ModelHandle::M2(handle) = display.handle else {
+            panic!("display 4 names an M2");
+        };
+        let cube: Handle<M2Model> = server.load(m2_url(ERROR_CUBE));
+        let shape = |app: &App, h: &Handle<M2Model>| {
+            app.world().resource::<Assets<M2Model>>().get(h).map(|m| {
+                m.submeshes
+                    .iter()
+                    .map(|s| s.geometry.positions.len())
+                    .collect::<Vec<_>>()
+            })
+        };
+        let mut got = None;
+        for _ in 0..3000 {
+            app.update();
+            if let (Some(a), Some(b)) = (shape(&app, &handle), shape(&app, &cube)) {
+                got = Some((a, b));
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let (spider, cube) = got.expect("both load");
+        assert!(!cube.is_empty(), "the cube has geometry");
+        assert_eq!(spider, cube, "the missing model is the cube");
+    }
+
     /// Both kinds carry the same empty `parts` once built, so only the handle tells a display that
     /// named no model from one whose model draws nothing.
     #[test]
