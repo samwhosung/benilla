@@ -688,6 +688,9 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // callback refuses above 1 and prints "Shadow mip level changed upon restart.", and the
     // terrain's shadow-map mip (`0x66f877`) reads it at load. `hwDetect` leaves it at 1.
     same("shadowLevel", "1").checked(benilla_ui::script::check_shadow_level),
+    // `shadowLOD` (`0x6d8157`, "1", record `[0x86f5b4]`, handler `0x6d8450`): the blob-shadow entry
+    // `0x6d78f0` draws only at 1. The handler refuses outside 0..=1 and says "Shadow LOD set to %d".
+    same("shadowLOD", "1").checked(benilla_ui::script::check_shadow_lod),
     // `doodadAnim` (`0x6884d8`, "1", flags 1, callback `0x688a10`, record `[0xc7f354]`), behind
     // `Get/SetDoodadAnim`: the callback toggles bit `0x8000` of `[0xc7b2a4]` and calls `0x6953d0`,
     // a bare `ret`, so no animation reads it. `hwDetect` sets 0 or 1 by CPU tier.

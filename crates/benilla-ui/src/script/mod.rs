@@ -314,8 +314,8 @@ pub use cvar_checks::{
     check_anisotropic, check_dist_cull, check_error_filter, check_error_level_max,
     check_error_level_min, check_ffx_echo, check_footstep_bias, check_horizon_farclip,
     check_lod_dist, check_map_obj_light_lod, check_max_lights, check_particle_density,
-    check_shadow_bias, check_target_nearest_distance, check_texture_lod_dist, check_unit_draw_dist,
-    check_water_lod, check_weather_density, scanf_f_prefix,
+    check_shadow_bias, check_shadow_lod, check_target_nearest_distance, check_texture_lod_dist,
+    check_unit_draw_dist, check_water_lod, check_weather_density, scanf_f_prefix,
 };
 pub use cvar_checks::{
     check_base_mip, check_camera_decay, check_camera_distance_max, check_camera_pitch,

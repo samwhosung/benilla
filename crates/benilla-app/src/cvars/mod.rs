@@ -1772,6 +1772,11 @@ mod tests {
         assert_eq!(res::<RenderScale>(&app).0, *RENDER_SCALE_RANGE.end());
         apply(&mut app, "renderscale", "0");
         assert_eq!(res::<RenderScale>(&app).0, *RENDER_SCALE_RANGE.start());
+        assert_eq!(res::<crate::blob_shadow::ShadowSettings>(&app).lod, 1);
+        apply(&mut app, "shadowLOD", "0");
+        assert_eq!(res::<crate::blob_shadow::ShadowSettings>(&app).lod, 0);
+        apply(&mut app, "shadowlod", "1");
+        assert_eq!(res::<crate::blob_shadow::ShadowSettings>(&app).lod, 1);
         assert!(!res::<crate::perf::FpsJournalSetting>(&app).0);
         apply(&mut app, "fpsJournal", "1");
         assert!(res::<crate::perf::FpsJournalSetting>(&app).0);
@@ -2348,6 +2353,12 @@ mod tests {
                 "Shadow bias must be in the range (0, 1)",
                 "0.5",
             ),
+            (
+                "shadowLOD",
+                "2",
+                "Shadow LOD must be in the range (0, 1)",
+                "0",
+            ),
         ] {
             let before = res::<Cvars>(&app).get(name).unwrap().to_string();
             assert_eq!(
@@ -2842,6 +2853,7 @@ mod tests {
             .init_resource::<crate::perf::FpsJournalSetting>()
             .init_resource::<crate::text_filter::TextFilterSwitches>()
             .init_resource::<crate::game_tip::GameTipSetting>()
+            .init_resource::<crate::blob_shadow::ShadowSettings>()
             .init_resource::<crate::player::Approach>()
             .add_plugins(CvarPlugin);
         app.insert_non_send_resource(UiScript::new().unwrap());

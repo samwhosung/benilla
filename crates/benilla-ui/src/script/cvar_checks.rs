@@ -413,6 +413,17 @@ pub fn check_shadow_bias(value: &str, _applied: &str, _rows: CvarRows<'_>) -> Cv
     )
 }
 
+/// `shadowLOD`'s callback (`0x6d8450`): `sscanf(value, "%d")` (`0x6d8469`) into the argument's own
+/// slot, refused outside 0..=1 (signed) with "Shadow LOD must be in the range (0, 1)" (`0x86f610`),
+/// else taken with "Shadow LOD set to %d" (`0x86f638`). With no number the slot keeps the string
+/// pointer's bits, a heap address far above 1, so such text is refused.
+pub fn check_shadow_lod(value: &str, _applied: &str, _rows: CvarRows<'_>) -> CvarVerdict {
+    match super::scanf_d(value) {
+        Some(v @ 0..=1) => CvarVerdict::accept_saying(format!("Shadow LOD set to {v}")),
+        _ => CvarVerdict::refuse("Shadow LOD must be in the range (0, 1)"),
+    }
+}
+
 /// The two LOD distance callbacks never refuse. Out of range they print their line and hand the
 /// setter a stand-in inside it, which the setter takes and answers 1 for: `lodDist`'s (`0x688ab0`)
 /// takes 50 to 250 (`[0x80fed4]`, `[0x80fed0]`), prints "Lod distance must be in range 50.0f -
@@ -958,6 +969,32 @@ mod tests {
         assert!(!check_horizon_farclip("2112.01", "2112", &farclip_350).accept);
         assert!(!check_horizon_farclip("900", "2112", &at("400")).accept);
         assert!(check_horizon_farclip("600", "2112", &no_rows).accept);
+    }
+
+    /// `0x6d8450`: 0 or 1 by `sscanf("%d")`, the taken value printed with `%d`; anything else,
+    /// text with no number included, is refused.
+    #[test]
+    fn shadow_lod_takes_zero_or_one_and_says_so() {
+        for (text, said) in [
+            ("0", "0"),
+            ("1", "1"),
+            (" 1", "1"),
+            ("1.9", "1"),
+            ("0x", "0"),
+        ] {
+            assert_eq!(
+                check_shadow_lod(text, "", &no_rows),
+                CvarVerdict::accept_saying(format!("Shadow LOD set to {said}")),
+                "{text:?}"
+            );
+        }
+        for bad in ["2", "-1", "abc", "", "4294967298"] {
+            assert_eq!(
+                check_shadow_lod(bad, "", &no_rows),
+                CvarVerdict::refuse("Shadow LOD must be in the range (0, 1)"),
+                "{bad:?}"
+            );
+        }
     }
 
     /// `0x689450` and `0x6d8530`: 0 to 1 by `sscanf`, the taken value printed with `%f`.

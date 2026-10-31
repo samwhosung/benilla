@@ -245,7 +245,6 @@ pub(super) const INERT: &[Registered] = &[
     same("PlayerFadeOutAlpha", "128"),      // 0x481bbf
     same("PlayerFadeOutRate", "4096"),      // 0x481b91
     same("shadowBias", "0.1").checked(benilla_ui::script::check_shadow_bias), // 0x6d817d
-    same("shadowLOD", "1"),                 // 0x6d8157
     same("ShowErrors", "1"),                // 0x402cc1
     same("showfootprintparticles", "1"),    // 0x6039b5
     same("showfootprints", "1"),            // 0x688842

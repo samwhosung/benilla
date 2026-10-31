@@ -23,7 +23,8 @@
 //!   (`0x707aea`), exactly like `UnitRenderAlpha`. Unlit, no fog, no depth write; the texture is
 //!   `Rgba8Unorm`, so the multiply runs on raw bytes as the reference's does.
 //! - Registration: units, players and corpses cast one; game objects and dynamic objects never do
-//!   (`0x670e94`, `0x613e10`). The reference's `shadowLOD` toggle is not built: always on.
+//!   (`0x670e94`, `0x613e10`). The entry `0x6d78f0` goes on to draw only while `shadowLOD` is 1
+//!   (`0x6d7904`-`0x6d790a`; [`ShadowSettings`]): at 0 no unit casts one.
 //! - Deviation: the shadow is gated on `InheritedVisibility`, though the reference draws one under
 //!   an undrawn body (`0x48161d`), because benilla's exterior-scene election hides units the
 //!   reference never loads, and their shadows would stay on the floor below.
@@ -80,14 +81,40 @@ struct ShadowAssets {
     texture: Handle<Image>,
 }
 
+/// The unit-shadow CVars' stored values (`0x6d8070`).
+#[derive(Resource, Debug, Clone, Copy, PartialEq)]
+pub(crate) struct ShadowSettings {
+    /// `shadowLOD` (`[0x86f5b4]`, handler `0x6d8450`): the blob-shadow entry draws only at 1.
+    pub(crate) lod: i32,
+}
+
+impl Default for ShadowSettings {
+    fn default() -> Self {
+        Self { lod: 1 }
+    }
+}
+
+/// The unit-shadow CVars' change callback; the registry has already refused a `shadowLOD` outside
+/// 0..=1 ([`benilla_ui::script::check_shadow_lod`]).
+pub(crate) fn on_cvar(ev: &crate::cvars::CvarChanged, mut settings: Mut<'_, ShadowSettings>) {
+    if ev.is("shadowLOD") {
+        settings.lod = benilla_ui::script::scanf_d(&ev.new).unwrap_or(0);
+    }
+}
+
 pub(crate) struct BlobShadowPlugin;
 
 impl Plugin for BlobShadowPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup_shadow_assets)
+        app.init_resource::<ShadowSettings>()
+            .add_systems(Startup, setup_shadow_assets)
             .add_systems(
                 Update,
-                (sync_shadows, update_shadows)
+                (
+                    sync_shadows,
+                    clear_shadows.run_if(not(shadow_lod_on)),
+                    update_shadows.run_if(shadow_lod_on),
+                )
                     .chain()
                     // After net motion and input, so the decal follows this frame's transforms.
                     .after(WorldStage::Input),
@@ -149,6 +176,21 @@ fn sync_shadows(
             ShadowKey::default(),
             ShadowVerts::default(),
         ));
+    }
+}
+
+/// The entry's gate (`0x6d7904`-`0x6d790a`): it draws only while `shadowLOD` is 1.
+fn shadow_lod_on(settings: Res<ShadowSettings>) -> bool {
+    settings.lod == 1
+}
+
+/// At any `shadowLOD` but 1 no unit casts a shadow: every record is emptied, and rebuilt from
+/// scratch once the setting is back at 1.
+fn clear_shadows(mut shadows: Query<(&mut ShadowKey, &mut ShadowVerts)>) {
+    for (mut key, mut verts) in &mut shadows {
+        if key.shown || !verts.0.is_empty() {
+            hide(&mut key, &mut verts);
+        }
     }
 }
 
@@ -480,6 +522,35 @@ mod tests {
         // Out-of-range clamps, never negative.
         assert_eq!(shadow_ramp(-1.0), 0.0);
         assert_eq!(shadow_ramp(2.0), 0.0);
+    }
+
+    /// `shadowLOD` 0 empties every shadow record and keeps it empty (`0x6d7904`-`0x6d790a`); at 1
+    /// the gate is open.
+    #[test]
+    fn shadow_lod_zero_clears_every_record() {
+        let mut app = App::new();
+        app.init_resource::<ShadowSettings>()
+            .add_systems(Update, clear_shadows.run_if(not(shadow_lod_on)));
+        let shadow = app
+            .world_mut()
+            .spawn((
+                ShadowKey {
+                    shown: true,
+                    ..default()
+                },
+                ShadowVerts(vec![<EffectVertex as bytemuck::Zeroable>::zeroed(); 3]),
+            ))
+            .id();
+        app.update();
+        assert!(
+            app.world().get::<ShadowKey>(shadow).unwrap().shown,
+            "1 casts"
+        );
+        assert_eq!(app.world().get::<ShadowVerts>(shadow).unwrap().0.len(), 3);
+        app.world_mut().resource_mut::<ShadowSettings>().lod = 0;
+        app.update();
+        assert!(!app.world().get::<ShadowKey>(shadow).unwrap().shown);
+        assert!(app.world().get::<ShadowVerts>(shadow).unwrap().0.is_empty());
     }
 
     /// The ±5 clamp is a pre-scale cap, not a floor.
