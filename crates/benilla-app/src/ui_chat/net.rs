@@ -128,6 +128,22 @@ fn on_session_end(
     rosters.clear();
 }
 
+/// The ignore gate of the player-chat path (`FriendList::IsIgnored` at `0x49d72d`): a sender on
+/// the list is dropped unless its chat tag is GM (`0x49d736`, tag 3), and a dropped whisper
+/// (type 6, `0x49d73c`) sends `CMSG_CHAT_IGNORED` (`0x49d74e` → `0x49d4b0`), so the sender hears
+/// "is ignoring you". A GM-tagged line passes whatever its type. Whether the line is dropped.
+fn drops_ignored(m: &ChatMessage, social: &SocialState, net_commands: &NetCommands) -> bool {
+    if !social.is_ignored(m.sender_guid) || m.chat_tag == benilla_protocol::messages::chat_tag::GM {
+        return false;
+    }
+    if m.chat_type == CHAT_MSG_WHISPER {
+        let _ = net_commands.0.send(ClientCommand::ChatIgnored {
+            guid: m.sender_guid,
+        });
+    }
+    true
+}
+
 /// A spoken line (`SMSG_MESSAGECHAT`). System lines (`0x0A`), the server's answers to GM
 /// commands, log at `info!` and go out as [`ServerSaidMessage`]; other chat logs at `debug!`.
 fn chat(
@@ -140,11 +156,10 @@ fn chat(
     // Addon traffic: 1.12 has no addon opcode or chat type, so `LANG_ADDON` on any lane is the
     // whole test (`0x49a89e`, in the display function `0x49a870`). The line never renders
     // (`0x49a970`); it fires `CHAT_MSG_ADDON` once the sender's name resolves (`0x49d7ba`,
-    // `0x49ccc0`). An ignored sender's fires nothing, as the reference drops ignored lines first
-    // (`0x49d72d`), and needs no `CMSG_CHAT_IGNORED`: vmangos refuses addon whispers
-    // (`ChatHandler.cpp:84-103`).
+    // `0x49ccc0`). No language test precedes the ignore gate (`0x49d72d`), so an addon line meets
+    // it as any line does ([`drops_ignored`]).
     if m.is_addon() {
-        if !social.is_ignored(m.sender_guid) {
+        if !drops_ignored(&m, social, net_commands) {
             debug!(
                 "net: addon chat [{:#04x}] from {:#x}: {:?} (suppressed — not a chat line)",
                 m.chat_type, m.sender_guid, m.text
@@ -186,14 +201,7 @@ fn chat(
         }
         m.chat_type = CHAT_MSG_WHISPER;
     }
-    // An ignored speaker is dropped silently (`FriendList::IsIgnored`, `0x5ae5a0`); a dropped
-    // whisper also sends `CMSG_CHAT_IGNORED`, so the sender hears "is ignoring you".
-    if social.is_ignored(m.sender_guid) {
-        if m.chat_type == CHAT_MSG_WHISPER {
-            let _ = net_commands.0.send(ClientCommand::ChatIgnored {
-                guid: m.sender_guid,
-            });
-        }
+    if drops_ignored(&m, social, net_commands) {
         return;
     }
     chat_log.push_wire(m);
@@ -343,6 +351,97 @@ mod tests {
             }
             assert!(rx.try_iter().next().is_none(), "no CMSG_CHAT_IGNORED");
         }
+    }
+
+    /// One line from sender 0x21 through [`chat`] with that sender ignored: the chat log, and the
+    /// commands that went on the wire.
+    fn from_an_ignored_sender(m: ChatMessage) -> (World, Vec<ClientCommand>) {
+        let mut world = World::new();
+        world.init_resource::<Messages<ServerSaidMessage>>();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        world.insert_resource(NetCommands(tx));
+        let mut social = SocialState::default();
+        social.ignore_for_test(0x21);
+        world.insert_resource(social);
+        world.insert_resource(ChatLog::default());
+        world
+            .run_system_once(
+                move |chat_log: Res<ChatLog>,
+                      social: Res<SocialState>,
+                      net_commands: Res<NetCommands>,
+                      mut server_said: MessageWriter<ServerSaidMessage>| {
+                    chat(
+                        m.clone(),
+                        &chat_log,
+                        &social,
+                        &net_commands,
+                        &mut server_said,
+                    );
+                },
+            )
+            .unwrap();
+        (world, rx.try_iter().collect())
+    }
+
+    /// The ignore gate (`0x49d72d`, `0x49d736`, `0x49d73c`): an ignored sender is dropped unless
+    /// tagged GM, and only a dropped whisper draws `CMSG_CHAT_IGNORED`.
+    #[test]
+    fn an_ignored_gm_passes_and_only_an_ignored_whisper_draws_the_reply() {
+        use benilla_protocol::messages::chat_tag;
+        let line = |chat_type: u8, tag: u8| ChatMessage {
+            chat_type,
+            chat_tag: tag,
+            ..a_party_line(0, "hi")
+        };
+        for (chat_type, tag, delivered, replies) in [
+            (CHAT_MSG_PARTY, chat_tag::NONE, false, false),
+            (CHAT_MSG_WHISPER, chat_tag::NONE, false, true),
+            (CHAT_MSG_WHISPER, chat_tag::DND, false, true),
+            (CHAT_MSG_PARTY, chat_tag::GM, true, false),
+            (CHAT_MSG_WHISPER, chat_tag::GM, true, false),
+        ] {
+            let (world, sent) = from_an_ignored_sender(line(chat_type, tag));
+            assert_eq!(
+                world.resource::<ChatLog>().pending_wire().len(),
+                usize::from(delivered),
+                "type {chat_type:#x} tag {tag}: delivered"
+            );
+            assert_eq!(
+                sent.len(),
+                usize::from(replies),
+                "type {chat_type:#x} tag {tag}: wire {sent:?}"
+            );
+            if replies {
+                assert!(matches!(sent[0], ClientCommand::ChatIgnored { guid: 0x21 }));
+            }
+        }
+    }
+
+    /// An addon line meets the same gate: no language test precedes it (`0x49d72d`).
+    #[test]
+    fn an_addon_line_meets_the_ignore_gate_like_any_other() {
+        use benilla_protocol::messages::chat_tag;
+        let addon = |chat_type: u8, tag: u8| ChatMessage {
+            chat_type,
+            chat_tag: tag,
+            ..a_party_line(LANGUAGE_ADDON, "Quiver\tVERSION:3.1.4")
+        };
+        let (world, sent) = from_an_ignored_sender(addon(CHAT_MSG_PARTY, chat_tag::NONE));
+        assert!(world.resource::<ChatLog>().pending_addons().is_empty());
+        assert!(sent.is_empty());
+        let (world, sent) = from_an_ignored_sender(addon(CHAT_MSG_PARTY, chat_tag::GM));
+        assert_eq!(world.resource::<ChatLog>().pending_addons().len(), 1);
+        assert!(sent.is_empty());
+        // A whisper-typed addon line is dropped and answered as a whisper is (`0x49d73c`).
+        let (world, sent) = from_an_ignored_sender(addon(CHAT_MSG_WHISPER, chat_tag::NONE));
+        assert!(world.resource::<ChatLog>().pending_addons().is_empty());
+        assert!(matches!(
+            sent[..],
+            [ClientCommand::ChatIgnored { guid: 0x21 }]
+        ));
+        let (world, sent) = from_an_ignored_sender(addon(CHAT_MSG_WHISPER, chat_tag::GM));
+        assert_eq!(world.resource::<ChatLog>().pending_addons().len(), 1);
+        assert!(sent.is_empty());
     }
 
     /// `SMSG_PLAYED_TIME` (`0x401850`) puts `TIME_PLAYED_MSG` on the notice lane (`0x4018df`) and
