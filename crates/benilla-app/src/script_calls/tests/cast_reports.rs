@@ -1276,3 +1276,45 @@ fn the_arm_tails_refusal_sends_its_cancel_after_its_lines_listeners() {
             .collect();
     assert_eq!(wire, ["chat", "cancel"]);
 }
+
+/// A unit selected at the push's signal (`0x6e5026`) is the arm's candidate (`0x6e539f`), and
+/// `BindTarget`'s merge refuses it out of range (`0x6e6063` → `0x6e6089`): the report's line
+/// signals `UI_ERROR_MESSAGE` (`0x6e21dd`) ahead of its tail's cancel of the pushed spell
+/// (`0x6e2218` → `0x6e4970`), so the line's listener sends ahead of the cancel.
+#[test]
+fn the_arms_range_refusal_sends_its_cancel_after_its_lines_listeners() {
+    let mut f = frame(true);
+    with_factions(&mut f, FRIEND, &[(2, 0x19), (FLAGS, 0x8)]);
+    seat_spells(
+        &mut f,
+        vec![(
+            MOTW,
+            benilla_formats::SpellDisplay {
+                name: "Mark of the Wild".into(),
+                implicit_target_a1: 21,
+                range_index: 5,
+                ..Default::default()
+            },
+        )],
+    );
+    with_friendly_party1(&mut f, true);
+    with_party1_out_of_range(&mut f);
+    on_change_number(&mut f, 1, r#"TargetUnit("party1")"#);
+    run(
+        &mut f,
+        r#"local l = CreateFrame("Frame")
+        l:RegisterEvent("UI_ERROR_MESSAGE")
+        l:SetScript("OnEvent", function() SendChatMessage("seen", "SAY") end)"#,
+    );
+    f.rx.try_iter().for_each(drop);
+    run_hosted(&mut f, r#"CastSpellByName("Mark of the Wild")"#);
+    let wire: Vec<&str> =
+        f.rx.try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::Chat { .. } => Some("chat"),
+                ClientCommand::CancelCast { spell_id: MOTW } => Some("cancel"),
+                _ => None,
+            })
+            .collect();
+    assert_eq!(wire, ["chat", "cancel"]);
+}

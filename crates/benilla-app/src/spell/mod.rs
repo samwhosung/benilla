@@ -68,9 +68,23 @@ pub(crate) struct ScriptCast<'w, 's> {
 impl ScriptCast<'_, '_> {
     /// `ArmCast` past its signal's listeners (`0x6e5338`): its candidate read again where the
     /// attempt took it, the selection at `0x6e539f` included ([`CastLadder::reread_arm`]).
-    pub(crate) fn reread_arm(&mut self, park: &mut cast_send::ArmPark) {
+    pub(crate) fn reread_arm(
+        &mut self,
+        park: &mut cast_send::ArmPark,
+    ) -> Option<cast_send::OwedRefusal> {
         let ctx = self.targeting.context_for(park.candidate());
-        self.ladder.reread_arm(park, ctx.as_ref());
+        self.ladder.reread_arm(park, ctx.as_ref())
+    }
+
+    /// The arm's range refusal past its line's listeners ([`CastLadder::reread_refused`]), its
+    /// candidate read again there.
+    pub(crate) fn reread_refused(
+        &mut self,
+        park: &mut cast_send::ArmPark,
+        owed: cast_send::OwedRefusal,
+    ) {
+        let ctx = self.targeting.context_for(park.candidate());
+        self.ladder.reread_refused(park, owed, ctx.as_ref());
     }
 }
 

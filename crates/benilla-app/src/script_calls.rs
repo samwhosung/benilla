@@ -1009,7 +1009,12 @@ impl ScriptCallHost<'_, '_> {
         while let Some(mut stage) = self.appliers.cast().ladder.take_parked() {
             self.at_point(script, at);
             if let crate::spell::CastStage::Arm(park) = &mut stage {
-                self.appliers.cast().reread_arm(park);
+                // `BindTarget`'s merge refused the unit out of range (`0x6e6089`): its line's
+                // listeners run ahead of the report's tail (`0x6e21dd` before `0x6e2218`).
+                if let Some(owed) = self.appliers.cast().reread_arm(park) {
+                    self.at_point(script, at);
+                    self.appliers.cast().reread_refused(park, owed);
+                }
             }
             self.appliers.cast().ladder.resume_parked(stage);
             // The attempt's return (`0x6e51e3`) waits past its unit's attack tail (`0x6e51de`),

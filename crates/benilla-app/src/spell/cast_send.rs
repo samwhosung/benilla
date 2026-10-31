@@ -210,6 +210,17 @@ pub(crate) struct ArmPark {
     on: ArmWord,
 }
 
+/// The merge's range refusal at the arm's reread, past its line (`0x6e6089` → `0x6e21dd`,
+/// `0x6e21fc`): the report's tail and the rest of the arm are owed once the line's listeners have
+/// run ([`CastLadder::reread_refused`]), with the word the bind took out meanwhile.
+pub(crate) struct OwedRefusal {
+    fail: CastFail,
+    reaches: bool,
+    record: u32,
+    word: u16,
+    standing: super::targeting::StandingWord,
+}
+
 impl ArmPark {
     /// Where the arm reads its candidate.
     pub(crate) fn candidate(&self) -> cast_target::ArmCandidate {
@@ -774,7 +785,7 @@ impl CastLadder<'_, '_> {
         &mut self,
         park: &mut ArmPark,
         ctx: Option<&cast_target::CastContext>,
-    ) {
+    ) -> Option<OwedRefusal> {
         use cast_target::CastWireTarget;
         let refilled = self.pending.fills() != park.fill;
         let (on, word, record) = match (self.ground.pending(), refilled) {
@@ -787,13 +798,11 @@ impl CastLadder<'_, '_> {
             (None, _) => {
                 park.on = ArmWord::Cleared;
                 park.leg = CastWireTarget::SelfImplicit;
-                return;
+                return None;
             }
         };
         park.on = on;
-        let Some(ctx) = ctx else {
-            return;
-        };
+        let ctx = ctx?;
         let binds = self.pending.record_send().is_some();
         let leg = self.walk_leg(park, ctx, word, record, true, binds);
         // `BindTarget`'s merge tests a bound unit's range (`0x6e6063` → `0x6e47b0`), which the
@@ -813,22 +822,51 @@ impl CastLadder<'_, '_> {
             }
             _ => None,
         };
-        park.leg = match refusal {
-            None => leg,
-            Some(reason) => {
-                debug!("ui_action: cast {record} not bound — range ({reason:#x})");
-                // The bind emptied the word ahead of the merge, so the report's cancel of a spell
-                // in flight goes on the wire (`0x6e4970`); the merge then puts the word back.
-                let standing = self.ground.take_word();
-                self.report_local(CastFail::local(record, reason));
-                self.ground.restore_word(standing);
-                // The arm goes on at `autoSelfCast` (`0x6e53d7`). The report cancels only the
-                // spell in flight (`0x6e2201`), and its cancel clears only the active player's
-                // caster (`0x6e4a04`), so an unpushed item's record or a pet's still binds there.
-                let binds = self.pending.record_send().is_some();
-                self.walk_leg(park, ctx, word, record, false, binds)
-            }
+        let Some(reason) = refusal else {
+            park.leg = leg;
+            return None;
         };
+        debug!("ui_action: cast {record} not bound — range ({reason:#x})");
+        // The bind emptied the word ahead of the merge, so the line's listeners read no
+        // targeting, and the report's cancel of a spell in flight goes on the wire (`0x6e4970`)
+        // once they have run ([`Self::reread_refused`]).
+        let standing = self.ground.take_word();
+        let fail = CastFail::local(record, reason);
+        let reaches = reaches_tail(&fail, self.spells.as_deref(), &self.items, &self.commands);
+        self.core().report_line(fail);
+        Some(OwedRefusal {
+            fail,
+            reaches,
+            record,
+            word,
+            standing,
+        })
+    }
+
+    /// [`Self::reread_arm`]'s refusal past its line's listeners: the report's tail (`0x6e2201`),
+    /// then the word the bind took put back (`0x6e6096`), and the arm on at `autoSelfCast`
+    /// (`0x6e53d7`). The report cancels only the spell in flight (`0x6e2201`), and its cancel
+    /// clears only the active player's caster (`0x6e4a04`), so an unpushed item's record or a
+    /// pet's still binds there.
+    pub(crate) fn reread_refused(
+        &mut self,
+        park: &mut ArmPark,
+        owed: OwedRefusal,
+        ctx: Option<&cast_target::CastContext>,
+    ) {
+        let OwedRefusal {
+            fail,
+            reaches,
+            record,
+            word,
+            standing,
+        } = owed;
+        self.core().report_tail(fail, false, reaches);
+        self.ground.restore_word(standing);
+        if let Some(ctx) = ctx {
+            let binds = self.pending.record_send().is_some();
+            park.leg = self.walk_leg(park, ctx, word, record, false, binds);
+        }
     }
 
     /// The arm's leg on `word` with `record` under it ([`cast_target::bind_leg`]), its candidate
