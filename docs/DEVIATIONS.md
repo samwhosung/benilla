@@ -193,7 +193,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### no_install
 
-- A boot with no install at all ends at a fatal error dialog, where the reference logs each missing archive and goes on (`0x403b00`), because nothing past this point can draw a word. ([`src/no_install.rs:7`](../crates/benilla-app/src/no_install.rs#L7))
+- With no install found, the dialog names the folders searched and how to supply one where the reference names its first missing archive, because benilla does not ship inside an install and the player has to say where theirs is. ([`src/no_install.rs:7`](../crates/benilla-app/src/no_install.rs#L7))
 
 #### player
 
@@ -551,8 +551,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### chain
 
-- An archive that fails to open is an error. In 1.12.1 a failed base archive is fatal (Error #134: `0x4038ea` → `0x64d0e0` → `0x64cfa0` → `0x64cc80`, `ExitProcess`) and only a failing patch archive is skipped, silently; benilla fails on that too, because a skipped corrupt archive surfaces only as missing files far downstream. ([`src/chain.rs:67`](../crates/benilla-formats/src/chain.rs#L67))
-- A last line with no CR or LF after it is passed too, because `0x648fb0` ends at the buffer's end without a flush (`0x64907f`) and drops it, a bug that loses a listfile's last name when it lacks a newline. ([`src/chain.rs:234`](../crates/benilla-formats/src/chain.rs#L234))
+- An archive that fails to open is an error. In 1.12.1 a failed base archive is fatal (Error #134: `0x4038ea` → `0x64d0e0` → `0x64cfa0` → `0x64cc80`, `ExitProcess`) and only a failing patch archive is skipped, silently; benilla fails on that too, because a skipped corrupt archive surfaces only as missing files far downstream. ([`src/chain.rs:79`](../crates/benilla-formats/src/chain.rs#L79))
+- A last line with no CR or LF after it is passed too, because `0x648fb0` ends at the buffer's end without a flush (`0x64907f`) and drops it, a bug that loses a listfile's last name when it lacks a newline. ([`src/chain.rs:245`](../crates/benilla-formats/src/chain.rs#L245))
 
 #### characters
 
