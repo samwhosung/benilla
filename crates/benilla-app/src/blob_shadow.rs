@@ -22,6 +22,10 @@
 //!   (`0x60d180` drives the same `0x614f80`), but not the M2 colour and texture-weight tracks
 //!   (`0x707aea`), exactly like `UnitRenderAlpha`. Unlit, no fog, no depth write; the texture is
 //!   `Rgba8Unorm`, so the multiply runs on raw bytes as the reference's does.
+//! - Depth bias: the decal draw `0x6d7480` biases by `2 * shadowBias / 32767` while the CVar is
+//!   nonzero (`0x6d7506`-`0x6d752d`); here that scales [`Rung::DECAL_RASTER`] by `shadowBias / 0.1`
+//!   for the shadow and the selection ring ([`ShadowSettings::decal_raster`]), none at 0. The
+//!   shadow draw's EQUAL depth test at 0 (`0x6d7fb2`-`0x6d7fcf`) is not built.
 //! - Registration: units, players and corpses cast one; game objects and dynamic objects never do
 //!   (`0x670e94`, `0x613e10`). The entry `0x6d78f0` goes on to draw only while `shadowLOD` is 1
 //!   (`0x6d7904`-`0x6d790a`; [`ShadowSettings`]): at 0 no unit casts one.
@@ -42,6 +46,7 @@ use crate::net::{Embodied, NetEntity};
 use benilla_world::decal::{DecalFrame, WorldDecal};
 use benilla_world::particles::buffer::{begin_effect_frame, EffectVertex};
 use benilla_world::schedule::WorldStage;
+use benilla_world::sky_order::Rung;
 use benilla_world::view::WorldCamera;
 
 /// The reference's shadow disc, created by `0x6d8070`.
@@ -86,11 +91,32 @@ struct ShadowAssets {
 pub(crate) struct ShadowSettings {
     /// `shadowLOD` (`[0x86f5b4]`, handler `0x6d8450`): the blob-shadow entry draws only at 1.
     pub(crate) lod: i32,
+    /// `shadowBias` (`[0xcea620]`, handler `0x6d8530`), 0 to 1: the decal draw `0x6d7480` biases
+    /// depth by `2 * bias / 32767` while it is nonzero (`0x6d7506`-`0x6d752d`).
+    pub(crate) bias: f32,
 }
+
+/// `shadowBias`'s registered default (`0x84fb48`).
+const DEFAULT_BIAS: f32 = 0.1;
 
 impl Default for ShadowSettings {
     fn default() -> Self {
-        Self { lod: 1 }
+        Self {
+            lod: 1,
+            bias: DEFAULT_BIAS,
+        }
+    }
+}
+
+impl ShadowSettings {
+    /// The raster depth-bias constant of the decals the reference draws through `0x6d7480` (the
+    /// selection ring and the blob shadow): [`Rung::DECAL_RASTER`] at the default, scaled by
+    /// `bias / 0.1` as the reference's bias is linear in the CVar, and none at 0.
+    pub(crate) fn decal_raster(&self) -> i32 {
+        if self.bias <= 0.0 {
+            return 0;
+        }
+        (Rung::DECAL_RASTER as f32 * (self.bias / DEFAULT_BIAS)).round() as i32
     }
 }
 
@@ -99,6 +125,9 @@ impl Default for ShadowSettings {
 pub(crate) fn on_cvar(ev: &crate::cvars::CvarChanged, mut settings: Mut<'_, ShadowSettings>) {
     if ev.is("shadowLOD") {
         settings.lod = benilla_ui::script::scanf_d(&ev.new).unwrap_or(0);
+    } else if ev.is("shadowBias") {
+        // `sscanf("%f")` (`0x6d8549`); text with no number is taken as 0, as the check does.
+        settings.bias = benilla_ui::script::scanf_f_prefix(&ev.new).map_or(0.0, |(v, _)| v);
     }
 }
 
@@ -450,6 +479,7 @@ fn update_shadows(
 /// off, the reference's shadow pass state.
 fn push_shadows(
     assets: Option<Res<ShadowAssets>>,
+    settings: Res<ShadowSettings>,
     cam: Query<Entity, With<WorldCamera>>,
     mut draw: benilla_world::particles::buffer::WorldEffectDraw,
     shadows: Query<(Entity, &ShadowKey, &ShadowVerts)>,
@@ -465,10 +495,7 @@ fn push_shadows(
             .batch(cam, assets.texture.id())
             .multiply()
             .anchored(key.feet)
-            .rung(
-                benilla_world::sky_order::Rung::SHADOW_SORT,
-                benilla_world::sky_order::Rung::DECAL_RASTER,
-            )
+            .rung(Rung::SHADOW_SORT, settings.decal_raster())
             .owner(entity);
         batch.vertices(&verts.0);
         batch.tris();
@@ -522,6 +549,19 @@ mod tests {
         // Out-of-range clamps, never negative.
         assert_eq!(shadow_ramp(-1.0), 0.0);
         assert_eq!(shadow_ramp(2.0), 0.0);
+    }
+
+    /// The decals' raster bias is the default's at `shadowBias` 0.1, linear in it, and none at 0
+    /// (`0x6d7506`-`0x6d752d`).
+    #[test]
+    fn shadow_bias_scales_the_decal_raster_bias_and_zero_has_none() {
+        let at = |bias| ShadowSettings { bias, ..default() }.decal_raster();
+        assert_eq!(ShadowSettings::default().decal_raster(), Rung::DECAL_RASTER);
+        assert_eq!(at(0.1), Rung::DECAL_RASTER);
+        assert_eq!(at(0.2), 2 * Rung::DECAL_RASTER);
+        assert_eq!(at(0.05), Rung::DECAL_RASTER / 2);
+        assert_eq!(at(1.0), 10 * Rung::DECAL_RASTER);
+        assert_eq!(at(0.0), 0);
     }
 
     /// `shadowLOD` 0 empties every shadow record and keeps it empty (`0x6d7904`-`0x6d790a`); at 1

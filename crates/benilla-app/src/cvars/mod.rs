@@ -1777,6 +1777,11 @@ mod tests {
         assert_eq!(res::<crate::blob_shadow::ShadowSettings>(&app).lod, 0);
         apply(&mut app, "shadowlod", "1");
         assert_eq!(res::<crate::blob_shadow::ShadowSettings>(&app).lod, 1);
+        assert_eq!(res::<crate::blob_shadow::ShadowSettings>(&app).bias, 0.1);
+        apply(&mut app, "shadowBias", "0.25");
+        assert_eq!(res::<crate::blob_shadow::ShadowSettings>(&app).bias, 0.25);
+        apply(&mut app, "shadowbias", "0");
+        assert_eq!(res::<crate::blob_shadow::ShadowSettings>(&app).bias, 0.0);
         assert!(!res::<crate::perf::FpsJournalSetting>(&app).0);
         apply(&mut app, "fpsJournal", "1");
         assert!(res::<crate::perf::FpsJournalSetting>(&app).0);

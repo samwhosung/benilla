@@ -395,6 +395,7 @@ fn project_ring(
 pub(super) fn push_ring(
     assets: Option<Res<RingAssets>>,
     state: Option<Res<RingState>>,
+    shadows: Option<Res<crate::blob_shadow::ShadowSettings>>,
     cam: Query<Entity, With<WorldCamera>>,
     mut draw: benilla_world::particles::buffer::WorldEffectDraw,
 ) {
@@ -410,9 +411,13 @@ pub(super) fn push_ring(
         .batch(cam, assets.texture.id())
         .additive()
         .anchored(state.key.feet)
+        // The ring goes through the same decal draw as the blob shadow (`0x608f28` → `0x6d7480`),
+        // so `shadowBias` scales its depth bias too.
         .rung(
             benilla_world::sky_order::Rung::RING,
-            benilla_world::sky_order::Rung::DECAL_RASTER,
+            shadows.map_or(benilla_world::sky_order::Rung::DECAL_RASTER, |s| {
+                s.decal_raster()
+            }),
         );
     batch.extend(state.verts.iter().map(|v| EffectVertex {
         pos: v.pos,

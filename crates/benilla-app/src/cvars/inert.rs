@@ -11,7 +11,7 @@
 //! refuses a write carries it as its check: the camera block's (`0x50b380`, `0x50b3c0`,
 //! `0x50bfe0`, `0x50c000`, `0x50c040`), the error filter's (`0x4030f0`), the target range's
 //! (`0x490720`) and the world's (`0x688b70`, `0x688bd0`, `0x688f00`, `0x688fb0`, `0x689000`,
-//! `0x689050`, `0x689250`, `0x689450`, `0x6d8530`). The two LOD distances' (`0x688ab0`,
+//! `0x689050`, `0x689250`, `0x689450`). The two LOD distances' (`0x688ab0`,
 //! `0x6891f0`) never refuse but print a line out of range, and `ffxRectangle`'s (`0x6cde30`)
 //! prints its state; they run too. The trailing address is
 //! the register site in `reference/cvars.tsv`.
@@ -244,7 +244,6 @@ pub(super) const INERT: &[Registered] = &[
     same("PlayerFadeInRate", "4096"),       // 0x481b72
     same("PlayerFadeOutAlpha", "128"),      // 0x481bbf
     same("PlayerFadeOutRate", "4096"),      // 0x481b91
-    same("shadowBias", "0.1").checked(benilla_ui::script::check_shadow_bias), // 0x6d817d
     same("ShowErrors", "1"),                // 0x402cc1
     same("showfootprintparticles", "1"),    // 0x6039b5
     same("showfootprints", "1"),            // 0x688842

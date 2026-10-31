@@ -691,6 +691,10 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // `shadowLOD` (`0x6d8157`, "1", record `[0x86f5b4]`, handler `0x6d8450`): the blob-shadow entry
     // `0x6d78f0` draws only at 1. The handler refuses outside 0..=1 and says "Shadow LOD set to %d".
     same("shadowLOD", "1").checked(benilla_ui::script::check_shadow_lod),
+    // `shadowBias` (`0x6d817d`, "0.1", record `[0xcea620]`, handler `0x6d8530`): the decal draw
+    // `0x6d7480` (the selection ring and the blob shadow) biases depth by `2 * bias / 32767` while
+    // it is nonzero. The handler refuses outside 0..=1 and says "Shadow bias set to %f".
+    same("shadowBias", "0.1").checked(benilla_ui::script::check_shadow_bias),
     // `doodadAnim` (`0x6884d8`, "1", flags 1, callback `0x688a10`, record `[0xc7f354]`), behind
     // `Get/SetDoodadAnim`: the callback toggles bit `0x8000` of `[0xc7b2a4]` and calls `0x6953d0`,
     // a bare `ret`, so no animation reads it. `hwDetect` sets 0 or 1 by CPU tier.
