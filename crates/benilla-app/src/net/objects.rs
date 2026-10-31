@@ -63,6 +63,7 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::GameObjectUnknown, on_gameobject_unknown)
         .net_handler(K::GameObjectCustomAnim, on_gameobject_anim)
         .net_handler(K::GameObjectDespawnAnim, on_gameobject_anim)
+        .net_handler(K::GameObjectResetState, on_gameobject_reset_state)
         .net_handler(K::SplineMoveMode, on_spline_move_mode)
         .net_handler(K::ForceSpeedChange, on_speed)
         .net_handler(K::SpeedChanged, on_speed);
@@ -828,6 +829,21 @@ fn on_gameobject_anim(In(ev): In<SessionEvent>, mut sc: Scene) {
             gameobject_anim_event(guid, &sc.index, &mut sc.go_anims, |go| go.despawn());
         }
         _ => {}
+    }
+}
+
+/// `SMSG_GAMEOBJECT_RESET_STATE` (`0x6e9790`): an animated object re-applies its descriptor's
+/// state (`0x5f8c00`); a guid that is no game object here, or a static one, is skipped.
+fn on_gameobject_reset_state(
+    In(ev): In<SessionEvent>,
+    index: Res<GuidIndex>,
+    mut gos: Query<(&ObjectStore, &mut crate::go_anim::GoAnim)>,
+) {
+    if let SessionEvent::GameObjectResetState { guid } = ev {
+        debug!("net: gameobject {guid:#x} reset state");
+        if let Some((store, mut go)) = index.0.get(&guid).and_then(|&e| gos.get_mut(e).ok()) {
+            go.reset_state(store);
+        }
     }
 }
 

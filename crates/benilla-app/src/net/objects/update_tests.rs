@@ -1176,6 +1176,40 @@ fn a_despawn_the_model_cannot_play_holds_nothing_from_its_destroy() {
     assert_eq!(field(world, DOOR, STALE), None, "a fresh object");
 }
 
+/// `SMSG_GAMEOBJECT_RESET_STATE` (`0x6e9790`) stores the descriptor's state over the client's own
+/// prediction (an open-lock cast, `0x6e83b5`, drops it to ACTIVE while the wire still says READY).
+#[test]
+fn a_reset_state_packet_restores_the_descriptors_state() {
+    use benilla_protocol::field::FIELD_GAMEOBJECT_STATE;
+    let mut app = client();
+    let world = app.world_mut();
+    let e = animated_door(world, DOOR, &[146, 147, 148, 149]);
+    send(world, [values(DOOR, &[(FIELD_GAMEOBJECT_STATE, 1)])]);
+    let state = |world: &World| {
+        crate::go_anim::go_state(
+            world.get::<crate::go_anim::GoAnim>(e),
+            world.get::<ObjectStore>(e).unwrap(),
+        )
+    };
+    world
+        .get_mut::<crate::go_anim::GoAnim>(e)
+        .unwrap()
+        .set_wire_state(0);
+    assert_eq!(state(world), 0, "control: the prediction stands");
+
+    super::super::handlers::dispatch(
+        world,
+        vec![SessionEvent::GameObjectResetState { guid: DOOR }],
+    );
+    assert_eq!(state(world), 1, "the descriptor's READY is back");
+
+    // An unknown guid is skipped.
+    super::super::handlers::dispatch(
+        world,
+        vec![SessionEvent::GameObjectResetState { guid: 0xDEAD }],
+    );
+}
+
 /// A `GAMEOBJECT_STATE` change to a motion the model lacks (Destroy, 150) still holds: the state
 /// arm plays and holds unchecked (`0x5f3af8`-`0x5f3b27`). The destroy behind it only marks the
 /// object pending (`0x464920`), and the unhold parks it in the released table, where a block

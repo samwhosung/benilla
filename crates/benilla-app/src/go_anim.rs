@@ -141,6 +141,13 @@ impl GoAnim {
         self.state = Some(state);
     }
 
+    /// `SMSG_GAMEOBJECT_RESET_STATE` (`0x6e9790` → `0x5f8c00` → `0x5f8bd0`): store the
+    /// descriptor's `GAMEOBJECT_STATE`, undoing the open-lock and loot-release predictions. Absent
+    /// is `0`, ACTIVE, as at the seed.
+    pub(crate) fn reset_state(&mut self, store: &ObjectStore) {
+        self.state = Some(store.0.gameobject_state().unwrap_or(GO_STATE_ACTIVE));
+    }
+
     /// `SMSG_GAMEOBJECT_CUSTOM_ANIM` (`0x5f8930`): Custom `n` on the one-shot channel (`0x5f8c50`),
     /// rejected from 4 on (`0x5f8971`); the bobber's splash is `n` 0.
     pub(crate) fn custom(&mut self, anim_id: u32) {

@@ -74,6 +74,12 @@ pub(super) fn read_gameobject_despawn_anim(r: &mut &[u8]) -> io::Result<u64> {
     read_u64_le(r)
 }
 
+/// Read `SMSG_GAMEOBJECT_RESET_STATE`, only the guid (`GameObject.cpp:2460-2465`); the 1.12 client
+/// reads it with `0x4190b0` (`0x6e9790`).
+pub(super) fn read_gameobject_reset_state(r: &mut &[u8]) -> io::Result<u64> {
+    read_u64_le(r)
+}
+
 /// Read `SMSG_GAMEOBJECT_PAGETEXT`, only the guid (`GameObject.cpp:1549-1554`); the 1.12 client
 /// reads it with `0x4190b0` (`0x5f88e0`).
 pub(super) fn read_gameobject_page_text(r: &mut &[u8]) -> io::Result<u64> {
@@ -149,6 +155,23 @@ mod tests {
             }
             other => panic!("expected GameObjectDespawnAnim, got {}", other.name()),
         }
+    }
+
+    /// vmangos `SendGameObjectReset` writes the guid alone (`GameObject.cpp:2462-2464`).
+    #[test]
+    fn gameobject_reset_state_body_golden() {
+        let body = hx("f0debc9a78563412");
+        match parse_server(opcode::SMSG_GAMEOBJECT_RESET_STATE, &body).unwrap() {
+            ServerPacket::GameObjectResetState { guid } => {
+                assert_eq!(guid, 0x1234_5678_9abc_def0);
+            }
+            other => panic!("expected GameObjectResetState, got {}", other.name()),
+        }
+        let (_, tail) =
+            crate::messages::parse_server_with_tail(opcode::SMSG_GAMEOBJECT_RESET_STATE, &body)
+                .unwrap();
+        assert_eq!(tail, 0);
+        assert!(parse_server(opcode::SMSG_GAMEOBJECT_RESET_STATE, &body[..7]).is_err());
     }
 
     /// The body is the eight guid bytes, little-endian.
