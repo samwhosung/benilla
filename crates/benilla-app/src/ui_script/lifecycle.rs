@@ -67,6 +67,8 @@ fn install_glue_vm(world: &mut World, screen: Option<&str>) -> bool {
         cvars.seed_vm(&mut script);
     }
     seed_agreements(world, &mut script);
+    // The billing verbs read the connection's word too (`0x46dbf0`, `0x46dc40`, `0x46dcf0`).
+    seed_billing(world, &mut script);
     let start = std::time::Instant::now();
     let failures = super::glue::load_glue(&mut script);
     super::glue::finish_glue_load_log(&mut script);
@@ -98,6 +100,18 @@ fn install_glue_vm(world: &mut World, screen: Option<&str>) -> bool {
         .unwrap_or(false);
     world.insert_non_send_resource(script);
     charselect
+}
+
+/// The connection's billing group into a VM (`+0x1af4`, `+0x1af8`, `+0x1afc`), which every verb
+/// that reads it, glue or in-game, answers from.
+pub(crate) fn seed_billing(world: &World, script: &mut UiScript) {
+    if let Some(billing) = world.get_resource::<crate::net::SessionBilling>() {
+        script.set_billing(
+            billing.0.time_remaining,
+            billing.0.time_rested,
+            billing.0.plan_flags,
+        );
+    }
 }
 
 /// Start the server alert's fetch, as the glue manager's init does after the GlueXML load and
@@ -553,9 +567,7 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
         .unwrap_or_default();
     script.set_realm_name(&realm);
     // `GetBillingTimeRested` reads the connection's word (`0x48ec59`), there for every VM.
-    if let Some(billing) = world.get_resource::<crate::net::SessionBilling>() {
-        script.set_billing_time_rested(billing.0.time_rested);
-    }
+    seed_billing(world, &mut script);
     // `CGGameUI::InitializeGame` flags these read-only before `UI_Init` loads anything
     // (`0x48f566`-`0x48f584`), so an in-game `SetCVar` of one raises, logout handlers included,
     // and no other write stores; `ShutdownGame` clears them (`0x491240`). The VM's flags die with

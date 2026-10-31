@@ -2084,6 +2084,44 @@ fn the_link_verbs_run_in_the_call() {
     ));
 }
 
+/// `PatchDownloadCancel` with no download (`0x474710`): the logon cancelled, the screen state 0
+/// and the `login` screen up, with no dialog. `PatchDownloadApply` with no `wow-patch.mpq`
+/// (`0x4749f0` → `FailPatch(4, 0)`, `0x474ab0`) does the same and opens the `OKAY` dialog with
+/// `PATCH_FAILED_MESSAGE`.
+#[test]
+fn the_patch_verbs_return_to_the_login_screen_and_apply_fails_with_the_message() {
+    let shared = SharedGlueMgr::default();
+    let s = seated(&shared);
+    s.run(
+        "PATCH_FAILED_MESSAGE = 'Patch failed' SCREENS = {} \
+         local g = CreateFrame('Frame') g:RegisterEvent('SET_GLUE_SCREEN') \
+         g:SetScript('OnEvent', function() table.insert(SCREENS, arg1) end)",
+    )
+    .unwrap();
+    shared.get_mut().state = ScreenState::Connect;
+    let seen = heard_in(&s, "PatchDownloadCancel()");
+    assert!(seen.is_empty(), "no dialog: {seen:?}");
+    assert_eq!(s.eval::<Vec<String>>("return SCREENS").unwrap(), ["login"]);
+    assert_eq!(shared.get().state, ScreenState::Idle);
+    assert!(matches!(
+        shared.get().login_out.as_slice(),
+        [GlueLogin::Abandon]
+    ));
+
+    shared.get_mut().state = ScreenState::Logon;
+    let seen = heard_in(&s, "PatchDownloadApply()");
+    assert_eq!(seen, ["OPEN_STATUS_DIALOG OKAY Patch failed"]);
+    assert_eq!(
+        s.eval::<Vec<String>>("return SCREENS").unwrap(),
+        ["login", "login"]
+    );
+    assert_eq!(shared.get().state, ScreenState::Idle);
+    assert!(matches!(
+        shared.get().login_out.as_slice(),
+        [GlueLogin::Abandon, GlueLogin::Abandon]
+    ));
+}
+
 /// A handler inside a verb's fan-out that calls another verb runs that verb's call there, and the
 /// first verb's operation begins only after its dialog's handlers have run (`0x46b8b7` after the
 /// signal at `0x46b8af`): the `CANCEL` dialog's button pressed from its own `OPEN_STATUS_DIALOG`
@@ -2489,6 +2527,32 @@ fn disconnecting_from_the_server_ends_the_query_in_flight() {
     vm(&app).run("DisconnectFromServer()").unwrap();
     app.update();
     assert_eq!(mgr(&app).state, ScreenState::RealmList);
+}
+
+/// The connection's billing group reaches the glue VM when the session writes it, after the VM was
+/// built (`0x5b41b0` writes `+0x1af4`, `+0x1af8`, `+0x1afc`; `0x46dbf0`, `0x46dc40` and `0x46dcf0`
+/// read them).
+#[test]
+fn the_billing_group_reaches_the_glue_vm_when_the_session_writes_it() {
+    let _ = benilla_formats::wow_data_or_skip!();
+    let (mut app, _rx, _abandon) = stock_app();
+    let answer = |app: &App| {
+        vm(app)
+            .eval::<Vec<f64>>(
+                "return {GetBillingPlan(), GetBillingTimeRemaining(), GetBillingTimeRested()}",
+            )
+            .unwrap()
+    };
+    assert_eq!(answer(&app), [3.0, 0.0, 0.0]);
+    app.insert_resource(crate::net::SessionBilling(
+        benilla_protocol::messages::Billing {
+            time_remaining: 90,
+            plan_flags: 0x04,
+            time_rested: 12,
+        },
+    ));
+    app.update();
+    assert_eq!(answer(&app), [2.0, 90.0, 12.0]);
 }
 
 /// The select verbs' cells are C globals in the reference, so a glue rebuild finds them as they

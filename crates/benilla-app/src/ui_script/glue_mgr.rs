@@ -719,7 +719,25 @@ impl GlueMgr {
             GlueCall::RenameCharacter { guid, name } => self.rename_character(guid, name),
             GlueCall::EnterWorld { index, guid, flags } => self.enter_world(index, guid, flags),
             GlueCall::CreateCharacter(request) => self.create_character(request),
+            GlueCall::CancelPatchDownload => self.return_to_login(),
+            GlueCall::ApplyPatch => {
+                // `FailPatch(4, 0)` (`0x474ab0`): the logon cancelled and the login screen up,
+                // then, for any code but 2, the `OKAY` dialog with `PATCH_FAILED_MESSAGE`
+                // (`0x474ae4`, `0x838a78`, `0x474b39`).
+                self.return_to_login();
+                self.open("OKAY", Some(Text::Key("PATCH_FAILED_MESSAGE")));
+            }
         }
+    }
+
+    /// The tail `CancelPatchDownload` (`0x474710`) and `FailPatch` (`0x474ab0`) share: the logon
+    /// cancelled (`0x5b3320`), the screen state 0 (`0x474ad0`, `0x474754`) and `SET_GLUE_SCREEN`
+    /// `login` (`0x46b840`, `0x82e3e0`). The operation in flight goes with the state, as at a drop.
+    fn return_to_login(&mut self) {
+        self.login_out.push(GlueLogin::Abandon);
+        self.state = ScreenState::Idle;
+        self.op = Operation::default();
+        self.outbox.push(Outgoing::Screen("login"));
     }
 
     /// `DisconnectFromServer` (`0x46d340`): with the world link up, its flag goes down in the call
@@ -1969,6 +1987,7 @@ pub(crate) fn drive_glue_mgr(
     run: Option<Res<RunModeRealm>>,
     env_pin: Option<Res<EnvPin>>,
     areas: Option<Res<crate::area::AreaTableRes>>,
+    billing: Option<Res<crate::net::SessionBilling>>,
     sources: super::glue_create::CreateSources,
     state: Option<Res<State<crate::client_state::ClientState>>>,
     time: Res<Time>,
@@ -2028,6 +2047,13 @@ pub(crate) fn drive_glue_mgr(
             if !fresh_vm && r.is_changed() {
                 let (categories, types) = r.glue_setup();
                 s.set_glue_realm_setup(categories, types);
+            }
+        }
+        // The connection's billing group, which the billing verbs read (`0x46dbf0`, `0x46dc40`,
+        // `0x46dcf0`), on a new VM and whenever the session rewrites it.
+        if let (Some(s), Some(b)) = (script.as_deref_mut(), billing.as_ref()) {
+            if fresh_vm || b.is_changed() {
+                s.set_billing(b.0.time_remaining, b.0.time_rested, b.0.plan_flags);
             }
         }
         // The name a connect resolves (`0x5ab7d0`).

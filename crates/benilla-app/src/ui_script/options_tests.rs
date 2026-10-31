@@ -3733,7 +3733,7 @@ fn the_mouse_sensitivity_slider_snaps_to_the_reference_step() {
         .unwrap();
     assert_eq!(
         s.eval::<String>("return GetCVar(\"mousespeed\")").unwrap(),
-        "1"
+        "1.0"
     );
     assert_eq!(
         s.eval::<String>(

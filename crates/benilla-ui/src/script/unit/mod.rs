@@ -472,10 +472,15 @@ impl super::UiScript {
         model.no_play_time = none;
     }
 
-    /// Push `GetBillingTimeRested()`'s minutes, from the last `SMSG_AUTH_RESPONSE` that carried the
-    /// billing group; nothing else on the wire writes it.
-    pub fn set_billing_time_rested(&mut self, minutes: u32) {
-        self.model_mut().billing_time_rested = minutes;
+    /// Push the connection's billing group, from the last `SMSG_AUTH_RESPONSE` that carried it
+    /// (nothing else on the wire writes it): the minutes remaining (`+0x1af4`), the rested minutes
+    /// (`+0x1af8`) and the plan flags (`+0x1afc`) that the billing verbs read (`0x46dbf0`,
+    /// `0x46dcf0`, `0x46dc40`, in-game `0x48ec50`).
+    pub fn set_billing(&mut self, time_remaining: u32, time_rested: u32, plan_flags: u8) {
+        let mut model = self.model_mut();
+        model.billing_time_remaining = time_remaining;
+        model.billing_time_rested = time_rested;
+        model.billing_plan_flags = plan_flags;
     }
 
     /// Enter the UI-load sound-suppression scope (`0x458f50`): a depth every name-keyed
