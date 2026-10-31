@@ -224,6 +224,32 @@ pub(in crate::net) fn monster_move_spline(
     })
 }
 
+/// A monster move's stop (type 1) 3 yd or more from where its unit stands, as the path the
+/// reference runs it as: the squared distance against `[0x80c5bc]` = 9.0 (`0x6019be`), then one
+/// leg from the unit to the stop point (`0x601aca`-`0x601b68`) at 4× the unit's run speed
+/// (`[0x80306c]` at `0x601f49`), over `len / speed · 1000` ms, rounded and at least 1
+/// (`0x601f9d`-`0x601fcc`). `None` for a nearer stop, which leaves the unit where it stands
+/// (`0x6019df` → `0x618750`), and for a speed of 2^-20 or less (`[0x8026bc]` at `0x601f8c`).
+pub(in crate::net) fn far_stop(
+    from: [f32; 3],
+    to: [f32; 3],
+    run: f32,
+) -> Option<(Vec<[f32; 3]>, u32)> {
+    let d = [0, 1, 2].map(|i| f64::from(to[i]) - f64::from(from[i]));
+    let squared = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+    if squared.is_nan() || squared < 9.0 {
+        return None; // NaN included: `0x6019ca` reads it as near
+    }
+    let speed = f64::from(run) * 4.0;
+    if speed.is_nan() || speed <= f64::from(2.0f32.powi(-20)) {
+        return None;
+    }
+    // Stored as a float before the integer store (`0x601fac`-`0x601fb2`).
+    let ms = ((squared.sqrt() / speed * 1000.0) as f32).round_ties_even();
+    let duration = if ms <= 1.0 { 1 } else { ms as u32 };
+    Some((vec![from, to], duration))
+}
+
 /// The [`Spline`] a unit is already riding in its create block, back-dated by
 /// [`CreateSpline::time_passed_ms`]; `None` for a degenerate path, a zero duration, a finished
 /// ride, or anything under `WOW_CREATE_SPLINE=off`.

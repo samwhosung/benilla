@@ -18,7 +18,7 @@ use benilla_world::model_fade::DespawnFade;
 use benilla_world::vis_chain::VisChainOnly;
 
 use super::motion::{
-    catch_up, create_spline, gameobject_rotation, monster_move_spline, pose_transform,
+    catch_up, create_spline, far_stop, gameobject_rotation, monster_move_spline, pose_transform,
     resolve_facing, set_raw_facing, smoothed, trace_create_spline, trace_move_snap, wire_yaw,
     write_pose, HeldSpline, MoverWorld, SplineStopped, ROOT_APPLY_WIPE,
 };
@@ -710,6 +710,27 @@ fn on_monster_move(In(ev): In<SessionEvent>, mut sc: Scene) {
                 sc.commands.entity(e).insert(HeldSpline);
             }
         }
+        // A stop 3 yd or more from the unit runs as a path there, its form's run-mode flag `0x100`
+        // set (`0x601a28`) ([`far_stop`]).
+        let far = stop
+            .then(|| sc.index.0.get(&guid).copied())
+            .flatten()
+            .and_then(|e| {
+                let from = match transport {
+                    Some(_) => sc.riders.get(e).ok().map(|r| r.local_pos),
+                    None => sc
+                        .transforms
+                        .get(e)
+                        .ok()
+                        .map(|t| bevy_to_wow(t.translation)),
+                }?;
+                let run = sc.speeds.get(e).map_or(0.0, |u| u.0.run);
+                far_stop(from, start, run)
+            });
+        let (path, duration_ms, stop, run_mode) = match far {
+            Some((leg, ms)) => (leg, ms, false, true),
+            None => (path, duration_ms, stop, run_mode),
+        };
         let smooth = sc.index.0.get(&guid).is_some_and(|&e| {
             let flags = sc.stores.get(e).map_or(0, |s| s.0.unit_flags());
             smoothed(
@@ -739,8 +760,9 @@ fn on_monster_move(In(ev): In<SessionEvent>, mut sc: Scene) {
         );
         // A path started on the active mover runs its input tick (`0x6187a0` → `0x602053`), whose
         // precondition the server's spline fails (`0x5144e0`): the teardown leg stops the auto-move
-        // (`0x5146d6`). A stop starts no path, and nor does a rooted mover: the start returns 0 on
-        // the root bit `0x1000` (`0x6187c2`-`0x6187c7`), so `0x601fee` skips the tick.
+        // (`0x5146d6`). A near stop starts no path, and nor does a rooted mover: the start
+        // returns 0 on the root bit `0x1000` (`0x6187c2`-`0x6187c7`), so `0x601fee` skips the
+        // tick.
         let mover_rooted = sc
             .player
             .as_deref()
