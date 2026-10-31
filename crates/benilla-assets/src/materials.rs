@@ -506,9 +506,137 @@ mod tests {
             );
         }
         assert!(
-            fragment.contains("var lit_rgb = albedo * in.primary;"),
+            fragment.contains("var lit_rgb = base.rgb * in.primary;"),
             "the fragment modulates the texel by the interpolated lit colour"
         );
+    }
+
+    /// The vertex or model colour is the lit material, inside the one clamp, and the texel
+    /// multiplies the clamped result. The FFP takes it as GL_COLOR_MATERIAL on ambient and diffuse
+    /// (`0x59cfec`, `0x59cff3`-`0x59cffd`), so a WMO lights `clamp(MOCV·sum + emission)`.
+    /// `Model2.bls` takes it as `c28`, `[model+0x1a0]` × the batch's M2Color (`0x70c60a`-`0x70c654`,
+    /// written at `0x70c712`), and writes `c28·(E, 1) + c29` to the saturating `oD0`, clamping E
+    /// first only with a point light bound
+    /// (`model2_clamps_the_light_sum_only_with_a_point_light_bound`).
+    #[test]
+    fn the_material_colour_is_lit_inside_the_one_clamp() {
+        let src = include_str!("shaders/wow_model.wgsl");
+        let at = |needle: &str| {
+            src.find(needle)
+                .unwrap_or_else(|| panic!("`{needle}` is gone"))
+        };
+        let light = &src[at("fn vertex_light(")..at("@vertex")];
+        let fragment = &src[at("@fragment")..];
+        for (why, line) in [
+            (
+                "the FFP sum is never clamped on its own",
+                "let sum_nl = wow_light.light_ambient.rgb + wow_light.light_diffuse.rgb * ndotl;",
+            ),
+            (
+                "the window ambient saturates as its own byte add, never the sum",
+                "let sum_window = min(window_mid + vec3<f32>(16.0 / 255.0), vec3<f32>(1.0))\n            \
+                 + window_mid * ndotl;",
+            ),
+            (
+                "a WMO's MOCV multiplies the light sum inside the one clamp",
+                "return clamp(vcol.rgb * sum_wmo + sidn_e + highlight, vec3<f32>(0.0), vec3<f32>(1.0));",
+            ),
+            (
+                "an M2's `c28` multiplies E inside the one clamp",
+                "return clamp(vcol.rgb * anim_tint * tint * e + highlight, vec3<f32>(0.0), vec3<f32>(1.0));",
+            ),
+            (
+                "E clamps first only with a point light bound",
+                "if (point_lit.w > 0.5) {\n        e = clamp(e, vec3<f32>(0.0), vec3<f32>(1.0));\n    }",
+            ),
+        ] {
+            assert!(light.contains(line), "{why}: `{line}` is gone");
+        }
+        assert!(
+            !light.contains("clamp(sun_lobe"),
+            "the SH lobe clamps before `c28` multiplies it again"
+        );
+        assert!(
+            src.contains("vo.color = vec4<f32>(1.0, 1.0, 1.0, in.color.a);"),
+            "Bevy folds the vertex colour into the texel again, outside the clamp"
+        );
+        assert!(
+            fragment
+                .contains("lit_rgb = base.rgb * m.tint.rgb * mix(vcol.rgb, in.primary, vcol.a);"),
+            "a TRANS batch is its clamped lit pass by MOCV.a over the unlit `tex × MOCV`"
+        );
+
+        /// The two laws, step for step: `Model2.bls` with `lights` bound, and the FFP.
+        fn model2(c28: f32, e: f32, lights: u32, c29: f32) -> f32 {
+            let e = if lights > 0 { e.clamp(0.0, 1.0) } else { e };
+            (c28 * e + c29).clamp(0.0, 1.0)
+        }
+        fn ffp(mocv: f32, sum: f32, emission: f32) -> f32 {
+            (mocv * sum + emission).clamp(0.0, 1.0)
+        }
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-6;
+        // M2Color 0.5 under a light sum of 1.4: 0.70, where the sum clamped first gives 0.50.
+        assert!(close(model2(0.5, 1.4, 0, 0.0), 0.7));
+        assert!(
+            close(model2(0.5, 1.4, 1, 0.0), 0.5),
+            "a bound light clamps E"
+        );
+        // A WMO surface with MOCV 0.5 under the ambient 0.388 and the sun 1.0 of a dusk frame.
+        assert!(close(ffp(0.5, 0.388 + 1.0, 0.0), 0.694));
+        // The one clamp still saturates a full colour.
+        assert!(close(ffp(1.0, 1.388, 0.0), 1.0));
+        assert!(close(model2(1.0, 1.4, 0, 0.0), 1.0));
+    }
+
+    /// The reference fact `vertex_light` follows, read from the install's `Model2.bls`: every
+    /// lit program of the vertex-lit set (digit L 1, P 0; `0x71de50` builds the id, `0x707cf6`
+    /// adds the bound light count as its last digit) ends `c28·(E, 1) + c29` into the primary
+    /// colour, and clamps E with `MIN`/`MAX` exactly when it binds a point light.
+    #[test]
+    fn model2_clamps_the_light_sum_only_with_a_point_light_bound() {
+        let data = benilla_formats::wow_data_or_skip!();
+        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+        let bls = chain
+            .read_file("Shaders\\Vertex\\Model2.bls")
+            .expect("read Model2.bls");
+        assert_eq!(&bls[..4], b"SVXG", "a vertex shader file");
+        // Level 2 is the ARB text set (`0x58e6b1`), the third offset of the level table.
+        let level2 = u32::from_le_bytes(bls[0x14..0x18].try_into().unwrap()) as usize;
+        let text = String::from_utf8_lossy(&bls[level2..]);
+        let programs: Vec<&str> = text
+            .split("!!ARBvp1.0")
+            .skip(1)
+            .map(|p| p.split("\nEND").next().unwrap_or(p))
+            .collect();
+        assert_eq!(programs.len(), 1800, "one program per vertex shader id");
+        let mut lit = 0;
+        for (id, program) in programs.iter().enumerate().take(900) {
+            if (id / 90) & 1 == 0 {
+                continue; // unlit: `c28 + c29`
+            }
+            lit += 1;
+            let lines: Vec<&str> = program.lines().map(str::trim).collect();
+            let out = lines
+                .iter()
+                .find(|l| l.contains("result.color.front.primary"))
+                .unwrap_or_else(|| panic!("program {id} writes no primary colour"));
+            assert!(
+                out.starts_with("MAD result.color.front.primary,") && out.ends_with("c28[1];"),
+                "program {id} ends `{out}`"
+            );
+            let clamps = |op: &str| {
+                lines
+                    .iter()
+                    .any(|l| l.starts_with(op) && l.contains(".xyz, c0."))
+            };
+            assert_eq!(
+                clamps("MIN R") && clamps("MAX R"),
+                id % 5 > 0,
+                "program {id}, {} point lights bound",
+                id % 5
+            );
+        }
+        assert_eq!(lit, 450, "the vertex-lit set's lit programs");
     }
 
     /// A second texture stage samples `Model2.bls`'s generated coordinate: the program for a stage
