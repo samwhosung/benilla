@@ -117,11 +117,16 @@ pub struct WowModelExt {
     pub anim_slots: Vec4,
     /// The second texture stage: `x` = bound (1) or not (0), `y` = its combine preset 0-5
     /// (`benilla_formats::TextureStage::combine`); `z` = the stage-0 combine preset plus one
-    /// (`benilla_formats::RenderSubmesh::combine`), 0 for a batch that has none; `w` unused.
+    /// (`benilla_formats::RenderSubmesh::combine`), 0 for a batch that has none; `w` = 1 when it
+    /// reads the vertex's UV set 1 (`ATTRIBUTE_UV_1`), not the generated coordinate.
     #[uniform(100)]
     pub stage1: Vec4,
-    /// Stage 1's texture, sampled at the generated environment coordinate when `stage1.x` is set;
-    /// `None` binds the fallback image, unread.
+    /// Stage 1's own texture transform, read when `stage1.w` is set: `x` = its UV-scroll row and
+    /// `y` its affine row in the `matanim` region, `zw` = its UV-scroll offset at t = 0, as
+    /// `anim_slots.x`, `anim_slots.z` and `sun_scale.zw` are stage 0's.
+    #[uniform(100)]
+    pub stage1_uv: Vec4,
+    /// Stage 1's texture, sampled when `stage1.x` is set; `None` binds the fallback image, unread.
     #[texture(101, visibility(fragment))]
     #[sampler(102, visibility(fragment))]
     pub stage1_texture: Option<Handle<Image>>,
@@ -723,6 +728,148 @@ mod tests {
         assert_eq!(seen, 450, "the vertex-lit set's lit programs");
     }
 
+    /// Stage `k` reads the vertex's UV set `k`. In every `Model2.bls` program, at both levels,
+    /// stage `k`'s output coordinate (set `k`, or `k + 2` past the pixel-shader set's two lighting
+    /// sets) comes from the input `texcoord[k]` when its digit (`0x71de50`) is 0, passed, or 1,
+    /// transformed, and from no input coordinate when it is 2, generated. A coordinate entry at or
+    /// below 2 picks no set, so `wow_model.wgsl` gives stage 1 the vertex's UV set 1. This pins
+    /// the reference fact, not benilla's code, which `stage_k_reads_uv_set_k_whatever_its_entry`
+    /// tests.
+    #[test]
+    fn model2_passes_texcoord_k_to_stage_k() {
+        use std::collections::{BTreeSet, HashMap};
+        let Some(bls) = model2_bls() else { return };
+        // The id is `5·(3·(3·Z + t0) + t1) + lights`; Z from 20 up is the pixel-shader set.
+        let digits = |id: usize| {
+            let q = id / 5;
+            ([(q / 3) % 3, q % 3], if q / 9 >= 20 { 2 } else { 0 })
+        };
+        let want = |digit: usize, k: u32| -> BTreeSet<u32> {
+            if digit == 2 {
+                BTreeSet::new()
+            } else {
+                BTreeSet::from([k])
+            }
+        };
+
+        // Level 1: `vs_2_0` tokens. `dcl` (31) gives an input register its usage (5 a texture
+        // coordinate) and index; temps (type 0) carry the sets they were computed from into the
+        // output coordinates (type 6).
+        let reg = |t: u32| (((t >> 28) & 7) | ((t >> 8) & 0x18), t & 0x7ff);
+        for (id, code) in model2_level(&bls, 1).into_iter().enumerate() {
+            let t: Vec<u32> = code
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|c| u32::from_le_bytes(*c))
+                .collect();
+            let mut sets_of_input: HashMap<u32, u32> = HashMap::new();
+            let mut temps: HashMap<u32, BTreeSet<u32>> = HashMap::new();
+            let mut outs: HashMap<u32, BTreeSet<u32>> = HashMap::new();
+            let mut i = 1;
+            while t[i] & 0xffff != 0xffff {
+                let op = t[i] & 0xffff;
+                if op == 0xfffe {
+                    i += 1 + ((t[i] >> 16) & 0x7fff) as usize;
+                    continue;
+                }
+                let a = &t[i + 1..i + 1 + ((t[i] >> 24) & 0xf) as usize];
+                if op == 31 {
+                    if reg(a[1]).0 == 1 && a[0] & 0x1f == 5 {
+                        sets_of_input.insert(reg(a[1]).1, (a[0] >> 16) & 0xf);
+                    }
+                } else if op != 81 {
+                    let mut sets = BTreeSet::new();
+                    for &src in &a[1..] {
+                        match reg(src) {
+                            (1, n) => sets.extend(sets_of_input.get(&n)),
+                            (0, n) => sets.extend(temps.get(&n).into_iter().flatten()),
+                            _ => {}
+                        }
+                    }
+                    match reg(a[0]) {
+                        (0, n) if (a[0] >> 16) & 0xf == 0xf => {
+                            temps.insert(n, sets);
+                        }
+                        (0, n) => temps.entry(n).or_default().extend(sets),
+                        (6, n) => outs.entry(n).or_default().extend(sets),
+                        _ => {}
+                    }
+                }
+                i += 1 + a.len();
+            }
+            let (stage_digits, shift) = digits(id);
+            for (k, &d) in stage_digits.iter().enumerate() {
+                let k = k as u32;
+                assert_eq!(
+                    outs.get(&(k + shift)).cloned().unwrap_or_default(),
+                    want(d, k),
+                    "Direct3D program {id}, stage {k}, digit {d}"
+                );
+            }
+        }
+
+        // Level 2: ARB text, `ATTRIB vN = vertex.texcoord[k]` read into `result.texcoord[n]`.
+        for (id, code) in model2_level(&bls, 2).into_iter().enumerate() {
+            let text = std::str::from_utf8(code).expect("ARB text");
+            let mut sets_of_attrib: HashMap<&str, u32> = HashMap::new();
+            let mut temps: HashMap<&str, BTreeSet<u32>> = HashMap::new();
+            let mut outs: HashMap<u32, BTreeSet<u32>> = HashMap::new();
+            for line in text.lines().map(|l| l.trim().trim_end_matches(';')) {
+                if let Some(rest) = line.strip_prefix("ATTRIB ") {
+                    let (name, binding) = rest.split_once(" = ").unwrap();
+                    if let Some(k) = binding.strip_prefix("vertex.texcoord[") {
+                        sets_of_attrib.insert(name, k.trim_end_matches(']').parse().unwrap());
+                    }
+                    continue;
+                }
+                let Some((_, operands)) = line.split_once(char::is_whitespace) else {
+                    continue;
+                };
+                if line.starts_with("PARAM") || line.starts_with("TEMP") {
+                    continue;
+                }
+                // A register's last `.` part is its mask or swizzle; `result.texcoord[n]` has
+                // a `.` of its own.
+                fn masked(r: &str) -> (&str, &str) {
+                    r.rsplit_once('.')
+                        .filter(|(_, m)| m.chars().all(|c| "xyzw".contains(c)))
+                        .unwrap_or((r, "xyzw"))
+                }
+                let operands: Vec<&str> = operands.trim().split(", ").collect();
+                let mut sets = BTreeSet::new();
+                for src in &operands[1..] {
+                    let name = masked(src.trim_start_matches('-')).0;
+                    sets.extend(sets_of_attrib.get(name));
+                    sets.extend(temps.get(name).into_iter().flatten());
+                }
+                let (dst, mask) = masked(operands[0]);
+                if let Some(n) = dst.strip_prefix("result.texcoord[") {
+                    if mask != "zw" {
+                        outs.entry(n.trim_end_matches(']').parse().unwrap())
+                            .or_default()
+                            .extend(sets);
+                    }
+                } else if dst.starts_with('R') {
+                    if mask == "xyzw" {
+                        temps.insert(dst, sets);
+                    } else {
+                        temps.entry(dst).or_default().extend(sets);
+                    }
+                }
+            }
+            let (stage_digits, shift) = digits(id);
+            for (k, &d) in stage_digits.iter().enumerate() {
+                let k = k as u32;
+                assert_eq!(
+                    outs.get(&(k + shift)).cloned().unwrap_or_default(),
+                    want(d, k),
+                    "ARB program {id}, stage {k}, digit {d}"
+                );
+            }
+        }
+    }
+
     /// Runs one ARB vertex program on one vertex: `local` is `program.local[]`, `attribs` binds
     /// `vertex.position` and `vertex.normal`. Returns the primary colour, which the GL clamps to
     /// [0, 1] before it interpolates. Covers the instructions of the vertex-lit programs.
@@ -970,15 +1117,16 @@ mod tests {
         );
         assert!(
             src.contains(
-                "out.env_uv = wow_env_uv(view_rot * p_cam, normalize(view_rot * out.world_normal));"
+                "out.stage1_uv = wow_env_uv(view_rot * p_cam, normalize(view_rot * out.world_normal));"
             ),
             "stage 1 no longer generates its coordinate in view space"
         );
         assert!(
-            src.contains(
-                "tex1 = textureSampleBias(stage1_texture, stage1_sampler, in.env_uv, view.mip_bias);"
-            ),
-            "stage 1 no longer samples its texture at the generated coordinate"
+            src.contains("var st1_uv = in.stage1_uv;")
+                && src.contains(
+                    "tex1 = textureSampleBias(stage1_texture, stage1_sampler, st1_uv, view.mip_bias);"
+                ),
+            "stage 1 no longer samples its texture at its own coordinate"
         );
 
         /// The ARB program's arithmetic, step for step.

@@ -38,10 +38,10 @@ fn is_zero(v: [f32; 2]) -> bool {
 /// (`UvAnimMaterials`) has no sequence to key on; [`bake_uv_seqs`] covers slots that differ.
 pub(super) fn bake_uv_anim(
     model: &M2Model,
-    combo_index: u16,
+    lookup: usize,
     seq0: Option<SeqSlot>,
 ) -> Option<UvAnim> {
-    let ti = *model.texture_transform_lookup.get(combo_index as usize)?;
+    let ti = *model.texture_transform_lookup.get(lookup)?;
     let t = model.texture_transforms.get(ti as usize)?;
     bake_track(
         &t.translation,
@@ -57,10 +57,10 @@ pub(super) fn bake_uv_anim(
 /// shared lane's loop and takes this only when [`SeqLoops::uniform`] declines.
 pub(super) fn bake_uv_seqs(
     model: &M2Model,
-    combo_index: u16,
+    lookup: usize,
     slots: &[SeqSlot],
 ) -> Option<SeqLoops<[f32; 2]>> {
-    let ti = *model.texture_transform_lookup.get(combo_index as usize)?;
+    let ti = *model.texture_transform_lookup.get(lookup)?;
     let t = model.texture_transforms.get(ti as usize)?;
     SeqLoops::new(
         slots
@@ -93,10 +93,10 @@ fn is_scale_identity(v: [f32; 2]) -> bool {
 /// little). `None` when the rotation never leaves the identity.
 pub(super) fn bake_uv_rot_seqs(
     model: &M2Model,
-    combo_index: u16,
+    lookup: usize,
     slots: &[SeqSlot],
 ) -> Option<SeqLoops<[f32; 4]>> {
-    let ti = *model.texture_transform_lookup.get(combo_index as usize)?;
+    let ti = *model.texture_transform_lookup.get(lookup)?;
     let t = model.texture_transforms.get(ti as usize)?;
     SeqLoops::new(
         slots
@@ -119,10 +119,10 @@ pub(super) fn bake_uv_rot_seqs(
 /// scale never leaves `(1, 1)`.
 pub(super) fn bake_uv_scale_seqs(
     model: &M2Model,
-    combo_index: u16,
+    lookup: usize,
     slots: &[SeqSlot],
 ) -> Option<SeqLoops<[f32; 2]>> {
-    let ti = *model.texture_transform_lookup.get(combo_index as usize)?;
+    let ti = *model.texture_transform_lookup.get(lookup)?;
     let t = model.texture_transforms.get(ti as usize)?;
     SeqLoops::new(
         slots
@@ -139,6 +139,32 @@ pub(super) fn bake_uv_scale_seqs(
             })
             .collect(),
     )
+}
+
+/// One texture stage's four transform channels, baked from the texAnimLookup entry at `lookup`
+/// (`texture_transform_combo_index + k`, `0x70b897`): the translation loop on slot 0 and, where
+/// the slots disagree, per slot; the rotation and scaling per slot.
+pub(super) struct StageUv {
+    pub uv_anim: Option<UvAnim>,
+    pub uv_seq: Option<SeqLoops<[f32; 2]>>,
+    pub uv_rot_seq: Option<SeqLoops<[f32; 4]>>,
+    pub uv_scale_seq: Option<SeqLoops<[f32; 2]>>,
+}
+
+/// [`StageUv`] for the stage whose transform lookup entry is at `lookup`.
+pub(super) fn bake_stage(
+    model: &M2Model,
+    lookup: usize,
+    seq0: Option<SeqSlot>,
+    slots: &[SeqSlot],
+) -> StageUv {
+    StageUv {
+        uv_anim: bake_uv_anim(model, lookup, seq0),
+        // Per sequence only when the slots disagree: the shared registry cannot key on one.
+        uv_seq: bake_uv_seqs(model, lookup, slots).filter(|set| set.uniform().is_none()),
+        uv_rot_seq: bake_uv_rot_seqs(model, lookup, slots),
+        uv_scale_seq: bake_uv_scale_seqs(model, lookup, slots),
+    }
 }
 
 /// The texture transform, `uv' = R_q((uv + t − p) ⊙ s) + p` with `p = (½, ½)` (`0x715f25`):

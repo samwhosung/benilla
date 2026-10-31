@@ -3,7 +3,8 @@
 //            point lights, μ = N·L, E clamped to [0, 1] first when a point light is bound
 //   WMO:     color = clamp(MOCV·(ambient + diffuse·max(N·L, 0)) + emission) × tex
 //   clutter: color = clamp(grey·(ambient + diffuse·max(N·L, 0) + the point lights)) × tex
-//   stage 1: color = combine(color, tex1), tex1 at the generated coordinate (presets below)
+//   stage 1: color = combine(color, tex1), tex1 at the generated coordinate or on the vertex's
+//            UV set 1 by its own texture transform (presets below)
 //   fog:     color = mix(fog_color, color, fog_factor); out = color, raw gamma
 // The M2 law is the order-2 SH lobe of `Shaders\Vertex\Model2.bls` (cvar `M2UseShaders`, default
 // 1); M2's one FFP light site (`70bdf6`) runs only with that cvar off. Clutter and WMO are the FFP
@@ -48,11 +49,17 @@ struct ModelParams {
     // Rows of `wow_light.matanim`, 0 = identity: x = UV scroll, y = tint, z = texture-transform
     // affine, w = the UI tile's cell clip.
     anim_slots: vec4<f32>,
-    // The second texture stage: x = bound (1) or not (0), y = its combine preset 0-5; zw unused.
+    // The second texture stage: x = bound (1) or not (0), y = its combine preset 0-5, z = the
+    // stage-0 preset + 1 (0 for none), w = 1 when it reads the vertex's UV set 1, not the
+    // generated coordinate.
     stage1: vec4<f32>,
+    // Stage 1's own texture transform, read when `stage1.w` is set: x = its UV-scroll row, y = its
+    // affine row, zw = its UV-scroll seed, as `anim_slots.x`, `anim_slots.z` and `sun_scale.zw`
+    // are stage 0's.
+    stage1_uv: vec4<f32>,
 };
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> m: ModelParams;
-// Stage 1's texture, sampled at the generated coordinate `env_uv` when `m.stage1.x` is set.
+// Stage 1's texture, sampled at `stage1_uv` when `m.stage1.x` is set.
 @group(#{MATERIAL_BIND_GROUP}) @binding(101) var stage1_texture: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(102) var stage1_sampler: sampler;
 
@@ -138,8 +145,8 @@ struct WowVsOut {
     // A merged blob's per-placement fade alpha, constant over the placement.
     @location(9) merged_fade: f32,
 #endif
-    // Stage 1's generated coordinate, (0, 0) when the material binds no stage 1.
-    @location(11) env_uv: vec2<f32>,
+    // Stage 1's coordinate, generated or the vertex's UV set 1; (0, 0) without a stage 1.
+    @location(11) stage1_uv: vec2<f32>,
 }
 
 // The generated environment coordinate of `Model2.bls` (its programs for a stage whose coordinate
@@ -149,6 +156,15 @@ struct WowVsOut {
 fn wow_env_uv(p_view: vec3<f32>, n_view: vec3<f32>) -> vec2<f32> {
     let refl = normalize(p_view - 2.0 * dot(p_view, n_view) * n_view);
     return refl.xy * 0.5 + vec2<f32>(0.5, 0.5);
+}
+
+// The M2 texture transform past its translation (in sync with `tex_anim::uv_transform`): with
+// `uv_t` = uv + t, uv' = R((uv_t − p) ⊙ s) + p, p = (½, ½), R and s from the affine row
+// `[cos − 1, sin, sx − 1, sy − 1]`. Each stage takes its own matrix (`0x70b91f`).
+fn wow_uv_affine(uv_t: vec2<f32>, affine: vec4<f32>) -> vec2<f32> {
+    let d = (uv_t - vec2<f32>(0.5, 0.5)) * vec2<f32>(1.0 + affine.z, 1.0 + affine.w);
+    let c = 1.0 + affine.x;
+    return vec2<f32>(0.5 + d.x * c - d.y * affine.y, 0.5 + d.x * affine.y + d.y * c);
 }
 
 // Stage 1's colour combine on `prev`, the stage-0 result, by gx preset as the default device,
@@ -588,18 +604,22 @@ fn vertex(vertex: WowVertex) -> WowVsOut {
 #endif
 #endif
 #endif
-    // Stage 1 takes the same generated coordinate in its own interpolant: a two-texture unit's
-    // second lookup is the environment one in every stock model (`0xffff`).
-    out.env_uv = vec2<f32>(0.0);
+    // Stage 1's coordinate in its own interpolant: the generated one, as every stock two-texture
+    // unit's second entry (`0xffff`) asks, or with `stage1.w` the vertex's UV set 1, since every
+    // `Model2.bls` program passes `texcoord[k]` to stage `k`.
+    out.stage1_uv = vec2<f32>(0.0);
 #ifdef VERTEX_POSITIONS
 #ifdef VERTEX_NORMALS
-    if (m.stage1.x > 0.5) {
-        out.env_uv = wow_env_uv(view_rot * p_cam, normalize(view_rot * out.world_normal));
+    if (m.stage1.x > 0.5 && m.stage1.w < 0.5) {
+        out.stage1_uv = wow_env_uv(view_rot * p_cam, normalize(view_rot * out.world_normal));
     }
 #endif
 #endif
 #ifdef VERTEX_UVS_B
     out.uv_b = vertex.uv_b;
+    if (m.stage1.w > 0.5) {
+        out.stage1_uv = vertex.uv_b;
+    }
 #endif
 
 #ifdef VERTEX_COLORS
@@ -668,9 +688,8 @@ fn fragment(in: WowVsOut, @builtin(front_facing) is_front: bool) -> WowFragOut {
         }
     }
 #endif
-    // Rebuild Bevy's `VertexOutput` with the M2 texture transform (in sync with
-    // `tex_anim::uv_transform`): uv' = R((uv + t − p) ⊙ s) + p, p = (½, ½), t = `sun_scale.zw`
-    // plus its mat-anim delta, R and s from the affine row `[cos − 1, sin, sx − 1, sy − 1]`.
+    // Rebuild Bevy's `VertexOutput` with the M2 texture transform (`wow_uv_affine`), t =
+    // `sun_scale.zw` plus its mat-anim delta, R and s from the `anim_slots.z` row.
     var vo: VertexOutput;
     vo.position = in.position;
     vo.world_position = in.world_position;
@@ -682,10 +701,7 @@ fn fragment(in: WowVsOut, @builtin(front_facing) is_front: bool) -> WowFragOut {
         vo.uv = in.uv;
     } else {
         let uv_t = in.uv + m.sun_scale.zw + wow_light.matanim[u32(m.anim_slots.x)].xy;
-        let affine = wow_light.matanim[u32(m.anim_slots.z)];
-        let d = (uv_t - vec2<f32>(0.5, 0.5)) * vec2<f32>(1.0 + affine.z, 1.0 + affine.w);
-        let c = 1.0 + affine.x;
-        vo.uv = vec2<f32>(0.5 + d.x * c - d.y * affine.y, 0.5 + d.x * affine.y + d.y * c);
+        vo.uv = wow_uv_affine(uv_t, wow_light.matanim[u32(m.anim_slots.z)]);
     }
 #endif
 #ifdef VERTEX_UVS_B
@@ -756,7 +772,14 @@ fn fragment(in: WowVsOut, @builtin(front_facing) is_front: bool) -> WowFragOut {
     let tex0_alpha = base_color.a;
     var tex1 = vec4<f32>(1.0);
     if (stage1_on) {
-        tex1 = textureSampleBias(stage1_texture, stage1_sampler, in.env_uv, view.mip_bias);
+        // A stage on its UV set moves by its own transform, the law stage 0's takes; the generated
+        // coordinate takes none, as stage 0's does not.
+        var st1_uv = in.stage1_uv;
+        if (m.stage1.w > 0.5) {
+            let st1_t = in.stage1_uv + m.stage1_uv.zw + wow_light.matanim[u32(m.stage1_uv.x)].xy;
+            st1_uv = wow_uv_affine(st1_t, wow_light.matanim[u32(m.stage1_uv.y)]);
+        }
+        tex1 = textureSampleBias(stage1_texture, stage1_sampler, st1_uv, view.mip_bias);
         base_color.a = stage_alpha(stage1_preset, base_color.a, tex1.a);
     }
 

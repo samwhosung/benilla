@@ -58,8 +58,8 @@ pub struct MatKey {
     fog_policy: benilla_formats::FogPolicy,
     /// The batch samples the generated sphere-map coordinate, not its vertex UVs.
     env_map: bool,
-    /// The second texture stage's texture and combine preset ([`benilla_assets::Stage1`]).
-    stage1: Option<(AssetId<Image>, u8)>,
+    /// The second texture stage ([`benilla_assets::Stage1`], [`stage1_key`]).
+    stage1: Option<Stage1Key>,
     /// Stage 0's combine preset (`ModelSubmesh::combine`), which sets a fade twin's alpha.
     combine: Option<u8>,
     /// The static terrain-shade selector, fixed per placement.
@@ -173,7 +173,7 @@ pub fn model_material(
         no_depth_test,
         fog_policy,
         env_map,
-        stage1: stage1.map(|s| (s.texture.id(), s.combine)),
+        stage1: stage1.map(stage1_key),
         combine,
         shade,
         batch_order,
@@ -330,6 +330,14 @@ pub fn model_material(
                 // Zero until a sampler registers this material and bakes its table slot in once.
                 anim_slots: Vec4::ZERO,
                 stage1: stage1_params(stage1, combine),
+                // Stage 1's own rows start at zero too; zw its translation at t = 0, the seed its
+                // row is added to, as `sun_scale.zw` is stage 0's.
+                stage1_uv: {
+                    let uv0 = stage1
+                        .and_then(|s| s.uv_anim.as_ref())
+                        .map_or([0.0, 0.0], |a| a.sample(0.0));
+                    Vec4::new(0.0, 0.0, uv0[0], uv0[1])
+                },
                 stage1_texture: stage1.map(|s| s.texture.clone()),
                 light_buf: light.clone(),
             },
@@ -414,7 +422,7 @@ pub fn zfill_material(
         no_depth_test: false,
         fog_policy: benilla_formats::FogPolicy::Scene,
         env_map,
-        stage1: stage1.map(|s| (s.texture.id(), s.combine)),
+        stage1: stage1.map(stage1_key),
         combine: None,
         shade: ShadeSel::Lit,
         batch_order: 0,
@@ -463,6 +471,8 @@ pub fn zfill_material(
                 sidn: Vec4::ZERO,
                 anim_slots: Vec4::ZERO,
                 stage1: stage1_params(stage1, None),
+                // No transform, as stage 0 here: the twin is not on the UV lane.
+                stage1_uv: Vec4::ZERO,
                 stage1_texture: stage1.map(|s| s.texture.clone()),
                 light_buf: light.clone(),
             },
@@ -473,13 +483,29 @@ pub fn zfill_material(
 }
 
 /// `WowModelExt::stage1`: `x` = stage 1 bound, `y` = its combine preset, `z` = the stage-0 preset
-/// plus one (`0` for a batch without one, which keeps the texel's alpha, the modulate).
+/// plus one (`0` for a batch without one, which keeps the texel's alpha, the modulate), `w` = it
+/// reads the vertex's UV set 1.
 fn stage1_params(stage1: Option<&benilla_assets::Stage1>, combine: Option<u8>) -> Vec4 {
     Vec4::new(
         f32::from(u8::from(stage1.is_some())),
         stage1.map_or(0.0, |s| f32::from(s.combine)),
         combine.map_or(0.0, |p| f32::from(p) + 1.0),
-        0.0,
+        f32::from(u8::from(stage1.is_some_and(|s| s.uv_set))),
+    )
+}
+
+/// A stage 1's dedup key: its texture, combine preset, coordinate source and translation loop,
+/// the `Arc<UvAnim>` pointer as [`MatKey::uv_anim`] keys stage 0's.
+type Stage1Key = (AssetId<Image>, u8, bool, Option<usize>);
+
+fn stage1_key(s: &benilla_assets::Stage1) -> Stage1Key {
+    (
+        s.texture.id(),
+        s.combine,
+        s.uv_set,
+        s.uv_anim
+            .as_ref()
+            .map(|a| std::sync::Arc::as_ptr(a) as usize),
     )
 }
 
@@ -997,9 +1023,43 @@ mod tests {
         let stage = benilla_assets::Stage1 {
             texture: Default::default(),
             combine: 3,
+            uv_set: false,
+            uv_anim: None,
         };
         let p = super::stage1_params(Some(&stage), Some(0));
-        assert_eq!((p.x, p.y, p.z), (1.0, 3.0, 1.0));
+        assert_eq!((p.x, p.y, p.z, p.w), (1.0, 3.0, 1.0, 0.0));
+    }
+
+    /// A stage 1 on the vertex's UV set says so in `stage1.w`, which `wow_model.wgsl` reads to
+    /// take `uv_b` and the stage's own transform, and keys a material of its own: its own
+    /// coordinates and its own translation loop are each part of the look.
+    #[test]
+    fn a_stage_one_on_a_uv_set_is_its_own_material() {
+        let generated = benilla_assets::Stage1 {
+            texture: Default::default(),
+            combine: 1,
+            uv_set: false,
+            uv_anim: None,
+        };
+        let on_uvs = benilla_assets::Stage1 {
+            uv_set: true,
+            ..generated.clone()
+        };
+        let scroll = std::sync::Arc::new(benilla_formats::UvAnim {
+            period: 1.0,
+            step: false,
+            wrap: true,
+            gseq: true,
+            keys: vec![(0.0, [0.0, 0.0]), (1.0, [0.5, 0.0])],
+        });
+        let scrolling = benilla_assets::Stage1 {
+            uv_anim: Some(scroll),
+            ..on_uvs.clone()
+        };
+        assert_eq!(super::stage1_params(Some(&on_uvs), None).w, 1.0);
+        assert_eq!(super::stage1_params(Some(&generated), None).w, 0.0);
+        let keys = [&generated, &on_uvs, &scrolling].map(super::stage1_key);
+        assert!(keys[0] != keys[1] && keys[1] != keys[2] && keys[0] != keys[2]);
     }
 
     /// Too small and coplanar layers strobe; too large and effects interleave into their owner.

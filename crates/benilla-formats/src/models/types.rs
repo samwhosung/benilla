@@ -1,5 +1,7 @@
 //! The render types every model source (M2 batches, WMO groups) produces, one per render batch.
 
+use std::sync::Arc;
+
 use super::key_anim::SeqLoops;
 use super::mat_anim::{AlphaAnim, RgbAnim};
 use super::tex_anim::UvAnim;
@@ -270,6 +272,9 @@ pub struct RenderSubmesh {
     /// canopies harshly. Empty if the source has none, and the renderer computes them.
     pub normals: Vec<[f32; 3]>,
     pub uvs: Vec<[f32; 2]>,
+    /// The vertices' UV set 1, parallel to [`Self::positions`], carried only for a batch whose
+    /// stage 1 reads it ([`TextureStage::env_map`] clear); empty otherwise.
+    pub uvs2: Vec<[f32; 2]>,
     pub indices: Vec<u32>,
     /// `None` for an unfilled creature skin slot ([`Self::skin_slot`]).
     pub texture: Option<String>,
@@ -367,14 +372,22 @@ pub struct TextureStage {
     /// The texture record's address mode (`flags & 0x1/0x2`), as stage 0's.
     pub wrap_x: bool,
     pub wrap_y: bool,
-    /// Generated coordinates: the lookup `texture_unit_lookup[texCoordSet + k]` is above 2
+    /// Generated coordinates: the coordinate entry (`benilla_m2::M2Model::stage_coord`) is above 2
     /// (`0x70b8bd`), the same view-space sphere map as [`RenderSubmesh::env_map`]. Otherwise the
-    /// stage reads the vertex's UV set `k` (`Model2.bls` binds `texcoord[k]`), which no stock
-    /// two-texture batch does.
+    /// stage reads the vertex's UV set `k`, whatever the entry holds (`Model2.bls` passes
+    /// `texcoord[k]`), carried as [`RenderSubmesh::uvs2`]; no stock two-texture batch does.
     pub env_map: bool,
     /// The combine preset (`benilla_m2::M2Model::stage_combine`): 0 and 1 modulate the colour
     /// with alpha passed or modulated, 3 adds, 4 modulates ×2, 2 and 5 interpolate.
     pub combine: u8,
+    /// The stage's own texture transform, the lookup at `texture_transform_combo_index + k`
+    /// (`0x70b897`), whose matrix moves, turns and scales this stage alone (`0x70b91f`), baked as
+    /// stage 0's [`RenderSubmesh::uv_anim`] and the three after it. None on a generated stage,
+    /// which no transform drives. Shared, so every lane keys one identity.
+    pub uv_anim: Option<Arc<UvAnim>>,
+    pub uv_seq: Option<Arc<SeqLoops<[f32; 2]>>>,
+    pub uv_rot_seq: Option<Arc<SeqLoops<[f32; 4]>>>,
+    pub uv_scale_seq: Option<Arc<SeqLoops<[f32; 2]>>>,
 }
 
 /// A flat ground-plane quad: four vertices on one horizontal plane at or just above z = 0 (hover
@@ -409,6 +422,7 @@ impl Default for RenderSubmesh {
             positions: Vec::new(),
             normals: Vec::new(),
             uvs: Vec::new(),
+            uvs2: Vec::new(),
             indices: Vec::new(),
             texture: None,
             skin_slot: None,

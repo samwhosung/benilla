@@ -63,6 +63,7 @@ fn remap_submesh(
             positions,
             normals,
             uvs,
+            uvs2: Vec::new(),
             indices,
             texture,
             // The per-batch fields start at their defaults; the M2 and WMO paths set their own.

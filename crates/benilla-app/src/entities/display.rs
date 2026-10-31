@@ -96,15 +96,16 @@ pub(super) struct EntityPart {
 }
 
 impl EntityPart {
-    /// The four texture-transform channels as the engine's lanes take them, the one place a spawner
-    /// reads them. Ask `UvLoops::animates`: a scale-only transform or a dead slot-0 translation is
-    /// `None` on the channel you would check first.
+    /// The texture-transform channels of both stages as the engine's lanes take them, the one place
+    /// a spawner reads them. Ask `UvLoops::animates`: a scale-only transform or a dead slot-0
+    /// translation is `None` on the channel you would check first.
     pub(super) fn uv_loops(&self) -> benilla_world::doodad_anim::UvLoops {
         benilla_world::doodad_anim::UvLoops {
             seqs: self.uv_seq.clone(),
             single: self.uv_anim.clone(),
             rot: self.uv_rot_seq.clone(),
             scale: self.uv_scale_seq.clone(),
+            stage1: benilla_world::doodad_anim::Stage1Loops::of(&self.geometry),
         }
     }
 }

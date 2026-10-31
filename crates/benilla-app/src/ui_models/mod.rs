@@ -396,7 +396,8 @@ struct UvPart {
     /// Held so the clone lives exactly as long as the tile.
     #[allow(dead_code)]
     material: Handle<WowModelMaterial>,
-    /// The translation row's slot and its seed (`sun_scale.zw`, the loop's sample at 0).
+    /// The translation row's slot and its seed (`sun_scale.zw` for stage 0, `stage1_uv.zw` for
+    /// stage 1: the loop's sample at 0).
     trans: Option<(u16, [f32; 2])>,
     /// The affine row's slot: rotation and scale ([`affine_row`]).
     affine: Option<u16>,
@@ -1763,6 +1764,29 @@ fn shelf_pack(sizes: &[UVec2], edge: u32) -> Vec<Cell> {
     cells
 }
 
+/// A stage's rows: [`UvPart::trans`] and [`UvPart::affine`].
+type UvRows = (Option<(u16, [f32; 2])>, Option<u16>);
+
+/// One texture stage's table rows when its transform translates or turns (rotates or scales): a
+/// translation slot beside its built `seed`, and an affine slot. `None` when the stage holds no
+/// channel.
+fn uv_stage_rows(
+    table: &mut MatAnimTable,
+    translates: bool,
+    turns: bool,
+    seed: [f32; 2],
+) -> Option<UvRows> {
+    if !translates && !turns {
+        return None;
+    }
+    let trans = translates
+        .then(|| table.alloc())
+        .flatten()
+        .map(|slot| (slot, seed));
+    let affine = turns.then(|| table.alloc()).flatten();
+    Some((trans, affine))
+}
+
 /// What [`build_tile`] made.
 struct BuiltTile {
     clips: HashMap<u16, (AnimationNodeIndex, usize)>,
@@ -1824,28 +1848,35 @@ fn build_tile(
             render.mats.materials(),
             lane,
         )?;
-        // An animated texture transform also gets its own table rows, off this pane's play head.
-        let animated = sub.uv_anim.is_some()
-            || sub.uv_seq.is_some()
-            || sub.uv_rot_seq.is_some()
-            || sub.uv_scale_seq.is_some();
+        // An animated texture transform also gets its own table rows, off this pane's play head:
+        // stage 0's in `anim_slots.x` and `.z`, stage 1's in `stage1_uv.x` and `.y`.
+        let stage1 = benilla_world::doodad_anim::Stage1Loops::of(&sub.geometry);
         {
             let mut own = render.mats.materials().get(&twin).cloned()?;
             own.extension.anim_slots.w = clip_slot.map_or(0.0, f32::from);
-            let seed = [own.extension.sun_scale.z, own.extension.sun_scale.w];
-            let trans = (animated && (sub.uv_anim.is_some() || sub.uv_seq.is_some()))
-                .then(|| render.table.alloc())
-                .flatten()
-                .map(|slot| {
-                    own.extension.anim_slots.x = f32::from(slot);
-                    (slot, seed)
-                });
-            let affine = (animated && (sub.uv_rot_seq.is_some() || sub.uv_scale_seq.is_some()))
-                .then(|| render.table.alloc())
-                .flatten()
-                .inspect(|&slot| own.extension.anim_slots.z = f32::from(slot));
+            let ext = &mut own.extension;
+            let stage0 = uv_stage_rows(
+                &mut render.table,
+                sub.uv_anim.is_some() || sub.uv_seq.is_some(),
+                sub.uv_rot_seq.is_some() || sub.uv_scale_seq.is_some(),
+                [ext.sun_scale.z, ext.sun_scale.w],
+            );
+            if let Some((trans, affine)) = stage0 {
+                ext.anim_slots.x = trans.map_or(0.0, |(slot, _)| f32::from(slot));
+                ext.anim_slots.z = affine.map_or(0.0, f32::from);
+            }
+            let stage1_rows = uv_stage_rows(
+                &mut render.table,
+                stage1.single.is_some() || stage1.seqs.is_some(),
+                stage1.rot.is_some() || stage1.scale.is_some(),
+                [ext.stage1_uv.z, ext.stage1_uv.w],
+            );
+            if let Some((trans, affine)) = stage1_rows {
+                ext.stage1_uv.x = trans.map_or(0.0, |(slot, _)| f32::from(slot));
+                ext.stage1_uv.y = affine.map_or(0.0, f32::from);
+            }
             let handle = render.mats.materials().add(own);
-            if animated {
+            if let Some((trans, affine)) = stage0 {
                 uv_parts.push(UvPart {
                     material: handle.clone(),
                     trans,
@@ -1854,6 +1885,17 @@ fn build_tile(
                     uv_seq: sub.uv_seq.clone(),
                     uv_rot: sub.uv_rot_seq.clone(),
                     uv_scale: sub.uv_scale_seq.clone(),
+                });
+            }
+            if let Some((trans, affine)) = stage1_rows {
+                uv_parts.push(UvPart {
+                    material: handle.clone(),
+                    trans,
+                    affine,
+                    uv_anim: stage1.single,
+                    uv_seq: stage1.seqs,
+                    uv_rot: stage1.rot,
+                    uv_scale: stage1.scale,
                 });
             }
             part_mats.push(handle);

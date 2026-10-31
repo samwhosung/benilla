@@ -122,6 +122,7 @@ fn concat_geometry(first: &RenderSubmesh, rest: &[&RenderSubmesh]) -> RenderSubm
         out.positions.extend_from_slice(&sub.positions);
         out.uvs.extend_from_slice(&sub.uvs);
         out.indices.extend(sub.indices.iter().map(|i| i + base));
+        extend_matched(&mut out.uvs2, &sub.uvs2, out.positions.len());
         extend_matched(&mut out.normals, &sub.normals, out.positions.len());
         extend_matched(&mut out.joints, &sub.joints, out.positions.len());
         extend_matched(&mut out.weights, &sub.weights, out.positions.len());

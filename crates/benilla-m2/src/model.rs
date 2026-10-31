@@ -107,15 +107,19 @@ impl M2Bone {
     }
 }
 
-/// One M2 vertex, 48 bytes: position @0, weights @0x0c, indices @0x10, normal @0x14, UV @0x20,
-/// and an unread second UV @0x28.
+/// One M2 vertex, 48 bytes: position @0, weights @0x0c, indices @0x10, normal @0x14, UV set 0
+/// @0x20 and UV set 1 @0x28, the device's vertex format 12 (`0x8097a8`).
 pub struct M2Vertex {
     pub position: C3,
     /// Per-vertex bone influence weights (`/255`), paired with [`Self::bone_indices`].
     pub bone_weights: [u8; 4],
     pub bone_indices: [u8; 4],
     pub normal: C3,
+    /// UV set 0, the coordinates texture stage 0 reads.
     pub tex_coords: C2,
+    /// UV set 1, the coordinates texture stage 1 reads: every `Model2.bls` program (`0x706510`)
+    /// passes `texcoord[k]` to stage `k`, whatever its coordinate entry at or below 2 holds.
+    pub tex_coords2: C2,
 }
 
 /// The texture lookup table and the collision hull's raw bytes.

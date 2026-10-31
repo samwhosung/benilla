@@ -2,6 +2,7 @@
 //! each card turns about its own pivot.
 
 use std::io::Cursor;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use benilla_bytes::ByteExt;
@@ -397,9 +398,9 @@ pub fn parse_m2_render_submeshes(
         // coordinate, as the reference gates it at `0x70b8bd`.
         let env_map = model.stage_is_env_mapped(bytes, batch, 0);
         let combine = model.stage_combine(batch, 0);
-        // A unit of two textures binds a second stage (`0x70b740`): texture, coordinates and
-        // combine by the same lookups at `+ 1`. No stock unit has more than two, and the shader
-        // draws two.
+        // A unit of two textures binds a second stage (`0x70b740`): texture, coordinates, combine
+        // and texture transform by the same lookups at `+ 1`. No stock unit has more than two,
+        // and the shader draws two.
         let stage1 = (batch.texture_count >= 2).then(|| {
             let rec = model
                 .raw_data
@@ -410,14 +411,32 @@ pub fn parse_m2_render_submeshes(
             // A slot the spawn site fills resolves only as far as `skins` and its embedded path
             // reach: the spawn sites fill stage 0's alone, and no stock stage 1 is a slot.
             let texture = rec.and_then(|t| resolve_texture(t, dir, skins).0);
+            let env_map = model.stage_is_env_mapped(bytes, batch, 1);
+            // A stage on its UV set moves by its own transform (`0x70b90b`); a generated one
+            // takes none.
+            let uv = (!env_map).then(|| {
+                tex_anim::bake_stage(
+                    model,
+                    batch.texture_transform_combo_index as usize + 1,
+                    seq0_slot,
+                    &seq_slots,
+                )
+            });
+            let uv = uv.as_ref();
             TextureStage {
                 texture,
                 wrap_x,
                 wrap_y,
-                env_map: model.stage_is_env_mapped(bytes, batch, 1),
+                env_map,
                 combine: model.stage_combine(batch, 1),
+                uv_anim: uv.and_then(|u| u.uv_anim.clone()).map(Arc::new),
+                uv_seq: uv.and_then(|u| u.uv_seq.clone()).map(Arc::new),
+                uv_rot_seq: uv.and_then(|u| u.uv_rot_seq.clone()).map(Arc::new),
+                uv_scale_seq: uv.and_then(|u| u.uv_scale_seq.clone()).map(Arc::new),
             }
         });
+        // Stage 1 on a UV set reads the vertex's set 1 (`Model2.bls` passes `texcoord[1]`).
+        let uv_stage1 = stage1.as_ref().is_some_and(|s| !s.env_map);
         // Render flag 0x01, unlit: full texture brightness (lamp glass, glow cards).
         let emissive = material.is_some_and(|m| m.flags.bits() & 0x01 != 0);
         // Render flags 0x10 (no depth write) and 0x08 (no depth test): the reference keys depth
@@ -484,16 +503,19 @@ pub fn parse_m2_render_submeshes(
                 .collect();
             AlphaAnim::new(per_seq)
         };
-        // The UV loop: batch combo → `texAnimLookup` → translation track, on the same clocks.
-        let uv_anim = tex_anim::bake_uv_anim(model, batch.texture_transform_combo_index, seq0_slot);
-        // Per sequence only when the slots disagree: the shared registry cannot key on one.
-        let uv_seq = tex_anim::bake_uv_seqs(model, batch.texture_transform_combo_index, &seq_slots)
-            .filter(|set| set.uniform().is_none());
-        // Rotation and scaling per slot, for lanes owning a material per instance (UI model tiles).
-        let uv_rot_seq =
-            tex_anim::bake_uv_rot_seqs(model, batch.texture_transform_combo_index, &seq_slots);
-        let uv_scale_seq =
-            tex_anim::bake_uv_scale_seqs(model, batch.texture_transform_combo_index, &seq_slots);
+        // The UV loops: batch combo → `texAnimLookup` → the transform's tracks, on the same
+        // clocks; rotation and scaling per slot, for lanes owning a material per instance.
+        let tex_anim::StageUv {
+            uv_anim,
+            uv_seq,
+            uv_rot_seq,
+            uv_scale_seq,
+        } = tex_anim::bake_stage(
+            model,
+            batch.texture_transform_combo_index as usize,
+            seq0_slot,
+            &seq_slots,
+        );
         // The animated M2Color tint: only a time-varying track bakes, replacing the vertex tint.
         let rgb_track = model.color_rgb_tracks.get(batch.color_index as usize);
         let rgb_anim =
@@ -574,6 +596,15 @@ pub fn parse_m2_render_submeshes(
             });
             sub.env_map = env_map;
             sub.stage1 = stage1.clone();
+            if uv_stage1 {
+                sub.uvs2 = globals
+                    .iter()
+                    .map(|&g| {
+                        let c = &model.vertices[g as usize].tex_coords2;
+                        [c.x, c.y]
+                    })
+                    .collect();
+            }
             sub.combine = combine;
             sub.additive = additive;
             sub.no_depth_write = no_depth_write;
@@ -786,6 +817,17 @@ mod tests {
     /// the stock two-texture units: lookups `[0, 1]`, coordinates `[0, 0xffff]`, combiners
     /// `[1, 1]`, blend 0, `B.BLP` clamped and `A.BLP` repeating.
     fn two_texture_model(texture_count: u16) -> Vec<u8> {
+        stage_model(texture_count, [0, 0xffff], false)
+    }
+
+    /// The vertices' UV sets 0 and 1 in [`stage_model`].
+    const UV0: [[f32; 2]; 3] = [[0.125, 0.25], [0.375, 0.5], [0.625, 0.75]];
+    const UV1: [[f32; 2]; 3] = [[0.875, -1.5], [2.25, 0.0625], [-0.5, 3.0]];
+
+    /// [`two_texture_model`] with the coordinate entries `coords` and, with `stage1_moves`, a
+    /// texture transform for stage 1 alone: texAnimLookup `[0xffff, 0]` and one transform whose
+    /// global-sequence translation runs to `(0.5, 0.25)` and scaling to `(2, 2)` over 1 s.
+    fn stage_model(texture_count: u16, coords: [u16; 2], stage1_moves: bool) -> Vec<u8> {
         fn arr(b: &mut [u8], at: usize, count: usize, ofs: usize) {
             b[at..at + 4].copy_from_slice(&(count as u32).to_le_bytes());
             b[at + 4..at + 8].copy_from_slice(&(ofs as u32).to_le_bytes());
@@ -803,13 +845,19 @@ mod tests {
             b[0xb4 + 4 * i..0xb8 + 4 * i].copy_from_slice(&v.to_le_bytes());
         }
         let verts = b.len();
-        for p in [[0.0f32, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]] {
+        for (i, p) in [[0.0f32, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+            .iter()
+            .enumerate()
+        {
             let mut v = vec![0u8; 48];
             for (k, c) in p.iter().enumerate() {
                 v[4 * k..4 * k + 4].copy_from_slice(&c.to_le_bytes());
             }
             v[12] = 255; // all weight on bone 0
             v[28..32].copy_from_slice(&1.0f32.to_le_bytes()); // normal +Z
+            for (k, c) in UV0[i].iter().chain(&UV1[i]).enumerate() {
+                v[32 + 4 * k..36 + 4 * k].copy_from_slice(&c.to_le_bytes());
+            }
             b.extend(v);
         }
         arr(&mut b, 0x44, 3, verts);
@@ -833,8 +881,39 @@ mod tests {
         arr(&mut b, 0x84, 1, mats);
         let tex_lookup = u16s(&mut b, &[0, 1]);
         arr(&mut b, 0x94, 2, tex_lookup);
-        let unit_lookup = u16s(&mut b, &[0, 0xffff]);
+        let unit_lookup = u16s(&mut b, &coords);
         arr(&mut b, 0x9c, 2, unit_lookup);
+        if stage1_moves {
+            // A v256 track (0x1c): interp, gseq, ranges, then the timestamp and value arrays.
+            let track = |b: &mut Vec<u8>, keys: &[[f32; 3]]| -> Vec<u8> {
+                let ts = u16s(b, &[]);
+                b.extend([0u32, 1000].iter().flat_map(|t| t.to_le_bytes()));
+                let vals = b.len();
+                b.extend(keys.iter().flatten().flat_map(|c| c.to_le_bytes()));
+                let mut t = vec![0u8; 0x1c];
+                t[0..2].copy_from_slice(&1u16.to_le_bytes()); // linear
+                arr(&mut t, 0x0c, 2, ts);
+                arr(&mut t, 0x14, keys.len(), vals);
+                t
+            };
+            let translation = track(&mut b, &[[0.0, 0.0, 0.0], [0.5, 0.25, 0.0]]);
+            let scaling = track(&mut b, &[[1.0, 1.0, 1.0], [2.0, 2.0, 1.0]]);
+            let mut rotation = vec![0u8; 0x1c];
+            rotation[2..4].copy_from_slice(&0xffffu16.to_le_bytes());
+            let transforms = b.len();
+            b.extend(translation);
+            b.extend(rotation);
+            b.extend(scaling);
+            arr(&mut b, 0x74, 1, transforms);
+            let anim_lookup = u16s(&mut b, &[0xffff, 0]);
+            arr(&mut b, 0xac, 2, anim_lookup);
+            // One looping sequence over the second, the slot rotation and scaling bake per.
+            let seqs = b.len();
+            let mut seq = vec![0u8; 0x44];
+            seq[8..12].copy_from_slice(&1000u32.to_le_bytes());
+            b.extend(seq);
+            arr(&mut b, 0x1c, 1, seqs);
+        }
         let combiners = u16s(&mut b, &[1, 1]);
         arr(&mut b, 0x144, 2, combiners);
         let indices = u16s(&mut b, &[0, 1, 2]);
@@ -875,12 +954,76 @@ mod tests {
                 wrap_y: false,
                 env_map: true,
                 combine: 1,
+                uv_anim: None,
+                uv_seq: None,
+                uv_rot_seq: None,
+                uv_scale_seq: None,
             })
         );
+        assert!(s.uvs2.is_empty(), "a generated stage 1 reads no UV set");
         // One texture binds one stage, whatever the lookups past it hold.
         let one = parse_m2_render_submeshes(&two_texture_model(1), "", &[]).expect("parses");
         assert_eq!(one[0].stage1, None);
         assert_eq!(one[0].texture.as_deref(), Some("A.BLP"));
+    }
+
+    /// Stage `k` reads the vertex's UV set `k` whatever its coordinate entry at or below 2 holds:
+    /// every `Model2.bls` program passes `texcoord[k]` to stage `k`. A stage-1 entry of 0 still
+    /// reads set 1, carried byte for byte, and a stage-0 entry of 1 (the Burning Steppes lava
+    /// rocks') still reads set 0.
+    #[test]
+    fn stage_k_reads_uv_set_k_whatever_its_entry() {
+        let bits = |v: &[[f32; 2]]| -> Vec<[u32; 2]> {
+            v.iter().map(|c| [c[0].to_bits(), c[1].to_bits()]).collect()
+        };
+        let subs =
+            parse_m2_render_submeshes(&stage_model(2, [0, 0], false), "", &[]).expect("parses");
+        let s = &subs[0];
+        let st = s.stage1.as_ref().expect("stage 1");
+        assert!(!st.env_map, "an entry of 0 is a UV set, not the sphere map");
+        assert_eq!(bits(&s.uvs), bits(&UV0), "stage 0 reads set 0");
+        assert_eq!(
+            bits(&s.uvs2),
+            bits(&UV1),
+            "stage 1 reads set 1, not the set 0 its entry names"
+        );
+
+        let subs = parse_m2_render_submeshes(&stage_model(2, [1, 0xffff], false), "", &[])
+            .expect("parses");
+        assert_eq!(
+            bits(&subs[0].uvs),
+            bits(&UV0),
+            "an entry of 1 on stage 0 reads set 0"
+        );
+        assert!(subs[0].uvs2.is_empty(), "stage 1 is generated");
+    }
+
+    /// Each stage moves by its own transform, the lookup at `texture_transform_combo_index + k`
+    /// (`0x70b897`): here stage 1's translates and scales while stage 0 stands still. A generated
+    /// stage 1 takes no transform, whatever its lookup holds.
+    #[test]
+    fn stage_one_moves_by_its_own_transform() {
+        let subs =
+            parse_m2_render_submeshes(&stage_model(2, [0, 1], true), "", &[]).expect("parses");
+        let s = &subs[0];
+        assert!(
+            s.uv_anim.is_none() && s.uv_scale_seq.is_none(),
+            "stage 0 has none"
+        );
+        let st = s.stage1.as_ref().expect("stage 1");
+        let scroll = st.uv_anim.as_ref().expect("stage 1's translation loop");
+        assert_eq!(scroll.period, 1.0);
+        assert_eq!(scroll.sample(0.5), [0.25, 0.125]);
+        let scale = st.uv_scale_seq.as_ref().expect("stage 1's scaling loop");
+        let scale = scale.seq(None).expect("slot 0");
+        assert_eq!(scale.sample_or(0.5, [1.0, 1.0]), [1.5, 1.5]);
+        assert!(st.uv_rot_seq.is_none(), "a keyless rotation bakes nothing");
+
+        let subs =
+            parse_m2_render_submeshes(&stage_model(2, [0, 0xffff], true), "", &[]).expect("parses");
+        let st = subs[0].stage1.as_ref().expect("stage 1");
+        assert!(st.env_map);
+        assert!(st.uv_anim.is_none() && st.uv_scale_seq.is_none());
     }
 
     /// A batch carries its stage-0 combine (`0x70b7bf`): a version 0x101 model's array entry 0

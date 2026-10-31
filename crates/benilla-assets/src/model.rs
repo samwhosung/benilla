@@ -100,13 +100,19 @@ pub struct ModelSubmesh {
 }
 
 /// A batch's second texture stage as `wow_model.wgsl` draws it: the texture at the generated
-/// environment coordinate, combined with the stage-0 result by its gx preset
-/// ([`benilla_formats::TextureStage`]).
+/// environment coordinate or on the vertex's UV set 1, combined with the stage-0 result by its gx
+/// preset ([`benilla_formats::TextureStage`]).
 #[derive(Clone)]
 pub struct Stage1 {
     pub texture: Handle<Image>,
     /// The combine preset 0-5.
     pub combine: u8,
+    /// The stage reads the mesh's UV set 1 (`ATTRIBUTE_UV_1`), moved by its own transform, not the
+    /// generated coordinate.
+    pub uv_set: bool,
+    /// The stage's translation loop ([`benilla_formats::TextureStage::uv_anim`]): the seed its
+    /// material opens on and, like [`ModelSubmesh::uv_anim`], a material-dedup identity.
+    pub uv_anim: Option<std::sync::Arc<benilla_formats::UvAnim>>,
 }
 
 /// Bake a [`RenderSubmesh`] to a Bevy-space [`Mesh`]: authored normals, else flat ones.
@@ -124,6 +130,10 @@ fn build_submesh_mesh(sub: &RenderSubmesh, usages: RenderAssetUsages) -> Mesh {
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, usages);
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, sub.uvs.clone());
+    // UV set 1, which a stage 1 on a UV set reads (`wow_model.wgsl`, `uv_b`).
+    if !sub.uvs2.is_empty() && sub.uvs2.len() == sub.positions.len() {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, sub.uvs2.clone());
+    }
     mesh.insert_indices(Indices::U32(sub.indices.clone()));
     if sub.vertex_colors.len() == sub.positions.len() {
         mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, sub.vertex_colors.clone());
@@ -668,9 +678,14 @@ fn merged_static_mesh_impl(
     let any_colors = parts
         .iter()
         .any(|(s, _)| s.vertex_colors.len() == s.positions.len());
+    // A blob shares one material, so its parts carry UV set 1 alike; a stray part pads zeros.
+    let any_uvs2 = parts
+        .iter()
+        .any(|(s, _)| !s.uvs2.is_empty() && s.uvs2.len() == s.positions.len());
     let mut positions: Vec<[f32; 3]> = Vec::new();
     let mut normals: Vec<[f32; 3]> = Vec::new();
     let mut uvs: Vec<[f32; 2]> = Vec::new();
+    let mut uvs2: Vec<[f32; 2]> = Vec::new();
     let mut colors: Vec<[f32; 4]> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
     let mut fade: Vec<[f32; 4]> = Vec::new();
@@ -694,6 +709,13 @@ fn merged_static_mesh_impl(
             normals.extend(std::iter::repeat_n([0.0, 1.0, 0.0], sub.positions.len()));
         }
         uvs.extend(sub.uvs.iter().copied());
+        if any_uvs2 {
+            if sub.uvs2.len() == sub.positions.len() {
+                uvs2.extend(sub.uvs2.iter().copied());
+            } else {
+                uvs2.extend(std::iter::repeat_n([0.0, 0.0], sub.positions.len()));
+            }
+        }
         if any_colors {
             if sub.vertex_colors.len() == sub.positions.len() {
                 colors.extend(sub.vertex_colors.iter().copied());
@@ -721,6 +743,9 @@ fn merged_static_mesh_impl(
     );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    if any_uvs2 {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, uvs2);
+    }
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
     if any_colors {
         mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
@@ -781,6 +806,44 @@ mod tests {
             bones,
             events: Vec::new(),
         }
+    }
+
+    /// UV set 1 reaches the mesh as `ATTRIBUTE_UV_1` where a stage reads it: in the static and
+    /// skinned meshes, and in a merged one, where a part without it pads zeros. A mesh with no
+    /// set 1 keeps the plain layout.
+    #[test]
+    fn uv_set_one_reaches_the_mesh_and_pads_in_a_merge() {
+        let tri = |uvs2: Vec<[f32; 2]>| RenderSubmesh {
+            positions: vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            uvs: vec![[0.0; 2]; 3],
+            uvs2,
+            indices: vec![0, 1, 2],
+            ..Default::default()
+        };
+        let uv1 = |m: &Mesh| match m.attribute(Mesh::ATTRIBUTE_UV_1) {
+            Some(VertexAttributeValues::Float32x2(v)) => Some(v.clone()),
+            Some(other) => panic!("UV_1 as {other:?}"),
+            None => None,
+        };
+        let set1 = vec![[0.25, 0.5], [0.75, -2.5], [1.0, 1.0]];
+        assert_eq!(
+            uv1(&submesh_to_static_mesh(&tri(set1.clone()))),
+            Some(set1.clone())
+        );
+        assert_eq!(
+            uv1(&submesh_to_skinned_mesh(&tri(set1.clone()))),
+            Some(set1.clone())
+        );
+        assert_eq!(uv1(&submesh_to_static_mesh(&tri(Vec::new()))), None);
+
+        let part = |uvs2| (std::sync::Arc::new(tri(uvs2)), Transform::default());
+        let parts = [part(Vec::new()), part(set1.clone())];
+        let (merged, ..) = merged_static_mesh_faded(&parts, &[Vec4::ZERO; 2], None);
+        let mut want = vec![[0.0, 0.0]; 3];
+        want.extend(set1);
+        assert_eq!(uv1(&merged), Some(want), "the first part pads zeros");
+        let (plain, ..) = merged_static_mesh_faded(&[part(Vec::new())], &[Vec4::ZERO], None);
+        assert_eq!(uv1(&plain), None);
     }
 
     /// A clip with no curves still carries its sequence's duration, or its clock never advances.

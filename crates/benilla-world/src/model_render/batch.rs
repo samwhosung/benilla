@@ -107,6 +107,7 @@ impl M2BatchMaterials<'_> {
         &mut self,
         sub: &benilla_formats::RenderSubmesh,
         texture: Option<Handle<Image>>,
+        stage1: Option<&benilla_assets::Stage1>,
         order: u16,
     ) -> Option<SkyboxBatch> {
         let light = self.light.as_ref()?.0.clone();
@@ -126,7 +127,7 @@ impl M2BatchMaterials<'_> {
                 false, // …and never skips the test
                 sub.fog_policy,
                 sub.env_map,
-                None, // no shipped skybox unit has a second texture
+                stage1, // no shipped skybox unit has a second texture
                 Some(sub.combine),
                 ShadeSel::Lit, // unread: every shipped skybox batch is UNLIT (0x01)
                 order,

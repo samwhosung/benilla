@@ -1029,6 +1029,7 @@ impl WorldAssets {
                 sidn: Vec4::ZERO, // clutter is never SIDN/WINDOW glass (WMO-only)
                 anim_slots: Vec4::ZERO,
                 stage1: Vec4::ZERO, // a tuft is one texture
+                stage1_uv: Vec4::ZERO,
                 stage1_texture: None,
                 light_buf: self.shared_light.clone(),
             },

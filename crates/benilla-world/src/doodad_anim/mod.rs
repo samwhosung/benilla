@@ -23,14 +23,14 @@ pub(crate) use lazy::{LazyRig, SkinnedTwin};
 use mat_anim::tick_anim_materials;
 pub use mat_anim::{
     clocked_twin, playing_seq, register_entity_uv, register_fx_uv, register_tint, sample_mat_anim,
-    scene_clocked, AnimMatPart, MatAnim, TintAnimMaterials, TintLoop, UvAnimMaterials, UvLoops,
+    scene_clocked, AnimMatPart, MatAnim, Stage1Loops, TintAnimMaterials, TintLoop, UvAnimMaterials,
+    UvLoops,
 };
 
 /// The material tick's set: a scene that owns its clock ([`crate::rig_anim::SceneClock`]) writes
 /// it before this.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MatAnimTick;
-pub(crate) use mat_anim::{register_uv, UvLoop};
 
 /// What a placed doodad model animates, decided per model at spawn.
 pub enum DoodadAnimTier<'a> {

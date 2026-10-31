@@ -120,7 +120,8 @@ fn own_per_sequence_materials(
     own: &mut OwnMats<'_>,
 ) -> Option<OwnedMaterials> {
     let loops = part.uv_loops();
-    let (uv_seq, tint_seq) = (loops.seqs.is_some(), part.rgb_seq.is_some());
+    let uv_seq = loops.seqs.is_some() || loops.stage1.seqs.is_some();
+    let tint_seq = part.rgb_seq.is_some();
     if dress.kind != ModelKind::GameObject || !(uv_seq || tint_seq) {
         return None;
     }
@@ -131,6 +132,8 @@ fn own_per_sequence_materials(
         let mut mat = own.store.get(h.id()).cloned()?;
         // A clone leaves the shared table: a carried slot would add the shared delta to its rows.
         mat.extension.anim_slots = Vec4::ZERO;
+        mat.extension.stage1_uv.x = 0.0;
+        mat.extension.stage1_uv.y = 0.0;
         Some(own.store.add(mat))
     };
     let owned = OwnedMaterials {

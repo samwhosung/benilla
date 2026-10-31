@@ -234,14 +234,33 @@ fn build_skybox(
                 .collect::<Vec<_>>(),
         );
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, sub.uvs.clone());
+        // UV set 1, which a stage 1 on a UV set reads (`RenderSubmesh::uvs2`).
+        if !sub.uvs2.is_empty() && sub.uvs2.len() == sub.positions.len() {
+            mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, sub.uvs2.clone());
+        }
         mesh.insert_indices(Indices::U32(sub.indices.clone()));
         // The batch's authored address mode: Caverns of Time's belts wrap their UVs.
         let texture = sub
             .texture
             .as_deref()
             .and_then(|t| world_assets.texture(t, (sub.wrap_x, sub.wrap_y), &mut images));
+        // A second texture binds a second stage (`0x70b740`), generated or on UV set 1. The sky
+        // lane plays no texture transform, so it stands at its opening offset.
+        let stage1 = sub.stage1.as_ref().and_then(|s| {
+            Some(benilla_assets::Stage1 {
+                texture: world_assets.texture(
+                    s.texture.as_deref()?,
+                    (s.wrap_x, s.wrap_y),
+                    &mut images,
+                )?,
+                combine: s.combine,
+                uv_set: !s.env_map,
+                uv_anim: s.uv_anim.clone(),
+            })
+        });
         // `i + 1`, the authored batch order (0 is unordered): every batch shares one sort distance.
-        let Some(pair) = mats.skybox(sub, texture, u16::try_from(i + 1).unwrap_or(0)) else {
+        let order = u16::try_from(i + 1).unwrap_or(0);
+        let Some(pair) = mats.skybox(sub, texture, stage1.as_ref(), order) else {
             return; // light buffer vanished mid-build; `built` is unlatched, so we retry
         };
         let part = commands
