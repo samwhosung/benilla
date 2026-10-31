@@ -226,10 +226,10 @@ pub(crate) fn look_released(rig: Option<&crate::player::CameraControl>) -> bool 
 }
 
 /// `CursorOptions.visible` (where it, not AppKit, hides the pointer) for a caller that hides the
-/// pointer while `hidden` holds, given whether it hid the pointer itself (`ours`) and what `visible` is now: the value to write, or
-/// `None` to leave it. It puts back only what it took, and writes only on a real change:
-/// `bevy_winit` re-applies `CursorOptions` to AppKit on every change, which can stall the main
-/// thread.
+/// pointer while `hidden` holds, given whether it hid the pointer itself (`ours`) and what
+/// `visible` is now: the value to write, or `None` to leave it. It puts back only what it took,
+/// and writes only on a real change: `bevy_winit` re-applies `CursorOptions` to AppKit on every
+/// change, which can stall the main thread.
 #[cfg(any(not(target_os = "macos"), test))]
 pub(crate) fn pointer_visibility(hidden: bool, ours: &mut bool, visible: bool) -> Option<bool> {
     if hidden && visible {
