@@ -34,10 +34,11 @@ mod merge;
 use dress::{spawn_group, PartDress};
 pub(super) use merge::MergedFormsCache;
 mod preview;
+pub(super) use preview::build_dressup_preview;
 pub(crate) use preview::equip_slot;
-pub(super) use preview::{build_dressup_preview, build_glue_pet, build_glue_preview};
 #[cfg(test)]
 mod arrival_tests;
+pub(super) mod glue_stage;
 mod redress;
 
 /// One body's drawn parts as `WOW_DRESS_CENSUS` prints them: index, merge group, blend, material.

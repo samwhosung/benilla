@@ -28,7 +28,7 @@ use display::{
 
 /// Attaching a visual to each net entity: skeleton, animation, character geosets and skin, fade.
 pub(crate) mod attach;
-use attach::{attach_entity_visuals, build_dressup_preview, build_glue_pet, build_glue_preview};
+use attach::{attach_entity_visuals, build_dressup_preview};
 
 /// Composited body skins by look, built off the main thread.
 mod skin_composite;
@@ -669,6 +669,7 @@ pub(crate) struct EntitiesPlugin;
 
 impl Plugin for EntitiesPlugin {
     fn build(&self, app: &mut App) {
+        attach::glue_stage::plugin(app);
         app.add_systems(
             Update,
             publish_world_units
@@ -733,13 +734,10 @@ impl Plugin for EntitiesPlugin {
                 spawn_missiles,
                 // The dest-anchored lane's three independent producers also create entries.
                 (arm_ground_effects, spawn_ground_bursts, tick_shard_emitters),
+                // The glue screens' character and pet assemble in their own stage, ahead of
+                // `Update` (`attach::glue_stage`).
                 update_display_models.in_set(DisplayBuildSet),
-                // The glue screens' character, assembled from the display built just above.
-                build_glue_preview,
-                // The select screen's pet, on its own latch so a slow pet model never holds the
-                // character back.
-                build_glue_pet,
-                // The dressing room's preview, the same assembly and latch.
+                // The dressing room's preview, assembled from the display built just above.
                 build_dressup_preview,
                 attach_entity_visuals,
                 // A WMO GameObject's doodad props, spawned as each M2 lands.

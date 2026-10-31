@@ -107,8 +107,8 @@ pub(in crate::entities) struct PreviewCtx<'a, 'w> {
     pub(in crate::entities) mats: &'a mut benilla_world::model_render::M2BatchMaterials<'w>,
 }
 
-/// Assemble the glue-screen preview when its look changes, after `update_display_models`; until
-/// the models build it leaves the bake untouched and retries.
+/// Assemble the glue-screen preview when its look changes, in the glue stage
+/// ([`super::glue_stage`]); until the models build it leaves the bake untouched and retries.
 pub(in crate::entities) fn build_glue_preview(
     preview: Res<GluePreview>,
     mut bake: ResMut<GluePreviewBake>,

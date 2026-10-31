@@ -147,7 +147,76 @@ impl ModelForms {
     ) {
         let e = self.entries.entry(key).or_default();
         e.want |= kinds;
-        build_entry(e, kinds, submeshes, meshes, usize::MAX, &mut 0);
+        build_entry(e, kinds, submeshes, meshes, usize::MAX, &mut 0, VERT_BUDGET);
+    }
+
+    /// Build every requested form whose asset has landed, with no budget: for a frame that waits
+    /// on its loads and cannot let their forms trickle across the frames after it. The count built.
+    pub fn furnish_now(
+        &mut self,
+        m2s: &Assets<M2Model>,
+        wmos: &Assets<WmoModel>,
+        meshes: &mut Assets<Mesh>,
+    ) -> usize {
+        self.furnish(m2s, wmos, meshes, usize::MAX, usize::MAX)
+    }
+
+    /// Whether any requested form is unbuilt.
+    fn pending(&self) -> bool {
+        self.entries.values().any(|e| e.done & e.want != e.want)
+    }
+
+    /// Build requested forms most urgent first, within `cap` submeshes and `vert_budget` vertices;
+    /// at least one submesh always builds. The count built.
+    fn furnish(
+        &mut self,
+        m2s: &Assets<M2Model>,
+        wmos: &Assets<WmoModel>,
+        meshes: &mut Assets<Mesh>,
+        cap: usize,
+        vert_budget: usize,
+    ) -> usize {
+        let mut pending: Vec<(i32, ModelKey)> = self
+            .entries
+            .iter()
+            .filter(|(_, e)| e.done & e.want != e.want)
+            .map(|(&k, e)| (e.priority, k))
+            .collect();
+        pending.sort_unstable_by_key(|(p, _)| *p);
+
+        let mut built = 0usize;
+        let mut verts = 0usize;
+        for (_, key) in pending {
+            if built >= cap || verts >= vert_budget {
+                break;
+            }
+            // An asset still decoding or already dropped skips: it builds on landing or frees.
+            let submeshes: &[ModelSubmesh] = match key {
+                ModelKey::M2(id) => match m2s.get(id) {
+                    Some(m) => &m.submeshes,
+                    None => continue,
+                },
+                ModelKey::Wmo(id) => match wmos.get(id) {
+                    Some(m) => &m.submeshes,
+                    None => continue,
+                },
+            };
+            let Some(e) = self.entries.get_mut(&key) else {
+                continue;
+            };
+            let want = e.want;
+            built += build_entry(
+                e,
+                want,
+                submeshes,
+                meshes,
+                cap - built,
+                &mut verts,
+                vert_budget,
+            );
+            e.priority = i32::MAX; // re-asserted by next frame's require() calls
+        }
+        built
     }
 
     /// Drop one model's entry (its asset left the store).
@@ -161,7 +230,8 @@ impl ModelForms {
     }
 }
 
-/// Advance one entry's builds within `budget` submeshes and [`VERT_BUDGET`]; returns the count.
+/// Advance one entry's builds within `budget` submeshes and `vert_budget` vertices; returns the
+/// count.
 fn build_entry(
     e: &mut Entry,
     kinds: u8,
@@ -169,11 +239,12 @@ fn build_entry(
     meshes: &mut Assets<Mesh>,
     budget: usize,
     verts: &mut usize,
+    vert_budget: usize,
 ) -> usize {
     let mut built = 0usize;
     if kinds & WANT_STATIC != 0 && e.done & WANT_STATIC == 0 {
         while e.stat.len() < submeshes.len() {
-            if built >= budget || *verts >= VERT_BUDGET {
+            if built >= budget || *verts >= vert_budget {
                 return built;
             }
             let geo = &submeshes[e.stat.len()].geometry;
@@ -187,7 +258,7 @@ fn build_entry(
     }
     if kinds & WANT_SKINNED != 0 && e.done & WANT_SKINNED == 0 {
         while e.skin.len() < submeshes.len() {
-            if built >= budget || *verts >= VERT_BUDGET {
+            if built >= budget || *verts >= vert_budget {
                 return built;
             }
             let geo = &submeshes[e.skin.len()].geometry;
@@ -231,43 +302,11 @@ pub(crate) fn furnish_model_forms(
         }
     }
 
-    let cap = if focus.paced { MESH_BUDGET } else { usize::MAX };
-
-    let mut pending: Vec<(i32, ModelKey)> = forms
-        .entries
-        .iter()
-        .filter(|(_, e)| e.done & e.want != e.want)
-        .map(|(&k, e)| (e.priority, k))
-        .collect();
-    if pending.is_empty() {
+    if !forms.pending() {
         return;
     }
-    pending.sort_unstable_by_key(|(p, _)| *p);
-
-    let mut built = 0usize;
-    let mut verts = 0usize;
-    for (_, key) in pending {
-        if built >= cap || verts >= VERT_BUDGET {
-            break;
-        }
-        // An asset still decoding or already dropped skips: it builds on landing or frees above.
-        let submeshes: &[ModelSubmesh] = match key {
-            ModelKey::M2(id) => match m2s.get(id) {
-                Some(m) => &m.submeshes,
-                None => continue,
-            },
-            ModelKey::Wmo(id) => match wmos.get(id) {
-                Some(m) => &m.submeshes,
-                None => continue,
-            },
-        };
-        let Some(e) = forms.entries.get_mut(&key) else {
-            continue;
-        };
-        let want = e.want;
-        built += build_entry(e, want, submeshes, &mut meshes, cap - built, &mut verts);
-        e.priority = i32::MAX; // re-asserted by next frame's require() calls
-    }
+    let cap = if focus.paced { MESH_BUDGET } else { usize::MAX };
+    let built = forms.furnish(&m2s, &wmos, &mut meshes, cap, VERT_BUDGET);
     activity.model_meshes_built += built as u32;
     activity.mfurnish_ms += t0.elapsed().as_secs_f32() * 1000.0;
 }
