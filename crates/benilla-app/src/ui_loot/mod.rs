@@ -1049,9 +1049,18 @@ impl Plugin for UiLootPlugin {
 
 /// The window's signals readied while no in-game interface is up, taken unsignalled: there is no
 /// interface to hear them, and the one that comes up later reads the window as it stands through
-/// the host. The pushes wait for it, as they wait for a VM.
-fn drop_loot_steps(mut loot: ResMut<LootState>) {
-    loot.steps.retain(|(_, s)| matches!(s, Step::Push(..)));
+/// the host. The pushes wait for it, as they wait for a VM. A close's release is no signal: it
+/// goes out, in its order (`0x48f311`), as the logout's sweep closes a window the lane still
+/// signals on.
+fn drop_loot_steps(mut loot: ResMut<LootState>, net: Res<NetCommands>) {
+    loot.steps.retain(|(_, s)| match s {
+        Step::Push(..) => true,
+        Step::Release(guid) => {
+            let _ = net.0.send(ClientCommand::LootRelease { guid: *guid });
+            false
+        }
+        _ => false,
+    });
 }
 
 /// The coin row's icon: the reference's six-step ladder (`0x4c2460` → `0x6c62d0`), shared with
@@ -3702,9 +3711,43 @@ mod tests {
         assert_eq!(app.world().resource::<LootState>().source(), Some(CORPSE));
         assert!(rx.try_recv().is_err());
         app.world_mut().resource_mut::<LootState>().remove_slot(0);
+        // The removal's packet signalled its `LOOT_SLOT_CLEARED` before the next move.
+        app.world_mut().resource_mut::<LootState>().signals_fired();
         step(&mut app);
         assert_eq!(app.world().resource::<LootState>().source(), None);
         assert!(matches!(rx.try_recv(), Ok(ClientCommand::LootRelease { guid }) if guid == CORPSE));
+    }
+
+    /// A close readied while no in-game interface is up, as the logout's sweep closes a lockbox
+    /// the lane still signals on (`0x490ab2` → `0x48f200`): the lane's signals are dropped
+    /// unheard, its unlocks among them, but its release goes out (`0x48f311`).
+    #[test]
+    fn a_dropped_lane_still_sends_its_closes_release() {
+        const LOCKBOX: u64 = 0x4000_0000_0000_0007;
+        let (mut app, rx) = close_app();
+        open_loot(
+            &mut app,
+            LOCKBOX,
+            loot_type::CORPSE,
+            0,
+            vec![item(0, 117, 1)],
+        );
+        let world = app.world_mut();
+        world.resource_scope(|world, mut loot: Mut<LootState>| {
+            world.resource_scope(|world, mut latch: Mut<LootLatch>| {
+                let net = world.resource::<NetCommands>();
+                close_interaction(&mut loot, &mut latch, Some(net), None);
+            });
+        });
+        assert!(rx.try_recv().is_err(), "the release waits on the lane");
+        world
+            .run_system_once(drop_loot_steps)
+            .expect("the drop runs as a one-shot system");
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ClientCommand::LootRelease { guid: LOCKBOX })
+        ));
+        assert!(world.resource::<LootState>().steps.is_empty());
     }
 
     /// The precast end's release at rest, `0x48f200(1, 0, 0)` (`0x60d10b`): with `dl` clear an

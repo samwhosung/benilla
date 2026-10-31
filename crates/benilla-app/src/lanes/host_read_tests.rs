@@ -129,8 +129,8 @@ const AFTER_THE_PACKETS_IN_THE_REFERENCE: &[(&str, &[&str], &str)] = &[
         "steps the pending-mail time in the world frame's update (its slot `0x38`, `0x4818d0` → \
          `0x4ade60`), which the frame pass runs after the packets (`0x420d6a` after `0x420d55`)"),
     ("::ui_loot::drop_loot_steps", &["ui_loot::LootState"],
-        "drops the loot lane's window signals, its pushes kept, run only while no in-game \
-         interface is up, so no listener exists"),
+        "drops the loot lane's window signals, its pushes kept and its releases sent, run only \
+         while no in-game interface is up, so no listener exists"),
     ("::ui_loot_roll::lane::drop_roll_events", &["ui_loot_roll::LootRolls"],
         "drops the rolls' lane, run only while no in-game interface is up, so no listener \
          exists"),
