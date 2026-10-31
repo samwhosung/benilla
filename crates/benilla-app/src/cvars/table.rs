@@ -480,11 +480,12 @@ pub(crate) const REGISTERED: &[Registered] = &[
     same("cameraDistanceMoveSpeed", "8.33").checked(benilla_ui::script::check_camera_decay),
     // MOUSE_SENSITIVITY (`UIOptionsFrame.lua:87`): FrameXML's spelling of the binary's `mouseSpeed`
     // (`0x402c7b`); lookups are case-insensitive (`CVar::Lookup 0x63de30`), here as there. The
-    // reference's default is `SPI_GETMOUSESPEED × 0.1`, "1.0" on stock Windows, and its record
-    // `[0x882704]` has no reader: the slider sets the OS pointer speed (`0x402ec0`, [0.1, 2.0]).
-    // The default matches; Deviation: here the dial multiplies the camera's own rate, because
+    // reference's default is `SPI_GETMOUSESPEED × 0.1` (`0x42cd60`) formatted `%1.1f` (`0x82e994`,
+    // `0x402c4d`-`0x402c7b`): "1.0" on a stock OS (speed 10). Its record `[0x882704]` has no reader:
+    // the slider sets the OS pointer speed (`0x402ec0`, [0.1, 2.0]).
+    // The default is that string; Deviation: here the dial multiplies the camera's own rate, because
     // benilla does not change the OS pointer speed, a system-wide setting.
-    same("mousespeed", "1"),
+    same("mousespeed", "1.0"),
     // The zoom-out limit is `cameraDistanceMax × cameraDistanceMaxFactor`, held to [0, 50]
     // (`0x5112d6`). `cameraDistanceMax` (`0x50beb2`, default `0x84fbd0`) has no panel row; its
     // validator `0x50b310` refuses a value outside [0, 50]. The factor is MAX_FOLLOW_DIST

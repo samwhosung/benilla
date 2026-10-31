@@ -17,7 +17,10 @@ const KNOWN: &[(&str, &str)] = &[];
 /// frequency is above 1500 MHz (`0x6414c0`) and "100" below. The power-information call that reads
 /// it (`0x42c0e0`, room for 4 processors) fails on a host with more logical CPUs, and the
 /// calibrated counter rate (`0x884060`) it falls back to is above 1500 MHz on a current part.
-const COMPUTED_ON_A_CURRENT_HOST: &[(&str, &str)] = &[("SoundBufferSize", "50")];
+/// `mouseSpeed` (`0x402c7b`) registers the OS pointer speed (`0x42cd60`) × 0.1 as `%1.1f`
+/// (`0x82e994`): "1.0" at a stock speed of 10.
+const COMPUTED_ON_A_CURRENT_HOST: &[(&str, &str)] =
+    &[("SoundBufferSize", "50"), ("mouseSpeed", "1.0")];
 
 /// Every registered name, lower-cased, with the defaults the client registers it with (a
 /// conditional default lists each arm).
