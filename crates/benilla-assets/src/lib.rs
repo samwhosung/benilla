@@ -548,6 +548,7 @@ mod tests {
     /// the `.blp`, and a loose file that will not open falls to the next candidate.
     #[test]
     fn the_loose_source_falls_through_per_candidate() {
+        #[cfg(unix)]
         use std::os::unix::fs::PermissionsExt;
         let data = benilla_formats::wow_data_or_skip!();
         let install =
@@ -566,6 +567,9 @@ mod tests {
         good_tga[16] = 32;
         std::fs::write(dir.join("b.tga"), &good_tga).unwrap();
         std::fs::write(dir.join("b.blp"), b"BLP2-b").unwrap();
+        // Unreadable by mode on unix alone; elsewhere the `.blp` stays readable and the second
+        // half's assertion is skipped below.
+        #[cfg(unix)]
         std::fs::set_permissions(dir.join("b.blp"), std::fs::Permissions::from_mode(0o000))
             .unwrap();
         let root = install.clone();
@@ -593,6 +597,7 @@ mod tests {
         );
         let got = read(&texture_url("zzfall\\b", (true, true)));
         let readable = std::fs::read(dir.join("b.blp")).is_ok();
+        #[cfg(unix)]
         let _ = std::fs::set_permissions(dir.join("b.blp"), std::fs::Permissions::from_mode(0o600));
         let _ = std::fs::remove_dir_all(&install);
         if !readable {
