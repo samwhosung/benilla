@@ -4,12 +4,14 @@
 //! raise here is right inside a script call (a verb segment, a handler, the host's apply of a
 //! call), a lane's firing or the VM's own tick. One made anywhere else is a system raising at its
 //! own place in the frame, which the source scans cannot see when it goes through a helper in
-//! another module: it fails, naming its caller, unless the scope open around it is a site on the
-//! host's allow list ([`Origin::Allowed`]), which names it with its reason. The verdict reads only
-//! the open scopes, never the stack, so it is the same in every build profile. Each raise is
-//! judged where it enters the VM, at one of its two doors: the fire (`tick::fire_event_into`) or
-//! the push onto the host queue (`Model::queue_event`); a queued one fires later inside the tick,
-//! and a held one inside the host's drain.
+//! another module: it fails, naming the line that made it, unless the scope open around it is a
+//! site on the host's allow list ([`Origin::Allowed`]), which names it with its reason. The verdict
+//! reads only the open scopes and the line is the caller's location, never the stack, so both are
+//! the same in every build profile; the stack adds the callers only where debug info places them,
+//! and Bevy's executor names the system a panic leaves. Each raise is judged where it enters the
+//! VM, at one of its two doors: the fire (`tick::fire_event_into`) or the push onto the host queue
+//! (`Model::queue_event`); a queued one fires later inside the tick, and a held one inside the
+//! host's drain.
 //!
 //! The check runs only while the host has armed it ([`arm`]), around its frame's schedules, so a
 //! test that drives a VM by hand is not judged. How an unlisted raise fails is the host's
@@ -46,7 +48,7 @@ pub struct Allow {
 /// How a raise from an unlisted origin fails.
 #[derive(Clone, Copy, Debug)]
 pub enum Failure {
-    /// A panic naming the event and its caller, for a test.
+    /// A panic naming the event and the line that raised it, for a test.
     Panic,
     /// The same line handed to the host's reporter, once per site (the raise's line and its
     /// callers), for a live run that must go on.
@@ -107,15 +109,16 @@ mod imp {
         if lua.is_some_and(|lua| lua.inspect_stack(0, |_| ()).is_some()) {
             return;
         }
+        // The raise's own line, fixed at compile time: right in every build.
         let at = std::panic::Location::caller();
-        // The stack only names the callers: without debug info an inlined one has no frame.
+        // Its callers, only as far as the build's debug info places them.
         let trace = std::backtrace::Backtrace::force_capture().to_string();
-        let symbols: Vec<&str> = trace
-            .lines()
-            .map(str::trim)
-            .filter_map(|l| l.split_once(": ").map(|(_, s)| s))
-            .collect();
-        let from = callers(&symbols);
+        let from = callers(&located(&trace));
+        let from = if from.is_empty() {
+            String::new()
+        } else {
+            format!(", from {from}")
+        };
         let head = match unlisted {
             Some(site) => format!(
                 "`{event}` was raised inside the site `{site}`, which the host's allow list lacks"
@@ -125,9 +128,9 @@ mod imp {
             ),
         };
         let line = format!(
-            "{head}, at {at}, from {from}: put it on a lane or inside the call that causes it, or \
-             give its site a row on the host's allow list with its reason and open that site's \
-             scope (`Origin::Allowed`) around the raise"
+            "{head}, at {at}{from}: put it on a lane or inside the call that causes it, or give \
+             its site a row on the host's allow list with its reason and open that site's scope \
+             (`Origin::Allowed`) around the raise"
         );
         match failure {
             Failure::Panic => panic!("{line}"),
@@ -141,6 +144,28 @@ mod imp {
                 }
             }
         }
+    }
+
+    /// The symbols of `trace`'s frames, inlined ones included, that carry a source line,
+    /// innermost first. A symbol with none was named without debug info, from the nearest symbol
+    /// the binary exports, which on Windows is often another function: it is left out.
+    pub(super) fn located(trace: &str) -> Vec<&str> {
+        let mut out = Vec::new();
+        let mut last = None;
+        for line in trace.lines().map(str::trim) {
+            if line.starts_with("at ") {
+                out.extend(last.take());
+                continue;
+            }
+            // `12: symbol` opens a frame, a bare `symbol` is one inlined into it, and anything
+            // else (`note: …`) is none.
+            last = match line.split_once(": ") {
+                Some((i, s)) if i.bytes().all(|b| b.is_ascii_digit()) => Some(s),
+                Some(_) => None,
+                None => Some(line),
+            };
+        }
+        out
     }
 
     /// A symbol's function path: its generic arguments, its closures and its hash cut.
@@ -182,7 +207,7 @@ mod imp {
     }
 
     /// The nearest functions of benilla's own crates past the check, innermost first, each once.
-    fn callers(symbols: &[&str]) -> String {
+    pub(super) fn callers(symbols: &[&str]) -> String {
         let mut ours: Vec<String> = Vec::new();
         for s in symbols {
             let path = path_of(s);
@@ -308,6 +333,31 @@ mod tests {
             message.contains("`PLAYER_MONEY`") && message.contains(&format!("origin.rs:{line}:")),
             "{message}"
         );
+    }
+
+    /// The callers come from the frames that carry a source line, an inlined one included; a
+    /// frame named without one, as a Windows build with no debug info names it from the nearest
+    /// exported function, names no caller.
+    #[test]
+    #[cfg(debug_assertions)]
+    fn the_callers_are_the_frames_with_a_source_line() {
+        let with_lines = "   0: benilla_ui::script::origin::imp::check
+             at ./src/script/origin.rs:110:20
+   1: benilla_ui::script::tick::fire_event_into::h0123456789abcdef
+             at ./src/script/tick.rs:310:5
+      benilla_app::ui_script::raise_origin::tests::raises_at_frame_time
+             at ./src/ui_script/raise_origin.rs:180:12
+   2: core::ops::function::FnMut::call_mut
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.";
+        assert_eq!(
+            imp::callers(&imp::located(with_lines)),
+            "benilla_ui::script::tick::fire_event_into \
+             < benilla_app::ui_script::raise_origin::tests::raises_at_frame_time"
+        );
+        let without = "   0: benilla_ui::script::origin::imp::check
+   1: benilla_ui::script::tick::fire_event_into
+   2: benilla_app::ui_action::toggle::tests::active_action_toggle_needs_the_icon";
+        assert_eq!(imp::callers(&imp::located(without)), "");
     }
 
     thread_local! {

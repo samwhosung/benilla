@@ -1,7 +1,7 @@
 //! The origins outside a script call, a lane's firing and the tick that may raise an event into
 //! the VM ([`benilla_ui::script::origin`]), and the arming of that check around each frame's
-//! schedules. In a debug build a raise anywhere else names its caller: the app's tests and a run
-//! under `BENILLA_RAISE_STRICT=1` panic, and a live run warns once per site and goes on.
+//! schedules. In a debug build a raise anywhere else names the line that made it: the app's tests
+//! and a run under `BENILLA_RAISE_STRICT=1` panic, and a live run warns once per site and goes on.
 
 use benilla_ui::script::origin::{Allow, Failure};
 use bevy::app::MainScheduleOrder;
@@ -157,6 +157,8 @@ fn disarm(_: &mut World) {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU32, Ordering};
+
     use benilla_ui::script::origin::{within, Origin};
     use benilla_ui::script::UiScript;
     use bevy::prelude::*;
@@ -175,8 +177,12 @@ mod tests {
         assert!(matches!(super::failure(), super::Failure::Panic));
     }
 
+    /// The line of [`raises_at_frame_time`]'s raise, stored as it runs.
+    static RAISED_AT: AtomicU32 = AtomicU32::new(0);
+
     fn raises_at_frame_time(world: &mut World) {
         let mut ui = world.non_send_resource_mut::<UiScript>();
+        RAISED_AT.store(line!() + 1, Ordering::Relaxed);
         ui.fire_event("PLAYER_MONEY", Vec::new());
     }
 
@@ -185,8 +191,8 @@ mod tests {
         within(Origin::Lane, || ui.fire_event("PLAYER_MONEY", Vec::new()));
     }
 
-    /// A frame-time system that raises outside every script call, lane firing and tick fails, its
-    /// own function named.
+    /// A frame-time system that raises outside every script call, lane firing and tick fails,
+    /// naming the line in it that raised, which needs no debug info to be right.
     #[test]
     #[cfg_attr(not(debug_assertions), ignore = "the check compiles out")]
     fn a_raise_from_a_frame_time_system_fails_naming_it() {
@@ -196,7 +202,10 @@ mod tests {
         let message = failed.downcast_ref::<String>().cloned().unwrap_or_default();
         assert!(
             message.contains("`PLAYER_MONEY`")
-                && message.contains("raise_origin::tests::raises_at_frame_time"),
+                && message.contains(&format!(
+                    "raise_origin.rs:{}:",
+                    RAISED_AT.load(Ordering::Relaxed)
+                )),
             "{message}"
         );
     }
