@@ -44,9 +44,6 @@ impl ScriptCallHost<'_, '_> {
     pub(super) fn close_bank(&mut self, script: &mut UiScript, at: &mut super::Signalled) {
         script.fire_event("BANKFRAME_CLOSED", vec![]);
         self.signalled(script, at);
-        if parked(NpcWindow::Bank) {
-            return;
-        }
         let banker = self.appliers.bank().banker();
         if let Some(banker) = banker {
             self.release_into(script, at, banker, Self::close_bank);
@@ -58,11 +55,6 @@ impl ScriptCallHost<'_, '_> {
     /// (`0x4d7459`), else `TRAINER_CLOSED` first (`0x4d7468`), the release on the cell as the
     /// listeners left it (`0x4d7474`), then the cell cleared (`0x4d747c`).
     pub(super) fn close_trainer(&mut self, script: &mut UiScript, at: &mut super::Signalled) {
-        if parked(NpcWindow::Trainer) {
-            script.fire_event("TRAINER_CLOSED", vec![]);
-            self.signalled(script, at);
-            return;
-        }
         if self.appliers.trainer().trainer().is_none() {
             return;
         }
@@ -118,9 +110,6 @@ impl ScriptCallHost<'_, '_> {
     /// (`0x4e1fb8`), else the release (`0x4e1fc5`), the cell zeroed (`0x4e1fcc`) and
     /// `GOSSIP_CLOSED` (`0x4e1fdc`); the slots, the text and its latch stay.
     pub(super) fn close_gossip(&mut self, script: &mut UiScript, at: &mut super::Signalled) {
-        if parked(NpcWindow::Gossip) {
-            return;
-        }
         let Some(npc) = self.appliers.gossip().npc() else {
             return;
         };
@@ -153,9 +142,6 @@ impl ScriptCallHost<'_, '_> {
     /// cleared (`0x4fae0e`), `MERCHANT_CLOSED` (`0x4fae2c`), then a vendor row held on the cursor
     /// dropped (`0x4fae31`-`0x4fae4a`) and a Repair base mode back to Point (`0x4fae4f`-`0x4fae68`).
     pub(super) fn close_merchant(&mut self, script: &mut UiScript, at: &mut super::Signalled) {
-        if parked(NpcWindow::Merchant) {
-            return;
-        }
         let Some(vendor) = self.appliers.merchant().vendor() else {
             return;
         };
@@ -184,9 +170,6 @@ impl ScriptCallHost<'_, '_> {
     /// The stable's close core `0x4cae10`: with a master stored, the release (`0x4cae24`), the
     /// cell cleared (`0x4cae29`), then `PET_STABLE_CLOSED` (`0x4cae3a`).
     pub(super) fn close_stable(&mut self, script: &mut UiScript, at: &mut super::Signalled) {
-        if parked(NpcWindow::Stable) {
-            return;
-        }
         let Some(master) = self.appliers.stable().master() else {
             return;
         };

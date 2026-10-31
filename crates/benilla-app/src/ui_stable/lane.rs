@@ -26,9 +26,6 @@ pub(crate) enum StableEvent {
     Paperdoll,
     /// A result's message line, by its `GlobalStrings` key.
     Line(&'static str),
-    /// What a close core run outside a call signalled while this lane held items, parked in the
-    /// VM of the session under the key ([`crate::script_calls::park_since`]).
-    Parked { session: u64, key: u64 },
 }
 
 /// The stable lane's queue.
@@ -129,25 +126,11 @@ fn fire(
                 crate::ui_action::show_now(script, sink, "ui_stable", line);
             }
         }
-        StableEvent::Parked { session, key } => {
-            if script.session() == session {
-                crate::ui_session::in_parked_close(crate::ui_session::NpcWindow::Stable, || {
-                    script.run_parked(key)
-                });
-            }
-        }
     }
 }
 
-/// Run the close `core` behind the lane ([`crate::lanes::behind`]), so a close never fires ahead
-/// of the open it closes.
+/// Run the close `core` as a step in its place ([`crate::lanes::step`]): what the lanes hold fires
+/// first, so a close never fires ahead of the open it closes, and its signals fire inside it.
 pub(super) fn behind_lane(world: &mut World, core: impl FnOnce(&mut World)) {
-    let head = world
-        .get_resource::<StableLane>()
-        .and_then(StableLane::head);
-    crate::lanes::behind(world, head, core, |world, session, key| {
-        world
-            .resource_mut::<StableLane>()
-            .push(StableEvent::Parked { session, key });
-    });
+    crate::lanes::step(world, core);
 }

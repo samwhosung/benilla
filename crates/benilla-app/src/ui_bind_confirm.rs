@@ -263,9 +263,9 @@ fn replay(vm: &mut ReplayVm, entry: u32, callback: RecordCallback, found: bool) 
 /// The equip callback the record's answer runs inside its handler (`ItemCacheReceive`
 /// `0x55bdb0`, `0x55bf39`, from `0x555140`), in its place among the entry's other callbacks
 /// ([`crate::net::objects`]), once the VM's copy holds the record
-/// ([`crate::ui_items::feed::push_answered_record`]): its send goes out at the packet, ahead of
-/// a later packet's, and what it signals is parked at the packet's place among the frame's events
-/// ([`crate::field_callbacks::Parked::split`]).
+/// ([`crate::ui_items::feed::push_answered_record`]): a step in its place
+/// ([`crate::lanes::step`]), its send going out at the packet, ahead of a later packet's, and its
+/// signals' listeners running inside it, ahead of the entry's next callback.
 pub(crate) fn replay_at_answer(
     world: &mut World,
     entry: u32,
@@ -275,8 +275,7 @@ pub(crate) fn replay_at_answer(
     fn run(In((entry, callback, found)): In<(u32, RecordCallback, bool)>, mut vm: ReplayVm) {
         replay(&mut vm, entry, callback, found);
     }
-    let mut parked = crate::field_callbacks::Parked::split(world);
-    parked.leg(world, |world| {
+    crate::lanes::step(world, |world| {
         if let Err(err) = world.run_system_cached_with(run, (entry, callback, found)) {
             debug!("ui_bind_confirm: the equip callback did not run: {err}");
         }

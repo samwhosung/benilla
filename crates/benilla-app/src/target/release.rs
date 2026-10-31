@@ -8,49 +8,31 @@
 //! `0x5fbbcd`) holds its guid, whose selection stays as the guid alone. The teardown signals
 //! inside the release, inside its packet (`0x493a2a`, `0x493a73`). Here the release decides in
 //! place ([`unit_released`]), and its packet's own handler then runs each teardown nested under its
-//! release's stamp, parking what it signals on the release lane ([`run_owed`]).
+//! release's stamp, a step in its place whose listeners run inside it ([`run_owed`]).
 
-use std::collections::VecDeque;
 use std::ops::DerefMut;
 
 use benilla_protocol::{ObjectFields, SessionEvent, SessionEventKind};
 use bevy::prelude::*;
 
 use super::Selection;
-use crate::lanes::{Stamp, Until};
+use crate::lanes::Stamp;
 use crate::net::NetHandlerApp;
 
 /// The teardowns the packet's releases owe, each at its release's stamp.
 #[derive(Resource, Default)]
 pub(crate) struct OwedReleases(Vec<(u64, Stamp)>);
 
-/// The Lua each of a packet's selection changes signalled, parked in the VM, with its stamp and the
-/// VM's session and key, for the release lane: a release's teardown, an acquire, the loot
-/// response's select ([`super::scan::OwedSelects`]).
-#[derive(Resource, Default)]
-pub(crate) struct Releases(VecDeque<(Stamp, u64, u64)>);
-
-/// The VM's end, a reload's or the session's: what its releases parked goes with it.
-pub(crate) fn drop_parked_releases(world: &mut World) {
-    if let Some(mut releases) = world.get_resource_mut::<Releases>() {
-        releases.0.clear();
-    }
-}
-
 /// Registers the teardowns after the handlers that release objects (`crate::net` builds first),
-/// the selects owed at each packet's end, the lane that fires their signals, and the lane that
-/// runs the selects a system or a lane owed.
+/// the selects owed at each packet's end, and the lane that runs the selects a system or a lane
+/// owed.
 pub(super) fn register(app: &mut App) {
     use crate::lanes::LaneApp;
     crate::net::handlers::add_packet_end(app, super::scan::run_owed_selects);
     app.init_resource::<OwedReleases>()
-        .init_resource::<Releases>()
         .init_resource::<super::scan::OwedSelects>()
         .net_handler(SessionEventKind::ObjectsRemoved, on_objects_removed)
         .net_handler(SessionEventKind::ObjectDestroyed, on_object_destroyed)
-        .add_exclusive_lane("releases", peek_releases, fire_releases, |_| {
-            Default::default()
-        })
         .add_exclusive_lane(
             "owed selects",
             super::scan::peek_owed_selects,
@@ -119,21 +101,21 @@ fn on_object_destroyed(In(ev): In<SessionEvent>, world: &mut World) {
     }
 }
 
-/// The packet's owed teardowns, each run as the firing of its release's stamp, so its sends go
-/// out in the packet's place and what it signals fires among the other lanes' items there.
+/// The packet's owed teardowns, each run nested under its release's stamp, so its sends go out in
+/// the packet's place and what it signals fires there, among the other lanes' items.
 fn run_owed(world: &mut World) {
     let Some(mut owed) = world.get_resource_mut::<OwedReleases>() else {
         return;
     };
     for (guid, at) in std::mem::take(&mut owed.0) {
-        crate::lanes::firing(at, || tear_down_parked(world, guid));
+        crate::lanes::firing(at, || tear_down(world, guid));
     }
 }
 
-/// The teardown `0x493910(guid, 1)` ([`super::OwedSelect::Deselect`]) on the world's VM with its
-/// signals held and parked ([`park_signals`]).
-fn tear_down_parked(world: &mut World, guid: u64) {
-    park_signals(world, |world| {
+/// The teardown `0x493910(guid, 1)` ([`super::OwedSelect::Deselect`]), a step in its place
+/// ([`in_place`]).
+fn tear_down(world: &mut World, guid: u64) {
+    in_place(world, |world| {
         let select = super::OwedSelect::Deselect(guid);
         if let Err(err) = world.run_system_cached_with(super::scan::owed_select, select) {
             // A harness without the attack seam's state tears nothing down.
@@ -142,53 +124,13 @@ fn tear_down_parked(world: &mut World, guid: u64) {
     });
 }
 
-/// Run `step`, a selection's engine turn inside a packet, on the world's VM with its signals held,
-/// its unit edits applied as it returns, then park what it signalled on the release lane at a
-/// stamp taken as it ends, after what it pushed onto the other lanes. With no VM nothing signals.
-pub(super) fn park_signals(world: &mut World, step: impl FnOnce(&mut World)) {
-    let deferring = crate::script_calls::defer_vm(world);
-    step(world);
-    crate::creature_anim::apply_unit_edits(world);
-    let Some((_held, mark)) = &deferring else {
-        return;
-    };
-    if let Some((session, key)) = crate::script_calls::park_since(world, *mark) {
-        let at = crate::lanes::stamp();
-        world
-            .get_resource_or_init::<Releases>()
-            .0
-            .push_back((at, session, key));
-    }
-}
-
-/// The release lane's head.
-fn peek_releases(world: &World) -> Option<Stamp> {
-    world
-        .get_resource::<Releases>()?
-        .0
-        .front()
-        .map(|(at, ..)| *at)
-}
-
-/// Each teardown's signals `until` admits, run as the firing of their stamp with the host lent;
-/// the lane stops after one whose firing stamped anything, so what it pushed fires next. It reads
-/// nothing beside the host and its own lane.
-fn fire_releases(In(until): In<Until>, world: &mut World) {
-    loop {
-        let Some((at, session, key)) = world
-            .resource::<Releases>()
-            .0
-            .front()
-            .copied()
-            .filter(|(at, ..)| until.admits(*at))
-        else {
-            return;
-        };
-        world.resource_mut::<Releases>().0.pop_front();
-        let ((), moved) =
-            crate::lanes::firing(at, || crate::script_calls::run_parked(world, session, key));
-        if moved {
-            return;
-        }
-    }
+/// Run `step`, a selection's engine turn inside a packet, as a step in its place
+/// ([`crate::lanes::step`]), its unit edits applied as it returns: what was stamped before it
+/// fires first, then its signals' listeners run inside it, as the reference's teardown and
+/// selects signal inside their packet (`0x493a2a`, `0x493a73`, `0x49389c`).
+pub(super) fn in_place(world: &mut World, step: impl FnOnce(&mut World)) {
+    crate::lanes::step(world, |world| {
+        step(world);
+        crate::creature_anim::apply_unit_edits(world);
+    });
 }

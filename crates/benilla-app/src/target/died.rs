@@ -22,11 +22,11 @@
 //!
 //! The health watcher runs it inside the update packet that wrote the health (`0x6046f0` at
 //! `0x6047a3`). Here the packet's end runs each death's legs in place ([`crate::field_callbacks`]),
-//! so their state and their sends come in packet order, and parks the Lua each leg signals on the
-//! field callbacks' lane, stamped under the health edge's stamp: they fire in stamp order among the
-//! other lanes' items, ahead of what the packet raised after the edge, their listeners reading the
-//! unit views as of the packet. The death line goes between `0x5e99b0`'s list and `PLAYER_DEAD`, as
-//! `PresentUnitDeath` writes it.
+//! so their state and their sends come in packet order, each leg a step under the health edge's
+//! stamp ([`crate::lanes::step`]): what was stamped before it fires first, then the leg runs with
+//! its signals' listeners in place, ahead of the next leg and of what the packet raised after the
+//! edge. The death line goes between `0x5e99b0`'s list and `PLAYER_DEAD`, as `PresentUnitDeath`
+//! writes it.
 
 use bevy::prelude::*;
 
@@ -34,7 +34,6 @@ use benilla_protocol::messages::ObjectType;
 
 use super::Selection;
 use crate::creature_anim::{AttackSeam, UnitEdit};
-use crate::field_callbacks::Parked;
 use crate::net::{FieldChanged, ObjectStore, SelfPlayer};
 use crate::query_cache::Ask;
 use crate::ui_action::{FillArg, UiError, UiErrorKeys};
@@ -46,45 +45,44 @@ const PLAYER_DIED: &str = "ERR_PLAYER_DIED_S";
 /// ([`crate::script_calls::ScriptCallHost::engine_select`]), a release of the interaction latch
 /// closes its window there ([`crate::ui_session::release_cell`]), and our own death's quest-giver
 /// sweep asks there ([`crate::quest_markers::sweep_statuses`]), before the death goes on. What
-/// each leg signals is parked behind it ([`Parked`]).
+/// each leg signals fires inside it, a step in its place ([`crate::lanes::step`]), ahead of the
+/// next leg.
 pub(crate) fn died(world: &mut World, e: FieldChanged) {
     let me = world
         .query_filtered::<Entity, With<SelfPlayer>>()
         .iter(world)
         .next();
     let own = e.kind == ObjectType::Player && me == Some(e.entity);
-    let mut parked = Parked::new(world);
     // Ahead of `OnDied`, the health watcher runs the dying active mover's input tick
     // (`0x60477a`-`0x60479c`), whose precondition fails on the health (`0x5144fd`), so it stops the
     // auto-move (`0x5146d6`), its `AUTOFOLLOW_END` first; the tail's stop (`0x605938`) then finds
     // the mode at 12.
-    parked.leg(world, |world| crate::player::stop_auto_move(world, e.guid));
+    crate::lanes::step(world, |world| crate::player::stop_auto_move(world, e.guid));
     // `CGPlayer_C::OnDied 0x5e99b0`, for a player (`0x605882`).
     if own {
         // The active player's leg (`0x5e99d8`-`0x5e99e4` match), in its order.
-        parked.leg(world, |world| step(world, own_death_head, e));
+        crate::lanes::step(world, |world| step(world, own_death_head, e));
         // `0x4931c0(0xb4e2d0, dl = 0)` (`0x5e9a51`): the latch, with the goodbye.
-        parked.leg(world, |world| crate::ui_session::release_latch(world, true));
-        parked.leg(world, |world| step(world, own_death_loot, e));
+        crate::lanes::step(world, |world| crate::ui_session::release_latch(world, true));
+        crate::lanes::step(world, |world| step(world, own_death_loot, e));
         // `0x5eb070` (`0x5e9a61`): the quest givers swept.
-        parked.leg(world, crate::quest_markers::sweep_statuses);
-        parked.leg(world, |world| step(world, own_death_cast, e));
+        crate::lanes::step(world, crate::quest_markers::sweep_statuses);
+        crate::lanes::step(world, |world| step(world, own_death_cast, e));
     } else if e.kind == ObjectType::Player {
-        parked.leg(world, |world| step(world, groupmate_died, e));
+        crate::lanes::step(world, |world| step(world, groupmate_died, e));
     }
-    parked.leg(world, |world| step(world, unit_attack_words, e));
+    crate::lanes::step(world, |world| step(world, unit_attack_words, e));
     // `PresentUnitDeath` (`0x6058ae`): the death line (`0x62c160`), then for the active player
     // its tail (`0x6251c2`-`0x6251cc`).
     crate::ui_chat::combat::watch::death_line(world, e);
     if own {
-        parked.leg(world, crate::death::signal_death_state);
+        crate::lanes::step(world, crate::death::signal_death_state);
     }
-    parked.leg(world, |world| step(world, unit_died, e));
+    crate::lanes::step(world, |world| step(world, unit_died, e));
     // The tail's `0x4931c0` on the unit's guid (`0x605950`, `dl = 1`): no goodbye.
-    parked.leg(world, |world| {
+    crate::lanes::step(world, |world| {
         crate::ui_session::release_cell(world, e.guid, false)
     });
-    drop(parked);
 }
 
 /// The health watcher's leg after `OnDied` (`0x6047a8`-`0x6047e7`): with the dead unit still the
@@ -498,6 +496,11 @@ mod tests {
             let (me, mob) = (c.me, c.mob);
             c.select(MOB, mob);
             c.cast(FIREBALL);
+            crate::script_calls::insert_test_vm(c.world());
+            c.lua(
+                r#"FAILED = 0 local f = CreateFrame("Frame") f:RegisterEvent("SPELLCAST_FAILED")
+                f:SetScript("OnEvent", function() FAILED = FAILED + 1 end)"#,
+            );
             c.world()
                 .resource_mut::<crate::ui_loot::LootState>()
                 .open(OTHER, 1, 0, Vec::new());
@@ -529,7 +532,13 @@ mod tests {
             if flagged {
                 want.push("RepopRequest".to_string());
             }
-            let sent: Vec<String> = c.sent().iter().map(|s| format!("{s:?}")).collect();
+            // The VM's views ask a name of their own, which is no leg of the death's.
+            let sent: Vec<String> = c
+                .sent()
+                .iter()
+                .filter(|s| !matches!(s, ClientCommand::NameQuery { .. }))
+                .map(|s| format!("{s:?}"))
+                .collect();
             assert_eq!(sent, want, "flagged: {flagged}");
             assert_eq!(c.world().resource::<Selection>().guid, None);
             assert_eq!(
@@ -537,12 +546,9 @@ mod tests {
                 None
             );
             assert_eq!(c.in_flight(), None, "the cast is popped");
-            assert!(
-                c.reports()
-                    .iter()
-                    .any(|r| matches!(r, CastReport::Bar(CastBarEdge::Failed))),
-                "and fails"
-            );
+            c.lanes();
+            let failed: i64 = crate::script_calls::eval_in_vm(c.world(), "return FAILED");
+            assert_eq!(failed, 1, "and fails");
         }
     }
 
@@ -550,8 +556,9 @@ mod tests {
     /// cleared (`0x5e9a45`); the interaction latch released with its window's close
     /// (`0x4931c0(0xb4e2d0, 0)` at `0x5e9a51` → `0x493310`); the loot closed with its release
     /// (`0x5e9a5c`); the quest givers asked again (`0x5eb070` at `0x5e9a61`); then the cast
-    /// cancelled (`0x5e9a6c`). Its `PLAYER_TARGET_CHANGED` and `MERCHANT_CLOSED` listeners run on
-    /// the deaths lane in that order, so their packets follow the death's own.
+    /// cancelled (`0x5e9a6c`). Its `PLAYER_TARGET_CHANGED` and `MERCHANT_CLOSED` listeners run where
+    /// their signals fire, inside the legs that raise them, so each one's packet goes out ahead of
+    /// the next leg's.
     #[test]
     fn our_own_death_runs_its_list_in_order() {
         const VENDOR: u64 = 0xF130_0000_0000_0050;
@@ -624,11 +631,11 @@ mod tests {
             sent,
             [
                 "SetSelection 0x0",
+                "RandomRoll 1",
+                "RandomRoll 2",
                 "LootRelease",
                 "QuestgiverStatusQuery",
-                "CancelCast",
-                "RandomRoll 1",
-                "RandomRoll 2"
+                "CancelCast"
             ]
         );
     }
@@ -768,55 +775,6 @@ mod tests {
             })
             .collect();
         assert_eq!(order, ["SetSelection 0", "DuelAccepted"]);
-    }
-
-    /// A death's signals parked on a VM that has since been replaced (a reload, the session's
-    /// end, the entry load's) run nothing on the new one, whose own parked keys count from 0
-    /// again.
-    #[test]
-    fn a_deaths_signals_parked_on_a_replaced_vm_run_nothing_on_the_next() {
-        let mut c = client();
-        let mob = c.mob;
-        c.select(MOB, mob);
-        crate::script_calls::insert_test_vm(c.world());
-        c.lua(
-            r#"HEARD = 0 local f = CreateFrame("Frame") f:RegisterEvent("PLAYER_TARGET_CHANGED")
-            f:SetScript("OnEvent", function() HEARD = HEARD + 1 end)"#,
-        );
-        // The death's legs run, their signals parked on this VM and left on the lane.
-        let world = c.world();
-        world.write_message(FieldChanged {
-            at: crate::lanes::stamp(),
-            entity: mob,
-            guid: MOB,
-            kind: ObjectType::Unit,
-            index: FIELD_UNIT_HEALTH,
-            old: 100,
-            new: 0,
-        });
-        crate::net::handlers::dispatch(world, vec![SessionEvent::ObjectUpdateEnd]);
-        assert_eq!(world.resource::<Selection>().guid, None, "the legs ran");
-        crate::script_calls::insert_test_vm(world);
-        crate::script_calls::with_hosted_vm(world, |s| {
-            let s = s.expect("a VM");
-            s.run(
-                r#"HEARD = 0 local f = CreateFrame("Frame") f:RegisterEvent("LOOT_OPENED")
-                f:SetScript("OnEvent", function() HEARD = HEARD + 1 end)"#,
-            )
-            .expect("the listener is in");
-            // The new VM parks its own first stretch, under the key the old one's took.
-            let mark = s.waiting_mark();
-            let deferring = s.defer();
-            s.fire_event("LOOT_OPENED", vec![]);
-            assert!(s.park_since(mark).is_some());
-            drop(deferring);
-        });
-        crate::field_callbacks::fire_parked_lane(c.world());
-        let heard: i64 = crate::script_calls::eval_in_vm(c.world(), "return HEARD");
-        assert_eq!(
-            heard, 0,
-            "the stale signals ran the new VM's parked stretch"
-        );
     }
 
     /// The death line is written inside its update packet, among the death's legs (`0x6058ae` →
@@ -1330,10 +1288,42 @@ mod tests {
         world.resource_mut::<crate::ui_pet::PetAttackLatch>().0 = Some(PET);
     }
 
+    /// The selection's destroy releases it (`0x5fbbe5` → `0x493910(guid, 1)`), whose teardown calls
+    /// a possessed unit off (`0x493a18` → `0x4bd650`) and signals `PET_BAR_UPDATE` (`0x4bd6b4`)
+    /// inside the destroy's packet: its listener's packet goes out ahead of the teardown's
+    /// `CMSG_SET_SELECTION` 0.
+    #[test]
+    fn the_selections_destroy_signals_its_pet_stop_in_place() {
+        let mut c = client();
+        crate::script_calls::insert_test_vm(c.world());
+        possessing_an_attacker(&mut c);
+        let mob = c.mob;
+        c.select(MOB, mob);
+        c.lua(
+            r#"local r = CreateFrame("Frame") r:RegisterEvent("PET_BAR_UPDATE")
+            r:SetScript("OnEvent", function() RandomRoll(1, 100) end)"#,
+        );
+        let _ = c.sent();
+        crate::net::handlers::dispatch(c.world(), vec![SessionEvent::ObjectDestroyed(MOB)]);
+        c.lanes();
+        let wire: Vec<String> = c
+            .sent()
+            .into_iter()
+            .filter_map(|cmd| match cmd {
+                ClientCommand::PetStopAttack { .. } => Some("PetStopAttack".to_string()),
+                ClientCommand::RandomRoll { .. } => Some("RandomRoll".to_string()),
+                ClientCommand::SetSelection { guid } => Some(format!("SetSelection {guid:#x}")),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(wire, ["PetStopAttack", "RandomRoll", "SetSelection 0x0"]);
+    }
+
     /// The selection's death deselects (`0x605901`), whose teardown calls a possessed unit off
     /// (`0x493a18` → `0x4bd650`): `PetStopAttack` signals `PET_BAR_UPDATE` (`0x4bd6b4`) ahead of
-    /// `PLAYER_TARGET_CHANGED` (`0x493a73`), each heard once. The listeners run on the deaths lane,
-    /// so the listener's packet follows the deselect's `CMSG_SET_SELECTION` 0.
+    /// `PLAYER_TARGET_CHANGED` (`0x493a73`), each heard once, each where it fires: the
+    /// `PET_BAR_UPDATE` listener's packet goes out ahead of the deselect's `CMSG_SET_SELECTION` 0,
+    /// which follows the store (`0x49388d`).
     #[test]
     fn the_selections_death_signals_its_pet_stop_and_its_change_in_place() {
         let mut c = client();
@@ -1368,7 +1358,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(wire, ["PetStopAttack", "SetSelection 0x0", "RandomRoll"]);
+        assert_eq!(wire, ["PetStopAttack", "RandomRoll", "SetSelection 0x0"]);
         let heard: Vec<String> = crate::script_calls::eval_in_vm(c.world(), "return HEARD");
         assert_eq!(heard, ["PET_BAR_UPDATE", "PLAYER_TARGET_CHANGED"]);
     }

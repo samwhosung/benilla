@@ -25,11 +25,6 @@ pub(crate) enum TrainerEvent {
     Show,
     /// One state pass, its push and sort, then `TRAINER_UPDATE`.
     Update,
-    /// A close's clear of the VM's rows (`0x4d7481`, `0x4d7486`), behind the signals it parked.
-    Cleared,
-    /// What a close core run outside a call signalled while this lane held items, parked in the
-    /// VM of the session under the key ([`crate::script_calls::park_since`]).
-    Parked { session: u64, key: u64 },
 }
 
 /// The trainer lane's queue.
@@ -135,26 +130,8 @@ fn fire_trainer(In(until): In<Until>, mut vm: TrainerVm) {
     }
 }
 
-/// One item: a parked close's signals, or a push and its event.
+/// One item: a push and its event.
 fn fire(vm: &mut TrainerVm, event: TrainerEvent) {
-    if let TrainerEvent::Parked { session, key } = event {
-        vm.run(|script| {
-            if let Some(script) = script.filter(|s| s.session() == session) {
-                crate::ui_session::in_parked_close(crate::ui_session::NpcWindow::Trainer, || {
-                    script.run_parked(key)
-                });
-            }
-        });
-        return;
-    }
-    if event == TrainerEvent::Cleared {
-        vm.run(|script| {
-            if let Some(script) = script {
-                script.set_trainer(None);
-            }
-        });
-        return;
-    }
     let signal = vm.turn(|script, (reads, mut open, _, title)| {
         push(script?, &reads, &mut open, &title, event)
     });
@@ -188,7 +165,6 @@ fn push(
             }
             "TRAINER_UPDATE"
         }
-        TrainerEvent::Parked { .. } | TrainerEvent::Cleared => return None,
     };
     let state = {
         let lua = script.lua();
@@ -204,18 +180,8 @@ fn push(
     Some(signal)
 }
 
-/// Run the close `core` behind the lane ([`crate::lanes::behind`]), so a close never fires ahead
-/// of the open it closes.
-pub(super) fn behind_lane(
-    world: &mut World,
-    core: impl FnOnce(&mut World),
-) -> crate::lanes::Behind {
-    let head = world
-        .get_resource::<TrainerLane>()
-        .and_then(TrainerLane::head);
-    crate::lanes::behind(world, head, core, |world, session, key| {
-        world
-            .resource_mut::<TrainerLane>()
-            .push(TrainerEvent::Parked { session, key });
-    })
+/// Run the close `core` as a step in its place ([`crate::lanes::step`]): what the lanes hold fires
+/// first, so a close never fires ahead of the open it closes, and its signals fire inside it.
+pub(super) fn behind_lane(world: &mut World, core: impl FnOnce(&mut World)) {
+    crate::lanes::step(world, core);
 }

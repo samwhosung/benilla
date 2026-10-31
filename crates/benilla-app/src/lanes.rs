@@ -134,16 +134,14 @@ pub(crate) fn firing_between(from: Mark, to: Mark) -> bool {
 }
 
 thread_local! {
-    /// A close core is running held behind a lane: what a core it re-enters signals is its.
-    static BEHIND: Cell<bool> = const { Cell::new(false) };
     /// The net dispatch is running the frame's packet handlers on this thread ([`at_packets`]).
     static AT_PACKETS: Cell<bool> = const { Cell::new(false) };
 }
 
-/// Run `f` as the dispatch of the frame's packets, each handler whole in wire order: a close core
-/// a handler runs with no item firing takes its place on its lane there ([`waits_behind`]), so its
-/// signals fire after every earlier packet's and ahead of every later one's, as the reference's
-/// fire inside the handler that closes (`0x537ae5`, `0x703e50`).
+/// Run `f` as the dispatch of the frame's packets, each handler whole in wire order: an interface
+/// half a handler runs with no item firing takes its place on its lane there ([`waits_behind`]),
+/// so its signals fire after every earlier packet's and ahead of every later one's, as the
+/// reference's fire inside the handler that runs it (`0x537ae5`, `0x703e50`).
 pub(crate) fn at_packets<R>(f: impl FnOnce() -> R) -> R {
     let _restore = AtPackets::set(true);
     f()
@@ -164,58 +162,14 @@ impl Drop for AtPackets {
     }
 }
 
-/// Where [`behind`] ran its core.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Behind {
-    /// At once, its signals fired in place.
-    Ran,
-    /// Held, its signals parked on the lane.
-    Parked,
-    /// Inside another core's hold, which parks its signals with its own.
-    Nested,
-}
-
-/// Run a close `core` behind a lane whose head is `head`: at once unless it waits
-/// ([`waits_behind`]), else with the world's VM held, what it signalled parked under a key `park`
-/// queues on the lane, so a close never fires ahead of the open it closes, nor ahead of an earlier
-/// packet's signals when a handler runs it. A core it re-enters, as a release re-enters its close
-/// (`0x493310`), runs inside the hold.
-pub(crate) fn behind(
-    world: &mut World,
-    head: Option<Stamp>,
-    core: impl FnOnce(&mut World),
-    park: impl FnOnce(&mut World, u64, u64),
-) -> Behind {
-    if BEHIND.get() {
-        core(world);
-        return Behind::Nested;
-    }
-    let Some((_held, mark)) = waits_behind(head)
-        .then(|| crate::script_calls::defer_vm(world))
-        .flatten()
-    else {
-        core(world);
-        return Behind::Ran;
-    };
-    BEHIND.set(true);
-    core(world);
-    BEHIND.set(false);
-    if let Some((session, key)) = crate::script_calls::park_since(world, mark) {
-        park(world, session, key);
-    }
-    Behind::Parked
-}
-
-/// Whether a close run now must wait behind a lane whose head is `head`, as no other core's hold
-/// already takes what it signals ([`behind`]): with an item firing, the lane holds one stamped
-/// before it; with none, a packet handler runs it ([`at_packets`]), whose place is the lane's
-/// next stamp, or the lane holds any item.
+/// Whether an open's or a close's interface half run now must wait behind a lane whose head is
+/// `head`: with an item firing, the lane holds one stamped before it; with none, a packet handler
+/// runs it ([`at_packets`]), whose place is the lane's next stamp, or the lane holds any item.
 pub(crate) fn waits_behind(head: Option<Stamp>) -> bool {
-    !BEHIND.get()
-        && match firing_now() {
-            Some(now) => head.is_some_and(|head| head < now),
-            None => AT_PACKETS.get() || head.is_some(),
-        }
+    match firing_now() {
+        Some(now) => head.is_some_and(|head| head < now),
+        None => AT_PACKETS.get() || head.is_some(),
+    }
 }
 
 /// Run `f` as the firing of the item stamped `at`, so what it pushes nests under the item; with
@@ -237,6 +191,8 @@ pub(crate) struct Until {
     before: Option<Stamp>,
     through: Option<Stamp>,
     fence: u64,
+    /// A step's own place ([`step`]): only what was stamped below it.
+    limit: Option<Stamp>,
 }
 
 impl Until {
@@ -247,6 +203,7 @@ impl Until {
             before: None,
             through: None,
             fence: CLOCK.load(Ordering::Relaxed),
+            limit: None,
         }
     }
 
@@ -254,6 +211,7 @@ impl Until {
         stamp.first() < self.fence
             && self.before.is_none_or(|b| stamp < b)
             && self.through.is_none_or(|b| stamp <= b)
+            && self.limit.is_none_or(|l| stamp < l)
     }
 }
 
@@ -525,7 +483,7 @@ impl LaneApp for App {
 /// The frame's drain: what the feeds and the frame's systems pushed after the dispatch, and what
 /// no flush fired, in stamp order, with the frame's begins ahead ([`fire_through`]).
 pub(crate) fn fire_in_order(world: &mut World) {
-    fire_through(world, true);
+    fire_through(world, true, None);
 }
 
 /// Whether some lane holds what a drain would fire now: a head that is an item, or a log's start
@@ -549,9 +507,31 @@ pub(crate) fn flush(world: &mut World) -> bool {
         return false;
     }
     FLUSHES.set(FLUSHES.get() + 1);
-    fire_through(world, false);
+    fire_through(world, false, None);
     span_starts(world);
     true
+}
+
+/// Run `f`, an engine step outside any call (a packet's callback, a close core, a teardown), in
+/// its place, its signals fired there: what was stamped before it fires first ([`fire_before`]),
+/// then `f` runs as the firing of a stamp of its own, outside the packets' dispatch, so each
+/// listener runs where its signal fires inside the step, and what the step pushes fires after it,
+/// ahead of what was stamped after its place. The reference's handler signals inside itself,
+/// every listener before the signal returns (`0x703e50`), so the step's next leg, and the
+/// handler's, act after them. Inside a drain, what was stamped before it has fired already.
+pub(crate) fn step<R>(world: &mut World, f: impl FnOnce(&mut World) -> R) -> R {
+    let at = stamp();
+    fire_before(world, at);
+    let _restore = AtPackets::set(false);
+    firing(at, || f(world)).0
+}
+
+/// The lanes fired as a flush fires them, up to `limit`, the span of packets going on: what was
+/// stamped below it, in stamp order, when the in-game interface is up and some lane is [`due`].
+fn fire_before(world: &mut World, limit: Stamp) {
+    if crate::ui_script::ingame_ui_up_in(world) && due(world) {
+        fire_through(world, false, Some(limit));
+    }
 }
 
 /// Where a span of packets begins: each log reads its starting state ([`LaneApp::add_span_start`]).
@@ -566,12 +546,13 @@ pub(crate) fn span_starts(world: &mut World) {
 }
 
 /// Fire every lane's items in stamp order: each lane's `begin`, the frame's begins when `frame`,
-/// then, while any lane's head was stamped before the drain began, the lane holding the lowest
-/// fires up to the next lane's head, its Lua run with the call host lent; then the drain's ends.
+/// then, while any lane's head was stamped before the drain began, and below `limit`, the lane
+/// holding the lowest fires up to the next lane's head, its Lua run with the call host lent; then
+/// the drain's ends.
 /// A lane that fires nothing (no VM) ends the drain, its items waiting for the next. Its listeners
 /// run outside the packets' dispatch ([`at_packets`]), as a signal's listeners run inside their
 /// signal's call (`0x703e50`), not as a handler.
-fn fire_through(world: &mut World, frame: bool) {
+fn fire_through(world: &mut World, frame: bool, limit: Option<Stamp>) {
     let Some(lanes) = world.remove_resource::<Lanes>() else {
         return;
     };
@@ -593,7 +574,7 @@ fn fire_through(world: &mut World, frame: bool) {
         let heads: Vec<Option<Stamp>> = lanes
             .0
             .iter()
-            .map(|l| (l.peek)(world).filter(|s| s.first() < fence))
+            .map(|l| (l.peek)(world).filter(|s| s.first() < fence && limit.is_none_or(|l| *s < l)))
             .collect();
         let Some((i, head)) = heads
             .iter()
@@ -617,6 +598,7 @@ fn fire_through(world: &mut World, frame: bool) {
             before: lowest(&heads[..i]),
             through: lowest(&heads[i + 1..]),
             fence,
+            limit,
         };
         let lane = &lanes.0[i];
         FIRED.set(FIRED.get() + 1);

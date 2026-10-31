@@ -14,10 +14,12 @@
 //! - the pet name stamp's re-ask and `LOCALPLAYER_PET_RENAMED` (`0x604aa0`), [`crate::ui_pet`]'s.
 //!
 //! What a callback pushes onto a lane is stamped under its edge, so it fires where the watcher ran
-//! among what the packets raised. The Lua a callback's cores signal is held as it runs and parked
-//! behind it on this module's lane ([`Parked`]), at a stamp taken as it ends. The item cache's
-//! answer parks its VM callbacks here too ([`crate::net::objects`]): the equip replays and the
-//! quest log's `QUEST_LOG_UPDATE`; and a refused record's walk goes on here behind its signals.
+//! among what the packets raised. Each leg of a callback is a step in its place
+//! ([`crate::lanes::step`]): what was stamped before it fires first, then the leg runs with its
+//! signals' listeners in place, ahead of the next leg, as the reference's watcher signals inside
+//! itself. The item cache's answer runs its VM callbacks so too ([`crate::net::objects`]): the
+//! equip replays and the quest log's `QUEST_LOG_UPDATE`; and a refused record's walk goes on on
+//! this module's lane behind its signals.
 
 use std::collections::VecDeque;
 
@@ -29,16 +31,13 @@ use benilla_protocol::{SessionEvent, SessionEventKind};
 use crate::lanes::{Stamp, Until};
 use crate::net::{AuraFieldsChanged, FieldChanged, NetHandlerApp};
 
-/// The Lua the callbacks' legs signalled, parked in the VM, each with its stamp, for the field
-/// callbacks' lane.
+/// The refused records' walks, each with its stamp, for the field callbacks' lane.
 #[derive(Resource, Default)]
 pub(crate) struct FieldCallbacks(VecDeque<(Stamp, Item)>);
 
 /// One item of the lane.
 #[derive(Clone, Copy)]
 pub(crate) enum Item {
-    /// A leg's signals, under the VM's session and key.
-    Parked(u64, u64),
     /// A refused record's walk, gone on behind its signals
     /// ([`crate::net::continue_refusal_walk`]).
     Walk(u32, crate::lanes::Mark),
@@ -52,7 +51,7 @@ pub(crate) fn walk_on(world: &mut World, entry: u32, from: crate::lanes::Mark) {
     }
 }
 
-/// The VM's end, a reload's or the session's: what the callbacks parked goes with it.
+/// The VM's end, a reload's or the session's: the walks it waited on go with it.
 pub(crate) fn drop_parked(world: &mut World) {
     if let Some(mut parked) = world.get_resource_mut::<FieldCallbacks>() {
         parked.0.clear();
@@ -112,37 +111,6 @@ pub(crate) fn run(world: &mut World, edges: &[FieldChanged], calls: &[AuraFields
     }
 }
 
-/// A callback's deferred stretch on the world's VM: each leg's signals held as it runs and parked
-/// behind it on the field callbacks' lane, at a stamp taken as it ends, after what it pushed onto
-/// the other lanes. With no VM nothing signals.
-pub(crate) struct Parked(Option<(benilla_ui::script::Deferring, usize)>);
-
-impl Parked {
-    pub(crate) fn new(world: &World) -> Self {
-        Self(crate::script_calls::defer_vm(world))
-    }
-
-    /// [`Self::new`] split as a close's halves: the legs' calls apply at once through the lent
-    /// host, their signals and writes park ([`crate::script_calls::defer_vm_split`]).
-    pub(crate) fn split(world: &World) -> Self {
-        Self(crate::script_calls::defer_vm_split(world))
-    }
-
-    /// Run `leg`, then park what it signalled.
-    pub(crate) fn leg(&mut self, world: &mut World, leg: impl FnOnce(&mut World)) {
-        leg(world);
-        let Some((_, mark)) = &self.0 else {
-            return;
-        };
-        if let Some((session, key)) = crate::script_calls::park_since(world, *mark) {
-            let at = crate::lanes::stamp();
-            if let Some(mut lane) = world.get_resource_mut::<FieldCallbacks>() {
-                lane.0.push_back((at, Item::Parked(session, key)));
-            }
-        }
-    }
-}
-
 /// The lane's head.
 fn peek_parked(world: &World) -> Option<Stamp> {
     world
@@ -152,8 +120,7 @@ fn peek_parked(world: &World) -> Option<Stamp> {
         .map(|(at, _)| *at)
 }
 
-/// Each item `until` admits, run as the firing of its stamp: a leg's signals with the host lent,
-/// or a walk's next callbacks. The lane stops after one whose firing stamped anything, so what it
+/// Each item `until` admits, run as the firing of its stamp: a walk's next callbacks. The lane stops after one whose firing stamped anything, so what it
 /// pushed fires next.
 fn fire_parked(In(until): In<Until>, world: &mut World) {
     loop {
@@ -168,7 +135,6 @@ fn fire_parked(In(until): In<Until>, world: &mut World) {
         };
         world.resource_mut::<FieldCallbacks>().0.pop_front();
         let ((), moved) = crate::lanes::firing(at, || match item {
-            Item::Parked(session, key) => crate::script_calls::run_parked(world, session, key),
             Item::Walk(entry, from) => crate::net::continue_refusal_walk(world, entry, from),
         });
         if moved {
@@ -177,7 +143,7 @@ fn fire_parked(In(until): In<Until>, world: &mut World) {
     }
 }
 
-/// Every parked signal queued, fired alone, for a test that drives the callbacks without the
+/// Every walk queued, run alone, for a test that drives the callbacks without the
 /// other lanes.
 #[cfg(test)]
 pub(crate) fn fire_parked_lane(world: &mut World) {

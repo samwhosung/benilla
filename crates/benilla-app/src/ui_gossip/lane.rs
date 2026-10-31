@@ -17,9 +17,6 @@ use crate::lanes::{LaneApp, Stamp, Until};
 pub(crate) enum GossipEvent {
     /// `GOSSIP_SHOW` (`0x4e22b5`), with no argument.
     Show,
-    /// What a close core run outside a call signalled while this lane held items, parked in the
-    /// VM of the session under the key ([`crate::script_calls::park_since`]).
-    Parked { session: u64, key: u64 },
 }
 
 /// The gossip lane's queue.
@@ -99,25 +96,11 @@ fn fire_gossip(
 fn fire(script: &mut UiScript, event: GossipEvent) {
     match event {
         GossipEvent::Show => script.fire_event("GOSSIP_SHOW", vec![]),
-        GossipEvent::Parked { session, key } => {
-            if script.session() == session {
-                crate::ui_session::in_parked_close(crate::ui_session::NpcWindow::Gossip, || {
-                    script.run_parked(key)
-                });
-            }
-        }
     }
 }
 
-/// Run the close `core` behind the lane ([`crate::lanes::behind`]), so a close never fires ahead
-/// of the show it closes.
+/// Run the close `core` as a step in its place ([`crate::lanes::step`]): what the lanes hold fires
+/// first, so a close never fires ahead of the open it closes, and its signals fire inside it.
 pub(super) fn behind_lane(world: &mut World, core: impl FnOnce(&mut World)) {
-    let head = world
-        .get_resource::<GossipLane>()
-        .and_then(GossipLane::head);
-    crate::lanes::behind(world, head, core, |world, session, key| {
-        world
-            .resource_mut::<GossipLane>()
-            .push(GossipEvent::Parked { session, key });
-    });
+    crate::lanes::step(world, core);
 }

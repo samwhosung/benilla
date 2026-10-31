@@ -1077,10 +1077,6 @@ impl ScriptCallHost<'_, '_> {
     /// the cell cleared (`0x4f502b`) and `GUILD_REGISTRAR_CLOSED` (`0x4f503a`), its signal once
     /// per run of the core, as the call's tail.
     fn close_registrar(&mut self) -> Option<CallTail> {
-        // A parked close's re-entry finds its cell clear ([`crate::ui_session::parked_close`]).
-        if crate::ui_session::parked_close(crate::ui_session::NpcWindow::Registrar) {
-            return None;
-        }
         let npc = self.appliers.petition().registrar_npc()?;
         let reenters = self.appliers.latch().release(npc);
         self.appliers.petition().clear_registrar();
@@ -1901,45 +1897,6 @@ pub(crate) fn with_hosted_vm<R>(
 #[cfg(test)]
 pub(crate) fn insert_test_vm(world: &mut World) {
     world.insert_non_send_resource(UiScript::new().expect("a VM"));
-}
-
-/// Defer what the world's VM fires while the guard lives ([`UiScript::defer`]), with the mark to
-/// park it from ([`park_since`]); `None` with no VM.
-pub(crate) fn defer_vm(world: &World) -> Option<(benilla_ui::script::Deferring, usize)> {
-    world
-        .get_non_send_resource::<UiScript>()
-        .map(|vm| (vm.defer(), vm.waiting_mark()))
-}
-
-/// [`defer_vm`] split: its calls apply at once through the lent host, its signals and writes park
-/// ([`UiScript::defer_split`]).
-pub(crate) fn defer_vm_split(world: &World) -> Option<(benilla_ui::script::Deferring, usize)> {
-    world
-        .get_non_send_resource::<UiScript>()
-        .map(|vm| (vm.defer_split(), vm.waiting_mark()))
-}
-
-/// Park what the world's VM has held since `mark` ([`UiScript::park_since`]); the VM's session
-/// and the key, `None` with nothing held or no VM.
-pub(crate) fn park_since(world: &mut World, mark: usize) -> Option<(u64, u64)> {
-    let mut vm = world.get_non_send_resource_mut::<UiScript>()?;
-    let key = vm.park_since(mark)?;
-    Some((vm.session(), key))
-}
-
-/// Run what the world's VM parked under `key` ([`UiScript::run_parked`]), with the host lent,
-/// if it is still the VM of `session`: a replaced VM's keys count from 0 again in the next.
-pub(crate) fn run_parked(world: &mut World, session: u64, key: u64) {
-    fn run(In((session, key)): In<(u64, u64)>, mut vm: HostedVm) {
-        vm.run(|script| {
-            if let Some(script) = script.filter(|s| s.session() == session) {
-                script.run_parked(key);
-            }
-        });
-    }
-    if let Err(err) = world.run_system_cached_with(run, (session, key)) {
-        debug!("script calls: parked signals did not run: {err}");
-    }
 }
 
 /// What the world's VM answers to `chunk`, for a test of an engine entry outside the feeds.

@@ -60,11 +60,7 @@ mod scan;
 mod script;
 pub(crate) use script::ScriptSelect;
 mod release;
-#[cfg(test)]
-pub(crate) use release::Releases;
-pub(crate) use release::{
-    drop_parked_releases, member as raid_member_or_pet, object_held, unit_released, OwedReleases,
-};
+pub(crate) use release::{member as raid_member_or_pet, object_held, unit_released, OwedReleases};
 #[cfg(test)]
 mod unheld_tests;
 

@@ -1,6 +1,6 @@
 //! The unit events that release the interaction latch (`0x4931c0`), off the field edges the update
 //! packet's notify pass writes, run inside the packet as the reference's watchers run there
-//! ([`crate::field_callbacks`]), their signals parked at their places.
+//! ([`crate::field_callbacks`]), each a step in its place ([`crate::lanes::step`]).
 //!
 //! A change of the active player's shapeshift form (`UNIT_FIELD_BYTES_1` byte 2, watcher
 //! `0x5de010`) into a form that is not a stance (`0x60e9f0`) and lacks flag `0x8` releases it with
@@ -20,7 +20,6 @@ use benilla_formats::ShapeshiftForm;
 use benilla_protocol::field::{FIELD_UNIT_BYTES_1, FIELD_UNIT_NPC_FLAGS};
 
 use super::latch::release_latch;
-use crate::field_callbacks::Parked;
 use crate::field_watch::{FieldNotice, NoticeLane};
 use crate::net::{FieldChanged, SelfGuid};
 use crate::ui_action::Spells;
@@ -100,7 +99,7 @@ pub(crate) fn on_field_edge(world: &mut World, e: FieldChanged) {
         // `0x604a20` → `0x60b420(old)` at the edge's own place, a type watcher's.
         let (guid, old, new) = (e.guid, e.old, e.new);
         crate::lanes::firing(e.at, || {
-            Parked::new(world).leg(world, |world| close_lost_services(world, guid, old, new));
+            crate::lanes::step(world, |world| close_lost_services(world, guid, old, new));
         });
     }
 }
@@ -123,6 +122,6 @@ fn form_changed(world: &mut World, e: FieldChanged) {
         .and_then(|lane| lane.first_after(e.at, |n| *n == FieldNotice::Shapeshift))
         .unwrap_or(e.at);
     crate::lanes::firing(place, || {
-        Parked::new(world).leg(world, |world| release_latch(world, true));
+        crate::lanes::step(world, |world| release_latch(world, true));
     });
 }

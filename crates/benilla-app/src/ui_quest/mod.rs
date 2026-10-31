@@ -1106,7 +1106,7 @@ mod tests {
 
     /// Each panel setter fires its event at its end, every time (`0x500ee5`, `0x50105d`,
     /// `0x501120`), at its packet's place: a second offer queues `QUEST_DETAIL` again, an
-    /// identical one too. `QUEST_ITEM_UPDATE` is queued only by the callback `GetQuestItemInfo`'s
+    /// identical one too, its latch's re-registration closing the first in place. `QUEST_ITEM_UPDATE` is queued only by the callback `GetQuestItemInfo`'s
     /// lookup keeps (`0x5017ce`), once per call, at the record's answer (`0x5018fe`-`0x501903`); a
     /// record no call asked for queues nothing.
     #[test]
@@ -1119,15 +1119,13 @@ mod tests {
         let detail = |app: &mut App, choice| {
             open_panel(app.world_mut(), 0x42, detail(100, "", vec![triple(choice)]))
         };
-        detail(&mut app, 901);
-        detail(&mut app, 901);
-        assert_eq!(
-            lane(&mut app),
-            [
-                QuestGiverEvent::Panel(QuestPanel::Detail, 0x42),
-                QuestGiverEvent::Panel(QuestPanel::Detail, 0x42)
-            ]
-        );
+        for _ in 0..2 {
+            detail(&mut app, 901);
+            assert_eq!(
+                lane(&mut app),
+                [QuestGiverEvent::Panel(QuestPanel::Detail, 0x42)]
+            );
+        }
         let land = |app: &mut App, entry| {
             let info = Some(Box::new(crate::items::test_template("Sword")));
             crate::net::handlers::dispatch(

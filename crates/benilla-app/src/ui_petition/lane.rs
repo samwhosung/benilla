@@ -31,9 +31,6 @@ pub(crate) enum PetitionEvent {
     Closed,
     /// A system line, by its catalog key and arguments.
     Line(Line),
-    /// What a close core run outside a call signalled while this lane held items, parked in the
-    /// VM of the session under the key ([`crate::script_calls::park_since`]).
-    Parked { session: u64, key: u64 },
 }
 
 /// The charter lane's queue.
@@ -125,25 +122,11 @@ fn fire(script: &mut UiScript, sink: &mut MessageSink, event: PetitionEvent) {
                 crate::ui_action::show_now(script, sink, "ui_petition", shown);
             }
         }
-        PetitionEvent::Parked { session, key } => {
-            if script.session() == session {
-                crate::ui_session::in_parked_close(crate::ui_session::NpcWindow::Registrar, || {
-                    script.run_parked(key)
-                });
-            }
-        }
     }
 }
 
-/// Run the close `core` behind the lane ([`crate::lanes::behind`]), so a close never fires ahead
-/// of the open it closes.
+/// Run the close `core` as a step in its place ([`crate::lanes::step`]): what the lanes hold fires
+/// first, so a close never fires ahead of the open it closes, and its signals fire inside it.
 pub(super) fn behind_lane(world: &mut World, core: impl FnOnce(&mut World)) {
-    let head = world
-        .get_resource::<PetitionLane>()
-        .and_then(PetitionLane::head);
-    crate::lanes::behind(world, head, core, |world, session, key| {
-        world
-            .resource_mut::<PetitionLane>()
-            .push(PetitionEvent::Parked { session, key });
-    });
+    crate::lanes::step(world, core);
 }

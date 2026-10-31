@@ -797,13 +797,13 @@ impl LatchedWindow for TrainerOpen {
 /// no trainer (`0x4d7459`, a zero guid against a zero cell), else `TRAINER_CLOSED` first
 /// (`0x4d7468`), then the latch release on the cell as it stands after the fire (`0x4d7474`) and
 /// the cell and the VM's rows cleared (`0x4d747c`-`0x4d7486`). The fire comes before the clear, so
-/// `OnHide`'s `CloseTrainer()` re-enters with the cell set; behind what the lane holds, it fires
-/// after the list it closes, and the rows clear after its signals.
+/// `OnHide`'s `CloseTrainer()` re-enters with the cell set; a step in its place, it fires after
+/// the list it closes, and the rows clear after its signals.
 pub(crate) fn close_core(world: &mut World) {
     if world.resource::<TrainerOpen>().trainer.is_none() {
         return;
     }
-    let ran = lane::behind_lane(world, |world| {
+    lane::behind_lane(world, |world| {
         crate::ui_session::fire(world, |script| {
             script.fire_event("TRAINER_CLOSED", vec![]);
         });
@@ -813,19 +813,8 @@ pub(crate) fn close_core(world: &mut World) {
         if world.resource::<TrainerOpen>().trainer.is_some() {
             world.resource_mut::<TrainerOpen>().clear();
         }
+        crate::ui_session::with_script(world, |script| script.set_trainer(None));
     });
-    match ran {
-        crate::lanes::Behind::Ran => {
-            crate::ui_session::with_script(world, |script| script.set_trainer(None));
-        }
-        crate::lanes::Behind::Parked => {
-            world
-                .resource_mut::<TrainerLane>()
-                .push(TrainerEvent::Cleared);
-        }
-        // The outer core clears them after every signal.
-        crate::lanes::Behind::Nested => {}
-    }
 }
 
 impl TrainerOpen {

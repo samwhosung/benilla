@@ -1100,9 +1100,8 @@ fn close_ui_session(world: &mut World, root: ShutdownRoot) {
     if let Some(mut minimap) = world.get_resource_mut::<crate::minimap::MinimapWidget>() {
         minimap.0 = None;
     }
-    // And the signals the frame's field callbacks and releases parked in it, for their lanes.
+    // And the refused records' walks the field callbacks' lane holds for it.
     crate::field_callbacks::drop_parked(world);
-    crate::target::drop_parked_releases(world);
 }
 
 /// A `ReloadUI()` waiting to run: set when [`crate::ui_logout`] drains

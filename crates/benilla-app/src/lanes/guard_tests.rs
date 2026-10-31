@@ -752,7 +752,7 @@ pub(super) const READ_ONLY_TO_HANDLERS: &[&str] = &[
 ];
 
 /// Every lane's queue, by type: what a handler fills there fires in the packets' order.
-pub(super) fn lane_types() -> [TypeId; 42] {
+pub(super) fn lane_types() -> [TypeId; 41] {
     [
         // The views lane: what each packet changed in the stores.
         TypeId::of::<crate::ui_unit::views::ViewLog>(),
@@ -769,11 +769,8 @@ pub(super) fn lane_types() -> [TypeId; 42] {
         TypeId::of::<crate::ui_party::PartyLane>(),
         // The list rebuilds a learn, an unlearn or a pet's spells owe, stamped at their packets.
         TypeId::of::<crate::ui_tradeskill::ListRebuilds>(),
-        // The field callbacks' lane: the signals each callback's legs parked, stamped under its
-        // edge, and the refused records' walks gone on behind their signals.
+        // The field callbacks' lane: the refused records' walks gone on behind their signals.
         TypeId::of::<crate::field_callbacks::FieldCallbacks>(),
-        // The release lane: the signals each selection teardown parked, stamped under its release.
-        TypeId::of::<crate::target::Releases>(),
         TypeId::of::<crate::target::OwedSelects>(),
         // The item-text lane: the page-text packets' reads, stamped at their packets.
         TypeId::of::<crate::ui_item_text::ItemTextLane>(),
@@ -1047,7 +1044,6 @@ fn the_frames_drain_runs_after_the_feeds_and_before_the_tick() {
             "pet cooldowns",
             "quest events",
             "quest giver",
-            "releases",
             "reputation",
             "social",
             "stable",

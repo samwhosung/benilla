@@ -322,8 +322,8 @@ impl DressUpSteps<'_> {
 
 /// The try-on callback `0x504ba0` on a found record of `entry`, at its place in the entry's list
 /// ([`crate::net::objects`]): the try-on again (`0x504bae` → `0x504540`), whose refusal's
-/// `UI_ERROR_MESSAGE` is parked at the packet's place among the frame's events
-/// ([`crate::field_callbacks::Parked`]). A refusal runs nothing (`0x504ba8`).
+/// `UI_ERROR_MESSAGE` runs its listeners there, a step in its place ([`crate::lanes::step`]). A
+/// refusal runs nothing (`0x504ba8`).
 pub(crate) fn try_on_answered(world: &mut World, entry: u32) {
     fn run(In(entry): In<u32>, mut vm: crate::script_calls::VmWith<DressUpSteps<'static>>) {
         vm.turn(|script, mut steps| {
@@ -332,8 +332,7 @@ pub(crate) fn try_on_answered(world: &mut World, entry: u32) {
             }
         });
     }
-    let mut parked = crate::field_callbacks::Parked::new(world);
-    parked.leg(world, |world| {
+    crate::lanes::step(world, |world| {
         if let Err(err) = world.run_system_cached_with(run, entry) {
             debug!("ui_dressup: the try-on callback did not run: {err}");
         }

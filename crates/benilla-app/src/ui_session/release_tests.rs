@@ -283,3 +283,83 @@ fn an_npc_that_loses_a_service_flag_closes_its_window() {
     assert!(seen_in(&app).is_empty());
     assert_eq!(latch(&app), Some(VENDOR));
 }
+
+/// A watcher's close runs its listeners where it fires, inside its edge's callback (`0x604a20` →
+/// `0x60b420`, or `0x5de010` → `0x5de07f`), ahead of the next edge's: the close listener's packet
+/// goes out ahead of the deselect that the selection's death in the same packet sends (`0x605901`
+/// → `0x49388d`). A lost flag closes its own window; a form that cannot interact releases the
+/// latch, which closes whichever window holds it.
+#[test]
+fn a_watchers_close_runs_its_listeners_ahead_of_the_next_edge() {
+    use crate::target::cursor_mode::npc_flags as f;
+    use benilla_protocol::field::{FIELD_UNIT_HEALTH, FIELD_UNIT_NPC_FLAGS};
+    const MOB: u64 = 0xF130_0000_0000_0009;
+    for (window, closed, lost) in [
+        (NpcWindow::Gossip, "GOSSIP_CLOSED", Some(f::GOSSIP)),
+        (NpcWindow::Quest, "QUEST_FINISHED", Some(f::QUESTGIVER)),
+        (NpcWindow::Trainer, "TRAINER_CLOSED", Some(f::TRAINER)),
+        (NpcWindow::Bank, "BANKFRAME_CLOSED", Some(f::BANKER)),
+        (NpcWindow::Merchant, "MERCHANT_CLOSED", None),
+        (NpcWindow::Stable, "PET_STABLE_CLOSED", None),
+        (NpcWindow::Registrar, "GUILD_REGISTRAR_CLOSED", None),
+    ] {
+        let (mut app, me) = app();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        app.insert_resource(crate::net::NetCommands(tx));
+        let world = app.world_mut();
+        crate::script_calls::insert_test_vm(world);
+        let npc = world.spawn_empty().id();
+        let mob = world
+            .spawn((
+                crate::net::Guid(MOB),
+                crate::net::ObjectStore(
+                    benilla_protocol::ObjectFields::from_pairs(&[(FIELD_UNIT_HEALTH, 0), (2, 0x9)])
+                        .into_created(ObjectType::Unit),
+                ),
+            ))
+            .id();
+        world
+            .resource_mut::<crate::net::GuidIndex>()
+            .0
+            .insert(MOB, mob);
+        *world.resource_mut::<crate::target::Selection>() = crate::target::Selection {
+            target: Some(mob),
+            guid: Some(MOB),
+            ..Default::default()
+        };
+        open(&mut app, window, VENDOR);
+        crate::lanes::fire_in_order(app.world_mut());
+        crate::script_calls::with_hosted_vm(app.world_mut(), |s| {
+            s.expect("a VM").run(&format!(
+                r#"local l = CreateFrame("Frame") l:RegisterEvent("{closed}")
+                l:SetScript("OnEvent", function() RandomRoll(1, 2) end)"#
+            ))
+        })
+        .expect("the listener is in");
+        rx.try_iter().for_each(drop);
+        let world = app.world_mut();
+        world.write_message(match lost {
+            Some(bit) => edge(npc, VENDOR, ObjectType::Unit, FIELD_UNIT_NPC_FLAGS, bit, 0),
+            None => edge(
+                me,
+                ME,
+                ObjectType::Player,
+                FIELD_UNIT_BYTES_1,
+                0x0102,
+                1 << 16 | 0x0102,
+            ),
+        });
+        world.write_message(edge(mob, MOB, ObjectType::Unit, FIELD_UNIT_HEALTH, 100, 0));
+        packet_end(&mut app);
+        let wire: Vec<&str> = rx
+            .try_iter()
+            .filter_map(|c| match c {
+                crate::net::ClientCommand::RandomRoll { .. } => Some("roll"),
+                crate::net::ClientCommand::SetSelection { .. } => Some("deselect"),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(wire.last(), Some(&"deselect"), "{window:?}: {wire:?}");
+        assert_eq!(wire.first(), Some(&"roll"), "{window:?}: {wire:?}");
+    }
+}

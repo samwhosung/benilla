@@ -956,8 +956,8 @@ fn an_interact_attack_signals_its_select_before_the_swing() {
 }
 
 /// The attacker's select (`0x6259fe` → `SetSelection 0x493540`) signals inside the packet's
-/// handler (`0x49389c`): its `PLAYER_TARGET_CHANGED` listeners run behind the select's send, at
-/// the packet's place on the release lane.
+/// handler (`0x49389c`): its `PLAYER_TARGET_CHANGED` listeners run there, behind the select's
+/// send, with no lane to wait for.
 #[test]
 fn an_acquired_attacker_signals_its_select_in_place() {
     let mut f = fix(false);
@@ -967,14 +967,8 @@ fn an_acquired_attacker_signals_its_select_in_place() {
     rolling_listener(&mut f);
     f.swung_at_us(mob);
     f.acquire();
-    assert_eq!(
-        wire_order(&f.rx),
-        ["SetSelection 0x31"],
-        "the listener waits"
-    );
-    crate::lanes::fire_in_order(f.app.world_mut());
+    assert_eq!(wire_order(&f.rx), ["SetSelection 0x31", "RandomRoll"]);
     assert_eq!(f.selected(), Some(MOB));
-    assert_eq!(wire_order(&f.rx), ["RandomRoll"]);
 }
 
 /// A bare `/assist`'s `AssistByName("")` commits through `SetSelection` (`0x493540`), which

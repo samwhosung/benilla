@@ -704,7 +704,8 @@ pub(crate) fn push_answered_record(
 
 /// The quest log's callback (`0x4e0830`) on a found record, at its place in the entry's list
 /// ([`crate::net::objects`]): a `QUEST_LOG_UPDATE` for each record the VM's lookups missed
-/// (`0x4e083a`, [`UiScript::flush_quest_log_refires`]), held and parked at this place.
+/// (`0x4e083a`, [`UiScript::flush_quest_log_refires`]), fired there, a step in its place
+/// ([`crate::lanes::step`]).
 pub(crate) fn quest_log_answered(world: &mut World) {
     fn flush(mut vm: crate::script_calls::HostedVm) {
         vm.run(|script| {
@@ -713,8 +714,7 @@ pub(crate) fn quest_log_answered(world: &mut World) {
             }
         });
     }
-    let mut parked = crate::field_callbacks::Parked::new(world);
-    parked.leg(world, |world| {
+    crate::lanes::step(world, |world| {
         if let Err(err) = crate::script_calls::run_cached(world, flush) {
             debug!("ui_items: the quest log's record callback did not run: {err}");
         }

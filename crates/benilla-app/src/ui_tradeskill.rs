@@ -746,8 +746,8 @@ pub(crate) fn ask_item_record(items: &Items, commands: &NetCommands, entry: u32,
 /// unit (`0x6e81b6`, the second guid) and first guid (`0x6e81d3`, an item's cast's being the item)
 /// are the active player, with neither flag `0x41` (`0x6e81de`). The hook counts the armed spell
 /// down and casts it again inside the packet, so the recast goes out ahead of a later packet's
-/// send; its `UPDATE_TRADESKILL_RECAST` is parked at this packet's place
-/// ([`crate::field_callbacks::Parked`]).
+/// send. The hook is a step in its place ([`crate::lanes::step`]): the recast's signals and its
+/// `UPDATE_TRADESKILL_RECAST` run their listeners inside it, ahead of the go's next leg.
 pub(crate) fn repeat_hook_at_go(ev: SessionEvent, world: &mut World) {
     let SessionEvent::SpellGo {
         caster,
@@ -766,8 +766,7 @@ pub(crate) fn repeat_hook_at_go(ev: SessionEvent, world: &mut World) {
     if !hook_runs(me, caster, item_caster, unit_caster, cast_flags) {
         return;
     }
-    let mut parked = crate::field_callbacks::Parked::new(world);
-    parked.leg(world, |world| {
+    crate::lanes::step(world, |world| {
         if let Err(err) = world.run_system_cached_with(repeat_at_go, spell_id) {
             debug!("ui_tradeskill: the repeat hook did not run: {err}");
         }
@@ -808,9 +807,7 @@ fn repeat_at_go(
     let Some(recast) = recast else {
         return;
     };
-    // The cast's points run its listeners only once this runs outside the go's parked leg
-    // ([`repeat_hook_at_go`]): inside it every signal is held past the leg, so for now they do
-    // nothing.
+    // The cast's points run its listeners there, ahead of its send (`0x6e5026`, `0x6e5333`).
     vm.engine_cast(recast, |(targeting, mut ladder)| {
         ladder.send(recast, &targeting.context(), CastCommit::Spell);
     });
@@ -1914,6 +1911,40 @@ mod tests {
                 .trade_skill_repeat(),
             (2963, 2)
         );
+    }
+
+    /// The go's hook recasts inside the go (`0x4fd7d7` → `0x6e5a90`), whose attempt signals its
+    /// push and its arm (`0x6e5026`, `0x6e5333`) ahead of its send: their listener's rolls go out
+    /// ahead of the recast's `CMSG_CAST_SPELL`, as `SignalEvent` (`0x703e50`) runs it inside the
+    /// hook.
+    #[test]
+    fn the_recasts_push_listener_sends_ahead_of_the_recast() {
+        let (mut app, rx) = headless_tailor();
+        crate::script_calls::with_hosted_vm(app.world_mut(), |vm| {
+            vm.expect("a VM").run("DoTradeSkill(2, 3)")
+        })
+        .unwrap();
+        crate::script_calls::with_hosted_vm(app.world_mut(), |vm| {
+            vm.expect("a VM").run(
+                r#"local l = CreateFrame("Frame") l:RegisterEvent("CURRENT_SPELL_CAST_CHANGED")
+                l:SetScript("OnEvent", function() RandomRoll(1, 2) end)"#,
+            )
+        })
+        .unwrap();
+        rx.try_iter().for_each(drop);
+        frame(&mut app, our_go(2963).to_vec());
+        let wire: Vec<&str> = rx
+            .try_iter()
+            .filter_map(|c| match c {
+                crate::net::ClientCommand::CastSpell { spell_id: 2963, .. } => Some("cast"),
+                crate::net::ClientCommand::RandomRoll { .. } => Some("roll"),
+                _ => None,
+            })
+            .collect();
+        // What the packets signalled ahead of the hook, the push's and the arm's listeners
+        // (`0x6e5026`, `0x6e5333`), the send, then the send's and the return's (`0x6e589d`,
+        // `0x6e51e3`).
+        assert_eq!(wire, ["roll", "roll", "roll", "cast", "roll", "roll"]);
     }
 
     /// `DoTradeSkill` reads the held list, not the open marker (`0x5002e1`), and casts

@@ -802,3 +802,127 @@ fn a_waiting_tradeskill_line_names_its_caster_at_the_answer() {
         ["Crafter creates Wolf Pelt."]
     );
 }
+
+/// Park a swap of backpack slot 1 onto the head on `entry`'s record (`0x5e0dbe`).
+fn park_swap_on(app: &mut App, entry: u32) {
+    use bevy::ecs::system::RunSystemOnce;
+    let mv = benilla_ui::script::ContainerMove {
+        src_bag: 0,
+        src_slot: 1,
+        dst_bag: benilla_ui::script::EQUIPMENT_BAG,
+        dst_slot: 1,
+        count: None,
+    };
+    app.world_mut()
+        .run_system_once(
+            move |mut gate: crate::ui_bind_confirm::BindGate,
+                  items: Res<crate::items::Items>,
+                  net: Res<crate::net::NetCommands>| {
+                gate.park_swap(&mv, entry, &items, &net);
+            },
+        )
+        .unwrap();
+}
+
+/// A listener of `event` that sends a roll, and the wire's rolls and swaps from here on.
+fn rolling_on(app: &mut App, sent: &Receiver<ClientCommand>, event: &str) {
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(&format!(
+            r#"local f = CreateFrame("Frame") f:RegisterEvent("{event}")
+            f:SetScript("OnEvent", function() RandomRoll(1, 2) end)"#
+        ))
+        .unwrap();
+    sent.try_iter().for_each(drop);
+}
+
+/// The rolls and swaps among `sent`, in order.
+fn rolls_and_swaps(sent: &Receiver<ClientCommand>) -> Vec<&'static str> {
+    sent.try_iter()
+        .filter_map(|c| match c {
+            ClientCommand::RandomRoll { .. } => Some("roll"),
+            ClientCommand::SwapInvItem { .. } | ClientCommand::SwapItem { .. } => Some("Swap"),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The swap callback walks its table inside the answer (`0x5e1020`): the first swap's clear
+/// signals `CURSOR_UPDATE` (`0x5e0fe7`), whose listener runs there, ahead of the second swap's
+/// send (`0x5e0fdb`), as the walk's next element runs only once the first returns.
+#[test]
+fn a_swaps_clear_runs_its_listener_ahead_of_the_next_swap() {
+    let (mut app, sent) = holding_client();
+    hosted(&mut app, "PickupContainerItem(0, 1)");
+    park_swap_on(&mut app, HELM_ENTRY);
+    park_swap_on(&mut app, HELM_ENTRY);
+    rolling_on(&mut app, &sent, "CURSOR_UPDATE");
+    frame(&mut app, vec![helm_record()]);
+    assert_eq!(rolls_and_swaps(&sent)[..2], ["Swap", "roll"]);
+}
+
+/// The try-on callback's refusal (`0x504ba0` → `0x504b2d`) signals `UI_ERROR_MESSAGE` inside the
+/// answer, ahead of the entry's next callback (`0x55bf12`-`0x55bf39`): its listener's roll goes
+/// out ahead of the swap parked after it.
+#[test]
+fn a_try_on_refusals_listener_runs_ahead_of_the_entrys_next_callback() {
+    const BOX: u32 = 5_555;
+    let (mut app, sent) = holding_client();
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .run(
+            r#"ERR_NOT_EQUIPPABLE = "Not equippable"
+            local pane = CreateFrame("Frame", "DressUpFrame", UIParent)
+            CreateFrame("DressUpModel", "DressUpModel", pane)"#,
+        )
+        .unwrap();
+    // The helm's record held, so the swap parked on the box's waits on nothing else.
+    frame(&mut app, vec![helm_record()]);
+    hosted(&mut app, &format!("DressUpModel:TryOn({BOX})"));
+    park_swap_on(&mut app, BOX);
+    rolling_on(&mut app, &sent, "UI_ERROR_MESSAGE");
+    let mut t = crate::items::test_template("Box");
+    t.inventory_type = 0;
+    frame(
+        &mut app,
+        vec![SessionEvent::ItemTemplate {
+            entry: BOX,
+            info: Some(Box::new(t)),
+        }],
+    );
+    assert_eq!(rolls_and_swaps(&sent), ["roll", "Swap"]);
+}
+
+/// The quest log's callback (`0x4e0830`) signals `QUEST_LOG_UPDATE` inside the answer
+/// (`0x4e083a`), ahead of the entry's next callback: its listener's roll goes out ahead of the
+/// swap parked after it.
+#[test]
+fn a_quest_log_updates_listener_runs_ahead_of_the_entrys_next_callback() {
+    use crate::ui_quest_log::fixture::{quest, seat};
+    const PELT: u32 = 900;
+    let (mut app, sent) = holding_client();
+    {
+        let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
+        let mut pelts = quest(50, "Pelts", 1);
+        pelts.record.objectives[0] = benilla_ui::script::QuestObjectiveView {
+            item_id: PELT,
+            item_count: 5,
+            ..Default::default()
+        };
+        seat(&mut s, &[pelts]);
+    }
+    let slot = benilla_protocol::field::FIELD_PLAYER_QUEST_LOG_1_1;
+    frame(&mut app, vec![values(ME, &[(slot, 50)])]);
+    frame(&mut app, vec![helm_record()]);
+    hosted(&mut app, "GetQuestLogLeaderBoard(1, 2)");
+    park_swap_on(&mut app, PELT);
+    rolling_on(&mut app, &sent, "QUEST_LOG_UPDATE");
+    frame(
+        &mut app,
+        vec![SessionEvent::ItemTemplate {
+            entry: PELT,
+            info: Some(Box::new(crate::items::test_template("Wolf Pelt"))),
+        }],
+    );
+    assert_eq!(rolls_and_swaps(&sent), ["roll", "Swap"]);
+}
