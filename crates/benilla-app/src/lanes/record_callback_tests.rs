@@ -858,7 +858,7 @@ fn a_swaps_clear_runs_its_listener_ahead_of_the_next_swap() {
     park_swap_on(&mut app, HELM_ENTRY);
     rolling_on(&mut app, &sent, "CURSOR_UPDATE");
     frame(&mut app, vec![helm_record()]);
-    assert_eq!(rolls_and_swaps(&sent)[..2], ["Swap", "roll"]);
+    assert_eq!(rolls_and_swaps(&sent), ["Swap", "roll", "Swap", "roll"]);
 }
 
 /// The try-on callback's refusal (`0x504ba0` → `0x504b2d`) signals `UI_ERROR_MESSAGE` inside the
