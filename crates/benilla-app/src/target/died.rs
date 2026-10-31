@@ -13,9 +13,10 @@
 //!   player its tail, `SignalDeathState` (`0x6251cc` → `0x495850`), `PLAYER_DEAD` and the cursor
 //!   cleared ([`crate::death`]'s);
 //! - with a spell in flight (`0x6e3d30`) whose record's target (`0xceac60`, read through
-//!   `0x6e3d50`) is this unit, `CancelCast(1, 1, 0x65)` (`0x6058e0`);
-//! - when the unit is the selection (`0xb4e2d8`), `SetSelection(0, 0)` (`0x605901`) and then
-//!   `StopAutoRepeatSpell 0x6ea080` (`0x605906`);
+//!   `0x6e3d50`) is this unit, `CancelCast(1, 1, 0x65)` (`0x6058e0`), its `SPELLCAST_FAILED`
+//!   listeners run inside it (`0x6e4a50`);
+//! - when the unit is the selection (`0xb4e2d8`, read after those listeners, `0x6058ea`),
+//!   `SetSelection(0, 0)` (`0x605901`) and then `StopAutoRepeatSpell 0x6ea080` (`0x605906`);
 //! - the tail from `0x60590b`: the quest marker, the missiles, the effects, a sound, the auto-move
 //!   stop (`0x605938`), which finds none (the health watcher's tick ended it first, `0x60479c`,
 //!   [`crate::player::AutoMoveStop`]), and `0x4931c0` on the unit's guid (`0x605950`).
@@ -68,6 +69,7 @@ pub(crate) fn died(world: &mut World, e: FieldChanged) {
         // `0x5eb070` (`0x5e9a61`): the quest givers swept.
         crate::lanes::step(world, crate::quest_markers::sweep_statuses);
         crate::lanes::step(world, |world| step(world, own_death_cast, e));
+        crate::lanes::step(world, |world| step(world, own_death_repop, e));
     } else if e.kind == ObjectType::Player {
         crate::lanes::step(world, |world| step(world, groupmate_died, e));
     }
@@ -78,7 +80,8 @@ pub(crate) fn died(world: &mut World, e: FieldChanged) {
     if own {
         crate::lanes::step(world, crate::death::signal_death_state);
     }
-    crate::lanes::step(world, |world| step(world, unit_died, e));
+    crate::lanes::step(world, |world| step(world, unit_died_cancel, e));
+    crate::lanes::step(world, |world| step(world, unit_died_deselect, e));
     // The tail's `0x4931c0` on the unit's guid (`0x605950`, `dl = 1`): no goodbye.
     crate::lanes::step(world, |world| {
         crate::ui_session::release_cell(world, e.guid, false)
@@ -153,9 +156,7 @@ fn own_death_loot(In(_): In<FieldChanged>, mut seam: AttackSeam) {
 }
 
 /// Our own death past the quest-giver sweep: `CancelCast(1, 1, 0x1c)` (`0x5e9a6c`), asking
-/// nothing of the slot first; then with `UNIT_FIELD_FLAGS` bit 20 (`0x5e9a7d`) `0x5e0ae0` sends
-/// `CMSG_REPOP_REQUEST` at once while the player is dead or a ghost (`0x605f30`), as it is at its
-/// death edge.
+/// nothing of the slot first, its `SPELLCAST_FAILED` signalled inside (`0x6e4a50`).
 fn own_death_cast(In(e): In<FieldChanged>, mut d: Died) {
     let seam = &mut d.seam;
     let spells = seam.spells.as_deref();
@@ -167,6 +168,12 @@ fn own_death_cast(In(e): In<FieldChanged>, mut d: Died) {
         Some(e.entity),
         &seam.edits,
     );
+}
+
+/// Our own death past the cancel's listeners: with `UNIT_FIELD_FLAGS` bit 20 (`0x5e9a7d`)
+/// `0x5e0ae0` sends `CMSG_REPOP_REQUEST` at once (`0x5e9a87`) while the player is dead or a ghost
+/// (`0x605f30`), as it is at its death edge.
+fn own_death_repop(In(e): In<FieldChanged>, d: Died) {
     let store = d.stores.get(e.entity).ok();
     if store.is_some_and(|s| {
         s.0.unit_flags() & crate::player::UNIT_FLAG_TAXI_FLIGHT != 0
@@ -198,30 +205,35 @@ fn unit_attack_words(In(e): In<FieldChanged>, mut seam: AttackSeam) {
     seam.clear_stop_word(e.entity);
 }
 
-/// Any unit's legs past `PresentUnitDeath`: a cast whose record names it cancelled (`0x6058e0`),
-/// and when it is the selection the deselect (`0x605901`), signalled in place, then the auto-repeat
-/// stop (`0x605906`).
-fn unit_died(In(e): In<FieldChanged>, mut vm: crate::script_calls::VmWith<Died<'static, 'static>>) {
+/// Any unit's leg past `PresentUnitDeath`: a cast whose record names it cancelled (`0x6058e0`),
+/// its `SPELLCAST_FAILED` signalled inside (`0x6e4a50`).
+fn unit_died_cancel(In(e): In<FieldChanged>, mut d: Died) {
+    let seam = &mut d.seam;
+    let me = seam.me.single().ok();
+    let spells = seam.spells.as_deref();
+    let mut core = seam.slots.core(&seam.net);
+    if core.slot().is_some() && core.pending.record_target() == Some(e.guid) {
+        core.cancel_reaping(
+            true,
+            true,
+            crate::spell::REASON_TARGETS_DEAD,
+            spells,
+            me,
+            &seam.edits,
+        );
+    }
+}
+
+/// Any unit's leg past the cancel's listeners: the selection read then (`0x6058ea`), and when it
+/// is the unit the deselect (`0x605901`), signalled in place, then the auto-repeat stop
+/// (`0x605906`).
+fn unit_died_deselect(
+    In(e): In<FieldChanged>,
+    mut vm: crate::script_calls::VmWith<Died<'static, 'static>>,
+) {
     let me = vm.own().seam.me.single().ok();
-    let selected = {
-        let mut d = vm.own();
-        let seam = &mut d.seam;
-        let spells = seam.spells.as_deref();
-        let mut core = seam.slots.core(&seam.net);
-        if core.slot().is_some() && core.pending.record_target() == Some(e.guid) {
-            core.cancel_reaping(
-                true,
-                true,
-                crate::spell::REASON_TARGETS_DEAD,
-                spells,
-                me,
-                &seam.edits,
-            );
-        }
-        d.selection.guid == Some(e.guid)
-    };
     // The dead target becomes the last one; a corpse selected afterwards stays selected, gray.
-    if selected {
+    if vm.own().selection.guid == Some(e.guid) {
         let select = vm.own().deselect();
         vm.engine_select(select, Died::pay);
         let mut d = vm.own();
@@ -487,8 +499,9 @@ mod tests {
     /// Our own death runs `0x5e99b0`'s active-player leg first (`0x605860` at `0x60588d`), in its
     /// order: the target cleared (`0x493540(0, 0)` at `0x5e9a45`), the loot window closed with its
     /// release (`0x48f200(1, 0, 0)` at `0x5e9a5c`), the cast cancelled whatever it is bound to
-    /// (`CancelCast(1, 1, 0x1c)` at `0x5e9a6c`), and with `UNIT_FIELD_FLAGS` 0x100000 a release
-    /// asked at once (`0x5e9a7d` → `0x5e0ae0`, `CMSG_REPOP_REQUEST`); without it, none.
+    /// (`CancelCast(1, 1, 0x1c)` at `0x5e9a6c`), its `SPELLCAST_FAILED` listeners run inside it
+    /// (`0x6e4a50`), and with `UNIT_FIELD_FLAGS` 0x100000 a release asked after them
+    /// (`0x5e9a7d` → `0x5e0ae0` at `0x5e9a87`, `CMSG_REPOP_REQUEST`); without it, none.
     #[test]
     fn our_own_death_clears_the_target_closes_the_loot_cancels_the_cast_and_releases() {
         for flagged in [true, false] {
@@ -498,8 +511,8 @@ mod tests {
             c.cast(FIREBALL);
             crate::script_calls::insert_test_vm(c.world());
             c.lua(
-                r#"FAILED = 0 local f = CreateFrame("Frame") f:RegisterEvent("SPELLCAST_FAILED")
-                f:SetScript("OnEvent", function() FAILED = FAILED + 1 end)"#,
+                r#"local f = CreateFrame("Frame") f:RegisterEvent("SPELLCAST_FAILED")
+                f:SetScript("OnEvent", function() RandomRoll(1, 1) end)"#,
             );
             c.world()
                 .resource_mut::<crate::ui_loot::LootState>()
@@ -528,6 +541,7 @@ mod tests {
                 "SetSelection { guid: 0 }".to_string(),
                 format!("LootRelease {{ guid: {OTHER} }}"),
                 format!("CancelCast {{ spell_id: {FIREBALL} }}"),
+                "RandomRoll { min: 1, max: 1 }".to_string(),
             ];
             if flagged {
                 want.push("RepopRequest".to_string());
@@ -547,8 +561,7 @@ mod tests {
             );
             assert_eq!(c.in_flight(), None, "the cast is popped");
             c.lanes();
-            let failed: i64 = crate::script_calls::eval_in_vm(c.world(), "return FAILED");
-            assert_eq!(failed, 1, "and fails");
+            assert!(c.sent().is_empty(), "the listener ran once, in place");
         }
     }
 
@@ -990,6 +1003,56 @@ mod tests {
                 .any(|r| matches!(r, CastReport::Bar(CastBarEdge::Failed))),
             "SPELLCAST_FAILED for SPELL_FAILED_TARGETS_DEAD"
         );
+    }
+
+    /// The selected unit dying under a cast that names it: `CancelCast` (`0x6058e0`) signals
+    /// `SPELLCAST_FAILED` inside it (`0x6e4a50`), so its listener's packet goes out ahead of the
+    /// deselect's `CMSG_SET_SELECTION` 0 (`0x605901`); and the death reads the selection after that
+    /// listener (`0x6058ea`), so a listener that clears the target leaves it nothing to deselect
+    /// and no auto-repeat to stop (`0x605906`).
+    #[test]
+    fn the_selections_death_mid_cast_runs_the_cancels_listeners_before_it_deselects() {
+        for clears in [false, true] {
+            let mut c = client();
+            let mob = c.mob;
+            c.select(MOB, mob);
+            c.cast(FIREBALL);
+            c.world().resource_mut::<AutoRepeatActive>().0 = Some(SHOOT);
+            crate::script_calls::insert_test_vm(c.world());
+            let act = if clears { "ClearTarget()" } else { "RandomRoll(1, 1)" };
+            c.lua(&format!(
+                r#"local f = CreateFrame("Frame") f:RegisterEvent("SPELLCAST_FAILED")
+                f:SetScript("OnEvent", function() {act} end)"#
+            ));
+            c.sent();
+            c.dies(mob, MOB, ObjectType::Unit);
+            let wire: Vec<&str> = c
+                .sent()
+                .iter()
+                .filter_map(|s| match s {
+                    ClientCommand::CancelCast { .. } => Some("CancelCast"),
+                    ClientCommand::RandomRoll { .. } => Some("RandomRoll"),
+                    ClientCommand::SetSelection { guid: 0 } => Some("SetSelection 0"),
+                    ClientCommand::CancelAutoRepeat => Some("CancelAutoRepeat"),
+                    _ => None,
+                })
+                .collect();
+            if clears {
+                assert_eq!(wire, ["CancelCast", "SetSelection 0"]);
+                assert_eq!(c.world().resource::<AutoRepeatActive>().0, Some(SHOOT));
+            } else {
+                assert_eq!(
+                    wire,
+                    [
+                        "CancelCast",
+                        "RandomRoll",
+                        "SetSelection 0",
+                        "CancelAutoRepeat"
+                    ]
+                );
+            }
+            assert_eq!(c.world().resource::<Selection>().guid, None);
+        }
     }
 
     /// The far cast at a unit the client does not hold parks its guid in the record's target
