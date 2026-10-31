@@ -2,6 +2,8 @@
 
 use std::ffi::CString;
 
+use benilla_bytes::ByteExt;
+
 use crate::track::{
     M2QuatTrack, M2ScalarSplineTrack, M2ScalarTrack, M2Vec3SplineTrack, M2Vec3Track,
 };
@@ -224,6 +226,9 @@ pub struct M2Model {
     /// The texture-unit lookup (header `0x9c`), by `texture_coord_combo_index`: a UV channel or a
     /// generated environment coordinate (see [`Self::stage_is_env_mapped`]).
     pub texture_unit_lookup: Vec<u16>,
+    /// The file offset of [`Self::texture_unit_lookup`], `None` for an empty table, which the
+    /// reference's fixup leaves a null pointer (`0x71e160`); see [`Self::stage_coord`].
+    pub(crate) texture_unit_lookup_at: Option<usize>,
     /// The texture transforms, reached through [`Self::texture_transform_lookup`].
     pub texture_transforms: Vec<M2TextureTransform>,
     /// The texture combiner presets (header `0x144`, u16), read in version 0x101 alone: there a
@@ -263,15 +268,28 @@ pub struct M2Model {
 }
 
 impl M2Model {
-    /// Whether `batch`'s stage `stage` takes generated environment coordinates: a
-    /// [`Self::texture_unit_lookup`] entry above 2 (art: `0xffff`), and an out-of-range index,
-    /// gives the stage digit 2 of the vertex shader id (`0x71de50`, the test at `0x71deaa`), whose
+    /// The coordinate entry `batch`'s stage `stage` reads: the u16 at `texture_coord_combo_index +
+    /// stage` of [`Self::texture_unit_lookup`], from `bytes`, the file this model was parsed from.
+    /// The draw indexes the table unchecked (`0x70b8bd`) in the file it holds whole, so an index
+    /// past the table reads the file's next u16s. `None` for an empty table, which the reference
+    /// reads through a null pointer, and past the file's end.
+    pub fn stage_coord(&self, bytes: &[u8], batch: &crate::SkinBatch, stage: u16) -> Option<u16> {
+        let idx = batch.texture_coord_combo_index as usize + stage as usize;
+        if let Some(&v) = self.texture_unit_lookup.get(idx) {
+            return Some(v);
+        }
+        let at = self.texture_unit_lookup_at?.checked_add(idx * 2)?;
+        bytes.u16_at(at)
+    }
+
+    /// Whether `batch`'s stage `stage` takes generated environment coordinates: a coordinate entry
+    /// ([`Self::stage_coord`]) above 2 (art: `0xffff`), or none to read, gives the stage digit 2
+    /// of the vertex shader id (`0x71de50`, the test at `0x71deaa`), whose
     /// `Shaders\Vertex\Model2.bls` program writes the sphere map `0.5 + 0.5·R.xy/|R|` of the
     /// view-space reflection `R`, which no texture transform drives. The draw's gate `0x70b8bd`
     /// makes the same test; the constants it then writes (`0x70b8d0`) that program does not read.
-    pub fn stage_is_env_mapped(&self, batch: &crate::SkinBatch, stage: u16) -> bool {
-        let idx = batch.texture_coord_combo_index as usize + stage as usize;
-        self.texture_unit_lookup.get(idx).is_none_or(|&v| v > 2)
+    pub fn stage_is_env_mapped(&self, bytes: &[u8], batch: &crate::SkinBatch, stage: u16) -> bool {
+        self.stage_coord(bytes, batch, stage).is_none_or(|v| v > 2)
     }
 
     /// The combine preset (0 to 5, gx render states `0x1f + k`) stage `stage` of `batch` binds

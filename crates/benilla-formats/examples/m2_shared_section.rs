@@ -10,11 +10,11 @@ use std::io::Cursor;
 
 /// What every consolidator excludes on: a `true` batch stays on the entity path whatever its
 /// siblings do.
-fn refusable(model: &benilla_m2::M2Model, batch: &benilla_m2::SkinBatch) -> bool {
+fn refusable(bytes: &[u8], model: &benilla_m2::M2Model, batch: &benilla_m2::SkinBatch) -> bool {
     let mat = model.materials.get(batch.material_index as usize);
     let flags = mat.map_or(0, |m| m.flags.bits());
     let blend = mat.map_or(0, |m| m.blend_mode.bits());
-    model.stage_is_env_mapped(batch, 0)
+    model.stage_is_env_mapped(bytes, batch, 0)
         || flags & 0x10 != 0
         || flags & 0x08 != 0
         || matches!(blend, 3 | 4)
@@ -53,7 +53,7 @@ fn main() -> anyhow::Result<()> {
         for b in skin.batches() {
             let e = per_section.entry(b.skin_section_index).or_default();
             e.0 += 1;
-            e.1 += usize::from(refusable(model, b));
+            e.1 += usize::from(refusable(&bytes, model, b));
         }
         let shared: Vec<_> = per_section.iter().filter(|(_, v)| v.0 > 1).collect();
         if shared.is_empty() {

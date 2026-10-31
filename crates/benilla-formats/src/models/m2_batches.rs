@@ -395,7 +395,7 @@ pub fn parse_m2_render_submeshes(
         let two_sided = material.is_some_and(|m| m.flags.bits() & 0x04 != 0);
         // `texCoordSet (+0x12) → texture_unit_lookup (0x9c)` above 2 is a generated environment
         // coordinate, as the reference gates it at `0x70b8bd`.
-        let env_map = model.stage_is_env_mapped(batch, 0);
+        let env_map = model.stage_is_env_mapped(bytes, batch, 0);
         let combine = model.stage_combine(batch, 0);
         // A unit of two textures binds a second stage (`0x70b740`): texture, coordinates and
         // combine by the same lookups at `+ 1`. No stock unit has more than two, and the shader
@@ -414,7 +414,7 @@ pub fn parse_m2_render_submeshes(
                 texture,
                 wrap_x,
                 wrap_y,
-                env_map: model.stage_is_env_mapped(batch, 1),
+                env_map: model.stage_is_env_mapped(bytes, batch, 1),
                 combine: model.stage_combine(batch, 1),
             }
         });

@@ -442,6 +442,8 @@ pub fn parse_m2(cursor: &mut Cursor<&[u8]>) -> Result<M2Format> {
             transparency_tracks,
             transparency_lookup,
             texture_unit_lookup,
+            texture_unit_lookup_at: (texture_unit_lookup_arr.0 != 0)
+                .then_some(texture_unit_lookup_arr.1 as usize),
             texture_combiners: if version == 0x101 {
                 parse_texture_combiners(b)
             } else {

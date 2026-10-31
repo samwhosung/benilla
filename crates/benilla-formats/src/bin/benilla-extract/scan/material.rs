@@ -251,8 +251,8 @@ pub fn envmapscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     // The blend modes and sheets env stages use: Mod2x tints what is behind (glass), Add a sheen.
     let mut by_blend: BTreeMap<String, u32> = BTreeMap::new();
     let mut by_sheet: BTreeMap<String, u32> = BTreeMap::new();
-    // `stage_is_env_mapped` reads an out-of-range `texture_unit_lookup` index as env, as the
-    // reference's unguarded read does; those hits, and models with no table at all, count apart.
+    // An index past `texture_unit_lookup` reads on into the file, as the reference's unguarded
+    // read does (`stage_coord`); those hits, and models with no table at all, count apart.
     let (mut from_oob, mut empty_table) = (0u32, 0u32);
     for name in names {
         let Ok(bytes) = chain.read_file(&name) else {
@@ -267,7 +267,9 @@ pub fn envmapscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
             if let Ok(skin) = model.parse_embedded_skin(&bytes, 0) {
                 for b in skin.batches() {
                     let idx = b.texture_coord_combo_index as usize;
-                    if model.texture_unit_lookup.get(idx).is_none() {
+                    if model.texture_unit_lookup.get(idx).is_none()
+                        && model.stage_is_env_mapped(&bytes, b, 0)
+                    {
                         from_oob += 1;
                     }
                 }
@@ -328,7 +330,7 @@ pub fn envmapscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     }
     eprintln!(
         "gate provenance: {from_eal} of {hits} hit(s) came from a REAL `>= 3` table entry, \
-         {from_oob} from the out-of-range fallback ({empty_table} model(s) carry no \
+         {from_oob} from a read past the table ({empty_table} model(s) carry no \
          texture_unit_lookup at all)",
         from_eal = hits.saturating_sub(from_oob),
     );
