@@ -23,6 +23,8 @@ use super::{
     BoothRider, BoothTwins, Booths, PortraitImages, PortraitSource, VariantLane, GLUE_LAYER,
 };
 
+pub(super) mod trace;
+
 /// The glue booth slot token (its key in [`super::PortraitImages`] / [`Booths`]).
 pub(crate) const GLUE_SLOT: &str = "glue";
 // `GLUE_LAYER` lives with the other booth layers in [`super`], so no two booths share one.

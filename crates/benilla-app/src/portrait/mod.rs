@@ -757,6 +757,7 @@ pub(crate) fn on_cvar(ev: &crate::cvars::CvarChanged, mut rate: bevy::prelude::M
 
 impl Plugin for PortraitPlugin {
     fn build(&self, app: &mut App) {
+        glue_booth::trace::plugin(app);
         app.init_resource::<PortraitImages>()
             .init_resource::<PortraitMarks>()
             .init_resource::<crate::field_watch::NoticeLane>()
