@@ -159,13 +159,21 @@ pub fn mail_create_text_item(mailbox: u64, mail_id: u32, template_id: u32) -> Ve
     body
 }
 
-/// `CMSG_ITEM_TEXT_QUERY` (vmangos `Server/Packets/Mail.cpp`): `u32 textId, u32 mailId, u32 unk`.
-/// The 1.12 client writes all three; vmangos only uses `textId`.
-pub fn item_text_query(text_id: u32, mail_id: u32) -> Vec<u8> {
+/// The `CMSG_ITEM_TEXT_QUERY` key of an inbox mail's body: the mail id with high dword
+/// `0x70000000` (`GetInboxText`, `0x4af19d`, `0x4af1a2`).
+pub fn mail_text_key(mail_id: u32) -> u64 {
+    0x7000_0000 << 32 | u64::from(mail_id)
+}
+
+/// `CMSG_ITEM_TEXT_QUERY`: `u32 textId`, then the u64 key the item-text cache's send-guid flag adds
+/// (`0x569980`: `0x569a99`-`0x569aad`; the flag is set at `0x554eb0`). The key is
+/// [`mail_text_key`] for a mail's body, the item's guid for an item's text window (`0x4e343e`,
+/// `0x4e3629`) and 0 for the invoice prefetch (`0x4af3f4`). vmangos reads it as `u32 mailId, u32
+/// unk` and uses neither (`HandleItemTextQuery`, `MailHandler.cpp:840`).
+pub fn item_text_query(text_id: u32, key: u64) -> Vec<u8> {
     let mut body = Vec::with_capacity(12);
     body.extend_from_slice(&text_id.to_le_bytes());
-    body.extend_from_slice(&mail_id.to_le_bytes());
-    body.extend_from_slice(&0u32.to_le_bytes()); // the unk vmangos never reads back
+    body.extend_from_slice(&key.to_le_bytes());
     body
 }
 

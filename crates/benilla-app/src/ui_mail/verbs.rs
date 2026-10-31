@@ -116,9 +116,10 @@ impl MailVerbs<'_> {
             } => {
                 // A miss asks and keeps the callback `0x4af340`, one per call (`0x4af1bf`).
                 let held = mail.bodies.lookup(text_id, || {
-                    let _ = commands
-                        .0
-                        .send(ClientCommand::ItemTextQuery { text_id, mail_id });
+                    let _ = commands.0.send(ClientCommand::ItemTextQuery {
+                        text_id,
+                        key: benilla_protocol::messages::mail_text_key(mail_id),
+                    });
                 });
                 if held.is_none() {
                     mail.wait(super::MailWait::Body(text_id));

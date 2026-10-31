@@ -93,10 +93,10 @@ impl WorldWriter {
     }
 
     /// `CMSG_ITEM_TEXT_QUERY`: a letter's body, asked once per mail with a nonzero `item_text_id`.
-    pub fn item_text_query(&mut self, text_id: u32, mail_id: u32) -> Result<()> {
+    pub fn item_text_query(&mut self, text_id: u32, key: u64) -> Result<()> {
         self.send(
             opcode::CMSG_ITEM_TEXT_QUERY,
-            &messages::item_text_query(text_id, mail_id),
+            &messages::item_text_query(text_id, key),
         )
     }
 

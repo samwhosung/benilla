@@ -335,7 +335,7 @@ fn an_answer_from_one_session_is_served_without_a_query_in_the_next() {
             .lookup(ITEM_TEXT, || {
                 let _ = c.0.send(ClientCommand::ItemTextQuery {
                     text_id: ITEM_TEXT,
-                    mail_id: 1,
+                    key: 1,
                 });
             })
             .is_some_and(|t| t == "Dear $N,")
@@ -743,7 +743,7 @@ fn an_ask_in_flight_at_a_disconnect_is_asked_again_after_the_relogin() {
         w.resource::<MailOpen>().bodies.lookup(ITEM_TEXT, || {
             let _ = commands.0.send(ClientCommand::ItemTextQuery {
                 text_id: ITEM_TEXT,
-                mail_id: 1,
+                key: 1,
             });
         });
         crate::query_cache::queries(&rx).len()

@@ -74,11 +74,24 @@ fn mail_send_bodies_golden() {
         "CMSG_MAIL_CREATE_TEXT_ITEM body, a template letter"
     );
 
-    // CMSG_ITEM_TEXT_QUERY: u32 textId, u32 mailId, u32 unk(0).
+    // CMSG_ITEM_TEXT_QUERY: u32 textId, then the u64 key (`0x569a99`-`0x569aad`).
+    // GetInboxText: the mail id, high dword 0x70000000 (`0x4af19d`, `0x4af1a2`).
     assert_eq!(
-        messages::item_text_query(1234, 77),
-        hx("d20400004d00000000000000"),
-        "CMSG_ITEM_TEXT_QUERY body"
+        messages::item_text_query(1234, messages::mail_text_key(77)),
+        hx("d20400004d00000000000070"),
+        "CMSG_ITEM_TEXT_QUERY body, a mail's"
+    );
+    // An item's text window: the item's guid (`0x4e343e`, `0x4e3629`).
+    assert_eq!(
+        messages::item_text_query(1234, 0x4000_0000_0000_0ABC),
+        hx("d2040000bc0a000000000040"),
+        "CMSG_ITEM_TEXT_QUERY body, an item's"
+    );
+    // The invoice prefetch: 0 (`0x4af3f4`).
+    assert_eq!(
+        messages::item_text_query(1234, 0),
+        hx("d20400000000000000000000"),
+        "CMSG_ITEM_TEXT_QUERY body, the invoice's"
     );
 }
 

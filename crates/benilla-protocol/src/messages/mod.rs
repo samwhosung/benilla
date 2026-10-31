@@ -170,7 +170,7 @@ pub use loot::{
 pub use mail::{
     get_mail_list, item_text_query, mail_action, mail_create_text_item, mail_delete, mail_error,
     mail_mark_as_read, mail_message_type, mail_return_to_sender, mail_take_item, mail_take_money,
-    send_mail, MailAttachment, MailListEntry,
+    mail_text_key, send_mail, MailAttachment, MailListEntry,
 };
 pub use meeting_stone::{
     meeting_stone_join, meeting_stone_leave, MeetingStoneNotice, MeetingStoneSetQueue,

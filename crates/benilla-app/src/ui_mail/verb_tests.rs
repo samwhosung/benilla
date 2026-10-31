@@ -13,6 +13,8 @@ use crate::net::{ClientCommand, NetCommands};
 use crate::script_calls::with_hosted_vm;
 
 const MAILBOX: u64 = 0xF110_0000_0000_0B0C;
+/// Mail 1's body key: the id with high dword `0x70000000` (`0x4af19d`).
+const MAIL_1_KEY: u64 = 0x7000_0000_0000_0001;
 /// The sender of every player mail here.
 const BOB: u64 = 0x42;
 
@@ -203,7 +205,7 @@ fn opening_an_unread_mail_marks_it_inside_the_call() {
             },
             ClientCommand::ItemTextQuery {
                 text_id: 9,
-                mail_id: 1,
+                key: MAIL_1_KEY,
             },
         ])
     );
@@ -245,7 +247,7 @@ fn opening_a_read_mail_only_asks_for_its_body() {
         h.sent(),
         text([ClientCommand::ItemTextQuery {
             text_id: 9,
-            mail_id: 1,
+            key: MAIL_1_KEY,
         }])
     );
     assert_eq!(h.eval::<i64>("return table.getn(HEARD)"), 0);

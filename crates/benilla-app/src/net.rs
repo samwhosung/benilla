@@ -1789,10 +1789,11 @@ pub(crate) enum ClientCommand {
         mail_id: u32,
         template_id: u32,
     },
-    /// `CMSG_ITEM_TEXT_QUERY`, once per mail with a nonzero `item_text_id`.
+    /// `CMSG_ITEM_TEXT_QUERY`, once per text: `key` is the mail-body key, the item's guid or 0
+    /// (`benilla_protocol::messages::item_text_query`).
     ItemTextQuery {
         text_id: u32,
-        mail_id: u32,
+        key: u64,
     },
     /// `MSG_QUERY_NEXT_MAIL_TIME`, on entering the world, to seed `HasNewMail()`.
     QueryNextMailTime,

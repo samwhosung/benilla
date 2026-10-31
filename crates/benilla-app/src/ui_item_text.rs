@@ -1080,16 +1080,16 @@ impl ItemTextShow<'_, '_> {
     fn record_at_hand(&self, record: TextRecord, object: u64, ask: Ask<'_>) -> bool {
         match record {
             TextRecord::Page(page_id) => self.pages.page(page_id, object, ask).is_some(),
-            TextRecord::Body(text_id) => self.body(text_id, ask).is_some(),
+            TextRecord::Body(text_id) => self.body(text_id, object, ask).is_some(),
         }
     }
 
-    fn body(&self, text_id: u32, ask: Ask<'_>) -> Option<&String> {
+    /// The letter's body, asked with the item's guid as the key (`0x4e343e`, `0x4e3629`).
+    fn body(&self, text_id: u32, item: u64, ask: Ask<'_>) -> Option<&String> {
         self.mail.bodies.read(text_id, ask, |commands| {
-            let _ = commands.0.send(ClientCommand::ItemTextQuery {
-                text_id,
-                mail_id: 0,
-            });
+            let _ = commands
+                .0
+                .send(ClientCommand::ItemTextQuery { text_id, key: item });
         })
     }
 
@@ -1106,7 +1106,7 @@ impl ItemTextShow<'_, '_> {
         let ask = Ask::Event(&self.net);
         let is_letter = matches!(sess.source, ReadSource::Letter { .. });
         let raw = match &mut sess.source {
-            ReadSource::Letter { text_id } => match self.body(*text_id, ask) {
+            ReadSource::Letter { text_id } => match self.body(*text_id, object, ask) {
                 Some(body) => body.clone(),
                 None => {
                     sess.awaiting = Some(Wait::Record(TextRecord::Body(*text_id)));
@@ -1854,6 +1854,31 @@ mod tests {
             app.update();
         }
         assert_eq!(shown(&app), PAGE);
+    }
+
+    /// A bag letter's body is asked with the item's own guid as the key (`0x4e343e`, `0x4e3629`),
+    /// not a mail id.
+    #[test]
+    fn a_letters_body_is_asked_with_the_items_guid() {
+        const LETTER: u64 = 0x4000_0000_0000_0009;
+        let (mut app, rx) = reading_app(0, &[]);
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(5_000, Some(crate::items::test_template("Letter")));
+        crate::items::test_spawn_item(
+            app.world_mut(),
+            LETTER,
+            benilla_protocol::ObjectFields::from_pairs(&[(3, 5_000)]),
+            false,
+        );
+        read_letter_now(app.world_mut(), LETTER, 77);
+        assert!(rx.try_iter().any(|c| matches!(
+            c,
+            ClientCommand::ItemTextQuery {
+                text_id: 77,
+                key: LETTER
+            }
+        )));
     }
 
     /// A bag book's page is rewritten in its template's language (`+0x1a0`, `0x4e37e9`) to the
