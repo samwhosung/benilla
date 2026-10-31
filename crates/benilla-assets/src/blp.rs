@@ -7,7 +7,9 @@ use bevy::reflect::TypePath;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use serde::{Deserialize, Serialize};
 
-use benilla_formats::{blp_bytes_to_native_chain, blp_to_rgba};
+use benilla_formats::{
+    blp_bytes_to_native_chain, blp_to_rgba, tga_texture_size, tga_to_rgba, BlpMipChain, BlpTexels,
+};
 
 use crate::gpu_blp::{for_upload, UploadChain};
 
@@ -57,6 +59,16 @@ impl AssetLoader for BlpImageLoader {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
         let to_io = |e: anyhow::Error| std::io::Error::other(format!("{e:#}"));
+        // The reader hands over the first candidate of `TextureCreate`'s chain that opens
+        // (`0x449d90`), which is a `.tga` where no `.blp` is there or the name asked for it.
+        if !bytes.starts_with(b"BLP") && tga_texture_size(&bytes).is_some() {
+            return tga_image(
+                &bytes,
+                settings.variant,
+                crate::sampler_mode_of(&ctx.path().to_string()),
+            )
+            .map_err(to_io);
+        }
         Ok(match settings.variant {
             BlpVariant::WorldArt => world_art_image(
                 for_upload(blp_bytes_to_native_chain(&bytes).map_err(to_io)?),
@@ -89,6 +101,28 @@ impl AssetLoader for BlpImageLoader {
     fn extensions(&self) -> &[&str] {
         &["blp"]
     }
+}
+
+/// A `.tga` candidate of `TextureCreate`'s chain (`0x449d90`) as the `variant` lane draws it: one
+/// level of decoded pixels, as the interface's TGAs are.
+fn tga_image(bytes: &[u8], variant: BlpVariant, wrap: (bool, bool)) -> anyhow::Result<Image> {
+    let (w, h, rgba) = tga_to_rgba(bytes)?;
+    let one_level = |rgba| {
+        for_upload(BlpMipChain {
+            width: w,
+            height: h,
+            texels: BlpTexels::Rgba8Unorm,
+            mips: vec![rgba],
+        })
+    };
+    Ok(match variant {
+        BlpVariant::WorldArt => world_art_image(one_level(rgba), wrap),
+        BlpVariant::Sprite => sprite_image(w, h, rgba),
+        BlpVariant::MapTile => map_tile_image(w, h, rgba),
+        BlpVariant::Effect => effect_image(w, h, rgba),
+        BlpVariant::PointSprite => point_sprite_image(one_level(rgba)),
+        BlpVariant::Cursor => cursor_image(w, h, rgba),
+    })
 }
 
 /// The gamma lanes' uncompressed format: non-sRGB, so the GPU does not linearize on sample.
@@ -235,4 +269,44 @@ fn cursor_image(width: u32, height: u32, rgba: Vec<u8>) -> Image {
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::default(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A 2x1 uncompressed 32-bit TGA: B G R A per texel, bottom-up.
+    fn tga_2x1() -> Vec<u8> {
+        let mut b = vec![0u8; 18];
+        b[2] = 2;
+        b[12] = 2;
+        b[14] = 1;
+        b[16] = 32;
+        b[17] = 8;
+        b.extend_from_slice(&[10, 20, 30, 255, 40, 50, 60, 128]);
+        b
+    }
+
+    /// A `.tga` candidate of the texture chain decodes in every lane, where a BLP parse of it
+    /// refuses the file.
+    #[test]
+    fn a_tga_candidate_decodes_in_every_lane() {
+        let tga = tga_2x1();
+        assert!(benilla_formats::blp_to_rgba(&tga).is_err());
+        for variant in [
+            BlpVariant::WorldArt,
+            BlpVariant::Sprite,
+            BlpVariant::MapTile,
+            BlpVariant::Effect,
+            BlpVariant::PointSprite,
+            BlpVariant::Cursor,
+        ] {
+            let image = tga_image(&tga, variant, (true, true)).expect("a TGA decodes");
+            assert_eq!(
+                (image.width(), image.height()),
+                (2, 1),
+                "{variant:?} keeps the TGA's size"
+            );
+        }
+    }
 }

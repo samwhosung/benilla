@@ -94,11 +94,12 @@ pub(super) fn resolve_char_look(
     None
 }
 
-/// The `mpq://` URL of a baked NPC atlas under `Textures\BakedNpcTextures\`.
+/// The `mpq://` URL of a baked NPC atlas under `Textures\BakedNpcTextures\`, its name resolved as
+/// `TextureCreate` resolves one (`0x449d90`): a bare bake name is the `.blp` or `.tga` there.
 fn baked_npc_url(bake_name: &str) -> String {
-    format!(
-        "mpq://textures/bakednpctextures/{}",
-        bake_name.replace('\\', "/").to_ascii_lowercase()
+    benilla_assets::texture_url(
+        &format!("Textures\\BakedNpcTextures\\{bake_name}"),
+        (true, true),
     )
 }
 
@@ -381,10 +382,7 @@ pub(super) fn build_char_skin_materials(
             let hair_part = parts
                 .iter()
                 .find(|p| p.char_slot == Some(CharSkinSlot::Hair))?;
-            let tex = asset_server.load::<Image>(format!(
-                "mpq://{}",
-                path.replace('\\', "/").to_ascii_lowercase()
-            ));
+            let tex = asset_server.load::<Image>(benilla_assets::texture_url(path, (true, true)));
             mats.char_variants(tex, hair_part.blend, hair_part.two_sided)
                 .map(&quint)
         });
@@ -413,10 +411,7 @@ pub(super) fn build_char_skin_materials(
         .tables
         .skin_extra_texture(look.race, look.sex, look.skin)
         .map_or((None, None), |path| {
-            let tex = asset_server.load::<Image>(format!(
-                "mpq://{}",
-                path.replace('\\', "/").to_ascii_lowercase()
-            ));
+            let tex = asset_server.load::<Image>(benilla_assets::texture_url(path, (true, true)));
             let mut quint_for = |two_sided: bool| {
                 let part = parts.iter().find(|p| {
                     p.char_slot == Some(CharSkinSlot::SkinExtra) && p.two_sided == two_sided
@@ -428,4 +423,22 @@ pub(super) fn build_char_skin_materials(
         });
 
     (body, hair, object, skin_extra)
+}
+
+#[cfg(test)]
+mod baked_url_tests {
+    use super::baked_npc_url;
+
+    /// A server's bare bake name resolves as `TextureCreate` resolves it (`0x449d90`): the same
+    /// atlas as the spelled-out `.blp`.
+    #[test]
+    fn a_bare_bake_name_is_the_atlas_the_blp_spelling_names() {
+        let blp = "mpq://textures/bakednpctextures/northwindbutcher.blp";
+        assert_eq!(baked_npc_url("Northwindbutcher"), blp);
+        assert_eq!(baked_npc_url("Northwindbutcher.blp"), blp);
+        assert_eq!(
+            baked_npc_url("CREATURE\\Sub\\Bake.BLP"),
+            "mpq://textures/bakednpctextures/creature/sub/bake.blp"
+        );
+    }
 }

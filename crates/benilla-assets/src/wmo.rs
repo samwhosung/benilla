@@ -480,14 +480,12 @@ impl AssetLoader for WmoModelLoader {
                 *slot = wmo_group_liquid_mesh(&gbytes);
             }
             for sub in subs {
-                // Lowercased: Bevy's loader lookup is case-sensitive, and an uppercase `.BLP` falls
-                // to type-based resolution, ambiguous with Bevy's own image loader.
-                let texture = sub.texture.as_deref().map(|t| {
-                    ctx.load::<Image>(format!(
-                        "mpq://{}",
-                        t.replace('\\', "/").to_ascii_lowercase()
-                    ))
-                });
+                // The material's texture name as `TextureCreate` takes it (`0x6c4c77`, `0x449d90`),
+                // lowercased and always `.blp`: Bevy's loader lookup is case-sensitive.
+                let texture = sub
+                    .texture
+                    .as_deref()
+                    .map(|t| ctx.load::<Image>(crate::texture_url(t, (true, true))));
                 submeshes.push(ModelSubmesh {
                     texture,
                     skin_slot: sub.skin_slot,

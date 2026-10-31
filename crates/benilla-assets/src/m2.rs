@@ -317,12 +317,10 @@ impl AssetLoader for M2ModelLoader {
             .unwrap_or_default()
             .into_iter()
             .map(|def| {
-                let texture = def.texture.as_deref().map(|t| {
-                    ctx.load::<Image>(format!(
-                        "mpq://{}",
-                        t.replace('\\', "/").to_ascii_lowercase()
-                    ))
-                });
+                let texture = def
+                    .texture
+                    .as_deref()
+                    .map(|t| ctx.load::<Image>(crate::texture_url(t, (true, true))));
                 let bone_pivot = skeleton_raw
                     .bones
                     .get(def.bone as usize)
@@ -361,12 +359,10 @@ impl AssetLoader for M2ModelLoader {
             .unwrap_or_default()
             .into_iter()
             .map(|def| {
-                let texture = def.texture.as_deref().map(|t| {
-                    ctx.load::<Image>(format!(
-                        "mpq://{}",
-                        t.replace('\\', "/").to_ascii_lowercase()
-                    ))
-                });
+                let texture = def
+                    .texture
+                    .as_deref()
+                    .map(|t| ctx.load::<Image>(crate::texture_url(t, (true, true))));
                 let bone_pivot = skeleton_raw
                     .bones
                     .get(def.bone as usize)
