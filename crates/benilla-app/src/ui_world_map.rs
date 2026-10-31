@@ -804,19 +804,19 @@ fn feed_world_map(
     data: Option<Res<WorldMapUiData>>,
     player: Res<Player>,
     map: Option<Res<CurrentMap>>,
-    world: benilla_world::world_point::WorldPoint,
-    areas: Option<Res<crate::area::AreaTableRes>>,
+    committed: Res<crate::area::CommittedZone>,
     mut memo: Local<crate::ui_script::VmMemo<FeedMemos>>,
 ) {
     vm.run(|script| {
-        let (Some(script), Some(data), Some(map), Some(areas)) = (script, data, map, areas) else {
+        let (Some(script), Some(data), Some(map)) = (script, data, map) else {
             return;
         };
         let wow = bevy_to_wow(player.pos);
         let (wx, wy) = (wow[0], wow[1]);
 
-        // CurrentArea is the MCNK leaf; its top zone is the zone-level area the reference matches.
-        let top_zone = world.area().and_then(|aid| areas.0.top_zone(aid));
+        // The resolver matches the rows against the stored zone `0xb4e314` (`0x4a6765`), which
+        // only the area poll's commit writes (`0x49479a`), never the live leaf.
+        let top_zone = committed.0;
         let player_sel = resolve_player_selection(&data, map.0, top_zone);
 
         // `GetWorldLocMapPosition` and the setter's landmark pass project synchronously with the
@@ -945,7 +945,10 @@ impl Plugin for WorldMapUiPlugin {
                 Update,
                 (
                     // After the script tick: a selection changed this tick projects on the next.
-                    feed_world_map.after(crate::ui_script::UiTick),
+                    feed_world_map
+                        .after(crate::ui_script::UiTick)
+                        // The commit's zone is read in its own frame (`0x4947ac` runs inside it).
+                        .after(crate::area::feed_zone_events),
                     // After the script tick, so the jump hit-tests this tick's frame rects.
                     dev_map_jump.after(crate::ui_script::UiTick),
                     drop_landmark_signals
@@ -1293,6 +1296,54 @@ mod player_zone_tests {
                 },
             }],
         }
+    }
+
+    /// `SetMapToCurrentZone`'s resolver `0x4a6650` matches the stored zone `0xb4e314` (`0x4a6765`),
+    /// which only the poll's commit writes (`0x49479a`): the live area under the player is not read.
+    #[test]
+    fn the_map_follows_the_committed_zone_not_the_live_area() {
+        use benilla_ui::script::UiScript;
+
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        let world = app.world_mut();
+        benilla_world::world_point::init_world_point_resources(world);
+        let mut player = crate::player::Player::default();
+        player.active = true;
+        world.insert_resource(player);
+        world.insert_resource(benilla_world::world_map::CurrentMap(0));
+        world.insert_resource(data());
+        world.insert_resource(crate::area::AreaTableRes(
+            benilla_formats::AreaTableCatalog::from_rows(Vec::new()),
+        ));
+        // Standing in Elwynn (12), the poll yet to commit it.
+        world.insert_resource(benilla_world::terrain_stream::CurrentArea(Some(12)));
+        let mut script = UiScript::new().expect("a VM");
+        // The VM's catalog the selection clamps against: Kalimdor bare, Azeroth with ten zones.
+        let zones = |n: usize| vec![benilla_ui::script::WorldMapZoneView::default(); n];
+        script.set_world_map_catalog(vec![
+            benilla_ui::script::WorldMapContinentView::default(),
+            benilla_ui::script::WorldMapContinentView {
+                zones: zones(10),
+                ..Default::default()
+            },
+        ]);
+        world.insert_non_send_resource(script);
+        let selection = |app: &mut App| {
+            app.world_mut()
+                .run_system_cached(feed_world_map)
+                .expect("the feed runs");
+            crate::script_calls::with_hosted_vm(app.world_mut(), |s| {
+                s.expect("a VM").world_map_selection()
+            })
+        };
+
+        // Before the first commit nothing is stored: the world-enter sync waits (`0x67e510`).
+        assert_eq!(selection(&mut app), (0, 0, None));
+
+        // The commit stores Lua zone 6 (area 905) while the live area is still Elwynn.
+        app.world_mut()
+            .insert_resource(crate::area::CommittedZone(Some(905)));
+        assert_eq!(selection(&mut app), (2, 6, None));
     }
 
     #[test]
