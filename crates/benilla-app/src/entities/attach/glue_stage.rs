@@ -6,15 +6,22 @@
 //! `IsReady(1, 1)` over the frame's scene model (`0x473083`, `0x710450`), which waits for each
 //! model's file (`0x710520`) and loads every texture it binds (`0x44acf0` with load set, which
 //! waits in `0x44ad50`), the character and pet attached to the scene included (`0x7104e8`), so
-//! the select's own frame holds until the stage is whole and the next frame drawn shows it. A read
-//! that fails ends its wait too: the reader thread tries `SFile::Read` ten times (`0x443423` to
-//! `0x443445`) and queues the read as finished either way (`0x4434a8`), whose drain marks it done
-//! (`0x443eed`), so `AsyncFileReadWait` (`0x443bd0`) returns; a texture slot with no texture is
-//! skipped (`0x71049f`). Here the reads stay on the asset server's threads
-//! and the frame waits on them, landing each file as it finishes and running the steps whose next
-//! files it names: the display models, their forms and the assembly. The wait ends when the stage
-//! is whole, or when nothing it waits on is still loading and one more pass leaves it short, as
-//! when a file failed. A create look builds on the asset server's own pace.
+//! the click's own frame holds until the stage is whole and the next frame drawn shows it. The
+//! same frame's paint waits a second time, for the body's composite (`OnUpdateModel` →
+//! `0x473190` → `0x477860(1)`); here the assembly composites on the calling thread
+//! (`SkinComposites::force`), inside this wait. A read that fails ends its wait too: the reader
+//! thread tries `SFile::Read` ten times (`0x443423` to `0x443445`) and queues the read as finished
+//! either way (`0x4434a8`), whose drain marks it done (`0x443eed`), so `AsyncFileReadWait`
+//! (`0x443bd0`) returns; a texture slot with no texture is skipped (`0x71049f`).
+//!
+//! Here the wait runs one frame after the click: the click's Lua runs in `Update`, so that frame
+//! still draws the old stage, and the next frame waits here, before its `Update` stands the new
+//! one. The reads stay on the asset server's threads and the frame waits on them, landing each
+//! file as it finishes and running the steps whose next files it names: the display models, their
+//! forms and the assembly. The wait ends when the stage is whole, or when nothing it waits on is
+//! still loading and one more pass leaves it short, as when a file failed. Each stage waits once:
+//! a new look, a new scene instance, or the same look again after the stage went away (a logout,
+//! a lost link, the create screen). A create look builds on the asset server's own pace.
 
 use std::time::{Duration, Instant};
 
@@ -57,8 +64,8 @@ pub(in crate::entities) fn plugin(app: &mut App) {
     }
 }
 
-/// The stage a select waited for: its look and its scene file.
-type StageKey = (Option<GlueLook>, Option<GlueSceneFile>);
+/// The stage a select waited for: its look, its scene file and the scene's instance.
+type StageKey = (Option<GlueLook>, Option<GlueSceneFile>, u64);
 
 /// Build the stage's character and pet; on a select's first frame, until its stage is whole.
 fn build_glue_stage(world: &mut World, mut waited: Local<Option<StageKey>>) {
@@ -66,8 +73,14 @@ fn build_glue_stage(world: &mut World, mut waited: Local<Option<StageKey>>) {
     let Some(preview) = world.get_resource::<GluePreview>() else {
         return;
     };
-    let key = (preview.look, preview.scene.clone());
-    if !matches!(key.0, Some(GlueLook::Select(_))) || waited.as_ref() == Some(&key) {
+    // Off a select the stage goes away (the world, the create screen, a lost link), and the same
+    // look back is a new build that waits again, as the list's own reselect rebuilds (`0x472950`).
+    if !matches!(preview.look, Some(GlueLook::Select(_))) {
+        *waited = None;
+        return;
+    }
+    let key = (preview.look, preview.scene.clone(), preview.stage);
+    if waited.as_ref() == Some(&key) {
         return;
     }
     *waited = Some(key);
@@ -463,6 +476,23 @@ mod tests {
         assert!(
             !landed(&app, &later),
             "a frame after the select's does not wait"
+        );
+    }
+
+    /// The same look back after the stage went away (here the look cleared, as off the glue
+    /// screens or on the create screen) waits again.
+    #[test]
+    fn the_same_select_after_the_stage_went_away_waits_again() {
+        let mut app = stage_app();
+        stand(&mut app, select(1), "a.slow");
+        app.update();
+        app.world_mut().resource_mut::<GluePreview>().look = None;
+        app.update();
+        let texture = stand(&mut app, select(1), "b.slow");
+        app.update();
+        assert!(
+            landed(&app, &texture),
+            "the reselect's frame waited for its stage"
         );
     }
 
