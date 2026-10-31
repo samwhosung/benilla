@@ -802,6 +802,53 @@ fn an_unnamed_held_unit_prints_the_unit_getters_miss() {
     assert_eq!(name(None), "Unknown");
 }
 
+/// A unit whose record name is empty reaches `GetObjectName`'s null-or-empty test
+/// (`0x6265eb`-`0x6265f2`) as it is (`GetUnitName` returns it unchanged, `0x609355`, `0x609341`),
+/// and falls to `UNKNOWNOBJECT` else `UKNOWNOBJECT` (`0x6265f4`-`0x62660c`), not to the getter's
+/// own "Unknown Being" miss.
+#[test]
+fn a_unit_with_an_empty_record_name_prints_the_unknown_object() {
+    let script = benilla_ui::script::UiScript::new().expect("VM");
+    let mut names = NameCache::default();
+    names.insert_creature(
+        77,
+        Some(crate::names::CreatureRecord {
+            name: String::new(),
+            subname: None,
+            creature_type: 1,
+            pet_family: 0,
+            rank: 0,
+            type_flags: 0,
+            pet_spell_list: 0,
+            civilian: false,
+            racial_leader: false,
+            display_id: 0,
+        }),
+    );
+    let (gameobjects, items) = (GameObjectTemplates::default(), Items::default());
+    let sources = NameSources {
+        names: &names,
+        gameobjects: &gameobjects,
+        items: &items,
+    };
+    let creature_guid = (0xF130u64 << 48) | (77u64 << 24) | 0x42;
+    let held = ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+        (2, 0x9),
+        (benilla_protocol::field::FIELD_OBJECT_ENTRY, 77),
+    ]));
+    let name =
+        |guid, store: Option<&ObjectStore>| logged_name(guid, store, &sources, Ask::Read, &script);
+    assert_eq!(name(creature_guid, Some(&held)), "UKNOWNOBJECT", "held");
+    assert_eq!(name(creature_guid, None), "UKNOWNOBJECT", "not held");
+
+    script
+        .lua()
+        .load("UNKNOWNOBJECT = \"Unknown\"")
+        .exec()
+        .expect("set");
+    assert_eq!(name(creature_guid, Some(&held)), "Unknown");
+}
+
 /// `GetObjectName` (`0x6264e0`) names a held object by its type mask: a game object by the record
 /// it holds (`0x5f8100`), an item, a bag included, from the item cache without asking
 /// (`0x55ba30` with no callback). No record, or an empty name (`0x6265ef`), is the miss.

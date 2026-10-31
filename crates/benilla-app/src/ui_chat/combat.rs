@@ -954,7 +954,8 @@ pub(crate) fn unknown_object(script: &benilla_ui::script::UiScript) -> String {
 /// One endpoint's name as `GetObjectName 0x6264e0` prints it: [`object_name`], else the miss of
 /// the getter it went through. A unit the client holds (type bit 3, `0x626526`) goes through
 /// `GetUnitName` (`0x626531`), whose miss is `UNKNOWNOBJECT` else the literal "Unknown Being"
-/// (`0x609324`-`0x60933c`); anything else misses as [`unknown_object`].
+/// (`0x609324`-`0x60933c`); anything else misses as [`unknown_object`], as does a unit whose
+/// record names it with an empty string (`0x609355`, `0x609341`, then `0x6265ef`).
 pub(crate) fn logged_name(
     guid: u64,
     store: Option<&ObjectStore>,
@@ -962,13 +963,14 @@ pub(crate) fn logged_name(
     ask: Ask<'_>,
     script: &benilla_ui::script::UiScript,
 ) -> String {
-    object_name(guid, store, sources, ask).unwrap_or_else(|| {
-        if store.is_some_and(is_unit) {
-            script.unknown_object_text()
-        } else {
-            unknown_object(script)
-        }
-    })
+    match object_name(guid, store, sources, ask) {
+        Some(name) if !name.is_empty() => name,
+        // A name every leg returns empty falls to the same test as a miss (`0x6265eb`-`0x6265f2`
+        // → `0x6265f4`), `GetUnitName`'s own fallback included: the record's empty name reaches it.
+        Some(_) => unknown_object(script),
+        None if store.is_some_and(is_unit) => script.unknown_object_text(),
+        None => unknown_object(script),
+    }
 }
 
 // ────────────────────────── the queued line, awaiting its names ───────────────────────
