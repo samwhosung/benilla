@@ -395,6 +395,8 @@ pub(crate) fn write(model: &mut Model, op: CursorOp) {
     let raised = segment.split_off(start.unwrap_or(0));
     let write = Box::new(CursorWrite { op, before, raised });
     if queued {
+        #[cfg(debug_assertions)]
+        super::census::vm_write("cursor");
         model.verb_events = None;
         model.push_waiting(super::calls::Waiting::Cursor {
             write,

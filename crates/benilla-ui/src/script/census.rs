@@ -7,7 +7,8 @@
 //! ([`super::UiScript::signal_point`]) or the apply's or turn's end, and refused there: a panic in
 //! tests, this crate's and the host's, which asks for it ([`refuse_sends`]), and in a live debug
 //! build only with `BENILLA_SEND_CENSUS_PANIC=1`, else counted alone. The panic goes on by default
-//! once a survey of the stock UI and a smoke run are clean. With
+//! once a survey of the stock UI and a smoke run are clean. A write of the VM's own lock bits or
+//! cursor made while a handler is held is refused the same way ([`vm_write`]). With
 //! `BENILLA_SEND_CENSUS` naming a file, each count is first appended to it as `kind count test
 //! site`, a whole suite's survey (`test` is the test's name under nextest, else its thread's, and
 //! `site` the frames of the app crate that held the first handler). A survey also gives every
@@ -328,6 +329,32 @@ pub fn lend_ends(wrote: bool, member: &str) -> bool {
         );
         after
     })
+}
+
+/// A write of the VM's own state, an item's lock bit or the cursor (`what`), made while something
+/// waits for the host ([`super::calls::Waiting`]): made while the innermost apply holds a handler
+/// or a queued signal, it is a write the reference makes after that signal's listeners ran, as
+/// `SignalEvent` (`0x703e50`) runs every listener before the verb goes on. The host makes its
+/// writes behind the point that runs them, so one made ahead of it panics where a send counted
+/// does ([`refusing`]), unless the thread is unwinding already.
+pub(crate) fn vm_write(what: &str) {
+    if std::thread::panicking() || !refusing() {
+        return;
+    }
+    let kind = CENSUS.with(|c| {
+        let c = c.borrow();
+        c.applying
+            .last()
+            .filter(|a| a.mark.is_some())
+            .map(|a| a.kind.clone())
+    });
+    if let Some(kind) = kind {
+        panic!(
+            "census: `{kind}` wrote the {what} while a handler it signalled was held, ahead of \
+             the point that runs it: `SignalEvent` (0x703e50) runs every listener before the \
+             verb goes on"
+        );
+    }
 }
 
 /// A signal point runs what the innermost apply held: its window closes, a send made in it

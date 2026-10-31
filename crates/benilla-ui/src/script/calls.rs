@@ -1641,9 +1641,11 @@ mod tests {
     /// `UnlockItem` (`0x495420`) clears the bit (`0x495449`) and signals `ITEM_LOCK_CHANGED`
     /// (`0x495455`) before it returns, so a step that unlocks two items in turn, as a refused move
     /// unlocks its two (`0x5e3ac0`, `0x5e3ad3`), shows the first signal's handlers the second item
-    /// still locked. Held for the host, they read the locks as each signal left them.
+    /// still locked. An engine step that makes the second write while the first's handlers are
+    /// held for the host writes ahead of their point, which the census refuses.
     #[test]
-    fn a_held_handler_reads_the_locks_its_signal_left() {
+    #[should_panic(expected = "wrote the lock while a handler it signalled was held")]
+    fn a_lock_write_ahead_of_a_held_handlers_point_is_refused() {
         let mut s = UiScript::new().unwrap();
         watch_locks(&s);
         s.seed_item_locks([1, 2]);
@@ -1651,10 +1653,6 @@ mod tests {
             s.unlock_item(1);
             s.unlock_item(2);
         });
-        let mut host = Stamping::default();
-        s.hosted(&mut host, |_| ());
-        assert_eq!(global::<String>(&s, "SEEN"), "01 00 ");
-        assert_eq!(s.item_locks(), Vec::<u64>::new());
     }
 
     /// A held verb segment carries its lock writes: the sell-slot clear (`0x4cd640`) unlocks its

@@ -79,6 +79,8 @@ impl Model {
         match &mut self.verb_events {
             Some(segment) => segment.push(Raised::Lock { guid, locked, was }),
             None if !self.script_calls.is_empty() => {
+                #[cfg(debug_assertions)]
+                super::census::vm_write("lock");
                 self.push_waiting(super::calls::Waiting::Lock { guid, locked, was });
             }
             None => {}
@@ -224,6 +226,8 @@ pub(crate) fn fan_out(lua: &Lua, raised: Vec<Raised>, how: Fan) {
                     .script_calls
                     .is_empty();
                 if waits {
+                    #[cfg(debug_assertions)]
+                    super::census::vm_write("cursor");
                     // Queued ahead of what its handlers leave waiting, as it was made before them.
                     let raised = write.raised.clone();
                     lua.app_data_mut::<Model>()
