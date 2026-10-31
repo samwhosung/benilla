@@ -1,11 +1,12 @@
 //! The boot with no WoW install: fatal. Fonts, art and the stock interface all come from the
 //! install, so a client without one is a window of textless buttons. The reference ships inside its
-//! install; its archive mount (`0x403740`, `0x403b00`) logs a missing base archive and goes on, and
-//! ends the process with a fatal error dialog (`SErrDisplayAppFatal2`, `0x403b6f`) only for one
-//! that is present and fails its checks.
+//! install, and its archive mount (`0x403740`, `0x403b00`) ends the process at the first base
+//! archive that will not open, a missing one included (`Failed to open archive %s: %s`,
+//! `0x4038ef`), or that is present and fails its checks (`SErrDisplayAppFatal2`, `0x403b6f`).
 //!
-//! Deviation: a boot with no install at all ends at a fatal error dialog, where the reference logs
-//! each missing archive and goes on (`0x403b00`), because nothing past this point can draw a word.
+//! Deviation: with no install found, the dialog names the folders searched and how to supply one
+//! where the reference names its first missing archive, because benilla does not ship inside an
+//! install and the player has to say where theirs is.
 //!
 //! [`require`] is the decision, pure; [`fail`] is the exit, which shows a native dialog only to a
 //! person: an [unattended](crate::run_mode::unattended) run prints the same message and exits.
@@ -26,8 +27,8 @@ impl NoInstall {
         &self.message
     }
 
-    /// A `Data` folder whose archives will not open, a corrupt one or none the chain knows: as fatal
-    /// as no folder, the case the reference's `0x403b6f` covers for a base archive.
+    /// A `Data` folder whose archives will not open, a base archive missing or corrupt: as fatal as
+    /// no folder, as the reference's `0x4038ef` and `0x403b6f` are for a base archive.
     pub(crate) fn unreadable(data_dir: &std::path::Path, err: &anyhow::Error) -> Self {
         Self {
             title: "benilla: the WoW install cannot be read",
