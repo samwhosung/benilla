@@ -993,7 +993,7 @@ mod tests {
     }
 
     /// `0x651993`-`0x65199f`: a shrunken sector reads only under `0xff00` exactly `0x200`; the
-    /// implode flag alone, with `0x200` or any other codec bit fails the read (`0x651a76`).
+    /// implode flag, alone or with `0x200`, or any other codec bit fails the read (`0x651a76`).
     #[test]
     fn a_shrunken_sector_reads_only_under_exactly_the_compress_flag() {
         let plain = three_sector_plain();
