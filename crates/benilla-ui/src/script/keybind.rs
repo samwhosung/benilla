@@ -276,7 +276,7 @@ impl KeybindState {
     /// `SetBinding(key[, command])` on the live set: refused only for a key string the validator
     /// rejects (`0x4b762c`). The command is never read (`0x4b7490`), so a name no `Bindings.xml`
     /// declared is stored and answered like any other.
-    fn set_binding(&mut self, key: &str, command: Option<&str>) -> bool {
+    pub(super) fn set_binding(&mut self, key: &str, command: Option<&str>) -> bool {
         let Some(key) = normalize_binding_key(key) else {
             return false;
         };

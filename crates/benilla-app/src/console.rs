@@ -320,8 +320,9 @@ fn register<'a>(
 
 /// The commands `ConsoleExec` runs inside the call on the VM's state, listed by `help` and never
 /// run here: `ConsoleVar.cpp`'s three that write a CVar (`0x63d3d0`-`0x63d40d`, category 5 with
-/// these helps) and `gxRestart` (`0x63b360`-`0x63b36e`, category 1, no help).
-const VM_COMMANDS: [(&str, ConsoleCategory, Option<&str>); 4] = [
+/// these helps), `gxRestart` (`0x63b360`-`0x63b36e`, category 1, no help) and `bind` (`0x4b6050`,
+/// category 5, no help).
+const VM_COMMANDS: [(&str, ConsoleCategory, Option<&str>); 5] = [
     ("set", DEFAULT, Some("Set the value of a CVar")),
     (
         "cvar_reset",
@@ -334,6 +335,7 @@ const VM_COMMANDS: [(&str, ConsoleCategory, Option<&str>); 4] = [
         Some("Set the value of a CVar to it's coded default value"),
     ),
     ("gxRestart", GRAPHICS, None),
+    ("bind", DEFAULT, None),
 ];
 
 /// The built-ins: `ConsoleVar.cpp`'s `cvarlist` (`0x63d423`), then `RegisterBuiltinCommands`'
@@ -812,19 +814,23 @@ mod tests {
         assert_eq!(asked, [window], "the primary window is asked to close");
     }
 
-    /// `gxRestart` registers in category 1 with no help (`0x63b36e`), so `help` lists and answers
-    /// it though `ConsoleExec` runs it.
+    /// `gxRestart` (category 1) and `bind` (category 5) register with no help (`0x63b36e`,
+    /// `0x4b6050`), so `help` lists and answers them though `ConsoleExec` runs them.
     #[test]
-    fn help_knows_gx_restart() {
+    fn help_knows_gx_restart_and_bind() {
         let mut app = console_app();
-        let graphics = run(&mut app, "help graphics");
-        assert!(graphics[1..]
-            .iter()
-            .any(|l| l.split(", ").any(|n| n == "gxRestart")));
-        let default = run(&mut app, "help default");
-        assert!(!default[1..]
-            .iter()
-            .any(|l| l.split(", ").any(|n| n == "gxRestart")));
+        let listed = |app: &mut App, category: &str, name: &str| {
+            run(app, &format!("help {category}"))[1..]
+                .iter()
+                .any(|l| l.split(", ").any(|n| n == name))
+        };
+        assert!(listed(&mut app, "graphics", "gxRestart"));
+        assert!(listed(&mut app, "default", "bind"));
+        assert!(!listed(&mut app, "default", "gxRestart"));
+        assert_eq!(
+            run(&mut app, "help bind"),
+            ["Help for command bind:", "     bind No help yet"]
+        );
         assert_eq!(
             run(&mut app, "help GXRESTART"),
             ["Help for command GXRESTART:", "     GXRESTART No help yet"]

@@ -9,7 +9,8 @@
 //! CVar name, `cvarlist`, the host's registered commands, an unknown word) goes to the host's
 //! executor, which reads it with the same [`console_word`].
 //!
-//! `gxRestart` (`0x639f60`) runs here too, the restart Lua's `RestartGx()` raises.
+//! Two more run here because their effect is the VM's: `gxRestart` (`0x639f60`), the restart Lua's
+//! `RestartGx()` raises, and `bind` (`0x4b60b0`), which writes the live key table.
 
 use mlua::{Lua, Value};
 
@@ -149,6 +150,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             if word.eq_ignore_ascii_case("gxrestart") {
                 return super::cvars::restart_gx(lua);
             }
+            if word.eq_ignore_ascii_case("bind") {
+                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                bind_command(&mut model, rest);
+                return Ok(());
+            }
             let ran = {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
                 run_cvar_command(&mut model, word, rest)
@@ -162,6 +168,27 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
     Ok(())
+}
+
+/// The key buffer of `bind` (`push 0x20`, `0x4b60d2`): 31 bytes of text.
+const BIND_KEY_BYTES: usize = 0x20;
+
+/// `bind` (`0x4b60b0`): no argument does nothing (`0x4b60b9`); else the key is the first space-split
+/// token (`0x4b60dc`, delimiters `" "` at `0x82ee00`, a longer one cut at 31 bytes and skipped to
+/// its space) and the rest of the line, as the tokenizer left it, is the command, handed to
+/// `SetKeyBinding(3, key, rest)` on the live set (`0x4b60ed`). A key the validator refuses leaves
+/// the set alone (`0x4b762c`), an empty rest unbinds the key, nothing is printed and no
+/// `UPDATE_BINDINGS` is signalled (only the Lua `SetBinding` does, `0x4b805b`).
+fn bind_command(model: &mut Model, rest: &str) {
+    if rest.is_empty() {
+        return;
+    }
+    let mut cursor = rest.as_bytes();
+    let key = s_str_tokenize(&mut cursor, BIND_KEY_BYTES, b" ");
+    let command = String::from_utf8_lossy(cursor);
+    model
+        .keybinds
+        .set_binding(&String::from_utf8_lossy(&key), Some(&command));
 }
 
 /// Run `word` if it is one of the commands that write a CVar; `false` hands the line on.
@@ -386,6 +413,44 @@ mod tests {
         assert_eq!(s.take_restart_gx_asks(), 2);
         s.run("RestartGx()").unwrap();
         assert_eq!(s.take_restart_gx_asks(), 1);
+    }
+
+    /// `bind` (`0x4b60b0`): the key is the first space-split token of at most 31 bytes, the rest is
+    /// the command, set on the live table with no `UPDATE_BINDINGS`.
+    #[test]
+    fn bind_sets_a_key_on_the_live_set_and_signals_nothing() {
+        let s = UiScript::new().unwrap();
+        crate::script::tick::heard::listen(&s, &["UPDATE_BINDINGS"], None);
+        let action = |key: &str| {
+            s.eval::<String>(&format!("return GetBindingAction({key:?})"))
+                .unwrap()
+        };
+        s.run("ConsoleExec('bind F SITORSTAND')").unwrap();
+        assert_eq!(action("F"), "SITORSTAND");
+        // The command word is case-blind; the key is not (`0x64a480`), the rest is kept whole.
+        s.run("ConsoleExec('BIND SHIFT-G do this')").unwrap();
+        assert_eq!(action("SHIFT-G"), "do this");
+        s.run("ConsoleExec('bind H  A')").unwrap();
+        assert_eq!(
+            action("H"),
+            " A",
+            "the delimiter after the key is one space"
+        );
+        // An empty rest unbinds; no argument and a refused key change nothing.
+        s.run("ConsoleExec('bind F')").unwrap();
+        assert_eq!(action("F"), "");
+        s.run("ConsoleExec('bind') ConsoleExec('bind UNKNOWNKEY JUMP')")
+            .unwrap();
+        assert_eq!(action("UNKNOWNKEY"), "");
+        // A key over 0x20 bytes is cut at 31 and skipped to its space: the cut key is refused, and
+        // the rest after that space is the command, so nothing is bound.
+        let long = format!("SHIFT-{}", "X".repeat(40));
+        s.run(&format!("ConsoleExec('bind {long} JUMP')")).unwrap();
+        assert_eq!(action(&long[..31]), "");
+        assert!(
+            crate::script::tick::heard::take(&s).is_empty(),
+            "no UPDATE_BINDINGS"
+        );
     }
 
     fn seeded(name: &str, value: &str, default: &str) -> crate::script::SeededCvar {
