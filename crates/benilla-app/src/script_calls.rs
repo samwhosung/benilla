@@ -194,9 +194,12 @@ pub(crate) struct EngineSelect {
 }
 
 impl ScriptCallHost<'_, '_> {
-    /// Count the census's sends on this host's channel ([`benilla_ui::script::census`]).
+    /// Count the census's sends on this host's channel ([`benilla_ui::script::census`]), which a
+    /// test refuses.
     #[cfg(debug_assertions)]
     fn census_probe(&self) {
+        #[cfg(test)]
+        benilla_ui::script::census::refuse_sends();
         if let Some(net) = self.census.as_deref() {
             let sent = net.0.clone();
             benilla_ui::script::census::probe(move || sent.len());

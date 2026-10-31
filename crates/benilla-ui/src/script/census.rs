@@ -4,7 +4,10 @@
 //! send made while one waits goes out ahead of the packets its handler sends in 1.12.1. Such a
 //! send is counted under its call's kind, or `turn@` and its turn's caller
 //! ([`super::UiScript::host_out`]), from the first handler held to the signal point that runs it
-//! ([`super::UiScript::signal_point`]) or the apply's or turn's end, and panics there. With
+//! ([`super::UiScript::signal_point`]) or the apply's or turn's end, and refused there: a panic in
+//! tests, this crate's and the host's, which asks for it ([`refuse_sends`]), and in a live debug
+//! build only with `BENILLA_SEND_CENSUS_PANIC=1`, else counted alone. The panic goes on by default
+//! once a survey of the stock UI and a smoke run are clean. With
 //! `BENILLA_SEND_CENSUS` naming a file, each count is first appended to it as `kind count test
 //! site`, a whole suite's survey (`test` is the test's name under nextest, else its thread's, and
 //! `site` the frames of the app crate that held the first handler). A survey also gives every
@@ -44,6 +47,8 @@ struct Census {
     /// Whether lends take ticks of their own and are scanned for writes: set by [`watch_writes`],
     /// else by the survey file.
     watching: bool,
+    /// Whether a counted send panics: set by [`refuse_sends`].
+    refusing: bool,
 }
 
 /// An apply or an engine turn running.
@@ -97,14 +102,31 @@ struct Counted {
     n: usize,
 }
 
-/// Panic over `counted`, past the census's borrow, unless the thread is unwinding already.
+/// Panic over `counted`, past the census's borrow, where a send counted panics ([`refusing`]),
+/// unless the thread is unwinding already.
 fn refuse(counted: Option<Counted>) {
     if let (Some(Counted { kind, n }), false) = (counted, std::thread::panicking()) {
+        if !refusing() {
+            return;
+        }
         panic!(
             "census: `{kind}` sent {n} while a handler it signalled was held, ahead of the point \
              that runs it: `SignalEvent` (0x703e50) runs every listener before the verb goes on"
         );
     }
+}
+
+/// Whether a counted send panics: in this crate's tests, where the host asked ([`refuse_sends`]),
+/// or where `BENILLA_SEND_CENSUS_PANIC=1` asks a live debug build.
+fn refusing() -> bool {
+    cfg!(test)
+        || CENSUS.with(|c| c.borrow().refusing)
+        || std::env::var_os("BENILLA_SEND_CENSUS_PANIC").is_some_and(|v| v == "1")
+}
+
+/// A send counted on this thread panics from now on: the host's tests ask for it.
+pub fn refuse_sends() {
+    CENSUS.with(|c| c.borrow_mut().refusing = true);
 }
 
 /// Append `kind n test site` to the file `BENILLA_SEND_CENSUS` names, if it names one.
