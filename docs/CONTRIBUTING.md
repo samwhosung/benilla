@@ -189,7 +189,10 @@ out of scope is closed with the reason.
   crate's tests, the quickest loop. `scripts/check.sh` verifies a round of work: the crates your
   branch changed against main and their dependents, so on a clean clone it has nothing to check; `scripts/gates.sh` is the full chain, and it opens a window for the engine boot
   checks, so it needs a display. `WOW_STOCK_UI=1` boots a dev build on the stock interface
-  alone, without benilla's layer. Work on a branch.
+  alone, without benilla's layer. A dev build panics when a script call or an engine turn sends a
+  packet, or writes an item's lock or the cursor, while an event handler it raised has yet to
+  run, which 1.12.1 runs first (`crates/benilla-ui/src/script/census.rs`);
+  `BENILLA_SEND_CENSUS_PANIC=0` turns that off. Work on a branch.
 
 ## Reporting a bug
 

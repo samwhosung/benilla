@@ -6,10 +6,9 @@
 //! ([`super::UiScript::host_out`]), from the first handler held to the signal point that runs it
 //! ([`super::UiScript::signal_point`]) or the apply's or turn's end, and refused there: a panic in
 //! tests, this crate's and the host's, which asks for it ([`refuse_sends`]), and in a live debug
-//! build only with `BENILLA_SEND_CENSUS_PANIC=1`, else counted alone. The panic goes on by default
-//! once a survey of the stock UI and a smoke run are clean. A write of the VM's own lock bits or
-//! cursor made while a handler is held or a queued signal waits is refused the same way
-//! ([`vm_write`]). With
+//! build unless `BENILLA_SEND_CENSUS_PANIC=0` turns it off, when it is counted alone. A write of
+//! the VM's own lock bits or cursor made while a handler is held or a queued signal waits is
+//! refused the same way ([`vm_write`]). With
 //! `BENILLA_SEND_CENSUS` naming a file, each count is first appended to it as `kind count test
 //! site`, a whole suite's survey (`test` is the test's name under nextest, else its thread's, and
 //! `site` the frames of the app crate that held the first handler). A survey also gives every
@@ -119,11 +118,17 @@ fn refuse(counted: Option<Counted>) {
 }
 
 /// Whether a counted send panics: in this crate's tests, where the host asked ([`refuse_sends`]),
-/// or where `BENILLA_SEND_CENSUS_PANIC=1` asks a live debug build.
+/// and in a live debug build unless `BENILLA_SEND_CENSUS_PANIC=0` turns it off ([`live_refuses`]).
 fn refusing() -> bool {
     cfg!(test)
         || CENSUS.with(|c| c.borrow().refusing)
-        || std::env::var_os("BENILLA_SEND_CENSUS_PANIC").is_some_and(|v| v == "1")
+        || live_refuses(std::env::var_os("BENILLA_SEND_CENSUS_PANIC").as_deref())
+}
+
+/// Whether a live debug build panics over a count, given `BENILLA_SEND_CENSUS_PANIC`: unless it is
+/// `0`.
+fn live_refuses(switch: Option<&std::ffi::OsStr>) -> bool {
+    switch.is_none_or(|v| v != "0")
 }
 
 /// A send counted on this thread panics from now on: the host's tests ask for it.
@@ -448,6 +453,16 @@ mod tests {
             s.fire_event("PLAYER_TARGET_CHANGED", vec![]);
             sent.set(sent.get() + 1);
         });
+    }
+
+    /// A live debug build panics over a count by default, and `BENILLA_SEND_CENSUS_PANIC=0` alone
+    /// turns it off.
+    #[test]
+    fn a_live_debug_build_refuses_unless_the_switch_is_zero() {
+        use std::ffi::OsStr;
+        assert!(super::live_refuses(None));
+        assert!(super::live_refuses(Some(OsStr::new("1"))));
+        assert!(!super::live_refuses(Some(OsStr::new("0"))));
     }
 
     /// The survey's listener, hidden, holds each signal for its handler: a send made while it
