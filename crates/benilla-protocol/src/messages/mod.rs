@@ -317,7 +317,23 @@ pub struct Billing {
     pub time_rested: u32,
 }
 
+/// The billing fields one response delivered. `GetUInt32` writes nothing on a short read
+/// (`0x418eb0`), so a field the body was too short for keeps its old value (`0x5b4207`-`0x5b4223`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BillingRead {
+    pub time_remaining: Option<u32>,
+    pub plan_flags: Option<u8>,
+    pub time_rested: Option<u32>,
+}
+
 impl Billing {
+    /// Overwrite the fields `read` delivered and keep the rest.
+    pub fn apply(&mut self, read: BillingRead) {
+        self.time_remaining = read.time_remaining.unwrap_or(self.time_remaining);
+        self.plan_flags = read.plan_flags.unwrap_or(self.plan_flags);
+        self.time_rested = read.time_rested.unwrap_or(self.time_rested);
+    }
+
     /// A recurring subscription: the play-time warning never arms (`0x48f654`), and the glue's
     /// `GetBillingTimeRemaining` answers 0 (`0x46dc0a`). vmangos `BILLING_FLAG_RECURRING`.
     pub const RECURRING: u8 = 0x02;

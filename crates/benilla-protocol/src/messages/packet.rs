@@ -71,8 +71,8 @@ pub enum ServerPacket {
         result: u8,
         /// Our login-queue place; only for [`super::AUTH_WAIT_QUEUE`] with a long enough body.
         queue_position: Option<u32>,
-        /// The billing group; `None` on a body too short for it.
-        billing: Option<super::Billing>,
+        /// The billing fields read; `None` when under 5 bytes follow the result (`0x5b41f9`).
+        billing: Option<super::BillingRead>,
     },
     CharEnum {
         characters: Vec<Character>,

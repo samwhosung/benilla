@@ -174,7 +174,7 @@ impl WorldSession {
                 ..
             } = packet
             {
-                session.link.billing = billing;
+                session.link.billing.apply(billing);
             }
             match packet {
                 ServerPacket::AuthResponse { result, .. } if result == messages::AUTH_OK => break,
