@@ -92,9 +92,8 @@ thread_local! {
     static PARKED_CLOSES: std::cell::Cell<u16> = const { std::cell::Cell::new(0) };
 }
 
-/// Run `f`, the interface half of `window`'s close that a handler or a lane's earlier item held
-/// back ([`crate::lanes::behind`]): its signals, and the VM's view of the window, at the close's
-/// place on its lane. The engine half, the cell, the latch and the sends, ran where the close was
+/// Run `f`, the interface half of `window`'s close, run as a step at the close's place on its lane
+/// ([`crate::lanes::step`]): its signals, and the VM's view of the window. The engine half, the cell, the latch and the sends, ran where the close was
 /// entered, as the reference runs them inside the handler, so the live window may by now be a
 /// session a later open began. A close verb the half's listeners re-enter ([`parked_close`])
 /// therefore acts on the session this close closed, never on that newer one.
