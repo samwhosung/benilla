@@ -426,12 +426,11 @@ fn list(
     };
     // The loot master's name as the setter reads it, from the cache with no callback (`0x4e878f`).
     let cached_name = |guid: u64| names.resolve_player(guid, Ask::Read).map(str::to_string);
-    // Taken before `apply_list` consumes the list; `seat_new_records` then treats a member with
-    // no record as new, the reference's `srcRec == 0`.
-    let seats: Vec<(u64, bool)> = members
-        .iter()
-        .map(|m| (m.guid, m.listed_online()))
-        .collect();
+    // The two tables as this list finds them, ahead of `apply_list`: `seat_new_records` treats a
+    // member absent from one as new to it, the reference's `srcRec == 0` (party) and a raid row
+    // missing from the old roster (raid).
+    let held_slots: Vec<u64> = group.party_slots().map(|m| m.guid).collect();
+    let held_rows: Vec<u64> = group.raid_rows().collect();
     let shown = group.apply_list_awaiting(
         group_type,
         own_flags,
@@ -446,7 +445,7 @@ fn list(
     if shown.invite_accept {
         sounds.push_cue(INVITE_ACCEPT_SOUND);
     }
-    seat_new_records(group, &seats, index, net_commands);
+    seat_new_records(group, &held_slots, &held_rows, index, net_commands);
     // The roster writer's last send, after its stats requests (`0x4bac33`).
     if shown.ask_raid_targets {
         let _ = net_commands.0.send(ClientCommand::RequestRaidTargets);
@@ -454,29 +453,45 @@ fn list(
     quest.bump_reask();
 }
 
-/// `SMSG_GROUP_LIST`'s record leg (`0x4e82d0`, raid twin `0x4ba5f0`): a known member's record
-/// carries over, its online bit rewritten by [`GroupState::apply_list`], and nothing is sent; a new
-/// member gets the 1/1 placeholder and, when we hold no object for them, a stats request
-/// (`0x4e83f1`, raid `0x4bab6e`). A listed member therefore owns a record, so an unseen one shows
-/// full bars, not 0/0, until their stats land.
+/// `SMSG_GROUP_LIST`'s two record legs, each its own search and its own request, in the order the
+/// handler runs them. The party leg (`0x4e82d0`) seats the new slot members, in seat order: a
+/// member with no old slot gets the 1/1 placeholder and, when we hold no object for them, a stats
+/// request (`0x4e83f1`); a known slot's record carries over, its online bit rewritten by
+/// [`GroupState::apply_list`], and nothing is sent. The raid leg (`0x4ba5f0`) then asks the same for
+/// each row the old roster lacked, in row order (`0x4bab6e`). A raid member in our subgroup is in
+/// both tables and is asked for twice. A listed member owns a record, so an unseen one shows full
+/// bars, not 0/0, until their stats land.
 fn seat_new_records(
     group: &mut GroupState,
-    seats: &[(u64, bool)],
+    held_slots: &[u64],
+    held_rows: &[u64],
     index: &GuidIndex,
     net_commands: &NetCommands,
 ) {
-    for (guid, online) in seats {
-        // `apply_list` kept only the staying members' records, so a missing one means new.
-        if group.stats.contains_key(guid) {
-            continue;
-        }
+    // Every listed member owns a record.
+    for m in group.members.clone() {
         group
             .stats
-            .insert(*guid, PartyMemberStatsInfo::placeholder(*online));
-        if !index.0.contains_key(guid) {
+            .entry(m.guid)
+            .or_insert_with(|| PartyMemberStatsInfo::placeholder(m.listed_online()));
+    }
+    let slots: Vec<u64> = group.party_slots().map(|m| m.guid).collect();
+    for guid in slots.into_iter().filter(|g| !held_slots.contains(g)) {
+        if !index.0.contains_key(&guid) {
             let _ = net_commands
                 .0
-                .send(ClientCommand::RequestPartyMemberStats { guid: *guid });
+                .send(ClientCommand::RequestPartyMemberStats { guid });
+        }
+    }
+    let rows: Vec<u64> = group.raid_rows().collect();
+    for guid in rows
+        .into_iter()
+        .filter(|g| *g != 0 && !held_rows.contains(g))
+    {
+        if !index.0.contains_key(&guid) {
+            let _ = net_commands
+                .0
+                .send(ClientCommand::RequestPartyMemberStats { guid });
         }
     }
 }
@@ -536,8 +551,10 @@ impl SnapshotPlace<'_, '_> {
 /// range): for a roster member, snapshot the live descriptor into their record (`0x5f0880`), with
 /// the viewer's `zone` and the object's `position` ([`SnapshotPlace`]), their pet's block too
 /// while `held` finds it, with the name `names` holds for it or `UNKNOWNOBJECT` on a miss
-/// ([`snapshot_pet_name`]), then request their stats (`0x4e8646`). Nothing happens off the roster
-/// or without an object, since the hook is a virtual on the object.
+/// ([`snapshot_pet_name`]), then request their stats once per table that holds them: the party
+/// slot (`0x4e8646`), then the raid row (`0x4bae27`), so a raid member in our subgroup is asked
+/// for twice. Nothing happens off both tables or without an object, since the hook is a virtual on
+/// the object.
 #[allow(clippy::too_many_arguments)] // the snapshot's reads, each as of the deactivate
 pub(crate) fn member_deactivated<'a>(
     guid: u64,
@@ -552,7 +569,11 @@ pub(crate) fn member_deactivated<'a>(
     let Some((store, position)) = object else {
         return;
     };
-    if !group.members.iter().any(|m| m.guid == guid) {
+    // The two legs' searches (`0x4e85d0` then `0x4badc0`, mode 0): the party slots, then the raid
+    // roster, our own row among its rows.
+    let in_party = group.party_slots().any(|m| m.guid == guid);
+    let in_raid = group.raid_rows().any(|g| g == guid);
+    if !in_party && !in_raid {
         return;
     }
     let pet_guid = store.0.unit_pet_guid();
@@ -568,15 +589,24 @@ pub(crate) fn member_deactivated<'a>(
         zone,
         position,
     );
-    let _ = net_commands
-        .0
-        .send(ClientCommand::RequestPartyMemberStats { guid });
+    // Each leg that finds the guid snapshots into its own record and asks (`0x4e8646`,
+    // `0x4bae27`); benilla keeps one record, so the snapshot is written once.
+    if in_party {
+        let _ = net_commands
+            .0
+            .send(ClientCommand::RequestPartyMemberStats { guid });
+    }
+    if in_raid {
+        let _ = net_commands
+            .0
+            .send(ClientCommand::RequestPartyMemberStats { guid });
+    }
 }
 
 /// [`member_deactivated`] for every streamed roster member: a cross-map transfer's teardown, where
 /// the reference frees each object without its release (`0x467700` → `0x467800`), and the player's
-/// destructor runs the same roster search in mode 0 (`0x5dd600`, at `0x5dd6a0` → `0x4e85d0`): the
-/// record built (`0x4e8630`) and the stats asked, with no `PARTY_MEMBER_DISABLE`, which only the
+/// destructor runs the same two searches in mode 0 (`0x5dd600`, at `0x5dd6a0` → `0x4e85d0` and
+/// `0x5dd6ab` → `0x4badc0`): the record built (`0x4e8630`) and the stats asked, with no `PARTY_MEMBER_DISABLE`, which only the
 /// release signals (`0x5e9b78`).
 #[allow(clippy::too_many_arguments)] // the snapshot's reads, each as of the teardown
 pub(crate) fn roster_deactivated(
@@ -1565,6 +1595,103 @@ mod tests {
             group.stats.get(&far).map(|r| (r.cur_hp, r.max_hp)),
             Some((Some(900), Some(1100))),
             "and the record it already had survives the resync"
+        );
+    }
+
+    /// A raid member's deactivate runs the party search then the raid search, each its own request
+    /// (`0x5e9ac1`, `0x5e9acf`; `0x4e8646`, `0x4bae27`): our subgroup's members sit in both tables
+    /// and are asked for twice, another subgroup's once, and a party member once.
+    #[test]
+    fn a_raid_members_despawn_asks_once_per_table_that_holds_them() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let net = NetCommands(tx);
+        let (mate, other, me) = (0x11u64, 0x22u64, 0x99u64);
+        let far = GroupMemberEntry {
+            flags: 1,
+            ..member(other, "Brisca")
+        };
+        let mut raid = GroupState::default();
+        raid.apply_list(
+            GROUPTYPE_RAID,
+            0,
+            vec![member(mate, "Aldwyn"), far],
+            mate,
+            None,
+            Some(me),
+        );
+        let mut party = grouped(&[member(mate, "Aldwyn")]);
+        let store = ObjectStore(benilla_protocol::messages::ObjectFields::from_pairs(&[]));
+        let despawn = |group: &mut GroupState, guid: u64| {
+            member_deactivated(
+                guid,
+                group,
+                Some((&store, (0, 0))),
+                0,
+                |_| None,
+                &NameCache::default(),
+                None,
+                &net,
+            );
+            asked(&rx)
+        };
+        assert_eq!(despawn(&mut raid, mate), vec![mate, mate], "both tables");
+        assert_eq!(despawn(&mut raid, other), vec![other], "the raid row alone");
+        assert_eq!(
+            despawn(&mut raid, me),
+            vec![me],
+            "our own row is a raid row"
+        );
+        assert_eq!(despawn(&mut raid, 0x77), Vec::<u64>::new(), "off both");
+        assert_eq!(despawn(&mut party, mate), vec![mate], "no raid roster");
+    }
+
+    /// A group list runs the party leg then the raid leg, each testing its own old table
+    /// (`0x4e83f1`, `0x4bab6e`): a subgroup mate we do not hold is asked for in both, in that
+    /// order; a resent list asks nothing; a member who moves into our subgroup is new to the
+    /// party slots only.
+    #[test]
+    fn a_raid_list_asks_the_party_leg_then_the_raid_leg() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let net = NetCommands(tx);
+        let (mut group, mut quest) = (GroupState::default(), QuestGiver::default());
+        let names = NameCache::default();
+        let (mate, other, near) = (0x11u64, 0x22u64, 0x33u64);
+        let mut index = GuidIndex::default();
+        let mut world = bevy::ecs::world::World::new();
+        index.0.insert(near, world.spawn_empty().id());
+        let mut send = |group: &mut GroupState, other_flags: u8| {
+            let far = GroupMemberEntry {
+                flags: other_flags,
+                ..member(other, "Brisca")
+            };
+            list(
+                group,
+                &MessageSounds::default(),
+                &mut quest,
+                GROUPTYPE_RAID,
+                0,
+                vec![member(mate, "Aldwyn"), far, member(near, "Cora")],
+                mate,
+                None,
+                &SelfGuid::default(),
+                &names,
+                &index,
+                &net,
+            );
+        };
+        send(&mut group, 1);
+        assert_eq!(
+            asked(&rx),
+            vec![mate, mate, other],
+            "the party leg's seats, then the raid leg's new rows; the held object is skipped"
+        );
+        send(&mut group, 1);
+        assert!(asked(&rx).is_empty(), "a resent list asks nothing");
+        send(&mut group, 0);
+        assert_eq!(
+            asked(&rx),
+            vec![other],
+            "new to the party slots, known to the raid"
         );
     }
 
