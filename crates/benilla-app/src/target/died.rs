@@ -1019,7 +1019,11 @@ mod tests {
             c.cast(FIREBALL);
             c.world().resource_mut::<AutoRepeatActive>().0 = Some(SHOOT);
             crate::script_calls::insert_test_vm(c.world());
-            let act = if clears { "ClearTarget()" } else { "RandomRoll(1, 1)" };
+            let act = if clears {
+                "ClearTarget()"
+            } else {
+                "RandomRoll(1, 1)"
+            };
             c.lua(&format!(
                 r#"local f = CreateFrame("Frame") f:RegisterEvent("SPELLCAST_FAILED")
                 f:SetScript("OnEvent", function() {act} end)"#
