@@ -2122,6 +2122,22 @@ fn the_patch_verbs_return_to_the_login_screen_and_apply_fails_with_the_message()
     ));
 }
 
+/// `SurveyNotificationDone` (`0x46ddd0` → EndSurvey `0x473e30`) reports the login authenticated
+/// (`0x473ef5`): with a logon on the screen the cells move to `LOGIN_AUTHENTICATED` and the final
+/// latch arms; at the idle login screen nothing moves.
+#[test]
+fn the_survey_verb_authenticates_a_logon_on_the_screen_only() {
+    let shared = SharedGlueMgr::default();
+    let s = seated(&shared);
+    s.run("SurveyNotificationDone(1)").unwrap();
+    assert!(!shared.get().auth_final);
+    assert_ne!(shared.get().cells.state, LOGIN_AUTHENTICATED);
+    shared.get_mut().state = ScreenState::Logon;
+    s.run("SurveyNotificationDone()").unwrap();
+    assert!(shared.get().auth_final);
+    assert_eq!(shared.get().cells.state, LOGIN_AUTHENTICATED);
+}
+
 /// A handler inside a verb's fan-out that calls another verb runs that verb's call there, and the
 /// first verb's operation begins only after its dialog's handlers have run (`0x46b8b7` after the
 /// signal at `0x46b8af`): the `CANCEL` dialog's button pressed from its own `OPEN_STATUS_DIALOG`

@@ -226,6 +226,9 @@ pub enum GlueCall {
     /// `PatchDownloadApply()` (`0x46d410` → `0x4749f0`) with no `wow-patch.mpq` to open: the
     /// failure dialog for code 4 (`0x474a43`, `0x474ab0`).
     ApplyPatch,
+    /// `SurveyNotificationDone()` (`0x46ddd0` → EndSurvey `0x473e30`): the logon listener's
+    /// slot 4 with `LOGIN_STATE_AUTHENTICATED` (`0x473ef5`).
+    SurveyDone,
 }
 
 /// A glue string by its global's key, or as given.
@@ -1191,6 +1194,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             super::cvars::written(lua)
         })?,
     )?;
+    // The flag argument 1 (`0x6f1c10`, default 0, `0x46ddd7`) only sends the kept survey result
+    // (`0x473df0`), which benilla never keeps. EndSurvey (`0x473e30`) always runs: it frees the
+    // result and file (none held), then reports the login authenticated (`0x473ef5`) in the host
+    // and stores state 1 in `0xb41da0`, the screen state the host models. One result without a
+    // push (`0x46ddea`): the stack's top, the last argument, or nil with none.
+    g.set(
+        "SurveyNotificationDone",
+        lua.create_function(|lua, args: MultiValue| {
+            call(lua, GlueCall::SurveyDone);
+            Ok(args.back().cloned().unwrap_or(Value::Nil))
+        })?,
+    )?;
+
     // One value (`0x46dbc0`): 1 when the `movieSubtitle` CVar's integer (`[0x882640]+0x28`) is
     // nonzero, else nil.
     g.set(
@@ -1396,7 +1412,7 @@ mod tests {
         s.run(
             "DisconnectFromServer() QuitGame() RequestRealmList(1) CancelRealmListQuery() \
              SetCurrentScreen('login') RealmListDialogCancelled() PatchDownloadCancel() \
-             PatchDownloadApply()",
+             PatchDownloadApply() SurveyNotificationDone()",
         )
         .unwrap();
         assert_eq!(
@@ -1408,7 +1424,8 @@ mod tests {
                 "CancelRealmListQuery",
                 "CancelLogon",
                 "CancelPatchDownload",
-                "ApplyPatch"
+                "ApplyPatch",
+                "SurveyDone"
             ]
         );
     }
@@ -1861,7 +1878,7 @@ mod tests {
     /// `SetMovieSubtitles` stores "1" or "0" in `movieSubtitle` from its flag argument, default 1
     /// (`0x46db80`).
     #[test]
-    fn set_movie_subtitles_writes_the_flag() {
+    fn set_movie_subtitles_writes_the_flag_and_the_survey_verb_answers_its_top() {
         let mut s = UiScript::new_glue().unwrap();
         s.register_cvars([("movieSubtitle", "0")]);
         for (call, want) in [
@@ -1881,6 +1898,14 @@ mod tests {
             );
         }
         assert!(s.eval::<bool>("return SetMovieSubtitles() == nil").unwrap());
+        assert_eq!(
+            s.eval::<String>("return SurveyNotificationDone(1, 'last')")
+                .unwrap(),
+            "last"
+        );
+        assert!(s
+            .eval::<bool>("return SurveyNotificationDone() == nil")
+            .unwrap());
         assert!(s.take_errors().is_empty());
     }
 

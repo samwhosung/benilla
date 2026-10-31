@@ -129,14 +129,9 @@ fn the_glue_surface_matches_the_shapes_table() {
     }
 }
 
-/// Glue-state functions the glue VM does not answer yet, by registrar table, each with why. The
-/// list only shrinks: a verb is absent until built, never stubbed.
-const NOT_YET: &[(&str, &[&str])] = &[(
-    "the glue core (0x46ddf0, table 0x8373b8): `SurveyNotificationDone` also ends the survey \
-         (0x473e30), reporting the login authenticated and returning the glue to state 1 \
-         (0x473ef5); not built, the director's ruling",
-    &["SurveyNotificationDone"],
-)];
+/// Glue-state functions the glue VM does not answer yet, by registrar table, each with why: none
+/// today. The list only shrinks: a verb is absent until built, never stubbed.
+const NOT_YET: &[(&str, &[&str])] = &[];
 
 /// The glue VM's globals by Lua type name.
 fn glue_globals() -> BTreeMap<String, String> {

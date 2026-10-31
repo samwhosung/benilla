@@ -720,6 +720,12 @@ impl GlueMgr {
             GlueCall::EnterWorld { index, guid, flags } => self.enter_world(index, guid, flags),
             GlueCall::CreateCharacter(request) => self.create_character(request),
             GlueCall::CancelPatchDownload => self.return_to_login(),
+            // EndSurvey's report (`0x473ef5`), which arms the latch only during a logon, as
+            // `on_logon_done` gates it.
+            // Deviation: the screen state is not set to 1 after the report (`0x473ef9`), because that
+            // store returns the glue from the survey state 11, which benilla never enters, and from
+            // the idle screen it would leave a logon standing with none running.
+            GlueCall::SurveyDone => self.on_logon_done(),
             GlueCall::ApplyPatch => {
                 // `FailPatch(4, 0)` (`0x474ab0`): the logon cancelled and the login screen up,
                 // then, for any code but 2, the `OKAY` dialog with `PATCH_FAILED_MESSAGE`
