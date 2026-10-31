@@ -1373,8 +1373,11 @@ fn parse_server_body(
         opcode::SMSG_GROUP_INVITE => ServerPacket::GroupInvite {
             inviter: group::read_group_invite(&mut r)?,
         },
-        // `0x5e6770` reads a name (`0x5e677f`) it never passes on (`0x5e6784`).
-        opcode::SMSG_GROUP_CANCEL => ServerPacket::GroupCancel,
+        // `0x5e6770` reads a name at capacity 0x30 (`0x5e677f`) it never passes on (`0x5e6784`).
+        opcode::SMSG_GROUP_CANCEL => {
+            let _ = read_cstring_capped(&mut r, 0x30);
+            ServerPacket::GroupCancel
+        }
         opcode::SMSG_GROUP_DECLINE => ServerPacket::GroupDecline {
             name: group::read_group_decline(&mut r)?,
         },

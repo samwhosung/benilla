@@ -174,7 +174,9 @@ fn group_notification_smsg_wire() {
     }
 
     // SMSG_GROUP_CANCEL (0x5e6770): a name is read and dropped; the event carries nothing.
-    let p = messages::parse_server(opcode::SMSG_GROUP_CANCEL, &hx("426f6200")).unwrap();
+    let (p, tail) =
+        messages::parse_server_with_tail(opcode::SMSG_GROUP_CANCEL, &hx("426f6200")).unwrap();
+    assert_eq!(tail, 0, "the name is read");
     assert!(matches!(p, ServerPacket::GroupCancel));
     assert!(matches!(decode(p).as_slice(), [SessionEvent::GroupCancel]));
 
