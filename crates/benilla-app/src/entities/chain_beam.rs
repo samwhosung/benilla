@@ -196,8 +196,9 @@ pub(super) fn spawn_chain_beams(
             _ => false,
         };
         for (e, beam) in &beams {
+            // A death's release and a channel's reap can both name the beam in one frame.
             if beam.persistent && reaped(beam) {
-                commands.entity(e).despawn();
+                commands.entity(e).try_despawn();
             }
         }
     }
