@@ -163,6 +163,11 @@ fn on_attacker_state(
     mut pending: ResMut<PendingImpacts>,
     mut sinks: ImpactSinks,
     mut play_seq: ResMut<PlaySeq>,
+    stop: (
+        Res<crate::net::NetCommands>,
+        ResMut<super::AttackStopInFlight>,
+        Query<&Transform>,
+    ),
     tutorials: Option<Res<crate::tutorial::Tutorials>>,
     // The self-defence acquire the swing owes, absent in a harness without the target plugin.
     acquires: Option<ResMut<crate::target::OwedSelects>>,
@@ -186,6 +191,7 @@ fn on_attacker_state(
             &mut pending,
             &mut sinks,
             play_seq.next(),
+            stop,
         );
         // A held attacker's auto-move other than mode 2, the facing turn, ends (`0x625a03`-
         // `0x625a21` → `StopAutoMove(1, 1)`), after the self-defence acquire (`0x6259fe`) and ahead
@@ -307,6 +313,32 @@ fn ai_reaction(
     }
 }
 
+/// The tail of `0x5ea800` after the latch clear: with the victim at or beyond four melee reaches
+/// (`0x5ea880`-`0x5ea8a4`), `SendAttackStop` (`0x5ea8a8` → `0x624370`) sends `CMSG_ATTACKSTOP`
+/// and sets `me`'s stop in flight. The squared distance is 3D, between the two units' positions.
+fn stop_on_far_victim(
+    me: Entity,
+    them: Entity,
+    stores: &Query<&crate::net::ObjectStore>,
+    places: &Query<&Transform>,
+    net: &crossbeam_channel::Sender<crate::net::ClientCommand>,
+    stop_word: &mut super::AttackStopInFlight,
+) {
+    let (Ok(t), Ok(m), Ok(tp), Ok(mp)) = (
+        stores.get(them),
+        stores.get(me),
+        places.get(them),
+        places.get(me),
+    ) else {
+        return;
+    };
+    let d2 = tp.translation.distance_squared(mp.translation);
+    if super::swing_beyond_stop_reach(d2, crate::target::cursor_mode::melee_reach(t, m)) {
+        let _ = net.send(crate::net::ClientCommand::AttackStop);
+        stop_word.set(me);
+    }
+}
+
 /// One melee swing (`SMSG_ATTACKERSTATEUPDATE`): the attacker's swing plays now and the victim's
 /// feedback waits for the clip's attack-hit key (`0x6247d0`); the combat-log line and its
 /// `COMBAT_TEXT_UPDATE` word come off the same packet in [`crate::combat_log`], after this.
@@ -322,6 +354,11 @@ fn attacker_state(
     pending: &mut PendingImpacts,
     sinks: &mut ImpactSinks,
     seq: u64,
+    (net, mut stop_word, places): (
+        Res<crate::net::NetCommands>,
+        ResMut<super::AttackStopInFlight>,
+        Query<&Transform>,
+    ),
 ) {
     let victim = index.0.get(&s.victim).copied();
     // Our landed swing clears the refusal latch (`0x6259b6` → `0x5ea800` → `0x5ecdb0(0)`) when we
@@ -333,6 +370,9 @@ fn attacker_state(
             std::time::Duration::ZERO,
             None,
         );
+        if let (Some(me), Some(them)) = (index.0.get(&s.attacker).copied(), victim) {
+            stop_on_far_victim(me, them, &sinks.stores, &places, &net.0, &mut stop_word);
+        }
     }
     if benilla_assets::trace::enabled() {
         benilla_assets::trace::line(
@@ -530,5 +570,42 @@ mod tests {
             .unwrap();
         assert!(world.get::<Engaged>(e).is_some());
         assert_eq!(world.get::<super::super::Precast>(e), Some(&precast));
+    }
+
+    /// A landed swing at a victim `d` yards away stops our attack from four melee reaches out
+    /// (`0x5ea880`-`0x5ea8a4`): default reaches 1.5 + 1.5 + 4/3 sit under the floor of 5, so the limit is 20.
+    #[test]
+    fn a_landed_swing_stops_the_attack_from_four_reaches_out() {
+        use crate::net::{ClientCommand, ObjectStore};
+        for (d, stops) in [(19.9_f32, false), (20.1, true), (40.0, true), (3.0, false)] {
+            let mut world = World::new();
+            let (tx, rx) = crossbeam_channel::unbounded();
+            world.init_resource::<super::super::AttackStopInFlight>();
+            let me = world
+                .spawn((ObjectStore::default(), Transform::from_xyz(0.0, 0.0, 0.0)))
+                .id();
+            let them = world
+                .spawn((
+                    ObjectStore::default(),
+                    Transform::from_xyz(d * 0.6, d * 0.48, d * 0.64),
+                ))
+                .id();
+            world
+                .run_system_once(
+                    move |stores: Query<&ObjectStore>,
+                          places: Query<&Transform>,
+                          mut word: ResMut<super::super::AttackStopInFlight>| {
+                        stop_on_far_victim(me, them, &stores, &places, &tx, &mut word);
+                    },
+                )
+                .unwrap();
+            let sent: Vec<ClientCommand> = rx.try_iter().collect();
+            assert_eq!(sent.len(), usize::from(stops), "{d} yd: {sent:?}");
+            assert_eq!(
+                world.resource::<super::super::AttackStopInFlight>().of(me),
+                stops,
+                "{d} yd: the stop in flight"
+            );
+        }
     }
 }

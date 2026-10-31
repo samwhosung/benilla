@@ -204,6 +204,15 @@ pub(crate) fn cancel_auto_repeat_local(
     core.reports.auto_repeat(false);
 }
 
+/// The reach test of our landed swing (`0x5ea880`-`0x5ea8a4`): the squared 3D distance between
+/// the two units' positions against `(4 * max(r1 + r2 + 4/3, 5))^2`, `reach` being the melee reach
+/// `max(...)` ([`crate::target::cursor_mode::melee_reach`]). At or beyond it, `SendAttackStop`
+/// (`0x5ea8a8`); a NaN distance does not stop (`0x5ea8a4` jp).
+fn swing_beyond_stop_reach(dist_sq: f32, reach: f32) -> bool {
+    let limit = reach * 4.0;
+    dist_sq >= limit * limit
+}
+
 /// The local StopAttack, reference `0x5ecac0`, for a caller with nobody to signal between its
 /// steps: [`stop_attack_head`], [`stop_attack_send`], then the save's leg of `CancelQueuedCast`
 /// ([`crate::spell::CastCore::cancel_queued_save`]). A queued on-next-swing spell is cancelled

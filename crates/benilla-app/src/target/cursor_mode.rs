@@ -157,7 +157,7 @@ const ATTACK_RANGE_SQ: f32 = 109.2025;
 pub(super) const MELEE_OFFSET: f32 = 1.333_33;
 pub(super) const MELEE_FLOOR: f32 = 5.0;
 
-pub(super) fn melee_reach(target: &ObjectStore, me: &ObjectStore) -> f32 {
+pub(crate) fn melee_reach(target: &ObjectStore, me: &ObjectStore) -> f32 {
     (target.0.unit_combat_reach() + me.0.unit_combat_reach() + MELEE_OFFSET).max(MELEE_FLOOR)
 }
 

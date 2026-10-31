@@ -972,6 +972,9 @@ mod tests {
     /// line first, then the animation layer's, which runs ahead of it.
     fn swing_world(held: &[u64]) -> App {
         let mut app = world(held);
+        // The landed swing's far-victim stop sends on the wire (`0x5ea8a8`).
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        app.insert_resource(crate::net::NetCommands(tx));
         app.add_message::<crate::creature_anim::SwingMessage>()
             .add_message::<crate::creature_anim::SwingImpact>()
             .add_message::<crate::creature_anim::SheathRequest>()
