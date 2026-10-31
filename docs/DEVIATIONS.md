@@ -222,7 +222,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - Only the four party slots hand over, capped at `Self::CAP`, instead of every portrait until `ClientDestroyGame` (`0x401ee0`), because a general cache would pay a texture per unit ever seen. ([`src/portrait/mod.rs:265`](../crates/benilla-app/src/portrait/mod.rs#L265))
 - This reads the window's aspect, not `gxResolution`'s, because the window here takes any shape a drag gives it, where the reference's keeps `gxResolution`'s (`0x5989d7`). In fullscreen the window is the screen in logical pixels and `gxResolution` the screen in device pixels, so their aspects agree and their sizes need not. ([`src/portrait/mod.rs:694`](../crates/benilla-app/src/portrait/mod.rs#L694))
 - `boothHalfRate` is benilla's own CVar, because the reference draws its doll in the main pass and has no second view; a full-rate pass costs up to 7.6 ms a frame at 4K. ([`src/portrait/mod.rs:733`](../crates/benilla-app/src/portrait/mod.rs#L733))
-- The reference widget draws only its model; a body pane clears to near-black, the chosen look where nothing sits behind the pane. ([`src/portrait/mod.rs:990`](../crates/benilla-app/src/portrait/mod.rs#L990))
+- The reference widget draws only its model; a body pane clears to near-black, the chosen look where nothing sits behind the pane. ([`src/portrait/mod.rs:991`](../crates/benilla-app/src/portrait/mod.rs#L991))
 
 #### quest_markers
 
