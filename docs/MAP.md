@@ -289,6 +289,7 @@
 - `WOW_LIGHT_DUMP` — benilla-world/src/lighting/global_light.rs, benilla-world/src/lighting/resolve.rs
 - `WOW_LIGHT_GRID` — benilla-world/src/wmo_portal/audit/light_probe.rs
 - `WOW_LIQUID_DC` — benilla-assets/src/world_assets/images.rs
+- `WOW_LIQUID_TRACE` — benilla-world/src/model_render/visibility.rs
 - `WOW_LIVE_` — benilla-world/src/bgwin.rs
 - `WOW_LIVE_FPS` — benilla-app/src/capture/probes/live_fps.rs, benilla-app/src/dev.rs, benilla-world/src/bgwin.rs
 - `WOW_LIVE_FPS_AT` — benilla-app/src/capture/probes/live_fps.rs
