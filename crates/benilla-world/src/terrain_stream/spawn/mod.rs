@@ -320,7 +320,6 @@ pub(super) fn spawn_loaded_placements(
                                 visible: vec![true; m.group_nav.len()],
                                 // Fogged only once a flood puts the group on the chain.
                                 interior_fog: vec![false; m.group_nav.len()],
-                                liquid_visited: vec![false; m.group_nav.len()],
                                 // MOGP `groupLiquid`: a room wholly submerged, with no liquid grid.
                                 flooded: m
                                     .group_nav

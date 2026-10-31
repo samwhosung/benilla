@@ -680,7 +680,6 @@ mod tests {
                 name_set: 0,
                 visible: vec![false, false],
                 interior_fog: vec![false, false],
-                liquid_visited: vec![false, false],
                 flooded: vec![None, None],
             })
             .id();

@@ -911,6 +911,12 @@ pub fn plugin(app: &mut App) {
         Update,
         visibility::trace_model_visibility.after(ModelVisSet),
     );
+    // `WOW_LIQUID_TRACE=1` traces every building pool's verdict per frame; registered only then,
+    // so an untraced run's schedule carries no reader of every `Visibility`.
+    if let Some(trace) = visibility::LiquidTrace::from_env() {
+        app.insert_resource(trace)
+            .add_systems(Update, visibility::trace_wmo_liquid.after(ModelVisSet));
+    }
     // The material dedup cache and its evictors: by distance, and whole on a cross-map transition.
     app.init_resource::<ModelMaterials>()
         .add_systems(Update, (scope_model_materials, evict_model_materials));

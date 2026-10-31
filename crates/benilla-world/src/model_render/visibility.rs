@@ -257,16 +257,15 @@ pub(super) fn apply_model_visibility(
         },
     );
 
-    // A building's MLIQ surfaces, gated by the ever-visited latch, not this frame's PVS: a group's
-    // liquid draws from its first visit for the rest of the placement's residency. An index past
-    // the latch fails open.
+    // A building's MLIQ surfaces, on this frame's PVS: the flood's visit callback links a visited
+    // group into the liquid list `0xc7cafc` (`0x685f66`), and the liquid pass unlinks each one it
+    // draws (`0x684e21`), so a pool draws only in a frame its group is visited.
     for (gv, mut vis, xf, aabb, exterior, tag) in &mut group_only {
         let portal_ok = !m.portal_cull
-            || instances.get(gv.instance).ok().is_none_or(|inst| {
-                gv.groups
-                    .iter()
-                    .any(|&g| inst.liquid_visited.get(g as usize).copied().unwrap_or(true))
-            });
+            || instances
+                .get(gv.instance)
+                .ok()
+                .is_none_or(|inst| gv.drawn_by(inst));
         // The same exterior-window term as the submesh walk.
         let exterior_ok = !exterior || Some(gv.instance) == own_instance || gate.admits(xf, aabb);
         // A building's water rides the building's toggle: the reference's WMO liquid drain
@@ -281,9 +280,8 @@ pub(super) fn apply_model_visibility(
         if *vis != want {
             *vis = want;
         }
-        // The pool's fog follows this frame's flood, not the latch, as the reference's WMO liquid
-        // pass pushes interior fog under the same `[0xca7f00]` as the geometry; a pool drawn by
-        // the latch alone wears scene fog. `liquid.wgsl` ANDs it with the surface's own class.
+        // The reference's WMO liquid pass pushes interior fog under the same `[0xca7f00]` as the
+        // geometry. `liquid.wgsl` ANDs it with the surface's own class.
         if let Some(mut tag) = tag {
             let on = instances
                 .get(gv.instance)
@@ -395,11 +393,52 @@ pub(super) fn trace_model_visibility(
     }
 }
 
+/// `WOW_LIQUID_TRACE=1` prints, every frame, each building pool's group, that group's PVS bit and
+/// the pool's verdict: `vis` is this frame's, `view` (Bevy's frustum cull) last frame's.
+#[derive(Resource, Default)]
+pub struct LiquidTrace {
+    frame: u64,
+}
+
+impl LiquidTrace {
+    /// `None` unless `WOW_LIQUID_TRACE` is set to anything but empty.
+    pub(crate) fn from_env() -> Option<Self> {
+        std::env::var_os("WOW_LIQUID_TRACE")
+            .filter(|v| !v.is_empty())
+            .map(|_| Self::default())
+    }
+}
+
+/// Prints [`LiquidTrace`]; runs after the authority.
+#[allow(clippy::type_complexity)]
+pub(super) fn trace_wmo_liquid(
+    mut trace: ResMut<LiquidTrace>,
+    instances: Query<&WmoPortalInstance>,
+    pools: Query<(Entity, &WmoGroupVis, &Visibility, Option<&ViewVisibility>), Without<ModelPart>>,
+) {
+    trace.frame += 1;
+    for (e, gv, vis, view) in &pools {
+        let pvs = instances
+            .get(gv.instance)
+            .ok()
+            .map(|inst| gv.drawn_by(inst));
+        println!(
+            "LIQUID_TRACE frame={} {e} inst={} groups={:?} pvs={} vis={vis:?} view={}",
+            trace.frame,
+            gv.instance,
+            gv.groups,
+            pvs.map_or("-".into(), |p| p.to_string()),
+            view.map_or("-".into(), |v| v.get().to_string()),
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::billboard::BillboardCard;
     use benilla_assets::BillboardInfo;
+    use benilla_assets::{WmoGroupNav, WmoModel, WmoPortalInfo, WmoPortalRef};
     use benilla_formats::{BillboardKind, ModelBlend};
 
     #[test]
@@ -476,8 +515,8 @@ mod tests {
             .init_resource::<crate::wmo_portal::CameraInteriorClaim>()
             .init_resource::<super::super::FarSideTwins>()
             .add_systems(Update, apply_model_visibility);
-        // A portal-less prop's pool: its instance has no latch, so `portal_ok` fails open and the
-        // toggle is the only term in play.
+        // An instance entity with no `WmoPortalInstance`: `portal_ok` fails open and the toggle is
+        // the only term in play.
         let instance = app.world_mut().spawn(()).id();
         let pool = app
             .world_mut()
@@ -523,5 +562,238 @@ mod tests {
             Visibility::Inherited,
             "the doodad toggle is a different bit and must not touch a building's water"
         );
+    }
+
+    /// The flood and the authority over one placement of `model` at the origin, with a pool in
+    /// `group` keyed as the spawn site keys it, and a world camera to aim with [`aim`].
+    fn pool_app(model: WmoModel, group: u16) -> (App, Entity) {
+        let mut app = App::new();
+        app.init_resource::<DebugState>()
+            .init_resource::<ViewDistance>()
+            .init_resource::<crate::wmo_portal::ExteriorWindows>()
+            .init_resource::<crate::wmo_portal::CameraInteriorClaim>()
+            .init_resource::<crate::wmo_portal::CameraWmoFog>()
+            .init_resource::<crate::wmo_portal::WmoCullProbe>()
+            .init_resource::<crate::terrain_stream::TerrainStreamer>()
+            .init_resource::<super::super::FarSideTwins>()
+            .init_resource::<Assets<benilla_assets::AdtTile>>()
+            .init_resource::<Assets<WmoModel>>()
+            .add_systems(
+                Update,
+                (crate::wmo_portal::compute_wmo_pvs, apply_model_visibility).chain(),
+            );
+        let groups = model.group_nav.len();
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<WmoModel>>()
+            .add(model);
+        let instance = app
+            .world_mut()
+            .spawn(WmoPortalInstance {
+                handle,
+                world_from_local: bevy::math::Affine3A::IDENTITY,
+                name_set: 0,
+                visible: vec![true; groups],
+                interior_fog: vec![false; groups],
+                flooded: vec![None; groups],
+            })
+            .id();
+        let pool = app
+            .world_mut()
+            .spawn((
+                WmoGroupVis {
+                    instance,
+                    groups: std::sync::Arc::from([group].as_slice()),
+                },
+                Visibility::Inherited,
+                GlobalTransform::IDENTITY,
+            ))
+            .id();
+        app.world_mut().spawn((
+            WorldCamera,
+            Transform::IDENTITY,
+            GlobalTransform::IDENTITY,
+            Projection::Perspective(PerspectiveProjection {
+                fov: 0.9,
+                aspect_ratio: 16.0 / 9.0,
+                near: 0.1,
+                far: 1000.0,
+                ..default()
+            }),
+        ));
+        (app, pool)
+    }
+
+    /// Puts the world camera at WoW model-space `eye`, looking at `at`, and runs a frame.
+    fn aim(app: &mut App, eye: [f32; 3], at: [f32; 3]) {
+        use benilla_assets::coords::wow_to_bevy;
+        let pose =
+            Transform::from_translation(wow_to_bevy(eye)).looking_at(wow_to_bevy(at), Vec3::Y);
+        let mut q = app
+            .world_mut()
+            .query_filtered::<(&mut Transform, &mut GlobalTransform), With<WorldCamera>>();
+        let (mut t, mut g) = q.single_mut(app.world_mut()).expect("one world camera");
+        *t = pose;
+        *g = GlobalTransform::from(pose);
+        app.update();
+    }
+
+    fn drawn(app: &App, pool: Entity) -> bool {
+        *app.world().entity(pool).get::<Visibility>().unwrap() == Visibility::Inherited
+    }
+
+    /// Two interior rooms joined by a doorway in the WoW `x = 0` plane (y in [-0.5, 0.5], z in
+    /// [0, 2]): `g0`, floored at `z = 0`, holds the camera, and `g1` beyond holds the pool.
+    fn two_rooms() -> WmoModel {
+        let room = |min: [f32; 3], max: [f32; 3], ref_start: u16| WmoGroupNav {
+            flags: 0x2000,
+            bbox_min: min,
+            bbox_max: max,
+            ref_start,
+            ref_count: 1,
+            area_table_id: 0,
+            fog_indices: [0; 4],
+            group_liquid: benilla_formats::NO_GROUP_LIQUID,
+        };
+        WmoModel {
+            portal_vertices: vec![
+                [0.0, -0.5, 0.0],
+                [0.0, 0.5, 0.0],
+                [0.0, 0.5, 2.0],
+                [0.0, -0.5, 2.0],
+            ],
+            portal_infos: vec![WmoPortalInfo {
+                start_vertex: 0,
+                count: 4,
+                plane: [1.0, 0.0, 0.0, 0.0],
+            }],
+            // `side = -1` puts an eye at x < 0 on g0's entering half-space.
+            portal_refs: vec![
+                WmoPortalRef {
+                    portal: 0,
+                    group: 1,
+                    side: -1,
+                },
+                WmoPortalRef {
+                    portal: 0,
+                    group: 0,
+                    side: 1,
+                },
+            ],
+            group_nav: vec![
+                room([-10.0, -10.0, 0.0], [0.0, 10.0, 3.0], 0),
+                room([0.0, -10.0, 0.0], [10.0, 10.0, 3.0], 1),
+            ],
+            group_collision_tris: vec![
+                vec![
+                    [[-10.0, -10.0, 0.0], [0.0, -10.0, 0.0], [0.0, 10.0, 0.0]],
+                    [[-10.0, -10.0, 0.0], [0.0, 10.0, 0.0], [-10.0, 10.0, 0.0]],
+                ],
+                Vec::new(),
+            ],
+            ..WmoModel::default()
+        }
+    }
+
+    /// A building's pool draws off this frame's flood: the reference links a visited group into
+    /// the liquid list `0xc7cafc` (`0x685f66`) and unlinks it as it draws (`0x684e21`), so a
+    /// room the flood stops reaching loses its pool that frame, and gets it back with the room.
+    #[test]
+    fn a_pool_follows_this_frames_pvs() {
+        let (mut app, pool) = pool_app(two_rooms(), 1);
+        let eye = [-3.0, 0.0, 1.0];
+        let room_visible = |app: &mut App| {
+            let mut q = app.world_mut().query::<&WmoPortalInstance>();
+            q.single(app.world()).expect("one instance").visible[1]
+        };
+
+        aim(&mut app, eye, [10.0, 0.0, 1.0]);
+        assert!(
+            room_visible(&mut app),
+            "the flood crosses the doorway ahead"
+        );
+        assert!(drawn(&app, pool), "the far room's pool draws with its room");
+
+        aim(&mut app, eye, [-10.0, 0.0, 1.0]);
+        assert!(!room_visible(&mut app), "the doorway is behind the camera");
+        assert!(
+            !drawn(&app, pool),
+            "a pool whose room the flood no longer visits does not draw, though it drew last frame"
+        );
+
+        aim(&mut app, eye, [10.0, 0.0, 1.0]);
+        assert!(drawn(&app, pool), "the room is back, and its pool with it");
+    }
+
+    /// A building without a portal graph keeps every group visible, so its pool draws though an
+    /// area id gives it an instance.
+    #[test]
+    fn a_portal_less_buildings_pool_draws() {
+        let model = WmoModel {
+            wmo_id: 63,
+            group_nav: vec![WmoGroupNav {
+                flags: 0x1000,
+                bbox_min: [-5.0; 3],
+                bbox_max: [5.0; 3],
+                ref_start: 0,
+                ref_count: 0,
+                area_table_id: 0,
+                fog_indices: [0; 4],
+                group_liquid: benilla_formats::NO_GROUP_LIQUID,
+            }],
+            ..WmoModel::default()
+        };
+        let (mut app, pool) = pool_app(model, 0);
+        for at in [[10.0, 0.0, 0.0], [-10.0, 0.0, 0.0]] {
+            aim(&mut app, [0.0, 0.0, 20.0], at);
+            assert!(drawn(&app, pool), "the fountain's pool draws from any view");
+        }
+    }
+
+    /// Northshire Abbey's wall fountain, `abbeygate01.wmo`: no portal graph and WMO id 63, so its
+    /// placement takes an instance (the spawn site's `has_portals || wmo_id != 0`), and group 0
+    /// holds still water, which draws.
+    #[test]
+    fn the_abbey_wall_fountain_draws_its_pool() {
+        let data = benilla_formats::wow_data_or_skip!();
+        let chain = benilla_formats::open_chain(&data).expect("open the MPQ chain");
+        let path = r"World\wmo\Azeroth\Collidable Doodads\Elwynn\AbbeyGate\abbeygate01.wmo";
+        let root_bytes = chain.read(path).expect("abbeygate01.wmo ships");
+        let root = benilla_formats::parse_wmo_root(&root_bytes).expect("parse the root");
+        let group = chain
+            .read(&path.replace(".wmo", "_000.wmo"))
+            .expect("its one group ships");
+        let portals = root.portals();
+        assert!(
+            portals.refs.is_empty() && portals.infos.is_empty(),
+            "the fountain has no portal graph"
+        );
+        let wmo_id = benilla_formats::wmo_root_id(&root_bytes);
+        assert_eq!(wmo_id, 63, "an area id: the placement spawns an instance");
+        assert_eq!(root.group_count(), 1);
+        let water = benilla_formats::wmo_group_liquid_mesh(&group).expect("group 0 holds a pool");
+        assert_eq!(water.kind, benilla_formats::LiquidKind::Still);
+        let header = benilla_formats::wmo_group_header(&group).expect("group header");
+        let info = &root.group_infos()[0];
+        let model = WmoModel {
+            wmo_id,
+            group_nav: vec![WmoGroupNav {
+                flags: header.flags,
+                bbox_min: info.bbox_min,
+                bbox_max: info.bbox_max,
+                ref_start: header.portal_ref_start,
+                ref_count: header.portal_ref_count,
+                area_table_id: header.area_table_id,
+                fog_indices: header.fog_indices,
+                group_liquid: header.group_liquid,
+            }],
+            group_liquids: vec![Some(water)],
+            ..WmoModel::default()
+        };
+        let (mut app, pool) = pool_app(model, 0);
+        for at in [[10.0, 0.0, 0.0], [-10.0, 0.0, 0.0]] {
+            aim(&mut app, [0.0, -18.0, 6.0], at);
+            assert!(drawn(&app, pool), "the basin holds its water from any view");
+        }
     }
 }

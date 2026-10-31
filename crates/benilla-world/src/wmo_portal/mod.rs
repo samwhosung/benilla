@@ -180,10 +180,6 @@ pub struct WmoPortalInstance {
     /// draws the group and its doodads with the building's MFOG triple, `false` with the scene fog.
     /// Seeded all-false, which a portal-less prop keeps.
     pub interior_fog: Vec<bool>,
-    /// Per-group ever-visited latch: once the flood visits a group, its MLIQ surface draws for the
-    /// rest of the placement's residency, whatever this frame's PVS. Latched by
-    /// [`compute_wmo_pvs`]; starts all-false.
-    pub liquid_visited: Vec<bool>,
     /// Per-group whole-group submersion from MOGP `groupLiquid`: `Some(kind)` means anywhere in the
     /// group is under liquid, at every z. Baked at spawn; empty on a placement spawned before its
     /// model resolved.
@@ -273,7 +269,7 @@ const MAX_FLOOR_DROP: f32 = 1760.0;
 
 /// Recompute each resident WMO's per-group visible set from the camera; a portal-less prop stays
 /// all-visible.
-fn compute_wmo_pvs(
+pub(crate) fn compute_wmo_pvs(
     wmos: Res<Assets<WmoModel>>,
     cam: Query<(&GlobalTransform, &Projection), With<WorldCamera>>,
     mut instances: Query<(Entity, &mut WmoPortalInstance)>,
@@ -425,23 +421,6 @@ fn compute_wmo_pvs(
                     windows = Some(std::mem::take(&mut fresh.windows));
                 }
             }
-        }
-        // The `liquid_visited` latch, through the change gate: only a slot that flips marks the
-        // instance changed.
-        let held = inst.bypass_change_detection();
-        let mut latched = false;
-        if held.liquid_visited.len() != groups {
-            held.liquid_visited = vec![false; groups];
-            latched = true;
-        }
-        for g in 0..groups {
-            if held.visible.get(g).copied().unwrap_or(false) && !held.liquid_visited[g] {
-                held.liquid_visited[g] = true;
-                latched = true;
-            }
-        }
-        if latched {
-            inst.set_changed();
         }
     }
     if camera_fog.0 != fog_target {
@@ -1017,7 +996,6 @@ mod tests {
             name_set: 0,
             visible: vec![false, true, false],
             interior_fog: vec![false; 3],
-            liquid_visited: vec![false; 3],
             flooded: vec![None; 3],
         };
         let key = |groups: &[u16]| WmoGroupVis {
@@ -1047,7 +1025,6 @@ mod tests {
             name_set: 0,
             visible: vec![true; 3],
             interior_fog: vec![false, true, false],
-            liquid_visited: vec![false; 3],
             flooded: vec![None; 3],
         };
         let key = |groups: &[u16]| WmoGroupVis {
