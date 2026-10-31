@@ -112,10 +112,10 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### creature_anim
 
 - A new puff inside the last one's clip is declined instead of replacing it (`0x6208e0`), because one-shot effects carry no reap key; either way two never overlap. ([`src/creature_anim/breath.rs:17`](../crates/benilla-app/src/creature_anim/breath.rs#L17))
-- A mounted draw is refused at the setter, because our rider track never replays the reference's per-play force-stow (`0x5fdf80`); the result is the same. ([`src/creature_anim/driver.rs:769`](../crates/benilla-app/src/creature_anim/driver.rs#L769))
-- The reference writes bone 0's rate blindly; we scope it to the swing's own node, because a moving attacker's gait would otherwise slow too. ([`src/creature_anim/driver.rs:1088`](../crates/benilla-app/src/creature_anim/driver.rs#L1088))
+- A mounted draw is refused at the setter, because our rider track never replays the reference's per-play force-stow (`0x5fdf80`); the result is the same. ([`src/creature_anim/driver.rs:792`](../crates/benilla-app/src/creature_anim/driver.rs#L792))
+- The reference writes bone 0's rate blindly; we scope it to the swing's own node, because a moving attacker's gait would otherwise slow too. ([`src/creature_anim/driver.rs:1111`](../crates/benilla-app/src/creature_anim/driver.rs#L1111))
 - A time-based rate, because the reference's per-frame step changes with the frame rate. ([`src/creature_anim/select.rs:137`](../crates/benilla-app/src/creature_anim/select.rs#L137))
-- A spell's state kit and body procs are reaped only once no slot holds the spell because the reference's removal of one slot (`0x612320` → `0x5ff290`) stops every effect of that spell on the unit (`0x614150(spell, 1)` at `0x5ff2d2`, and its procs through `0x60d150` and `0x5ff320`), even while another slot holds the same spell, which drops a visual the server says still holds. ([`src/creature_anim/spell_visual.rs:1351`](../crates/benilla-app/src/creature_anim/spell_visual.rs#L1351))
+- A spell's state kit and body procs are reaped only once no slot holds the spell because the reference's removal of one slot (`0x612320` → `0x5ff290`) stops every effect of that spell on the unit (`0x614150(spell, 1)` at `0x5ff2d2`, and its procs through `0x60d150` and `0x5ff320`), even while another slot holds the same spell, which drops a visual the server says still holds. ([`src/creature_anim/spell_visual.rs:1367`](../crates/benilla-app/src/creature_anim/spell_visual.rs#L1367))
 
 #### cvars
 
@@ -186,8 +186,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - The reference places collision and culling by the raw facing, ours follow the display facing, because a capsule and a sphere barely change under rotation. ([`src/net/motion/facing.rs:10`](../crates/benilla-app/src/net/motion/facing.rs#L10))
 - The reference paces a self move through the same replay chain as a remote's; benilla hands it over at arrival because pacing it would only delay a correction to our own pose. ([`src/net/motion/remote.rs:110`](../crates/benilla-app/src/net/motion/remote.rs#L110))
 - Its rate-limited hover climb (`0x636fa1`, 7 yd/s) is not reproduced, because the cache gate needs a pure function; it converges to this answer. ([`src/net/motion/spline.rs:725`](../crates/benilla-app/src/net/motion/spline.rs#L725))
-- A first-pass values block the clear header byte left unwritten re-fires, for a live object, its last write's edges against the watch copy (`0x465570`, `0x466686`); benilla compares against this packet's copies, which hold none for it, because that way a stale edge never fires twice. ([`src/net/objects/update.rs:1087`](../crates/benilla-app/src/net/objects/update.rs#L1087))
-- The create notify uses its lookup's result untested (`0x465c97`, `0x465d79`). ([`src/net/objects/update.rs:1099`](../crates/benilla-app/src/net/objects/update.rs#L1099))
+- A first-pass values block the clear header byte left unwritten re-fires, for a live object, its last write's edges against the watch copy (`0x465570`, `0x466686`); benilla compares against this packet's copies, which hold none for it, because that way a stale edge never fires twice. ([`src/net/objects/update.rs:1093`](../crates/benilla-app/src/net/objects/update.rs#L1093))
+- The create notify uses its lookup's result untested (`0x465c97`, `0x465d79`). ([`src/net/objects/update.rs:1105`](../crates/benilla-app/src/net/objects/update.rs#L1105))
 - On benilla's unattended reconnect, which the reference lacks, the world's VM survives the loss; because of that the clear signals its `PLAYER_TARGET_CHANGED` and usable refresh as a release's teardown does (`0x493a69`, `0x493a73`), still sending nothing, and the surviving target frame lets the lost unit go. ([`src/net/session.rs:310`](../crates/benilla-app/src/net/session.rs#L310))
 
 #### no_install
