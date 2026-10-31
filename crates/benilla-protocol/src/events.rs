@@ -6,15 +6,16 @@ use crate::messages::{
     DamageShield, DispelFailed, EnchantmentLog, EnvironmentalDamageLog, ExplorationXp, FriendEntry,
     FriendStatusUpdate, GmTicket, GossipOption, GroupLootInfo, GroupMemberEntry,
     GuildCommandResult, GuildEventNotice, GuildInfo, GuildQueryResponse, GuildRoster,
-    InspectHonorStats, ItemInfo, ItemPushResult, JumpInfo, LevelUpInfo, LootAllPassed, LootItem,
-    LootRoll, LootRollWon, LootStartRoll, MailListEntry, MirrorTimerStart, MonsterMoveFacing,
-    MoverState, ObjectFields, PartyKillLog, PartyMemberStatsInfo, PeriodicAuraLog, PetMode,
-    PetSpells, PetitionQueryResponse, PetitionRename, PetitionShowList, PetitionShowSignatures,
-    PetitionSignResults, PvpCredit, QuestComplete, QuestConfirmAccept, QuestDetails,
-    QuestGiverList, QuestOfferReward, QuestRequestItems, QuestShareMsg, QuestTemplate,
-    SpellDamageLog, SpellDispelLog, SpellEnergizeLog, SpellHealLog, SpellInstaKillLog,
-    SpellLogExecute, SpellLogMiss, SpellOutcomeLog, StabledPet, TaxiMask, TradeStatus,
-    TradeStatusExtended, TrainerSpell, TransportPose, VendorItem, WhoResults, WowTime, XpGain,
+    InspectHonorStats, ItemInfo, ItemPushResult, JumpInfo, LevelUpInfo, LfgResults, LootAllPassed,
+    LootItem, LootRoll, LootRollWon, LootStartRoll, MailListEntry, MirrorTimerStart,
+    MonsterMoveFacing, MoverState, ObjectFields, PartyKillLog, PartyMemberStatsInfo,
+    PeriodicAuraLog, PetMode, PetSpells, PetitionQueryResponse, PetitionRename, PetitionShowList,
+    PetitionShowSignatures, PetitionSignResults, PvpCredit, QuestComplete, QuestConfirmAccept,
+    QuestDetails, QuestGiverList, QuestOfferReward, QuestRequestItems, QuestShareMsg,
+    QuestTemplate, SpellDamageLog, SpellDispelLog, SpellEnergizeLog, SpellHealLog,
+    SpellInstaKillLog, SpellLogExecute, SpellLogMiss, SpellOutcomeLog, StabledPet, TaxiMask,
+    TradeStatus, TradeStatusExtended, TrainerSpell, TransportPose, VendorItem, WhoResults, WowTime,
+    XpGain,
 };
 
 /// Coarse entity classification, free of wire types, carried on [`SessionEvent::ObjectCreate`].
@@ -1156,6 +1157,8 @@ pub enum SessionEvent {
     FriendStatus(FriendStatusUpdate),
     /// A `/who` answer (`SMSG_WHO`): at most 49 rows, plus the true match total.
     WhoResults(WhoResults),
+    /// A looking-for-group reply (`MSG_LOOKING_FOR_GROUP`): `UPDATE_LFG_LIST`.
+    LfgResults(LfgResults),
     /// A guild's name, ten rank names and tabard (`SMSG_GUILD_QUERY_RESPONSE`), cached by id.
     GuildQueryResponse(GuildQueryResponse),
     /// The whole guild (`SMSG_GUILD_ROSTER`), a complete snapshot that replaces what is held.

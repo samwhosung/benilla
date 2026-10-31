@@ -1108,10 +1108,10 @@ impl super::UiScript {
     /// landing, each rebuild callback it carries runs (`0x4de8b0`): one awaited record fewer, and
     /// the last one rebuilds (`0x4de8d4`-`0x4de8e2`), as does one landing when none is awaited.
     pub fn land_quest_records(&mut self, records: Vec<(u32, QuestRecordView)>) {
+        let ids: Vec<u32> = records.iter().map(|&(id, _)| id).collect();
         let waits: Vec<u32> = {
             let mut model = self.model_mut();
             let store = &mut model.quest_store;
-            let ids: Vec<u32> = records.iter().map(|&(id, _)| id).collect();
             store.records.extend(records);
             let waits: Vec<u32> = ids
                 .iter()
@@ -1138,6 +1138,7 @@ impl super::UiScript {
                 self.fire_event("QUEST_LOG_UPDATE", Vec::new());
             }
         }
+        self.lfg_titles_landed(&ids);
     }
 
     /// A record held with nothing waiting on it: a new VM's seat, before its load runs any file.
@@ -1152,9 +1153,13 @@ impl super::UiScript {
     /// and its rebuild callbacks run with status 0, which only log (`0x4de8bc`) and leave the
     /// awaited count as it was, so the list holds until the next world entry.
     pub fn refuse_quest_record(&mut self, quest_id: u32) {
-        let mut model = self.model_mut();
-        model.quest_store.records.remove(&quest_id);
-        model.quest_store.record_waits.remove(&quest_id);
+        {
+            let mut model = self.model_mut();
+            model.quest_store.records.remove(&quest_id);
+            model.quest_store.record_waits.remove(&quest_id);
+        }
+        // The looking-for-group title callback counts down whatever the status (`0x4e8d30`).
+        self.lfg_titles_landed(&[quest_id]);
     }
 
     /// The quests a rebuild run with no host lent missed, for a harness to ask.

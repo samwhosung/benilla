@@ -458,6 +458,9 @@ pub(crate) struct Model {
     /// `SetLookingForGroup` writes and `GetLookingForGroup` reads; the reference's slots stay 0.
     pub(crate) lfg_slots: [u32; 3],
     pub(crate) lfg_comment: String,
+    /// The looking-for-group result list `MSG_LOOKING_FOR_GROUP`'s reply writes, and its title
+    /// waits.
+    pub(crate) lfg_store: super::lfg::LfgStore,
     /// Guild roster, ranks, MOTD and info, sorted and filtered by the app, which holds the toggles.
     pub(crate) guild: guild::GuildState,
     /// The roster module's own cells and the rank editor's unsaved edits, apart from `guild` so a
@@ -1454,6 +1457,7 @@ impl Model {
             lfg_dungeons: Vec::new(),
             lfg_slots: [0; 3],
             lfg_comment: String::new(),
+            lfg_store: Default::default(),
             guild: guild::GuildState::default(),
             guild_cells: guild::GuildCells::default(),
             petition: petition::PetitionState::default(),

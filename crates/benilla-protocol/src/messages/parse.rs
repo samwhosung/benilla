@@ -1495,6 +1495,7 @@ fn parse_server_body(
             ServerPacket::FriendStatus(social::read_friend_status(&mut r)?)
         }
         opcode::SMSG_WHO => ServerPacket::WhoResults(social::read_who(&mut r)?),
+        opcode::MSG_LOOKING_FOR_GROUP => ServerPacket::LookingForGroup(social::read_lfg(&mut r)?),
         opcode::SMSG_GUILD_QUERY_RESPONSE => {
             ServerPacket::GuildQueryResponse(guild::read_guild_query_response(&mut r)?)
         }

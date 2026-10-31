@@ -864,6 +864,48 @@ fn a_ready_check_outlives_a_reload_and_not_a_login() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// The looking-for-group list is engine state (`0xbc6fd8`-`0xbc7620`) that only its reply's
+/// handler writes, and `ReloadUI()` does not run `InitializeGame`'s party init (`0x4e7c70`), so a
+/// reloaded VM reads the list; a login starts with none ([`crate::ui_social::seed_vm_lfg`]).
+#[test]
+fn the_lfg_list_outlives_a_reload_and_not_a_login() {
+    use benilla_ui::script::{LfgReply, LfgResultRead, UiScript};
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (tmp, _c, _h) = hermetic_probe("lfg-list");
+    let mut world = booted_world();
+    let counts = |world: &World| -> (i64, i64) {
+        world
+            .non_send_resource::<UiScript>()
+            .eval("return GetNumLFGResults()")
+            .unwrap()
+    };
+
+    log_in_as(&mut world, "Onehunter", 1);
+    world
+        .non_send_resource_mut::<UiScript>()
+        .lfg_results(LfgReply {
+            count: Some(1),
+            total: Some(3),
+            records: vec![LfgResultRead {
+                name: "Aria".into(),
+                ..Default::default()
+            }],
+        });
+
+    reload(&mut world, crate::client_state::ClientState::InWorld);
+    assert_eq!(counts(&world), (1, 3), "the reloaded VM reads the list");
+
+    super::end_ui_session(&mut world);
+    log_in_as(&mut world, "Onehunter", 1);
+    assert_eq!(counts(&world), (0, 0), "a login starts with none");
+
+    drop(world);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// `ReloadUI()` runs only the teardown and `UI_Init` (`0x495664`, `0x495669`); the roster's
 /// show-offline flag (`0xb73124`) is zeroed only by `InitGuildRoster` (`0x4d0a25`), from
 /// `InitializeGame` (`0x48f5ea`). So an addon's file scope, which runs before `VARIABLES_LOADED`

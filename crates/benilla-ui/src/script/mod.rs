@@ -356,7 +356,7 @@ pub use input_verbs::{
 };
 pub use item_calls::ItemCall;
 pub use item_read::{ItemInfoFields, ItemKey, ItemRead, ItemRoll};
-pub use lfg::LfgDungeon;
+pub use lfg::{LfgDungeon, LfgReply, LfgResultRead, LfgStore};
 pub use lottery::UnservedSend;
 pub use modelframe::{CharacterPaneFrame, ModelPaneFrame, ModelWanted};
 pub use movieframe::{

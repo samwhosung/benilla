@@ -101,6 +101,8 @@ pub(super) enum Heard {
         raw: u32,
         wire: Vec<benilla_ui::script::WhoInfo>,
     },
+    /// `MSG_LOOKING_FOR_GROUP`'s reply (`0x4e8dc0`), which the VM writes over its list.
+    Lfg(benilla_ui::script::LfgReply),
 }
 
 /// One friend slot, the 32 bytes at `+0x20·k`.
@@ -587,6 +589,38 @@ impl SocialState {
         });
     }
 
+    /// `MSG_LOOKING_FOR_GROUP`'s reply (`0x4e8dc0`): the records, each class read resolved through
+    /// `ChrClasses` as `GetLFGResults` does (`0x4e9952`-`0x4e9975`, empty for an id with no row),
+    /// stored and signalled in the lane.
+    fn apply_lfg(
+        &mut self,
+        results: benilla_protocol::messages::LfgResults,
+        names: crate::ui_unit::UnitNames<'_>,
+    ) {
+        let records = results
+            .entries
+            .into_iter()
+            .map(|e| benilla_ui::script::LfgResultRead {
+                name: e.name,
+                level: e.level,
+                class: e.class.map(|class| {
+                    u8::try_from(class)
+                        .ok()
+                        .and_then(|c| names.class(c))
+                        .map(|(display, _)| display.to_string())
+                        .unwrap_or_default()
+                }),
+                slots: e.slots,
+                comment: e.comment,
+            })
+            .collect();
+        self.step(Heard::Lfg(benilla_ui::script::LfgReply {
+            count: results.count,
+            total: results.total,
+            records,
+        }));
+    }
+
     /// The `qsort` of the kept records with the chain's comparator `0x5ada00`, at an answer
     /// (`0x5ae0e2`) and at a `SortWho` click (`0x5ad9d6`); the comparator compares the resolved
     /// names.
@@ -721,6 +755,7 @@ pub(crate) mod net {
             .net_handler(K::FriendStatus, on_friend_status)
             .net_handler(K::PlayerName, on_player_name)
             .net_handler(K::WhoResults, on_who)
+            .net_handler(K::LfgResults, on_lfg)
             .net_handler(K::LoggedOut, on_session_end)
             .net_handler(K::Disconnected, on_session_end);
     }
@@ -831,6 +866,18 @@ pub(crate) mod net {
         }
     }
 
+    fn on_lfg(
+        In(ev): In<SessionEvent>,
+        mut social: ResMut<SocialState>,
+        mut lane: ResMut<SocialLane>,
+        unit_names: crate::ui_unit::NameTables,
+    ) {
+        if let SessionEvent::LfgResults(results) = ev {
+            social.apply_lfg(results, unit_names.get());
+            lane.take(&mut social);
+        }
+    }
+
     /// The world's teardown `ClientDestroyGame` (`0x401ee0`) frees the list (`0x5ae2d0` at
     /// `0x401fc6`), at a logout to the character list and a lost link alike.
     fn on_session_end(In(ev): In<SessionEvent>, mut social: ResMut<SocialState>) {
@@ -878,6 +925,42 @@ impl Plugin for UiSocialPlugin {
     }
 }
 
+/// The looking-for-group list between a dying VM and the next ([`fold_dying_vm_lfg`]).
+#[derive(Resource, Default)]
+struct LfgCarry(benilla_ui::script::LfgStore);
+
+/// Take the looking-for-group list out of the dying VM: its records, count, total and title waits
+/// are engine state (`0xbc6fd8`-`0xbc7620`) that only the reply's handler writes, so a `/reload`'s
+/// VM gets them back ([`seed_vm_lfg`]).
+pub(crate) fn fold_dying_vm_lfg(world: &mut World) {
+    let Some(store) = world
+        .get_non_send_resource_mut::<benilla_ui::script::UiScript>()
+        .map(|mut s| s.take_lfg_store())
+    else {
+        return;
+    };
+    world.insert_resource(LfgCarry(store));
+}
+
+/// Seat a new in-game VM's looking-for-group list before its load runs. A `/reload` runs only the
+/// teardown and `UI_Init` (`0x495664`, `0x495669`), so its VM keeps the last one's list. A world
+/// entry runs the party init from `InitializeGame` (`0x4e7c70`, at `0x48f59a`), which zeroes the
+/// title counter (`0x4e7cb5`) and allocates the 50 records afresh (`0x4e7cc4`-`0x4e7ce5`).
+///
+/// Deviation: a world entry starts with no list, because the reference's getters read undefined
+/// bytes there: its allocation is not zero-filled (`SMemAlloc` flag 0) and nothing resets the
+/// count or the total, which the last session's reply left.
+pub(crate) fn seed_vm_lfg(
+    world: &mut World,
+    script: &mut benilla_ui::script::UiScript,
+    reload: bool,
+) {
+    let carried = world.remove_resource::<LfgCarry>().unwrap_or_default();
+    if reload {
+        script.seed_lfg_store(carried.0);
+    }
+}
+
 /// `LFGDungeons.dbc` for the VM's looking-for-group lists.
 #[derive(Resource)]
 struct LfgDungeonsRes(Vec<benilla_ui::script::LfgDungeon>);
@@ -893,6 +976,7 @@ fn load_lfg_dungeons(mut commands: Commands, assets: Option<Res<benilla_assets::
         Ok(rows) => commands.insert_resource(LfgDungeonsRes(
             rows.into_iter()
                 .map(|r| benilla_ui::script::LfgDungeon {
+                    id: r.id,
                     name: r.name,
                     min_level: r.min_level,
                     max_level: r.max_level,

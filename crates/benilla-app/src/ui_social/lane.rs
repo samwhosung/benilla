@@ -124,6 +124,7 @@ fn fire(script: &mut UiScript, sink: &mut MessageSink, heard: Heard) {
             show_now(script, sink, "ui_social", Shown::keyed(line.key, text));
         }
         Heard::Who { raw, wire } => who(script, sink, raw, &wire),
+        Heard::Lfg(reply) => script.lfg_results(reply),
     }
 }
 

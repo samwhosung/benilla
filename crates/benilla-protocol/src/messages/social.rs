@@ -337,6 +337,76 @@ pub fn set_looking_for_group(slots: [u32; 3], comment: &str) -> Vec<u8> {
     body
 }
 
+/// One looking-for-group record as `0x4e8dc0` reads it over the stored one (`0x4e8e8e`-`0x4e8f17`).
+/// The handler reads straight into the record, so a dword the store falls short of is `None`: the
+/// read writes nothing (`0x418e44`) and the record keeps its old value. A string always writes,
+/// `""` when the store is short or poisoned.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct LfgEntry {
+    pub name: String,
+    pub level: Option<u32>,
+    /// `ChrClasses.dbc` id.
+    pub class: Option<u32>,
+    /// The three slot words: the type in the top byte, the entry in the low 24 bits.
+    pub slots: [Option<u32>; 3],
+    pub comment: String,
+}
+
+/// `MSG_LOOKING_FOR_GROUP`'s reply, as written over the stored list.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct LfgResults {
+    /// The first dword, at most 50 (`0x4e8e60`); `None` when the store is short of it, which
+    /// keeps the stored count (`0x418eb0` writes nothing).
+    pub count: Option<u32>,
+    /// The second dword, the server's total; `None` keeps the stored one.
+    pub total: Option<u32>,
+    /// The records read before the store ran out, the last perhaps cut. Every record past them up
+    /// to the count reads a poisoned store: its name and comment `""`, its dwords unwritten.
+    pub entries: Vec<LfgEntry>,
+}
+
+/// The records `HandleLookingForGroupPacket` keeps (`0x4e8e60`).
+const LFG_KEPT: u32 = 50;
+
+/// Read the reply as `0x4e8dc0` does: two `u32` (`0x4e8e4a`, `0x4e8e56`), the first clamped to 50,
+/// then per record a name at cap `0x30` (`0x4e8e8e`), level and class dwords, three slot words and
+/// a comment at cap `0x80` (`0x4e8f17`). A short dword or a string with no NUL in its capacity
+/// poisons the store ([`who_string`], [`lfg_dword`]), and the loop still runs to the count, so a
+/// truncated reply still stands and is signalled; the records past the bytes are left to the
+/// caller, which knows the stored count a short header keeps.
+pub fn read_lfg(r: &mut &[u8]) -> io::Result<LfgResults> {
+    let count = lfg_dword(r).map(|count| count.min(LFG_KEPT));
+    let total = lfg_dword(r);
+    let mut entries = Vec::new();
+    for _ in 0..count.unwrap_or(0) {
+        if r.is_empty() {
+            break;
+        }
+        entries.push(LfgEntry {
+            name: who_string(r, 0x30),
+            level: lfg_dword(r),
+            class: lfg_dword(r),
+            slots: [lfg_dword(r), lfg_dword(r), lfg_dword(r)],
+            comment: who_string(r, 0x80),
+        });
+    }
+    Ok(LfgResults {
+        count,
+        total,
+        entries,
+    })
+}
+
+/// `GetUInt32`/`GetInt32` (`0x418eb0`, `0x418e30`): short of four bytes it moves the cursor past
+/// the end and writes nothing (`0x418e44`), which poisons every later read.
+fn lfg_dword(r: &mut &[u8]) -> Option<u32> {
+    let value = read_u32_le(r).ok();
+    if value.is_none() {
+        *r = &[];
+    }
+    value
+}
+
 /// Body of `MSG_LOOKING_FOR_GROUP` as `LFGQuery` sends it (`0x4e97f9`..`0x4e983a`): two
 /// `PutUInt32` (`0x4181f0`) after the opcode, the criterion word `(type << 24) & entry` (an `and`,
 /// `0x4e9826`, so 0 for any entry below 2^24) and the class argument, 0 when it is not a number.
@@ -445,6 +515,94 @@ mod tests {
         let status = read_friend_status(&mut &removed[..]).unwrap();
         assert_eq!(status.result, friend_result::REMOVED);
         assert_eq!(status.online, None);
+    }
+
+    /// `0x4e8dc0`: count, total, then per record name, level, class, three slots, comment.
+    #[test]
+    fn lfg_reply_golden() {
+        let mut body = Vec::new();
+        body.extend_from_slice(&2u32.to_le_bytes()); // count
+        body.extend_from_slice(&7u32.to_le_bytes()); // total
+        body.extend_from_slice(b"Aria\0");
+        body.extend_from_slice(&60u32.to_le_bytes()); // level
+        body.extend_from_slice(&8u32.to_le_bytes()); // class
+        body.extend_from_slice(&0x0100_0002u32.to_le_bytes());
+        body.extend_from_slice(&0x0300_0abcu32.to_le_bytes());
+        body.extend_from_slice(&0u32.to_le_bytes());
+        body.extend_from_slice(b"LF Strat\0");
+        body.extend_from_slice(b"Bo\0");
+        body.extend_from_slice(&1u32.to_le_bytes());
+        body.extend_from_slice(&2u32.to_le_bytes());
+        body.extend_from_slice(&[0; 12]);
+        body.extend_from_slice(b"\0");
+        let got = read_lfg(&mut &body[..]).unwrap();
+        assert_eq!(
+            got,
+            LfgResults {
+                count: Some(2),
+                total: Some(7),
+                entries: vec![
+                    LfgEntry {
+                        name: "Aria".into(),
+                        level: Some(60),
+                        class: Some(8),
+                        slots: [Some(0x0100_0002), Some(0x0300_0abc), Some(0)],
+                        comment: "LF Strat".into(),
+                    },
+                    LfgEntry {
+                        name: "Bo".into(),
+                        level: Some(1),
+                        class: Some(2),
+                        slots: [Some(0); 3],
+                        comment: String::new(),
+                    },
+                ],
+            }
+        );
+        // A count of 0 has no records.
+        let zero = [0u8; 8];
+        let got = read_lfg(&mut &zero[..]).unwrap();
+        assert_eq!(
+            (got.count, got.total, got.entries.len()),
+            (Some(0), Some(0), 0)
+        );
+    }
+
+    /// A short reply still stands, as `0x4e8dc0` reads on through a poisoned store: a short header
+    /// leaves the stored count and total unwritten (`0x418eb0`), a count past 50 keeps 50
+    /// (`0x4e8e60`), and a cut record keeps what it read, its dwords past the cut unwritten
+    /// (`0x418e30`).
+    #[test]
+    fn a_short_lfg_reply_writes_only_what_it_read() {
+        for short in [&[][..], &[2, 0, 0][..]] {
+            assert_eq!(
+                read_lfg(&mut &short[..]).unwrap(),
+                LfgResults::default(),
+                "{short:?}"
+            );
+        }
+        let mut body = Vec::new();
+        body.extend_from_slice(&9000u32.to_le_bytes());
+        let got = read_lfg(&mut &body[..]).unwrap();
+        assert_eq!(
+            (got.count, got.total, got.entries.len()),
+            (Some(50), None, 0)
+        );
+
+        body.extend_from_slice(&9u32.to_le_bytes());
+        body.extend_from_slice(b"Aria\0");
+        body.extend_from_slice(&60u32.to_le_bytes());
+        body.extend_from_slice(&[8, 0]);
+        let got = read_lfg(&mut &body[..]).unwrap();
+        assert_eq!((got.count, got.total), (Some(50), Some(9)));
+        assert_eq!(
+            got.entries,
+            [LfgEntry {
+                name: "Aria".into(),
+                level: Some(60),
+                ..LfgEntry::default()
+            }]
+        );
     }
 
     #[test]
