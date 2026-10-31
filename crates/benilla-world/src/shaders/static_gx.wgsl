@@ -113,6 +113,125 @@ fn point_light_sum(P: vec3<f32>, N: vec3<f32>, anchor: vec3<f32>) -> vec3<f32> {
     return sum;
 }
 
+// The lit colour at one vertex, `wow_model.wgsl`'s `vertex_light` over the flag words: the
+// reference lights per vertex and interpolates the clamped colour. Both faces light from the
+// submitted normal (no GL_LIGHT_MODEL_TWO_SIDE in the reference). `vc` is the vertex colour, white
+// where the batch authors none.
+fn vertex_light(normal: vec3<f32>, point_lit: vec3<f32>, vc: vec4<f32>, word: u32) -> vec3<f32> {
+    let n_lit = wow_normalize(normal);
+    let L = -normalize(wow_light.light_sun.xyz);
+    let ndotl = max(dot(n_lit, L), 0.0);
+    let lit_nl = clamp(
+        wow_light.light_ambient.rgb + wow_light.light_diffuse.rgb * ndotl,
+        vec3<f32>(0.0),
+        vec3<f32>(1.0),
+    );
+    // Order-2 SH basis terms of the vertex normal, for the doodad lobe and the probe lane.
+    let quad = vec4<f32>(n_lit.x * n_lit.y, n_lit.y * n_lit.z, n_lit.z * n_lit.z, n_lit.x * n_lit.z);
+    let x2y2 = n_lit.x * n_lit.x - n_lit.y * n_lit.y;
+    let rec = recs[word & 0xffffu];
+    if ((word & WORD_WMO) != 0u) {
+        // ---- WMO surfaces: wow_model.wgsl's is_wmo lane ----
+        let interior = (word & WORD_INTERIOR) != 0u;
+        let class_int = (word & WORD_CLASS_INT) != 0u;
+        let class_trans = (word & WORD_CLASS_TRANS) != 0u;
+        let trans_a = vc.a; // 1.0 where no MOCV is authored
+        // WINDOW (MOMT 0x20), interior drawer only: GL_LIGHT0 becomes the Direct/Ambient
+        // midpoint pair, ambient +16/255 saturating (0x6d37e0).
+        let window_mid = 0.5 * (wow_light.light_ambient.rgb + wow_light.light_diffuse.rgb);
+        let lit_window = clamp(
+            window_mid + vec3<f32>(16.0 / 255.0) + window_mid * ndotl,
+            vec3<f32>(0.0),
+            vec3<f32>(1.0),
+        );
+        let lit_int_base = select(lit_nl, lit_window, (word & WORD_WINDOW) != 0u);
+        // Interior batch classes: INT is unlit (the bake is the room's light), TRANS lerps lit
+        // to bake by MOCV alpha, EXT is plain lit_nl. Exterior groups take lit_nl at sun scale 1,
+        // no terrain shade and no SH lobe (prog 198/VS 151).
+        var lit_wmo_interior = vec3<f32>(1.0);
+        if (class_trans) {
+            lit_wmo_interior = mix(vec3<f32>(1.0), lit_int_base, trans_a);
+        } else if (!class_int) {
+            lit_wmo_interior = lit_int_base;
+        }
+        let lit_wmo = select(lit_nl, lit_wmo_interior, interior);
+        // SIDN night glow (MOMT 0x10): authored emissive × night fraction, an emission term
+        // inside the clamp and never MOCV-multiplied; zero on INT, MOCV-alpha weighted on TRANS.
+        let sidn_rgb = vec3<f32>(
+            f32(rec.z & 0xffu),
+            f32((rec.z >> 8u) & 0xffu),
+            f32((rec.z >> 16u) & 0xffu),
+        ) / 255.0;
+        var sidn_w = 1.0;
+        if (interior) {
+            if (class_trans) {
+                sidn_w = trans_a;
+            } else if (class_int) {
+                sidn_w = 0.0;
+            }
+        }
+        let sidn_e = sidn_rgb * (wow_light.grade.x * sidn_w);
+        // GL_COLOR_MATERIAL: MOCV multiplies the lit terms inside the clamp; emission adds beside.
+        return clamp(
+            vc.rgb * (lit_wmo + point_lit) + sidn_e,
+            vec3<f32>(0.0),
+            vec3<f32>(1.0),
+        );
+    }
+    if ((word & WORD_INTERIOR) != 0u) {
+        // ---- interior M2 props: wow_model.wgsl's interior-prop lane ----
+        // The spawn-folded SH probe (MODD ambient, fixed-axis diffuse, the group's MOLR lobes)
+        // over the vertex normal; its soft wrap is the reference's, not a hard max(N·L, 0).
+        let probe = 7u * ((rec.w >> 1u) & 0x1fffu);
+        let n1 = vec4<f32>(n_lit, 1.0);
+        let lit_prop = clamp(
+            vec3<f32>(
+                dot(wow_light.prop_probes[probe + 0u], n1)
+                    + dot(wow_light.prop_probes[probe + 3u], quad)
+                    + wow_light.prop_probes[probe + 6u].x * x2y2,
+                dot(wow_light.prop_probes[probe + 1u], n1)
+                    + dot(wow_light.prop_probes[probe + 4u], quad)
+                    + wow_light.prop_probes[probe + 6u].y * x2y2,
+                dot(wow_light.prop_probes[probe + 2u], n1)
+                    + dot(wow_light.prop_probes[probe + 5u], quad)
+                    + wow_light.prop_probes[probe + 6u].z * x2y2,
+            ),
+            vec3<f32>(0.0),
+            vec3<f32>(1.0),
+        );
+        return clamp(lit_prop + point_lit, vec3<f32>(0.0), vec3<f32>(1.0));
+    }
+    // ---- exterior ADT doodads and exterior MODD props ----
+    // Model2.bls order-2 SH sun lobe at intensity 0.5 Shaded (MCSH), 1.0 Matte, 2.5 Lit.
+    // Deviation: the `min(I, 1)` cap, as in wow_model.wgsl, because lifting it takes sun-facing
+    // surfaces past 1.0; Matte keeps its own bit so it stays 1.0 if the cap goes.
+    let shade_t = select(1.0, 0.0, (word & WORD_SHADE_LIT) != 0u);
+    let intensity = min(
+        select(mix(2.5, 0.5, shade_t), 1.0, (word & WORD_MATTE) != 0u),
+        1.0,
+    );
+    let sun_dc = wow_light.grade.yzw * intensity;
+    let sun_lobe = vec3<f32>(
+        wow_light.sh_c10_r.w + sun_dc.x
+            + intensity
+                * (dot(wow_light.sh_c10_r.xyz, n_lit) + dot(wow_light.sh_c13_r, quad)
+                    + wow_light.sh_c16.x * x2y2),
+        wow_light.sh_c10_g.w + sun_dc.y
+            + intensity
+                * (dot(wow_light.sh_c10_g.xyz, n_lit) + dot(wow_light.sh_c13_g, quad)
+                    + wow_light.sh_c16.y * x2y2),
+        wow_light.sh_c10_b.w + sun_dc.z
+            + intensity
+                * (dot(wow_light.sh_c10_b.xyz, n_lit) + dot(wow_light.sh_c13_b, quad)
+                    + wow_light.sh_c16.z * x2y2),
+    );
+    let lit_doodad = clamp(sun_lobe, vec3<f32>(0.0), vec3<f32>(1.0));
+    // Sun disabled (light_sun.w) falls back to the FFP matte, like the entity path.
+    let lit = select(lit_nl, lit_doodad, wow_light.light_sun.w > 0.5);
+    // FFP combine: the light sum saturates first, then the texture modulates it.
+    return clamp(lit + point_lit, vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
 // ---- the pass ----
 
 struct GxVertex {
@@ -128,10 +247,10 @@ struct GxVertex {
 struct GxVsOut {
     @builtin(position) position: vec4<f32>,
     @location(0) world_position: vec4<f32>,
-    @location(1) world_normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
     @location(3) @interpolate(flat) word: u32,
-    @location(4) point_lit: vec3<f32>,
+    // The lit colour from `vertex_light`, clamped at the vertex and interpolated.
+    @location(4) primary: vec3<f32>,
     @location(5) color: vec4<f32>,
 }
 
@@ -143,10 +262,9 @@ fn vertex(v: GxVertex) -> GxVsOut {
     if ((recs[v.word & 0xffffu].w & 1u) != 0u) {
         out.position = vec4<f32>(0.0, 0.0, 2.0, 1.0);
         out.world_position = vec4<f32>(0.0);
-        out.world_normal = vec3<f32>(0.0, 1.0, 0.0);
         out.uv = vec2<f32>(0.0);
         out.word = v.word;
-        out.point_lit = vec3<f32>(0.0);
+        out.primary = vec3<f32>(0.0);
         out.color = vec4<f32>(1.0);
         return out;
     }
@@ -163,17 +281,18 @@ fn vertex(v: GxVertex) -> GxVsOut {
     // Authored MOBA batch order (record y, 0 on cells): a later coplanar batch wins reverse-Z
     // GreaterEqual in any draw order, because the draw sort does not keep authored order.
     out.position.z *= 1.0 + f32(recs[v.word & 0xffffu].y) * 1.1920929e-7;
-    out.world_normal = v.normal;
     out.uv = v.uv;
     out.word = v.word;
     out.color = v.color;
     // Up to 3 nearest point lights, chosen from the placement origin. WMO surfaces take none,
     // as in the reference; interior props neither: the probe holds their group's MOLR lights.
-    if ((v.word & (WORD_WMO | WORD_INTERIOR)) != 0u) {
-        out.point_lit = vec3<f32>(0.0);
-    } else {
-        out.point_lit = point_light_sum(world, v.normal, v.anchor);
+    var point_lit = vec3<f32>(0.0);
+    if ((v.word & (WORD_WMO | WORD_INTERIOR)) == 0u) {
+        point_lit = point_light_sum(world, v.normal, v.anchor);
     }
+    // A colour-less batch takes a constant 1.0 (WORD_HAS_VC).
+    let vc = select(vec4<f32>(1.0), v.color, (v.word & WORD_HAS_VC) != 0u);
+    out.primary = vertex_light(v.normal, point_lit, vc, v.word);
     return out;
 }
 
@@ -217,139 +336,27 @@ fn fragment(in: GxVsOut) -> @location(0) vec4<f32> {
         discard;
     }
 #endif
-    // Both faces light from the submitted normal (no GL_LIGHT_MODEL_TWO_SIDE in the reference);
-    // this pipeline never negates back faces, so it has no front-face select like wow_model.wgsl.
-    let n_lit = wow_normalize(in.world_normal);
-    let L = -normalize(wow_light.light_sun.xyz);
-    let ndotl = max(dot(n_lit, L), 0.0);
-    let lit_nl = clamp(
-        wow_light.light_ambient.rgb + wow_light.light_diffuse.rgb * ndotl,
-        vec3<f32>(0.0),
-        vec3<f32>(1.0),
-    );
-    // Order-2 SH basis terms of the fragment normal, for the doodad lobe and the probe lane.
-    let quad = vec4<f32>(n_lit.x * n_lit.y, n_lit.y * n_lit.z, n_lit.z * n_lit.z, n_lit.x * n_lit.z);
-    let x2y2 = n_lit.x * n_lit.x - n_lit.y * n_lit.y;
     // A colour-less batch takes a constant 1.0, not interpolated white: interpolating a constant
     // attribute gives 1.0±ε, and base × 0.99999994 rounds about half the pixels one byte down.
     let has_vc = (in.word & WORD_HAS_VC) != 0u;
     let vc = select(vec4<f32>(1.0), in.color, has_vc);
     let folded = select(base.rgb, base.rgb * vc.rgb, has_vc);
-    var rgb: vec3<f32>;
+    // The stage-0 modulate: the texel times the lit colour `vertex_light` clamped per vertex.
+    var rgb = folded * in.primary;
     if ((in.word & WORD_WMO) != 0u) {
-        // ---- WMO surfaces: wow_model.wgsl's is_wmo branch ----
-        let interior = (in.word & WORD_INTERIOR) != 0u;
-        let class_int = (in.word & WORD_CLASS_INT) != 0u;
-        let class_trans = (in.word & WORD_CLASS_TRANS) != 0u;
-        let trans_a = vc.a; // 1.0 where no MOCV is authored
-        // WINDOW (MOMT 0x20), interior drawer only: GL_LIGHT0 becomes the Direct/Ambient
-        // midpoint pair, ambient +16/255 saturating (0x6d37e0).
-        let window_mid = 0.5 * (wow_light.light_ambient.rgb + wow_light.light_diffuse.rgb);
-        let lit_window = clamp(
-            window_mid + vec3<f32>(16.0 / 255.0) + window_mid * ndotl,
-            vec3<f32>(0.0),
-            vec3<f32>(1.0),
-        );
-        let lit_int_base = select(lit_nl, lit_window, (in.word & WORD_WINDOW) != 0u);
-        // Interior batch classes: INT is unlit (the bake is the room's light), TRANS lerps lit
-        // to bake by MOCV alpha, EXT is plain lit_nl. Exterior groups take lit_nl at sun scale 1,
-        // no terrain shade and no SH lobe (prog 198/VS 151).
-        var lit_wmo_interior = vec3<f32>(1.0);
-        if (class_trans) {
-            lit_wmo_interior = mix(vec3<f32>(1.0), lit_int_base, trans_a);
-        } else if (!class_int) {
-            lit_wmo_interior = lit_int_base;
-        }
-        let lit_wmo = select(lit_nl, lit_wmo_interior, interior);
-        // SIDN night glow (MOMT 0x10): authored emissive × night fraction, an emission term
-        // inside the clamp and never MOCV-multiplied; zero on INT, MOCV-alpha weighted on TRANS.
-        let rec = recs[in.word & 0xffffu];
-        let sidn_rgb = vec3<f32>(
-            f32(rec.z & 0xffu),
-            f32((rec.z >> 8u) & 0xffu),
-            f32((rec.z >> 16u) & 0xffu),
-        ) / 255.0;
-        var sidn_w = 1.0;
-        if (interior) {
-            if (class_trans) {
-                sidn_w = trans_a;
-            } else if (class_int) {
-                sidn_w = 0.0;
-            }
-        }
-        let sidn_e = sidn_rgb * (wow_light.grade.x * sidn_w);
-        // GL_COLOR_MATERIAL: MOCV multiplies the lit terms inside the clamp; emission adds beside.
-        let primary = clamp(
-            vc.rgb * (lit_wmo + in.point_lit) + sidn_e,
-            vec3<f32>(0.0),
-            vec3<f32>(1.0),
-        );
-        // The entity path's algebra: (tex×vc)/max(vc, 1/255) is not tex in floats; keep it.
+        // MOCV is inside the lit colour. The entity path's algebra: (tex×vc)/max(vc, 1/255) is
+        // not tex in floats; keep it.
         let tex_rgb = folded / max(vc.rgb, vec3<f32>(1.0 / 255.0));
-        rgb = tex_rgb * primary;
-        if (interior && class_int && has_vc) {
+        rgb = tex_rgb * in.primary;
+        if ((in.word & WORD_INTERIOR) != 0u && (in.word & WORD_CLASS_INT) != 0u && has_vc) {
             // INT self-illumination, the reference's interior pixel shader (literal 4.0):
             // tex·MOCV·(1 + 4·MOCV.a), clamped once. A colour-less INT batch keeps tex × lit.
             rgb = clamp(
-                tex_rgb * vc.rgb * (1.0 + 4.0 * trans_a),
+                tex_rgb * vc.rgb * (1.0 + 4.0 * vc.a),
                 vec3<f32>(0.0),
                 vec3<f32>(1.0),
             );
         }
-    } else if ((in.word & WORD_INTERIOR) != 0u) {
-        // ---- interior M2 props: wow_model.wgsl's interior-prop branch ----
-        // The spawn-folded SH probe (MODD ambient, fixed-axis diffuse, the group's MOLR lobes)
-        // over the fragment normal; its soft wrap is the reference's, not a hard max(N·L, 0).
-        let probe = 7u * ((recs[in.word & 0xffffu].w >> 1u) & 0x1fffu);
-        let n1 = vec4<f32>(n_lit, 1.0);
-        let lit_prop = clamp(
-            vec3<f32>(
-                dot(wow_light.prop_probes[probe + 0u], n1)
-                    + dot(wow_light.prop_probes[probe + 3u], quad)
-                    + wow_light.prop_probes[probe + 6u].x * x2y2,
-                dot(wow_light.prop_probes[probe + 1u], n1)
-                    + dot(wow_light.prop_probes[probe + 4u], quad)
-                    + wow_light.prop_probes[probe + 6u].y * x2y2,
-                dot(wow_light.prop_probes[probe + 2u], n1)
-                    + dot(wow_light.prop_probes[probe + 5u], quad)
-                    + wow_light.prop_probes[probe + 6u].z * x2y2,
-            ),
-            vec3<f32>(0.0),
-            vec3<f32>(1.0),
-        );
-        let primary = clamp(lit_prop + in.point_lit, vec3<f32>(0.0), vec3<f32>(1.0));
-        rgb = folded * primary;
-    } else {
-        // ---- exterior ADT doodads and exterior MODD props ----
-        // Model2.bls order-2 SH sun lobe at intensity 0.5 Shaded (MCSH), 1.0 Matte, 2.5 Lit.
-        // Deviation: the `min(I, 1)` cap, as in wow_model.wgsl, because lifting it takes sun-facing
-        // surfaces past 1.0; Matte keeps its own bit so it stays 1.0 if the cap goes.
-        let shade_t = select(1.0, 0.0, (in.word & WORD_SHADE_LIT) != 0u);
-        let intensity = min(
-            select(mix(2.5, 0.5, shade_t), 1.0, (in.word & WORD_MATTE) != 0u),
-            1.0,
-        );
-        let sun_dc = wow_light.grade.yzw * intensity;
-        let sun_lobe = vec3<f32>(
-            wow_light.sh_c10_r.w + sun_dc.x
-                + intensity
-                    * (dot(wow_light.sh_c10_r.xyz, n_lit) + dot(wow_light.sh_c13_r, quad)
-                        + wow_light.sh_c16.x * x2y2),
-            wow_light.sh_c10_g.w + sun_dc.y
-                + intensity
-                    * (dot(wow_light.sh_c10_g.xyz, n_lit) + dot(wow_light.sh_c13_g, quad)
-                        + wow_light.sh_c16.y * x2y2),
-            wow_light.sh_c10_b.w + sun_dc.z
-                + intensity
-                    * (dot(wow_light.sh_c10_b.xyz, n_lit) + dot(wow_light.sh_c13_b, quad)
-                        + wow_light.sh_c16.z * x2y2),
-        );
-        let lit_doodad = clamp(sun_lobe, vec3<f32>(0.0), vec3<f32>(1.0));
-        // Sun disabled (light_sun.w) falls back to the FFP matte, like the entity path.
-        let lit = select(lit_nl, lit_doodad, wow_light.light_sun.w > 0.5);
-        // FFP combine: the light sum saturates first, then the texture modulates it.
-        let primary = clamp(lit + in.point_lit, vec3<f32>(0.0), vec3<f32>(1.0));
-        rgb = folded * primary;
     }
     // Unlit (M2 UNLIT 0x01, WMO UNLIT on an exterior group): texture × vertex colour, no light.
     if ((in.word & WORD_UNLIT) != 0u) {

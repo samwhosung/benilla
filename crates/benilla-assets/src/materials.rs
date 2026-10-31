@@ -459,6 +459,58 @@ mod tests {
         );
     }
 
+    /// The reference lights in the vertex stage: `Model2.bls` evaluates the SH lobe and writes the
+    /// colour to `oD0`, and WMO and clutter run FFP T&L, so the colour is clamped at each vertex
+    /// and interpolated. The light lanes live in `vertex_light`, the vertex stage writes its result
+    /// to the interpolated `primary`, and the fragment only modulates the texel by it.
+    #[test]
+    fn the_model_light_is_evaluated_per_vertex() {
+        let src = include_str!("shaders/wow_model.wgsl");
+        let at = |needle: &str| {
+            src.find(needle)
+                .unwrap_or_else(|| panic!("`{needle}` is gone"))
+        };
+        let light = &src[at("fn vertex_light(")..at("@vertex")];
+        let vertex = &src[at("@vertex")..at("@fragment")];
+        let fragment = &src[at("@fragment")..];
+        for (lane, term) in [
+            ("the exterior SH lobe", "wow_light.sh_c10_r.w + sun_dc.x"),
+            ("the FFP N·L", "let ndotl = max(dot(n_lit, L), 0.0);"),
+            (
+                "the interior probe",
+                "dot(wow_light.prop_probes[probe + 0u], n1)",
+            ),
+        ] {
+            assert!(light.contains(term), "{lane} left `vertex_light`");
+        }
+        assert!(
+            vertex.contains("out.primary = vertex_light(out.world_normal, point_lit, vcol,"),
+            "the vertex stage no longer lights its vertex"
+        );
+        assert!(
+            src.contains("    @location(8) primary: vec3<f32>,\n"),
+            "the lit colour must be interpolated across the triangle, never flat"
+        );
+        for term in [
+            "sh_c10",
+            "sh_c13",
+            "prop_probes",
+            "light_sun",
+            "light_diffuse",
+            "point_light_sum",
+            "vertex_light(",
+        ] {
+            assert!(
+                !fragment.contains(term),
+                "the fragment evaluates `{term}` again — the reference lights per vertex"
+            );
+        }
+        assert!(
+            fragment.contains("var lit_rgb = albedo * in.primary;"),
+            "the fragment modulates the texel by the interpolated lit colour"
+        );
+    }
+
     /// A second texture stage samples `Model2.bls`'s generated coordinate: the program for a stage
     /// whose coordinate lookup is above 2 reflects the view-space position about the normal
     /// (`DP3`, `MUL 2`, `MAD −`), normalizes it (`RSQ`) and maps x, y by `MAD ·0.5 + 0.5`.

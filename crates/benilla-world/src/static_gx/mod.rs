@@ -782,6 +782,52 @@ mod tests {
     use super::testkit::{batch, batch_of, object, tri};
     use super::*;
 
+    /// The static pass lights as the entity pass does, per vertex: `vertex_light` holds every
+    /// lane, the vertex stage writes its clamped colour to the interpolated `primary`, and the
+    /// fragment only modulates the texel by it.
+    #[test]
+    fn the_static_light_is_evaluated_per_vertex() {
+        let src = include_str!("../shaders/static_gx.wgsl");
+        let at = |needle: &str| {
+            src.find(needle)
+                .unwrap_or_else(|| panic!("`{needle}` is gone"))
+        };
+        let light = &src[at("fn vertex_light(")..at("// ---- the pass ----")];
+        let vertex = &src[at("@vertex")..at("@fragment")];
+        let fragment = &src[at("@fragment")..];
+        for (lane, term) in [
+            ("the exterior SH lobe", "wow_light.sh_c10_r.w + sun_dc.x"),
+            ("the FFP N·L", "let ndotl = max(dot(n_lit, L), 0.0);"),
+            (
+                "the interior probe",
+                "dot(wow_light.prop_probes[probe + 0u], n1)",
+            ),
+        ] {
+            assert!(light.contains(term), "{lane} left `vertex_light`");
+        }
+        assert!(
+            vertex.contains("out.primary = vertex_light(v.normal, point_lit, vc, v.word);"),
+            "the vertex stage no longer lights its vertex"
+        );
+        assert!(
+            src.contains("    @location(4) primary: vec3<f32>,\n"),
+            "the lit colour must be interpolated across the triangle, never flat"
+        );
+        for term in [
+            "sh_c10",
+            "prop_probes",
+            "light_sun",
+            "light_diffuse",
+            "point_light_sum",
+            "vertex_light(",
+        ] {
+            assert!(
+                !fragment.contains(term),
+                "the fragment evaluates `{term}` again — the reference lights per vertex"
+            );
+        }
+    }
+
     #[test]
     fn a_collected_region_is_undrawn_until_it_publishes() {
         let mut gx = StaticGx::default();

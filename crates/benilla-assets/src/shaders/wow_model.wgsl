@@ -6,7 +6,8 @@
 // The M2 law is the order-2 SH lobe of `Shaders\Vertex\Model2.bls` (cvar `M2UseShaders`, default
 // 1); M2's one FFP light site (`70bdf6`) runs only with that cvar off. Clutter and WMO are the FFP
 // light (GL_LIGHTING, GL_LIGHT0, GL_COLOR_MATERIAL); clutter's normal is the terrain normal under
-// the tuft, which the reference writes onto the clutter vertex.
+// the tuft, which the reference writes onto the clutter vertex. Both light per vertex and the
+// clamped colour is interpolated (`vertex_light`); the fragment multiplies the texel by it.
 // Not built: a specular term (the M2 per-material shininess is only inferred) and the WMO
 // per-group authored colour.
 
@@ -128,14 +129,12 @@ struct WowVsOut {
 #ifdef VERTEX_OUTPUT_INSTANCE_INDEX
     @location(6) @interpolate(flat) instance_index: u32,
 #endif
-    // The point-light sum `Σ att·sat(N·L)·colour`, per vertex like the reference FFP.
-    @location(8) point_lit: vec3<f32>,
+    // The lit colour from `vertex_light`, clamped at the vertex and interpolated, as the
+    // reference interpolates its vertex program's `oD0` and the FFP's lit colour.
+    @location(8) primary: vec3<f32>,
 #ifdef WOW_MERGED_FADE
     // A merged blob's per-placement fade alpha, constant over the placement.
     @location(9) merged_fade: f32,
-#endif
-#ifdef WOW_MERGED_SLOT
-    @location(10) @interpolate(flat) merged_slot: u32,
 #endif
     // Stage 1's generated coordinate, (0, 0) when the material binds no stage 1.
     @location(11) env_uv: vec2<f32>,
@@ -355,6 +354,160 @@ fn wow_skin_normals(frame_from_local: mat4x4<f32>, normal: vec3<f32>) -> vec3<f3
 }
 #endif
 
+// The body tint (an aura colouring the whole model) by the tag's rig slot, 0 = identity: the
+// material ambient+diffuse colour (gx SetState(1), GL_COLOR_MATERIAL), so it multiplies the light
+// sum inside the clamp, never the emission.
+fn body_tint(fade_tag: u32) -> vec3<f32> {
+    let tint_word = wow_light.rig_tint[(fade_tag >> 19u) & 0x7ffu];
+    return select(
+        vec3<f32>(
+            f32((tint_word >> 16u) & 0xffu),
+            f32((tint_word >> 8u) & 0xffu),
+            f32(tint_word & 0xffu),
+        ) * (1.0 / 255.0),
+        vec3<f32>(1.0),
+        tint_word == 0u,
+    );
+}
+
+// The hover/target highlight (tag bit 31): the scene's committed ambient
+// (`0x614576`-`0x6145bd`), added to the batch colour inside the final clamp, lit or unlit
+// (`c29`). Sampled live, where the reference holds the value sampled when the highlight
+// began: a unit's tag has no slot to hold a colour, and the ambient moves slowly.
+fn highlight_add(raw_tag: u32) -> vec3<f32> {
+    return select(vec3<f32>(0.0), wow_light.light_ambient.rgb, (raw_tag & 0x80000000u) != 0u);
+}
+
+// The lit colour at one vertex: the reference lights in the vertex stage (`Model2.bls` evaluates
+// the SH and writes `oD0`; WMO and clutter run FFP T&L) and the rasterizer interpolates the
+// clamped result. `world_normal` is the submitted one: the reference never enables
+// GL_LIGHT_MODEL_TWO_SIDE (`0x59ce30`), so a back face lights from it too. `vcol` is the vertex
+// colour (white without one), `point_lit` the selected point lights' sum.
+fn vertex_light(
+    world_normal: vec3<f32>,
+    point_lit: vec3<f32>,
+    vcol: vec4<f32>,
+    probe_slot: u32,
+    raw_tag: u32,
+) -> vec3<f32> {
+    let is_clutter = m.clutter_fade.w > 0.5;
+    let is_wmo = m.model_flags.x > 0.5;
+    let is_interior = m.model_flags.z > 0.5;
+    let interior_prop = is_interior && !is_wmo;
+    let fade_tag = raw_tag & 0x3fffffffu;
+    let L = -normalize(wow_light.light_sun.xyz);
+    // `wow_normalize`: an authored zero normal reaches here on the unskinned lane.
+    let n_lit = wow_normalize(world_normal);
+    let ndotl = max(dot(n_lit, L), 0.0);
+    let lit_nl = clamp(wow_light.light_ambient.rgb + wow_light.light_diffuse.rgb * ndotl, vec3<f32>(0.0), vec3<f32>(1.0));
+    // The order-2 SH basis, shared by the exterior lobe and the interior probes.
+    let quad = vec4<f32>(n_lit.x * n_lit.y, n_lit.y * n_lit.z, n_lit.z * n_lit.z, n_lit.x * n_lit.z);
+    let n1 = vec4<f32>(n_lit, 1.0);
+    let x2y2 = n_lit.x * n_lit.x - n_lit.y * n_lit.y;
+    // Exterior doodads and entities: the header's `Model2.bls` lobe at the per-instance intensity
+    // I, `[node+0xa4]` (animator targets 2.5 lit and 0.5 shadowed, `0x69e4ad`/`0x69e280`; 1.0
+    // indoors, `0x69e36b`). `sun_scale.x` picks the family:
+    //   ≥ 0.85: an entity M2, 2.5 mixed toward 0.5 by the tag's shade byte (ramped like `0x69e770`)
+    //   0.5..0.85: a doodad (ADT MDDF or WMO MODD, both `CMapDoodadDef`): 1.0, never 2.5
+    //   < 0.5: a doodad on MCSH-shadowed ground: 0.5
+    // Deviation: `min(I, 1)`. The reference bakes I into the SH unclamped (`0x71c4e0`), so a lit
+    // entity commits ×2.5 there and ×1.0 here; lifting the cap takes sun-facing surfaces past 1.0.
+    // `entity_shade::LIT_T` aims the lit ramp at 1.0 because of it: lift the cap and set `LIT_T`
+    // back to 0.0 together.
+    let inst_shade = select(f32((fade_tag >> 6u) & 0xffu) / 255.0, 0.0, interior_prop);
+    let mat_shade = select(0.0, 1.0, m.sun_scale.x < 0.5);
+    let shade_t = max(mat_shade, inst_shade);
+    let mid_band = m.sun_scale.x >= 0.5 && m.sun_scale.x < 0.85;
+    let intensity = min(select(mix(2.5, 0.5, shade_t), 1.0, mid_band), 1.0);
+    // One `intensity` multiply covers every sun band (never I²); the c10 `.w` ambient does not
+    // scale. `pack_model_core_rows` packs the same closed form.
+    let sun_dc = wow_light.grade.yzw * intensity;
+    let sun_lobe = vec3<f32>(
+        wow_light.sh_c10_r.w + sun_dc.x
+            + intensity
+                * (dot(wow_light.sh_c10_r.xyz, n_lit) + dot(wow_light.sh_c13_r, quad)
+                    + wow_light.sh_c16.x * x2y2),
+        wow_light.sh_c10_g.w + sun_dc.y
+            + intensity
+                * (dot(wow_light.sh_c10_g.xyz, n_lit) + dot(wow_light.sh_c13_g, quad)
+                    + wow_light.sh_c16.y * x2y2),
+        wow_light.sh_c10_b.w + sun_dc.z
+            + intensity
+                * (dot(wow_light.sh_c10_b.xyz, n_lit) + dot(wow_light.sh_c13_b, quad)
+                    + wow_light.sh_c16.z * x2y2),
+    );
+    // Clamp the sum, never a term: the lobe's own ringing dips to −0.037·C near μ ≈ −0.53, and a
+    // per-term clamp would erase it.
+    let lit_doodad = clamp(sun_lobe, vec3<f32>(0.0), vec3<f32>(1.0));
+    // WMO and clutter take the FFP N·L light with no terrain shade; the lobe needs the directional
+    // light on (`light_sun.w`).
+    let use_doodad_shade = (wow_light.light_sun.w > 0.5) && !is_clutter && !is_wmo;
+    let lit_exterior = select(lit_nl, lit_doodad, use_doodad_shade);
+    // WMO interior groups (`groupFlags & 0x48 == 0`) by batch class (`tint.w`): INT (1) is unlit
+    // `tex × MOCV`; TRANS (2) is the reference's two passes, lit × MOCV.a + unlit × (1 − MOCV.a),
+    // as one lerp; EXT (0) is `lit_nl`. A WINDOW batch (MOMT 0x20) on the interior drawer lights
+    // with ambient = diffuse = the Direct/Ambient midpoint, ambient +16/255 (`0x6d37e0`).
+    let trans_a = vcol.a;
+    let window_mid = 0.5 * (wow_light.light_ambient.rgb + wow_light.light_diffuse.rgb);
+    let lit_window = clamp(
+        window_mid + vec3<f32>(16.0 / 255.0) + window_mid * ndotl,
+        vec3<f32>(0.0),
+        vec3<f32>(1.0),
+    );
+    let lit_int_base = select(lit_nl, lit_window, m.sidn.w > 0.5);
+    var lit_wmo_interior = vec3<f32>(1.0);
+    if (m.tint.w > 1.5) {
+        lit_wmo_interior = mix(vec3<f32>(1.0), lit_int_base, trans_a);
+    } else if (m.tint.w < 0.5) {
+        lit_wmo_interior = lit_int_base;
+    }
+    // Interior M2 props (WMO MODD doodads): the reference commits the prop's MODD colour through a
+    // fixed-axis diffuse lobe plus its group's MOLR lights as an order-2 SH probe, folded at spawn
+    // by `lighting::prop_probe_coeffs`. Its soft wrap (≈ 0.088·C side-on) is the reference's
+    // response, not a max(N·L, 0).
+    let probe = 7u * probe_slot;
+    let lit_m2_interior = clamp(
+        vec3<f32>(
+            dot(wow_light.prop_probes[probe + 0u], n1)
+                + dot(wow_light.prop_probes[probe + 3u], quad)
+                + wow_light.prop_probes[probe + 6u].x * x2y2,
+            dot(wow_light.prop_probes[probe + 1u], n1)
+                + dot(wow_light.prop_probes[probe + 4u], quad)
+                + wow_light.prop_probes[probe + 6u].y * x2y2,
+            dot(wow_light.prop_probes[probe + 2u], n1)
+                + dot(wow_light.prop_probes[probe + 5u], quad)
+                + wow_light.prop_probes[probe + 6u].z * x2y2,
+        ),
+        vec3<f32>(0.0),
+        vec3<f32>(1.0),
+    );
+    let lit_interior = select(lit_m2_interior, lit_wmo_interior, is_wmo);
+    // The authored-rig lane (`ShadeSel::Rig`, glue scenes): the scene's lights are folded into
+    // probe slot 0 of the material's own buffer, which `lit_m2_interior` already evaluated (tag 0).
+    let is_rig = m.sun_scale.x >= 1.5;
+    let lit = select(select(lit_exterior, lit_interior, is_interior), lit_m2_interior, is_rig);
+    // SIDN night glow: the emissive × the night fraction (ramping 20:30→21:30, 06:00→07:00), a
+    // GL_EMISSION term inside the clamped lit sum, on lit lanes only.
+    var sidn_w = 1.0;
+    if (is_interior && is_wmo) {
+        if (m.tint.w > 1.5) {
+            sidn_w = trans_a; // TRANS: weighted by its lit pass
+        } else if (m.tint.w > 0.5) {
+            sidn_w = 0.0; // INT: unlit, so no emission
+        }
+    }
+    let sidn_e = m.sidn.rgb * (wow_light.grade.x * sidn_w);
+    // The FFP combine: the light sum (lit, point lights, emission) clamps first and the texture
+    // modulates it, `tex × clamp(C·sum + emission)`, with C the GL_COLOR_MATERIAL colour: MOCV on
+    // WMO (white without one), the body tint on M2. A WMO surface has no tint slot.
+    let c = select(body_tint(fade_tag), vcol.rgb, is_wmo);
+    return clamp(
+        c * (lit + point_lit) + sidn_e + highlight_add(raw_tag),
+        vec3<f32>(0.0),
+        vec3<f32>(1.0),
+    );
+}
+
 // Bevy 0.18's `mesh.wgsl` vertex stage plus our skinning and point lights. A `MaterialExtension`
 // replaces the whole stage, so this must track Bevy's on upgrades.
 @vertex
@@ -418,9 +571,6 @@ fn vertex(vertex: WowVertex) -> WowVsOut {
     if (out.merged_fade <= 0.0) {
         out.position = vec4<f32>(0.0, 0.0, 2.0, 1.0);
     }
-#ifdef WOW_MERGED_SLOT
-    out.merged_slot = vertex.merged_slot;
-#endif
 #endif
 #endif
 
@@ -460,15 +610,26 @@ fn vertex(vertex: WowVertex) -> WowVsOut {
 
     // Point lights: none on WMO surfaces, none here on interior M2 props (their group's MOLR lights
     // are in the SH probe), else the ≤3 nearest to the instance origin (clutter: its MCNK chunk).
-    if (m.model_flags.x > 0.5 || m.model_flags.z > 0.5) {
-        out.point_lit = vec3<f32>(0.0);
-    } else {
+    var point_lit = vec3<f32>(0.0);
+    if (m.model_flags.x < 0.5 && m.model_flags.z < 0.5) {
         var anchor = mesh_world_from_local[3].xyz;
         if (m.clutter_fade.w > 0.5) {
             anchor = mcnk_cell_anchor(out.world_position.xyz);
         }
-        out.point_lit = point_light_sum(out.world_position.xyz, out.world_normal, anchor);
+        point_lit = point_light_sum(out.world_position.xyz, out.world_normal, anchor);
     }
+    var vcol = vec4<f32>(1.0);
+#ifdef VERTEX_COLORS
+    vcol = vertex.color;
+#endif
+    let raw_tag = mesh_functions::get_tag(vertex.instance_index);
+#ifdef WOW_MERGED_SLOT
+    // A merged blob bakes the probe slot per vertex; its tag carries only fog and alpha.
+    let probe_slot = vertex.merged_slot;
+#else
+    let probe_slot = ((raw_tag & 0x3fffffffu) >> 6u) & 0x1fffu;
+#endif
+    out.primary = vertex_light(out.world_normal, point_lit, vcol, probe_slot, raw_tag);
     return out;
 }
 
@@ -599,9 +760,7 @@ fn fragment(in: WowVsOut, @builtin(front_facing) is_front: bool) -> WowFragOut {
     // The MeshTag (mesh_tag.rs): bit 31 = highlight, bit 30 = interior fog; payload bits 0-5 = the
     // fade alpha (a zero payload is untagged, opaque), 19-29 = the rig slot, 6-13 = the ground
     // shade (0 lit, 255 MCSH-shadowed) or, on an interior-prop material, 6-18 = the SH-probe slot.
-    let interior_prop = m.model_flags.z > 0.5 && m.model_flags.x < 0.5;
     let raw_tag = mesh_functions::get_tag(in.instance_index);
-    let highlighted = (raw_tag & 0x80000000u) != 0u;
     let interior_fogged = (raw_tag & 0x40000000u) != 0u;
     let fade_tag = raw_tag & 0x3fffffffu;
     let alpha6 = f32(fade_tag & 0x3fu) / 63.0;
@@ -610,19 +769,7 @@ fn fragment(in: WowVsOut, @builtin(front_facing) is_front: bool) -> WowFragOut {
     // A merged blob's per-vertex fade composes where the tag fade does, so it feathers the same.
     obj_fade = obj_fade * in.merged_fade;
 #endif
-    // The body tint (an aura colouring the whole model), by rig slot, 0 = identity: the material
-    // ambient+diffuse colour (gx SetState(1), GL_COLOR_MATERIAL), so it multiplies the light sum
-    // inside the clamp, never the emission.
-    let tint_word = wow_light.rig_tint[(fade_tag >> 19u) & 0x7ffu];
-    let inst_tint = select(
-        vec3<f32>(
-            f32((tint_word >> 16u) & 0xffu),
-            f32((tint_word >> 8u) & 0xffu),
-            f32(tint_word & 0xffu),
-        ) * (1.0 / 255.0),
-        vec3<f32>(1.0),
-        tint_word == 0u,
-    );
+    let inst_tint = body_tint(fade_tag);
     // The blend twin re-applies its source's cutout: the reference scales ALPHAREF with the fade,
     // so the cutoff stays tex.a < 224/255 on the unfaded alpha. Only for a source batch that
     // alpha-tests (bit 10): ALPHAREF keys on the stored blend mode.
@@ -646,177 +793,34 @@ fn fragment(in: WowVsOut, @builtin(front_facing) is_front: bool) -> WowFragOut {
     let base = alpha_discard(pbr_input.material, base_color);
 
     // --- Lighting --------------------------------------------------------------------------------
-    let is_clutter = m.clutter_fade.w > 0.5;
-    let L = -normalize(wow_light.light_sun.xyz);
-    // `wow_normalize`: an authored zero normal reaches here on the unskinned lane.
-    let n_m2 = wow_normalize(pbr_input.world_normal);
-    // Bevy negates `world_normal` on back faces of double-sided materials (foliage, every WMO
-    // face); the reference never enables GL_LIGHT_MODEL_TWO_SIDE (`0x59ce30`), so undo it.
-    let n_lit = select(-n_m2, n_m2, is_front);
-    let ndotl = max(dot(n_lit, L), 0.0);
-    let lit_nl = clamp(wow_light.light_ambient.rgb + wow_light.light_diffuse.rgb * ndotl, vec3<f32>(0.0), vec3<f32>(1.0));
-    // The order-2 SH basis, shared by the exterior lobe and the interior probes.
-    let quad = vec4<f32>(n_lit.x * n_lit.y, n_lit.y * n_lit.z, n_lit.z * n_lit.z, n_lit.x * n_lit.z);
-    let n1 = vec4<f32>(n_lit, 1.0);
-    let x2y2 = n_lit.x * n_lit.x - n_lit.y * n_lit.y;
-    // Exterior doodads and entities: the header's `Model2.bls` lobe at the per-instance intensity
-    // I, `[node+0xa4]` (animator targets 2.5 lit and 0.5 shadowed, `0x69e4ad`/`0x69e280`; 1.0
-    // indoors, `0x69e36b`). `sun_scale.x` picks the family:
-    //   ≥ 0.85: an entity M2, 2.5 mixed toward 0.5 by the tag's shade byte (ramped like `0x69e770`)
-    //   0.5..0.85: a doodad (ADT MDDF or WMO MODD, both `CMapDoodadDef`): 1.0, never 2.5
-    //   < 0.5: a doodad on MCSH-shadowed ground: 0.5
-    // Deviation: `min(I, 1)`. The reference bakes I into the SH unclamped (`0x71c4e0`), so a lit
-    // entity commits ×2.5 there and ×1.0 here; lifting the cap takes sun-facing surfaces past 1.0.
-    // `entity_shade::LIT_T` aims the lit ramp at 1.0 because of it: lift the cap and set `LIT_T`
-    // back to 0.0 together.
-    let inst_shade = select(f32((fade_tag >> 6u) & 0xffu) / 255.0, 0.0, interior_prop);
-    let mat_shade = select(0.0, 1.0, m.sun_scale.x < 0.5);
-    let shade_t = max(mat_shade, inst_shade);
-    let mid_band = m.sun_scale.x >= 0.5 && m.sun_scale.x < 0.85;
-    let intensity = min(select(mix(2.5, 0.5, shade_t), 1.0, mid_band), 1.0);
-    // One `intensity` multiply covers every sun band (never I²); the c10 `.w` ambient does not
-    // scale. `pack_model_core_rows` packs the same closed form.
-    let sun_dc = wow_light.grade.yzw * intensity;
-    let sun_lobe = vec3<f32>(
-        wow_light.sh_c10_r.w + sun_dc.x
-            + intensity
-                * (dot(wow_light.sh_c10_r.xyz, n_lit) + dot(wow_light.sh_c13_r, quad)
-                    + wow_light.sh_c16.x * x2y2),
-        wow_light.sh_c10_g.w + sun_dc.y
-            + intensity
-                * (dot(wow_light.sh_c10_g.xyz, n_lit) + dot(wow_light.sh_c13_g, quad)
-                    + wow_light.sh_c16.y * x2y2),
-        wow_light.sh_c10_b.w + sun_dc.z
-            + intensity
-                * (dot(wow_light.sh_c10_b.xyz, n_lit) + dot(wow_light.sh_c13_b, quad)
-                    + wow_light.sh_c16.z * x2y2),
-    );
-    // Clamp the sum, never a term: the lobe's own ringing dips to −0.037·C near μ ≈ −0.53, and a
-    // per-term clamp would erase it.
-    let lit_doodad = clamp(sun_lobe, vec3<f32>(0.0), vec3<f32>(1.0));
-    // WMO and clutter take the FFP N·L light with no terrain shade; the lobe needs the directional
-    // light on (`light_sun.w`).
+    // The stage-0 modulate: the texel times the lit colour `vertex_light` clamped per vertex.
     let is_wmo = m.model_flags.x > 0.5;
     let is_interior = m.model_flags.z > 0.5;
-    let use_doodad_shade = (wow_light.light_sun.w > 0.5) && !is_clutter && !is_wmo;
-    let lit_exterior = select(lit_nl, lit_doodad, use_doodad_shade);
-    // WMO interior groups (`groupFlags & 0x48 == 0`) by batch class (`tint.w`): INT (1) is unlit
-    // `tex × MOCV`; TRANS (2) is the reference's two passes, lit × MOCV.a + unlit × (1 − MOCV.a),
-    // as one lerp; EXT (0) is `lit_nl`. A WINDOW batch (MOMT 0x20) on the interior drawer lights
-    // with ambient = diffuse = the Direct/Ambient midpoint, ambient +16/255 (`0x6d37e0`).
-    var trans_a = 1.0;
-#ifdef VERTEX_COLORS
-    trans_a = in.color.a;
-#endif
-    let window_mid = 0.5 * (wow_light.light_ambient.rgb + wow_light.light_diffuse.rgb);
-    let lit_window = clamp(
-        window_mid + vec3<f32>(16.0 / 255.0) + window_mid * ndotl,
-        vec3<f32>(0.0),
-        vec3<f32>(1.0),
-    );
-    let lit_int_base = select(lit_nl, lit_window, m.sidn.w > 0.5);
-    var lit_wmo_interior = vec3<f32>(1.0);
-    if (m.tint.w > 1.5) {
-        lit_wmo_interior = mix(vec3<f32>(1.0), lit_int_base, trans_a);
-    } else if (m.tint.w < 0.5) {
-        lit_wmo_interior = lit_int_base;
-    }
-    // Interior M2 props (WMO MODD doodads): the reference commits the prop's MODD colour through a
-    // fixed-axis diffuse lobe plus its group's MOLR lights as an order-2 SH probe, folded at spawn
-    // by `lighting::prop_probe_coeffs` and evaluated here per fragment (the reference: per vertex).
-    // Its soft wrap (≈ 0.088·C side-on) is the reference's response, not a max(N·L, 0).
-#ifdef WOW_MERGED_SLOT
-    // A merged blob bakes the slot per vertex; its tag carries only fog and alpha.
-    let probe = 7u * in.merged_slot;
-#else
-    let probe = 7u * ((fade_tag >> 6u) & 0x1fffu);
-#endif
-    let lit_m2_interior = clamp(
-        vec3<f32>(
-            dot(wow_light.prop_probes[probe + 0u], n1)
-                + dot(wow_light.prop_probes[probe + 3u], quad)
-                + wow_light.prop_probes[probe + 6u].x * x2y2,
-            dot(wow_light.prop_probes[probe + 1u], n1)
-                + dot(wow_light.prop_probes[probe + 4u], quad)
-                + wow_light.prop_probes[probe + 6u].y * x2y2,
-            dot(wow_light.prop_probes[probe + 2u], n1)
-                + dot(wow_light.prop_probes[probe + 5u], quad)
-                + wow_light.prop_probes[probe + 6u].z * x2y2,
-        ),
-        vec3<f32>(0.0),
-        vec3<f32>(1.0),
-    );
-    let lit_interior = select(lit_m2_interior, lit_wmo_interior, is_wmo);
-    // The authored-rig lane (`ShadeSel::Rig`, glue scenes): the scene's lights are folded into
-    // probe slot 0 of the material's own buffer, which `lit_m2_interior` already evaluated (tag 0).
-    let is_rig = m.sun_scale.x >= 1.5;
-    let lit = select(select(lit_exterior, lit_interior, is_interior), lit_m2_interior, is_rig);
     // Gamma-space albedo: lighting runs on the authored byte values. `m.tint` plus its mat-anim
     // delta is the animated M2Color tint.
     let anim_tint = m.tint.rgb + wow_light.matanim[u32(m.anim_slots.y)].xyz;
     let albedo = base.rgb * anim_tint;
     // An unlit batch replaces the lit path: fullbright, with only the highlight added (below).
     let is_emissive = m.model_flags.w > 0.5;
-    // SIDN night glow: the emissive × the night fraction (ramping 20:30→21:30, 06:00→07:00), a
-    // GL_EMISSION term inside the clamped lit sum, on lit lanes only.
-    var sidn_w = 1.0;
-    if (is_interior && is_wmo) {
-        if (m.tint.w > 1.5) {
-            sidn_w = trans_a; // TRANS: weighted by its lit pass
-        } else if (m.tint.w > 0.5) {
-            sidn_w = 0.0; // INT: unlit, so no emission
-        }
-    }
-    let sidn_e = m.sidn.rgb * (wow_light.grade.x * sidn_w);
-    let point_diffuse = in.point_lit;
-
-    // The hover/target highlight (tag bit 31): the scene's committed ambient
-    // (`0x614576`-`0x6145bd`), added to the batch colour inside the final clamp, lit or unlit
-    // (`c29`). Sampled live, where the reference holds the value sampled when the highlight
-    // began: a unit's tag has no slot to hold a colour, and the ambient moves slowly.
-    let highlight = select(vec3<f32>(0.0), wow_light.light_ambient.rgb, highlighted);
-    // The FFP combine: the light sum (lit, point lights, emission) clamps first and the texture
-    // modulates it, `tex × clamp(C·sum + emission)`, with C the GL_COLOR_MATERIAL colour (MOCV on
-    // WMO, the body tint on M2). The WMO branch divides Bevy's MOCV fold back out, guarded; a dim
-    // channel's product is ~0 either way.
-    var lit_rgb: vec3<f32>;
+    let highlight = highlight_add(raw_tag);
+    var lit_rgb = albedo * in.primary;
 #ifdef VERTEX_COLORS
     if (is_wmo) {
+        // MOCV is inside the lit colour; divide Bevy's fold of it back out, guarded: a dim
+        // channel's product is ~0 either way.
         let vc = in.color.rgb;
-        let primary = clamp(
-            vc * (lit + point_diffuse) + sidn_e + highlight,
-            vec3<f32>(0.0),
-            vec3<f32>(1.0),
-        );
         let tex_rgb = base.rgb / max(vc, vec3<f32>(1.0 / 255.0));
-        lit_rgb = tex_rgb * m.tint.rgb * primary;
+        lit_rgb = tex_rgb * m.tint.rgb * in.primary;
         if (is_interior && m.tint.w > 0.5 && m.tint.w < 1.5) {
             // INT: the reference's interior pixel shader, `tex·MOCV.rgb·(1 + 4·MOCV.a)` with only
             // the framebuffer's final clamp.
             lit_rgb = clamp(
-                tex_rgb * m.tint.rgb * vc * (1.0 + 4.0 * trans_a),
+                tex_rgb * m.tint.rgb * vc * (1.0 + 4.0 * in.color.a),
                 vec3<f32>(0.0),
                 vec3<f32>(1.0),
             );
         }
-    } else {
-        // An M2: the body tint multiplies the light terms as MOCV does above. A WMO surface has
-        // no tint slot, so the WMO branch leaves it out.
-        let primary = clamp(
-            inst_tint * (lit + point_diffuse) + sidn_e + highlight,
-            vec3<f32>(0.0),
-            vec3<f32>(1.0),
-        );
-        lit_rgb = albedo * primary;
     }
-#else
-    // A WMO batch without MOCV lands here too; its tint slot is the identity slot 0.
-    let primary = clamp(
-        inst_tint * (lit + point_diffuse) + sidn_e + highlight,
-        vec3<f32>(0.0),
-        vec3<f32>(1.0),
-    );
-    lit_rgb = albedo * primary;
 #endif
     // The unlit path: an M2's unlit program outputs `c28 + c29` (`0x70c663`-`0x70c693` fold the
     // tint·M2Color term into `c29` beside the highlight), so the texel modulates

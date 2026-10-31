@@ -1,5 +1,5 @@
 //! The order-2 SH light fold of the reference's `Model2.bls`: one closed form for the interior-prop
-//! probes and the exterior sun rows, evaluated per fragment in `wow_model.wgsl`. There is no
+//! probes and the exterior sun rows, evaluated per vertex in `wow_model.wgsl`. There is no
 //! separate amplitude scalar; intensity lives entirely in the committed colour.
 
 use bevy::math::{Vec3, Vec4};
