@@ -289,24 +289,6 @@ pub fn within_farclip(
 #[derive(Component)]
 pub struct WorldCamera;
 
-/// The `$WOW_MSAA` knob as a Bevy `Msaa` level, 4x when unset. `8` falls back to 4x:
-/// `Rgba16Float` is only guaranteed `[1, 4]` samples, and there is no adapter to ask here.
-pub fn msaa_from_env() -> bevy::render::view::Msaa {
-    use bevy::render::view::Msaa;
-    match std::env::var("WOW_MSAA").ok().as_deref() {
-        Some("off") | Some("0") | Some("1") => Msaa::Off,
-        Some("2") => Msaa::Sample2,
-        Some("8") => {
-            warn!(
-                "WOW_MSAA=8: Rgba16Float is only guaranteed [1, 4] samples and this adapter \
-                 reports [1, 2, 4] — falling back to 4x rather than panicking the render thread"
-            );
-            Msaa::Sample4
-        }
-        _ => Msaa::Sample4,
-    }
-}
-
 /// The `nearclip` CVar's registered default, 0.1 (the string at `0x84fb48`, registered at
 /// `0x68867a`, record `[0xc7f348]`); the camera ctor's 1/9 (`0x50a6c0`) is overwritten from the
 /// record in the first frame, before it renders. The small near keeps the waterline-crossing band
