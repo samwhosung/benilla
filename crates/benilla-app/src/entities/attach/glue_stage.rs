@@ -6,10 +6,15 @@
 //! `IsReady(1, 1)` over the frame's scene model (`0x473083`, `0x710450`), which waits for each
 //! model's file (`0x710520`) and loads every texture it binds (`0x44acf0` with load set, which
 //! waits in `0x44ad50`), the character and pet attached to the scene included (`0x7104e8`), so
-//! the select's own frame holds until the stage is whole and the next frame drawn shows it. Here
-//! the reads stay on the asset server's threads and the frame waits on them, landing each file as
-//! it finishes and running the steps whose next files it names: the display models, their forms
-//! and the assembly. A create look builds on the asset server's own pace.
+//! the select's own frame holds until the stage is whole and the next frame drawn shows it. A read
+//! that fails ends its wait too: the reader thread tries `SFile::Read` ten times (`0x443423` to
+//! `0x443445`) and queues the read as finished either way (`0x4434a8`), whose drain marks it done
+//! (`0x443eed`), so `AsyncFileReadWait` (`0x443bd0`) returns; a texture slot with no texture is
+//! skipped (`0x71049f`). Here the reads stay on the asset server's threads
+//! and the frame waits on them, landing each file as it finishes and running the steps whose next
+//! files it names: the display models, their forms and the assembly. The wait ends when the stage
+//! is whole, or when nothing it waits on is still loading and one more pass leaves it short, as
+//! when a file failed. A create look builds on the asset server's own pace.
 
 use std::time::{Duration, Instant};
 
@@ -20,6 +25,10 @@ use bevy::asset::{LoadState, RecursiveDependencyLoadState};
 use bevy::ecs::schedule::{ExecutorKind, ScheduleLabel};
 use bevy::prelude::*;
 
+use super::super::display::{DisplayModel, ModelHandle};
+use super::super::item_glow::ItemGlows;
+use super::super::spell_fx::SpellFx;
+use super::super::{Creatures, ItemDisplays};
 use super::preview::{build_glue_pet, build_glue_preview};
 use crate::portrait::{
     GlueLook, GluePetBake, GluePreview, GluePreviewBake, GlueSceneFile, PreviewBillboard,
@@ -29,17 +38,6 @@ use crate::portrait::{
 /// The glue stage's schedule, run each frame after `PreUpdate`'s asset landing.
 #[derive(ScheduleLabel, Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct GlueStage;
-
-/// How long a select may hold its frame for its stage.
-///
-/// Deviation: the wait gives up after this, with a warning, and what is left lands on the asset
-/// server's pace, where the reference waits for ever, because a file that never lands would
-/// otherwise freeze the screen.
-const GLUE_STAGE_WAIT: Duration = Duration::from_secs(2);
-
-/// A test's override of [`GLUE_STAGE_WAIT`].
-#[derive(Resource)]
-struct GlueStageWaitCap(Duration);
 
 /// The wait's poll: the asset server's threads read and decode while the frame sleeps.
 const GLUE_STAGE_POLL: Duration = Duration::from_millis(1);
@@ -78,28 +76,26 @@ fn build_glue_stage(world: &mut World, mut waited: Local<Option<StageKey>>) {
             .resource::<AssetServer>()
             .load::<M2Model>(s.url().to_string())
     });
-    let cap = world
-        .get_resource::<GlueStageWaitCap>()
-        .map_or(GLUE_STAGE_WAIT, |c| c.0);
     let start = Instant::now();
     let mut passes = 0u32;
+    // Passes run in a row with nothing loading: the second ends the wait short of whole.
+    let mut settled = 0u32;
     let whole = loop {
         if stage_whole(world, scene.as_ref()) {
             break true;
         }
-        if start.elapsed() >= cap {
-            break false;
+        if loading(world, scene.as_ref()) {
+            settled = 0;
+        } else {
+            settled += 1;
+            if settled > 1 {
+                break false;
+            }
         }
         std::thread::sleep(GLUE_STAGE_POLL);
         step(world);
         passes += 1;
     };
-    if !whole {
-        warn!(
-            "glue stage: the select's stage was not whole after {:.1}s; the rest lands as it loads",
-            cap.as_secs_f32()
-        );
-    }
     if benilla_assets::trace::enabled_for("gsel") {
         benilla_assets::trace::line(
             "gsel",
@@ -119,9 +115,12 @@ fn build(world: &mut World) {
 }
 
 /// One pass of the wait: land what the asset server finished, build the forms and display parts
-/// it completes, and assemble, which names the items' files once the body stands.
+/// it completes, and assemble, which names the items' files once the body stands. The first
+/// display pass asks for the forms of each model that landed, the furnish builds them and the
+/// second builds the parts, so one pass carries a landed file to its assembly.
 fn step(world: &mut World) {
     bevy::asset::handle_internal_asset_events(world);
+    run(world, crate::entities::update_display_models);
     world.try_resource_scope(
         |world, mut forms: Mut<benilla_world::model_forms::ModelForms>| {
             world.try_resource_scope(|world, mut meshes: Mut<Assets<Mesh>>| {
@@ -142,6 +141,52 @@ fn run<M>(world: &mut World, system: impl IntoSystem<(), (), M> + 'static) {
     if let Err(e) = world.run_system_cached(system) {
         debug!("glue stage: a build step did not run: {e}");
     }
+}
+
+/// Whether anything the stage waits on is still being read: an unbuilt display model's file, the
+/// scene's file or anything it names, or a texture the assembly binds.
+fn loading(world: &World, scene: Option<&Handle<M2Model>>) -> bool {
+    let server = world.resource::<AssetServer>();
+    let reading = |dm: &DisplayModel| {
+        dm.parts.is_none()
+            && matches!(&dm.handle, ModelHandle::M2(h)
+                if matches!(server.get_load_state(h.id()), Some(LoadState::Loading)))
+    };
+    let mut models = world
+        .get_resource::<Creatures>()
+        .into_iter()
+        .flat_map(|c| c.models.values())
+        .chain(
+            world
+                .get_resource::<ItemDisplays>()
+                .into_iter()
+                .flat_map(|d| d.models.values()),
+        )
+        .chain(
+            world
+                .get_resource::<ItemGlows>()
+                .into_iter()
+                .flat_map(|g| g.models.values()),
+        )
+        .chain(
+            world
+                .get_resource::<SpellFx>()
+                .into_iter()
+                .flat_map(|f| f.models.values()),
+        );
+    if models.any(reading) {
+        return true;
+    }
+    if scene.is_some_and(|h| !landed_with_deps(server, h.id())) {
+        return true;
+    }
+    let images = world.resource::<Assets<Image>>();
+    let materials = world.resource::<Assets<WowModelMaterial>>();
+    let (bake, pet) = (
+        world.resource::<GluePreviewBake>(),
+        world.resource::<GluePetBake>(),
+    );
+    stage_textures(bake, pet, materials).any(|id| !texture_landed(server, images, id))
 }
 
 /// Whether the stage is whole: the look and the pet assembled, the scene's file and everything it
@@ -276,40 +321,43 @@ mod tests {
         }
     }
 
-    /// A hung disk: every `.hung` read stays loading for ever.
+    /// A failing disk: every `.fail` read takes [`SLOW_READ`] and then fails.
     #[derive(Default, TypePath)]
-    struct HungImageLoader;
+    struct FailingImageLoader;
 
-    impl AssetLoader for HungImageLoader {
+    impl AssetLoader for FailingImageLoader {
         type Asset = Image;
         type Settings = ();
         type Error = std::io::Error;
 
         async fn load(
             &self,
-            _reader: &mut dyn Reader,
+            reader: &mut dyn Reader,
             _settings: &(),
             _ctx: &mut LoadContext<'_>,
         ) -> Result<Image, Self::Error> {
-            std::future::pending::<()>().await;
-            unreachable!("a pending future never resolves")
+            let mut bytes = Vec::new();
+            reader.read_to_end(&mut bytes).await?;
+            std::thread::sleep(SLOW_READ);
+            Err(std::io::Error::other("a read that fails"))
         }
 
         fn extensions(&self) -> &[&str] {
-            &["hung"]
+            &["fail"]
         }
     }
 
-    fn select(guid: u64) -> GlueLook {
-        GlueLook::Select(SelectLook::from(
-            &crate::glue_session::roster::test_character(guid, "Rec"),
-        ))
+    /// A select look, told apart by its skin.
+    fn select(skin: u8) -> GlueLook {
+        let mut look = SelectLook::from(&crate::glue_session::roster::test_character(1, "Rec"));
+        look.skin = skin;
+        GlueLook::Select(look)
     }
 
-    /// The stage alone, over a memory source with the slow and hung loaders.
+    /// The stage alone, over a memory source with the slow and failing loaders.
     fn stage_app() -> App {
         let dir = Dir::default();
-        for file in ["a.slow", "b.slow", "c.hung"] {
+        for file in ["a.slow", "b.slow", "c.fail"] {
             dir.insert_asset(Path::new(file), vec![0u8; 4]);
         }
         let mut app = App::new();
@@ -324,7 +372,7 @@ mod tests {
             .init_asset::<M2Model>()
             .init_asset::<WmoModel>()
             .register_asset_loader(SlowImageLoader)
-            .register_asset_loader(HungImageLoader)
+            .register_asset_loader(FailingImageLoader)
             .init_resource::<benilla_world::model_forms::ModelForms>()
             .init_resource::<GluePreview>()
             .init_resource::<GluePreviewBake>()
@@ -418,18 +466,36 @@ mod tests {
         );
     }
 
-    /// A read that never lands holds the select's frame only to the cap.
+    /// A read that fails ends the select's wait, as a failed read is done in the reference
+    /// (`0x4434a8`): the frame waited for the failure, then went on.
     #[test]
-    fn a_hung_read_holds_the_frame_only_to_the_cap() {
+    fn a_failed_read_ends_the_wait() {
         let mut app = stage_app();
-        app.insert_resource(GlueStageWaitCap(Duration::from_millis(50)));
-        let texture = stand(&mut app, select(1), "c.hung");
+        let texture = stand(&mut app, select(1), "c.fail");
+        app.update();
+        let state = app
+            .world()
+            .resource::<AssetServer>()
+            .get_load_state(&texture);
+        assert!(
+            matches!(state, Some(LoadState::Failed(_))),
+            "the frame waited until the read failed, got {state:?}"
+        );
+    }
+
+    /// A stage no read can finish (here an assembly nothing will build) does not hold the frame
+    /// once nothing it waits on is loading.
+    #[test]
+    fn a_stage_nothing_loads_for_does_not_hold_the_frame() {
+        let mut app = stage_app();
+        stand(&mut app, select(1), "a.slow");
+        // The look moves on to one whose assembly nothing in this app builds.
+        app.world_mut().resource_mut::<GluePreview>().look = Some(select(2));
         let t0 = Instant::now();
         app.update();
-        assert!(!landed(&app, &texture));
         assert!(
-            t0.elapsed() < Duration::from_secs(1),
-            "the frame went on at the cap, not after {:?}",
+            t0.elapsed() < Duration::from_secs(5),
+            "the frame went on once nothing loaded, after {:?}",
             t0.elapsed()
         );
     }
