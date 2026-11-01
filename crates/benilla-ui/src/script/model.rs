@@ -479,6 +479,8 @@ pub(crate) struct Model {
     pub(crate) known_languages: Vec<String>,
     /// `Languages.dbc`'s `(ID, Name_lang)` rows in file order, whatever the character knows.
     pub(crate) language_table: Vec<(u32, String)>,
+    /// The `ChrRaces` and `ChrClasses` rows an item's race and class lines walk.
+    pub(crate) item_req_names: super::tooltip_item::names::ItemReqNames,
     pub(crate) zone_channel_catalog: Vec<super::channel::ZoneChannelRow>,
     /// The recruitment auto-join latch `[0x843608]`: 0 `STANDARD`, 1 `AUTO` (`0x49ea70` maps any
     /// other word to 1). Boots at 1, as the reference writes `AUTO` for an untouched option.
@@ -1472,6 +1474,7 @@ impl Model {
             chat_colors_changed: false,
             known_languages: Vec::new(),
             language_table: Vec::new(),
+            item_req_names: Default::default(),
             zone_channel_catalog: Vec::new(),
             guild_recruitment_mode: 1,
             guild_recruitment_cascade: false,

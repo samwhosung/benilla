@@ -71,6 +71,8 @@ struct ChrClass {
     file: Option<String>,
     has_relic_slot: bool,
     spell_family: u32,
+    /// The row's place in the file.
+    index: usize,
 }
 
 /// `ChrClasses.dbc`'s read columns by class id.
@@ -82,7 +84,8 @@ impl ChrClasses {
     pub fn from_rows<'a>(rows: impl IntoIterator<Item = (u32, &'a str, &'a str)>) -> Self {
         Self(
             rows.into_iter()
-                .map(|(id, name, file)| {
+                .enumerate()
+                .map(|(index, (id, name, file))| {
                     let row = ChrClass {
                         damage_bonus_stat: 0,
                         pet_name_token: None,
@@ -90,6 +93,7 @@ impl ChrClasses {
                         file: Some(file.to_string()).filter(|f| !f.is_empty()),
                         has_relic_slot: false,
                         spell_family: 0,
+                        index,
                     };
                     (id, row)
                 })
@@ -118,6 +122,17 @@ impl ChrClasses {
         self.0
             .iter()
             .map(|(id, c)| (*id, c.name.as_deref().unwrap_or_default()))
+    }
+
+    /// Every row in file order, its id and name, the empty string for a row with none: the record
+    /// table (`0xc0deec`, count `0xc0def0`) as an item's class lines walk it, with no flag test
+    /// (`0x52cecd`, `0x52d003`, `0x52d1cd`, `0x4feaa8`, `0x4fec02`, `0x4feddf`).
+    pub fn in_file_order(&self) -> Vec<(u32, &str)> {
+        let mut rows: Vec<_> = self.0.iter().collect();
+        rows.sort_by_key(|(id, c)| (c.index, **id));
+        rows.into_iter()
+            .map(|(id, c)| (*id, c.name.as_deref().unwrap_or_default()))
+            .collect()
     }
 
     /// The class's file string (`"WARRIOR"`), the create screen's second value per class; `None`
@@ -206,7 +221,7 @@ pub fn load_chr_classes(chain: &mut Chain) -> Result<ChrClasses> {
     let rs = parse(&bytes, schema(), "ChrClasses.dbc")?;
     let locale = chain.locale();
     let mut by_id = HashMap::new();
-    for r in rs.records() {
+    for (index, r) in rs.records().iter().enumerate() {
         let Some(id) = u32_at(r, 0) else { continue };
         by_id.insert(
             id,
@@ -217,6 +232,7 @@ pub fn load_chr_classes(chain: &mut Chain) -> Result<ChrClasses> {
                 file: str_at(&rs, r, FILE_FIELD),
                 has_relic_slot: u32_at(r, RELIC_SLOT_FIELD).is_some_and(|v| v != 0),
                 spell_family: u32_at(r, SPELL_FAMILY_FIELD).unwrap_or(0),
+                index,
             },
         );
     }
@@ -230,6 +246,18 @@ mod tests {
     fn chain() -> Option<crate::chain::Chain> {
         let data = crate::wow_data_or_skip!(None);
         Some(crate::open_chain(&data).expect("open chain"))
+    }
+
+    /// An item's class lines walk the rows as the file holds them (`0x52cecd`), whatever their ids,
+    /// a row with no name included.
+    #[test]
+    fn the_rows_walk_in_file_order() {
+        let t = ChrClasses::from_rows([
+            (8, "Mage", "MAGE"),
+            (1, "Warrior", "WARRIOR"),
+            (3, "", "HUNTER"),
+        ]);
+        assert_eq!(t.in_file_order(), [(8, "Mage"), (1, "Warrior"), (3, "")]);
     }
 
     /// Field 5 holds the class name, so a one-column slip would blank the spellbook tab silently.

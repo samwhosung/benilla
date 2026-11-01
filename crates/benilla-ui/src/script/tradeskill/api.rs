@@ -213,6 +213,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 crate::script::unit::view(lua, &model, "player").map(|u| (u.pvp_team, u.sex == 3));
             let knows = view.required_spell != 0
                 && crate::script::spellbook::book_spell(lua, &model, view.required_spell).is_some();
+            let names = model.item_req_names.clone();
             drop(model);
             let facts = super::itemstats::PlayerFacts {
                 // A player whose level is unpushed declines to judge, as `item_refusal` does.
@@ -222,7 +223,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 knows_required_spell: knows,
             };
             let get = |key: &str| crate::strings::global(lua, key).unwrap_or_default();
-            let lines = super::itemstats::item_stat_lines(&view, &req, facts, &get);
+            let lines = super::itemstats::item_stat_lines(&view, &req, facts, &names, &get);
             let mut out = Vec::with_capacity(lines.len());
             for line in &lines {
                 out.push(Value::String(lua.create_string(line)?));

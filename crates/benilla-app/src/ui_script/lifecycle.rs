@@ -638,6 +638,7 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
     crate::ui_items::feed::seed_vm_item_records(world, &mut script);
     crate::ui_tradeskill::seed_repeat(world, &mut script);
     crate::ui_unit::seed_language_table(world, &mut script);
+    crate::ui_unit::seed_item_req_names(world, &mut script);
     // The world map's continent and zone lists: static DBC data in the reference, read at file
     // scope (Astrolabe builds its whole zone table from `GetMapContinents`/`GetMapZones` there).
     crate::ui_world_map::seed_world_map_catalog(world, &mut script);

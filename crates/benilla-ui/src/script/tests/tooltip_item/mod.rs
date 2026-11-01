@@ -88,6 +88,7 @@ fn seed_item_strings(s: &mut UiScript) {
         ITEM_DURATION_MIN   = "[DURATION %d m]"
         ITEM_DURATION_SEC   = "[DURATION %d s]"
 
+        RACE_CLASS_ONLY      = "[ONLY %s]"
         ITEM_CLASSES_ALLOWED = "[CLASSES %s]"
         ITEM_RACES_ALLOWED   = "[RACES %s]"
         ITEM_MIN_LEVEL       = "[MIN_LEVEL %d]"
@@ -112,11 +113,14 @@ fn seed_item_strings(s: &mut UiScript) {
     .unwrap();
 }
 
-/// The fixture VM, with [`seed_item_strings`] run and `SetItemByIdForTest(tooltip, itemId)`, the
-/// test VM's door onto the id-keyed render the engine's item hovers call from Rust.
+/// The fixture VM, with [`seed_item_strings`] run, the enUS race and class rows seated and
+/// `SetItemByIdForTest(tooltip, itemId)`, the test VM's door onto the id-keyed render the engine's
+/// item hovers call from Rust.
 fn script() -> UiScript {
     let mut s = bare_script();
     seed_item_strings(&mut s);
+    let names = crate::script::tooltip_item::names::stock_req_names();
+    s.set_item_req_names(names.races, names.classes);
     let f = s
         .lua()
         .create_function(|lua, (tt, id): (mlua::Table, u32)| {

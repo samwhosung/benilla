@@ -183,6 +183,23 @@ pub(crate) fn seed_language_table(world: &World, script: &mut UiScript) {
     );
 }
 
+/// Seed a new VM with the `ChrRaces` and `ChrClasses` rows an item's race and class lines walk
+/// (`0x52ce50`, `0x52cecd`), in the install's locale column; a table that failed to load seeds no
+/// rows, and those lines name none.
+pub(crate) fn seed_item_req_names(world: &World, script: &mut UiScript) {
+    fn owned(rows: Vec<(u32, &str)>) -> Vec<(u32, String)> {
+        rows.into_iter()
+            .map(|(id, name)| (id, name.to_string()))
+            .collect()
+    }
+    let names = world_unit_names(world);
+    let races = names
+        .races
+        .map_or_else(Vec::new, |t| t.visible_in_file_order());
+    let classes = names.classes.map_or_else(Vec::new, |t| t.in_file_order());
+    script.set_item_req_names(owned(races), owned(classes));
+}
+
 /// Seed each VM's `Exhaustion.dbc` table; a failed load keeps the shipped-table fallback.
 fn load_exhaustion_rows(
     mut hosted_vm: crate::script_calls::HostedVm,
@@ -2335,6 +2352,51 @@ mod tests {
             -1,
             "and a template is not one"
         );
+    }
+
+    /// A new VM names an item's races and classes in the tables' own words, a koKR install's here:
+    /// `0x52d0cb` and `0x52d20e` read the row's name at the locale.
+    #[test]
+    fn a_new_vm_names_an_items_races_and_classes_from_the_tables() {
+        let mut world = World::new();
+        TestNames::korean().insert_world(&mut world);
+        let mut script = UiScript::new().expect("VM");
+        seed_item_req_names(&world, &mut script);
+        crate::ui_script::test_ui::load_tooltip_template(&script);
+        script.set_item_template(
+            871,
+            benilla_ui::script::ItemTemplateView {
+                name: "Axe".into(),
+                allowable_race: 0b11,
+                allowable_class: 0b1001,
+                ..Default::default()
+            },
+        );
+        script
+            .run(
+                r#"
+                ITEM_RACES_ALLOWED = "Races: %s"
+                ITEM_CLASSES_ALLOWED = "Classes: %s"
+                local a = CreateFrame("Button", "Slot")
+                a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
+                CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
+                TT:SetOwner(a, "ANCHOR_RIGHT")
+                TT:SetHyperlink("item:871:0:0:0")
+                "#,
+            )
+            .unwrap();
+        let lines: String = script
+            .eval(
+                r#"
+                local t = {}
+                for i = 1, TT:NumLines() do
+                    t[i] = getglobal("TTTextLeft" .. i):GetText()
+                end
+                return table.concat(t, "/")
+                "#,
+            )
+            .unwrap();
+        assert!(lines.contains("Races: 인간, 오크/Classes: 전사, 도적"), "{lines}");
     }
 
     /// A new VM is seeded with the shipped `Languages.dbc`, so each race's own tongue resolves by

@@ -1,5 +1,5 @@
-//! The requirement and identity lines: the area and map of a zone-bound item, the known-recipe
-//! line, and the honor rank and medal requirements.
+//! The requirement and identity lines: the race and class lines, the area and map of a zone-bound
+//! item, the known-recipe line, and the honor rank and medal requirements.
 
 use std::collections::HashSet;
 
@@ -26,6 +26,69 @@ fn render(s: &mut UiScript, id: u32) -> Vec<(String, [f32; 4])> {
 
 fn texts(lines: &[(String, [f32; 4])]) -> Vec<&str> {
     lines.iter().map(|(t, _)| t.as_str()).collect()
+}
+
+/// The race and class lines name the tables' rows at the install's locale (`0x52ce89`, `0x52cf01`,
+/// `0x52d0cb`, `0x52d20e`). Masks of at most one bit each give one `RACE_CLASS_ONLY` line
+/// (`0x52ce24`, `0x52ce3c`); otherwise each table gives its own, the races first (`0x52d186`,
+/// `0x52d2c4`), only for a mask that leaves out one of its rows (`0x52cfa0`-`0x52d045`), white when
+/// the player's own row is listed and red when not.
+#[test]
+fn the_race_and_class_lines_read_the_tables() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_item_req_names(
+        vec![
+            (1, "Humain".into()),
+            (2, "Orc".into()),
+            (9, "Gobelin".into()),
+        ],
+        vec![(1, "Guerrier".into()), (8, "Mage".into())],
+    );
+    s.set_player_req_state(PlayerReqState {
+        level: 60,
+        class_id: 1,
+        race_id: 1,
+        ..Default::default()
+    });
+    let mut req_lines = |id: u32, races: i32, classes: i32| {
+        s.set_item_template(
+            id,
+            ItemTemplateView {
+                name: "Item".into(),
+                allowable_race: races,
+                allowable_class: classes,
+                ..Default::default()
+            },
+        );
+        render(&mut s, id)
+            .into_iter()
+            .filter(|(t, _)| {
+                t.starts_with("[ONLY") || t.starts_with("[RACES") || t.starts_with("[CLASSES")
+            })
+            .collect::<Vec<_>>()
+    };
+    let line = |t: &str, color| vec![(t.to_string(), color)];
+    assert_eq!(req_lines(9001, 1, 1), line("[ONLY Humain Guerrier]", WHITE));
+    assert_eq!(req_lines(9002, 2, 1), line("[ONLY Orc Guerrier]", RED));
+    assert_eq!(req_lines(9003, 1, 0), line("[ONLY Humain ]", WHITE));
+    assert!(req_lines(9004, 0, 0).is_empty());
+    // The eight playable races' mask leaves out this table's ninth row, and -1 covers the classes.
+    assert_eq!(
+        req_lines(9005, 0xff, -1),
+        line("[RACES Humain, Orc]", WHITE)
+    );
+    assert!(req_lines(9006, 0b1_0000_0011, -1).is_empty());
+    // A class mask of two bits is the list arm, and this one covers both class rows.
+    assert_eq!(req_lines(9007, 0b10, 0b1000_0001), line("[RACES Orc]", RED));
+    assert_eq!(
+        req_lines(9008, 0b11, 0b11),
+        [
+            ("[RACES Humain, Orc]".to_string(), WHITE),
+            ("[CLASSES Guerrier]".to_string(), WHITE)
+        ]
+    );
+    assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
 }
 
 /// A zone-bound item names its area (`+0x1c8`, the `AreaTable` name at `+0x2c`) and its map

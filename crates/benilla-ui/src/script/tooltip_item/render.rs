@@ -695,42 +695,20 @@ pub(super) fn render_view_flagged(
             live = true;
         }
     }
-    if v.allowable_class > 0
-        && (v.allowable_class & full_mask(&CLASS_NAMES)) != full_mask(&CLASS_NAMES)
-    {
-        let list: Vec<&str> = CLASS_NAMES
-            .iter()
-            .filter(|&&(id, _)| v.allowable_class & (1 << (id - 1)) != 0)
-            .map(|&(_, n)| n)
-            .collect();
-        if !list.is_empty() {
-            let class = req.head().class_id;
-            let ok = class > 0 && v.allowable_class & (1 << (class - 1)) != 0;
-            keyed(
-                "ITEM_CLASSES_ALLOWED",
-                &[Arg::S(&list.join(", "))],
-                req_color(ok),
-                false,
-            )?;
-        }
-    }
-    if v.allowable_race > 0 && (v.allowable_race & full_mask(&RACE_NAMES)) != full_mask(&RACE_NAMES)
-    {
-        let list: Vec<&str> = RACE_NAMES
-            .iter()
-            .filter(|&&(id, _)| v.allowable_race & (1 << (id - 1)) != 0)
-            .map(|&(_, n)| n)
-            .collect();
-        if !list.is_empty() {
-            let race = req.head().race_id;
-            let ok = race > 0 && v.allowable_race & (1 << (race - 1)) != 0;
-            keyed(
-                "ITEM_RACES_ALLOWED",
-                &[Arg::S(&list.join(", "))],
-                req_color(ok),
-                false,
-            )?;
-        }
+    // The race and class lines (`0x52ce14`..`0x52d2c9`), white when met, else red.
+    let race_class = {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        let head = req.head();
+        race_class_lines(
+            &model.item_req_names,
+            v.allowable_race,
+            v.allowable_class,
+            head.race_id,
+            head.class_id,
+        )
+    };
+    for line in &race_class {
+        keyed(line.key, &[Arg::S(&line.text)], req_color(line.ok), false)?;
     }
     // Only a required level above 1 prints (`0x52d2cf`).
     if v.required_level > 1 {

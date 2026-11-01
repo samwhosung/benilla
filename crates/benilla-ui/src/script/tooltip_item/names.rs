@@ -1,8 +1,8 @@
 //! The item tooltip's vocabulary: the builder's key tables (`INVTYPE_*`, `ITEM_MOD_*`,
 //! `SPELL_SCHOOL%d_CAP`), which [`super::render`] resolves against the player's own
 //! `GlobalStrings.lua`, and its colours. Keys, not English: `INVTYPE_SHIELD` and
-//! `INVTYPE_WEAPONOFFHAND` both read "Off Hand" in enUS and differ elsewhere. [`CLASS_NAMES`] and
-//! [`RACE_NAMES`] are English literals; the reference reads `ChrClasses.dbc` and `ChrRaces.dbc`.
+//! `INVTYPE_WEAPONOFFHAND` both read "Off Hand" in enUS and differ elsewhere. The race and class
+//! names are `ChrRaces.dbc`'s and `ChrClasses.dbc`'s rows ([`ItemReqNames`]).
 
 /// The reference's quality colour table, `0xc0d3c8`, read by `GetItemQualityColor` (`0x48dfb0`).
 pub(super) const QUALITY_RGB: [[f32; 3]; 7] = [
@@ -125,34 +125,125 @@ pub(in crate::script) fn stat_key(t: u32) -> Option<&'static str> {
     })
 }
 
-/// The playable class ids and names the `ITEM_CLASSES_ALLOWED` list prints.
-pub(in crate::script) const CLASS_NAMES: [(u32, &str); 9] = [
-    (1, "Warrior"),
-    (2, "Paladin"),
-    (3, "Hunter"),
-    (4, "Rogue"),
-    (5, "Priest"),
-    (7, "Shaman"),
-    (8, "Mage"),
-    (9, "Warlock"),
-    (11, "Druid"),
-];
+/// The rows an item's race and class lines walk, at the install's locale, each `(id, name)` in file
+/// order: `ChrRaces` (`0xc0ded8`) without its hidden rows, and `ChrClasses` (`0xc0deec`).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ItemReqNames {
+    pub(crate) races: Vec<(u32, String)>,
+    pub(crate) classes: Vec<(u32, String)>,
+}
 
-/// The playable race ids and names the `ITEM_RACES_ALLOWED` list prints.
-pub(in crate::script) const RACE_NAMES: [(u32, &str); 8] = [
-    (1, "Human"),
-    (2, "Orc"),
-    (3, "Dwarf"),
-    (4, "Night Elf"),
-    (5, "Undead"),
-    (6, "Tauren"),
-    (7, "Gnome"),
-    (8, "Troll"),
-];
+impl crate::script::UiScript {
+    /// Push the `ChrRaces` and `ChrClasses` rows an item's race and class lines walk, each
+    /// `(id, name)` at the install's locale, in file order.
+    pub fn set_item_req_names(&mut self, races: Vec<(u32, String)>, classes: Vec<(u32, String)>) {
+        self.model_mut().item_req_names = ItemReqNames { races, classes };
+    }
+}
 
-/// The mask of every listed id; an item allowing all of them shows no line.
-pub(in crate::script) fn full_mask(ids: &[(u32, &str)]) -> i32 {
-    ids.iter().fold(0i32, |m, &(id, _)| m | (1 << (id - 1)))
+/// One race or class line of an item: its template's key, what fills its `%s`, and whether the
+/// player meets it.
+pub(in crate::script) struct ReqLine {
+    pub(in crate::script) key: &'static str,
+    pub(in crate::script) text: String,
+    pub(in crate::script) ok: bool,
+}
+
+/// Whether `mask` holds a row's bit, `1 << (id - 1)` (`0x52ce68`-`0x52ce70`).
+fn allows(mask: i32, id: u32) -> bool {
+    mask & 1i32.wrapping_shl(id.wrapping_sub(1)) != 0
+}
+
+/// An item's race and class lines, the same in both builders (`0x52ce14`..`0x52d2c9`,
+/// `0x4fe9e8`..`0x4fef07`). Masks of at most one bit each (`0x52ce24`, `0x52ce3c`) give one
+/// `RACE_CLASS_ONLY` line: `"%s "` of the first race row in the mask, then the first class row's
+/// name (`0x52ce89`, `0x52cf12`), met when the player is both, and no line with neither row.
+/// Otherwise each table gives its own line, the races first ([`list_line`]).
+pub(in crate::script) fn race_class_lines(
+    names: &ItemReqNames,
+    races: i32,
+    classes: i32,
+    race: u32,
+    class: u32,
+) -> Vec<ReqLine> {
+    if races & races.wrapping_sub(1) != 0 || classes & classes.wrapping_sub(1) != 0 {
+        return [
+            list_line("ITEM_RACES_ALLOWED", &names.races, races, race),
+            list_line("ITEM_CLASSES_ALLOWED", &names.classes, classes, class),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+    }
+    let mut text = String::new();
+    let mut ok = true;
+    if let Some((id, name)) = names.races.iter().find(|(id, _)| allows(races, *id)) {
+        text = format!("{name} ");
+        ok &= race == *id;
+    }
+    if let Some((id, name)) = names.classes.iter().find(|(id, _)| allows(classes, *id)) {
+        text.push_str(name);
+        ok &= class == *id;
+    }
+    if text.is_empty() {
+        return Vec::new();
+    }
+    vec![ReqLine {
+        key: "RACE_CLASS_ONLY",
+        text,
+        ok,
+    }]
+}
+
+/// One table's list line: none for a mask that holds every row (`0x52cfa0`-`0x52d045`) or names
+/// none of them (`0x52d123`), else the names joined by `", "` (`0x84480c`), met when the player's
+/// own row is among them (`0x52d0fc`).
+fn list_line(key: &'static str, rows: &[(u32, String)], mask: i32, player: u32) -> Option<ReqLine> {
+    let allowed: Vec<&(u32, String)> = rows.iter().filter(|(id, _)| allows(mask, *id)).collect();
+    if allowed.len() == rows.len() {
+        return None;
+    }
+    let text = allowed
+        .iter()
+        .map(|(_, name)| name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if text.is_empty() {
+        return None;
+    }
+    let ok = allowed.iter().any(|(id, _)| *id == player);
+    Some(ReqLine { key, text, ok })
+}
+
+/// The enUS rows, for the tests of what prints them.
+#[cfg(test)]
+pub(in crate::script) fn stock_req_names() -> ItemReqNames {
+    fn owned(rows: &[(u32, &str)]) -> Vec<(u32, String)> {
+        rows.iter().map(|&(id, n)| (id, n.to_string())).collect()
+    }
+    ItemReqNames {
+        races: owned(&[
+            (1, "Human"),
+            (2, "Orc"),
+            (3, "Dwarf"),
+            (4, "Night Elf"),
+            (5, "Undead"),
+            (6, "Tauren"),
+            (7, "Gnome"),
+            (8, "Troll"),
+        ]),
+        classes: owned(&[
+            (1, "Warrior"),
+            (2, "Paladin"),
+            (3, "Hunter"),
+            (4, "Rogue"),
+            (5, "Priest"),
+            (7, "Shaman"),
+            (8, "Mage"),
+            (9, "Warlock"),
+            (11, "Druid"),
+        ]),
+    }
 }
 
 pub(super) fn quality_color(q: u32) -> [f32; 4] {
