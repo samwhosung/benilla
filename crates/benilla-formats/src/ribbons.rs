@@ -298,6 +298,41 @@ mod tests {
         assert!(parse_m2_ribbon_emitters(&b).unwrap().is_empty());
     }
 
+    /// A first sequence that ends before it starts is one instant, as one that ends where it
+    /// starts is: alpha keys at 0 and 300 ms both land at 0, the second closing the band.
+    #[test]
+    fn a_first_sequence_that_ends_before_it_starts_is_one_instant() {
+        fn put(b: &mut [u8], at: usize, v: u32) {
+            b[at..at + 4].copy_from_slice(&v.to_le_bytes());
+        }
+        let key_times = |start: u32, end: u32| {
+            let (seq, ribbon) = (0x148, 0x148 + 0x44);
+            let (times, values) = (ribbon + STRIDE, ribbon + STRIDE + 8);
+            let mut b = vec![0u8; values + 4];
+            b[0..4].copy_from_slice(b"MD20");
+            put(&mut b, 4, 256);
+            put(&mut b, 0x1c, 1);
+            put(&mut b, 0x20, seq as u32);
+            put(&mut b, seq + 4, start);
+            put(&mut b, seq + 8, end);
+            put(&mut b, HDR_COUNT, 1);
+            put(&mut b, HDR_PTR, ribbon as u32);
+            put(&mut b, times + 4, 300);
+            put(&mut b, values, 32767);
+            put(&mut b, ribbon + 0x40, (0xffff << 16) | 1); // linear, no global sequence
+            for (at, ofs) in [(0x0c, times), (0x14, values)] {
+                put(&mut b, ribbon + 0x40 + at, 2);
+                put(&mut b, ribbon + 0x40 + at + 4, ofs as u32);
+            }
+            let ribbons = parse_m2_ribbon_emitters(&b).unwrap();
+            let keys = &ribbons[0].alpha.keys;
+            keys.iter().map(|&(t, _)| t).collect::<Vec<u32>>()
+        };
+        assert_eq!(key_times(100, 200), [0, 100]);
+        assert_eq!(key_times(200, 200), [0, 0]);
+        assert_eq!(key_times(200, 100), [0, 0]);
+    }
+
     #[test]
     fn visibility_samples_step_and_falls_back_to_stand() {
         let vis = RibbonVisibility {

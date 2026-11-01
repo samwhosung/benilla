@@ -125,7 +125,7 @@ impl ValueTrack<f32> {
 
 /// Rebase a track from the global timeline onto a sequence's `[start, end]` band: in-band keys
 /// shift by `-start`, the last key at or before `start` becomes `t = 0`, and the first at or
-/// after `end` closes the band at `end - start`.
+/// after `end` closes the band at `end - start`, or at 0 for a band that ends before it starts.
 pub(crate) fn rebase_keys_to_band<V: Copy>(keys: &mut Vec<(u32, V)>, start: u32, end: u32) {
     if keys.is_empty() || (start == 0 && keys.last().is_some_and(|&(t, _)| t <= end)) {
         return; // already 0-based and in band, the common ambient-prop shape
@@ -141,7 +141,7 @@ pub(crate) fn rebase_keys_to_band<V: Copy>(keys: &mut Vec<(u32, V)>, start: u32,
         } else if t < end {
             out.push((t - start, v));
         } else {
-            out.push((end - start, v));
+            out.push((end.saturating_sub(start), v));
             break; // first key at/past the end closes the band
         }
     }
