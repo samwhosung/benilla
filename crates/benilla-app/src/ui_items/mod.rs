@@ -670,6 +670,34 @@ pub(crate) fn form_refuses_item(
             .is_some_and(|row| !row.is_stance() && !row.allows_items(equippable))
 }
 
+/// `ITEM_FIELD_FLAGS` bit `0x8`, a wrapped gift, which no durability refuses (`0x5d900a`).
+const ITEM_FLAG_WRAPPED: u32 = 0x8;
+/// The worn and bag slots that open the player's list, the slots past them a copy held in its
+/// backpack or vault (`0x5d90fc`).
+const LIST_WORN_SLOTS: u8 = 23;
+
+/// The equip tests of an equippable item with a use spell (`0x5d8fd6`-`0x5d90ff`), the line each
+/// shows, in their order, the disarmed hands of the same list walk apart ([`item_use_route`]):
+/// `ITEM_FIELD_CONTAINED` must be the active player (`0x5d8fed`-`0x5d8ff9`), an unwrapped item
+/// with maximum durability must have some left (`0x5d9005`-`0x5d9027`), and a copy from list slot
+/// 23 on must be equipped (`0x5d90ff`). A copy missing from the list passes (`0x5d9078`).
+pub(crate) fn equip_gate_refusal(
+    it: ItemUse,
+    item: &ObjectFields,
+    me: Option<u64>,
+) -> Option<&'static str> {
+    if item.item_contained() != me {
+        return Some("ERR_MUST_EQUIP_ITEM");
+    }
+    if item.item_flags().unwrap_or(0) & ITEM_FLAG_WRAPPED == 0
+        && item.item_max_durability().unwrap_or(0) > 0
+        && item.item_durability().unwrap_or(0) == 0
+    {
+        return Some("ERR_MUST_REPAIR_DURABILITY");
+    }
+    (it.bag_index == PLAYER_ARRAY && it.slot >= LIST_WORN_SLOTS).then_some("ERR_MUST_EQUIP_ITEM")
+}
+
 /// [`ItemUseRoute`]'s decision, in the reference's order: quest offer (`0x5d8dcc`), charter
 /// (`0x5d8f95`), disarmed refusal, form refusal (`0x5d9105`), toggle scan (`0x5d9157`), cast tail
 /// (`0x5d9249`). The toggle predicate, the disarmed hand and the form refusal are caster state,
@@ -767,17 +795,30 @@ pub(crate) fn send_item_use(
     let disarmed_hand = ctx.rel.self_store.and_then(|store| {
         crate::items::disarmed_equipment_slot(store, &ladder.objects, &ladder.items)
     });
-    // The form test (`0x5d9105`) reads the template's inventory type (`0x5d9ff0`).
+    // The equip tests (`0x5d8fc7`) and the form test (`0x5d9105`) read the template's inventory
+    // type (`0x5d9ff0`).
+    let equippable = ladder
+        .items
+        .template(
+            it.entry,
+            it.guid.unwrap_or(0),
+            crate::query_cache::Ask::Read,
+        )
+        .is_some_and(|t| t.inventory_type != 0);
+    // The equip tests, past the quest (`0x5d8dcc`) and charter (`0x5d8f95`) arms and the silent
+    // return of an item with no use spell (`0x5d8fc1`), each line shown and nothing sent
+    // (`0x5d926d`).
+    let held_refusal = it
+        .guid
+        .filter(|_| equippable && it.use_spell.is_some() && it.start_quest == 0 && !it.is_charter)
+        .and_then(|guid| equip_gate_refusal(it, ladder.objects.object(guid)?, ctx.self_guid));
+    if let Some(key) = held_refusal {
+        debug!("ui_items: item use refused — {key}");
+        ui_errors.push(crate::ui_action::UiError::key(key));
+        return false;
+    }
     let form_refuses = {
         let form = ctx.rel.self_store.map_or(0, |s| s.0.unit_shapeshift_form());
-        let equippable = ladder
-            .items
-            .template(
-                it.entry,
-                it.guid.unwrap_or(0),
-                crate::query_cache::Ask::Read,
-            )
-            .is_some_and(|t| t.inventory_type != 0);
         ladder
             .spells
             .as_ref()
@@ -1186,6 +1227,67 @@ mod tests {
         assert_eq!(
             item_use_route(worn(16), never, Some(16), false),
             ItemUseRoute::CantUseDisarmed
+        );
+    }
+
+    /// The equip tests in their order (`0x5d8fd6`-`0x5d90ff`): where it is held, then broken, then
+    /// its list slot.
+    #[test]
+    fn a_use_item_must_be_held_by_the_player_unbroken_and_worn() {
+        const ME: u64 = 0x07;
+        const BAG: u64 = 0x4000_0000_0000_0B01;
+        const REPAIR: Option<&str> = Some("ERR_MUST_REPAIR_DURABILITY");
+        const EQUIP: Option<&str> = Some("ERR_MUST_EQUIP_ITEM");
+        // Fields 8 `ITEM_FIELD_CONTAINED`, 21 `ITEM_FIELD_FLAGS`, 46 durability, 47 its maximum.
+        let item = |contained: u64, flags: u32, durability: u32, max: u32| {
+            benilla_protocol::ObjectFields::from_pairs(&[
+                (8, contained as u32),
+                (9, (contained >> 32) as u32),
+                (21, flags),
+                (46, durability),
+                (47, max),
+            ])
+        };
+        let at = |bag_index: u8, slot: u8| ItemUse {
+            entry: 7,
+            guid: Some(1),
+            start_quest: 0,
+            bag_index,
+            slot,
+            spell_index: 0,
+            use_spell: Some(8690),
+            on_object: None,
+            is_charter: false,
+        };
+        let refusal = |it: ItemUse, fields: benilla_protocol::ObjectFields| {
+            super::equip_gate_refusal(it, &fields, Some(ME))
+        };
+        let worn = at(super::PLAYER_ARRAY, 7);
+
+        assert_eq!(refusal(worn, item(ME, 0, 0, 50)), REPAIR, "broken");
+        assert_eq!(refusal(worn, item(ME, 0, 1, 50)), None, "one point left");
+        assert_eq!(refusal(worn, item(ME, 0, 0, 0)), None, "no durability");
+        assert_eq!(refusal(worn, item(ME, 0x8, 0, 50)), None, "wrapped");
+
+        let in_a_bag = at(0, 0);
+        assert_eq!(refusal(in_a_bag, item(BAG, 0, 1, 50)), EQUIP);
+        assert_eq!(
+            refusal(in_a_bag, item(BAG, 0, 0, 50)),
+            EQUIP,
+            "the holder is read ahead of the durability"
+        );
+
+        let in_the_pack = at(super::PLAYER_ARRAY, 23);
+        assert_eq!(refusal(in_the_pack, item(ME, 0, 1, 50)), EQUIP);
+        assert_eq!(
+            refusal(in_the_pack, item(ME, 0, 0, 50)),
+            REPAIR,
+            "the durability is read ahead of the list"
+        );
+        assert_eq!(
+            refusal(at(super::PLAYER_ARRAY, 22), item(ME, 0, 1, 50)),
+            None,
+            "the last of the first 23"
         );
     }
 

@@ -932,6 +932,76 @@ fn the_bind_on_use_accept_uses_the_item_inside_its_call() {
     );
 }
 
+/// A worn use item with no durability left is refused (`0x5d9005`-`0x5d9027`) and sends nothing;
+/// with any left it casts.
+#[test]
+fn a_broken_worn_use_item_sends_nothing() {
+    /// Goblin Rocket Boots, doll slot 8 (wire 7).
+    const BOOTS: u32 = 7189;
+    const R: u64 = 0x4000_0000_0000_0A30;
+    let mut h = Bags::new();
+    let world = h.app.world_mut();
+    world.resource_mut::<crate::net::SelfGuid>().0 = Some(ME);
+    let me = world
+        .query_filtered::<Entity, With<SelfPlayer>>()
+        .single(world)
+        .expect("our own player");
+    world
+        .entity_mut(me)
+        .insert(ObjectStore(ObjectFields::from_pairs(&[
+            (22, 100),
+            (F_INV_SLOT_HEAD + 14, R as u32),
+            (F_INV_SLOT_HEAD + 15, (R >> 32) as u32),
+        ])));
+    // Fields 8 `ITEM_FIELD_CONTAINED`, 46 durability, 47 its maximum.
+    let boots = |durability: u32| {
+        ObjectFields::from_pairs(&[
+            (F_TYPE, 0x3),
+            (FIELD_OBJECT_ENTRY, BOOTS),
+            (8, ME as u32),
+            (9, 0),
+            (14, 1),
+            (46, durability),
+            (47, 50),
+        ])
+    };
+    let worn = test_spawn_item(world, R, boots(0), false);
+    world.resource_mut::<Items>().insert_template(
+        BOOTS,
+        Some(ItemInfo {
+            inventory_type: 8,
+            spells: vec![benilla_protocol::messages::ItemSpellEntry {
+                index: 0,
+                spell_id: 4321,
+                trigger: 0,
+                charges: 0,
+                cooldown_ms: -1,
+                category: 0,
+                category_cooldown_ms: -1,
+            }],
+            use_spell: Some(benilla_protocol::messages::ItemUseSpell {
+                spell_id: 4321,
+                cooldown_ms: -1,
+                category: 0,
+                category_cooldown_ms: -1,
+            }),
+            ..test_template("Goblin Rocket Boots")
+        }),
+    );
+
+    assert_eq!(h.verb("", "UseInventoryItem(8)"), [roll()], "refused");
+
+    h.app
+        .world_mut()
+        .entity_mut(worn)
+        .insert(ObjectStore(boots(1)));
+    let sent = h.verb("", "UseInventoryItem(8)");
+    assert!(
+        sent.iter().any(|c| c.starts_with("UseItem {")),
+        "one point left: {sent:?}"
+    );
+}
+
 /// A held vendor row dropped on a bag slot buys into that bag (`0x4c7c00` → `0x4c7e66`):
 /// `CMSG_BUY_ITEM_IN_SLOT` with the bag's guid, the player's for the backpack (`0x4c7c7d`), slot
 /// `0xFF` and count 1 (`0x4c7e9c`-`0x4c7eaa`), then `ClearCursor(1,1)` and nil. An empty bag slot
