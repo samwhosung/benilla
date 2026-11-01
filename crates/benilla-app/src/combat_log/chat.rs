@@ -268,8 +268,9 @@ pub(super) fn party_kill_log(
     );
 }
 
-/// `SMSG_SPELLINSTAKILLLOG`: "You are killed by %s." or "%s is killed by %s.". `0x62cbe0` passes
-/// the victim's class in both selector positions (`0x626be0(class, class)`).
+/// `SMSG_SPELLINSTAKILLLOG`: "You are killed by %s." or "%s is killed by %s.". `0x62cbe0` needs the
+/// victim held as a unit (`0x62cc52`-`0x62cc60`), and passes its class in both selector positions
+/// (`0x626be0(class, class)`).
 pub(super) fn spell_insta_kill_log(
     s: SpellInstaKillLog,
     ctx: &ChatCtx,
@@ -277,6 +278,9 @@ pub(super) fn spell_insta_kill_log(
     poses: &impl Poses,
     log: &ChatLog,
 ) {
+    if !ctx.holds_unit(s.victim, stores) {
+        return;
+    }
     let victim = ctx.classify(s.victim, stores);
     let Some(spell) = ctx.spell_name(s.spell_id) else {
         return;
@@ -586,9 +590,10 @@ pub(super) fn spell_log_execute(
                 // Effect 19 ADD_EXTRA_ATTACKS: no caster in the sentence (`0x62d9f0`), only the
                 // unit that gained the attacks, typed by the spell's hostility (`0x62b190`, from
                 // `0x62db78`) and worded `EXTRA_ATTACKS` with the count when that is you
-                // (`0x62db7d`-`0x62dba9`); a count of 0 writes neither (`0x62da2a`).
+                // (`0x62db7d`-`0x62dba9`); a count of 0 writes neither (`0x62da2a`), and nor does
+                // a target not held as a unit (`0x62da73`-`0x62da83`).
                 E::ExtraAttacks { target, count } => {
-                    if count == 0 {
+                    if count == 0 || !ctx.holds_unit(target, stores) {
                         continue;
                     }
                     let Some(spell) = spell() else { continue };
@@ -618,30 +623,42 @@ pub(super) fn spell_log_execute(
                     );
                 }
                 // Effect 24 CREATE_ITEM: the tradeskill line, literal type `0x3e`, split on the
-                // caster being you; no target on the wire.
-                E::CreateItem { item_entry } => queue_named(
-                    log,
-                    ctx,
-                    poses,
-                    crate::ui_chat::ChatEventKind::SpellTradeskills,
-                    combat::TRADESKILL_LOG,
-                    (s.caster, caster),
-                    (s.caster, caster),
-                    Fills::default(),
-                    combat::Named::Item(item_entry, combat::ItemLog::TradeSkill),
-                ),
-                // Effect 101 FEED_PET: CREATE_ITEM's shape, a different sentence.
-                E::FeedPet { item_entry } => queue_named(
-                    log,
-                    ctx,
-                    poses,
-                    crate::ui_chat::ChatEventKind::SpellTradeskills,
-                    combat::FEEDPET_LOG,
-                    (s.caster, caster),
-                    (s.caster, caster),
-                    Fills::default(),
-                    combat::Named::Item(item_entry, combat::ItemLog::FeedPet),
-                ),
+                // caster being you, who must be held as a unit (`0x62d8f6`-`0x62d904`); no target
+                // on the wire.
+                E::CreateItem { item_entry } => {
+                    if !ctx.holds_unit(s.caster, stores) {
+                        continue;
+                    }
+                    queue_named(
+                        log,
+                        ctx,
+                        poses,
+                        crate::ui_chat::ChatEventKind::SpellTradeskills,
+                        combat::TRADESKILL_LOG,
+                        (s.caster, caster),
+                        (s.caster, caster),
+                        Fills::default(),
+                        combat::Named::Item(item_entry, combat::ItemLog::TradeSkill),
+                    );
+                }
+                // Effect 101 FEED_PET: CREATE_ITEM's shape, a different sentence
+                // (`0x62d826`-`0x62d834`).
+                E::FeedPet { item_entry } => {
+                    if !ctx.holds_unit(s.caster, stores) {
+                        continue;
+                    }
+                    queue_named(
+                        log,
+                        ctx,
+                        poses,
+                        crate::ui_chat::ChatEventKind::SpellTradeskills,
+                        combat::FEEDPET_LOG,
+                        (s.caster, caster),
+                        (s.caster, caster),
+                        Fills::default(),
+                        combat::Named::Item(item_entry, combat::ItemLog::FeedPet),
+                    );
+                }
                 // Effect 68 INTERRUPT_CAST: the sentence names the interrupted spell, off the row,
                 // not the packet's own, and so does the `INTERRUPT` word when the interrupted unit
                 // is you (`0x626b53`-`0x626b69`).

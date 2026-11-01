@@ -1,6 +1,8 @@
 //! The target half of the two-sided gate (`0x626630`).
 
-use benilla_protocol::messages::{ExecuteLog, PartyKillLog, SpellDamageLog, SpellLogExecute};
+use benilla_protocol::messages::{
+    ExecuteLog, PartyKillLog, SpellDamageLog, SpellInstaKillLog, SpellLogExecute,
+};
 
 use super::{melee, spell_damage, spell_hit, stems, swing, Bench, NoPoses, FIREBALL, ME, MOB};
 use crate::net::ObjectStore;
@@ -50,6 +52,56 @@ fn a_target_held_as_any_object_passes() {
     let lines =
         bench.lines(|ctx, st, po, log| super::super::super::attacker_state(s, ctx, st, po, log));
     assert_eq!(stems(&lines), ["COMBATHIT"]);
+}
+
+/// Four formatters look their one unit up with type mask 8 and exit on null: instakill
+/// (`0x62cc52`-`0x62cc60`), feed pet (`0x62d826`-`0x62d834`), create item (`0x62d8f6`-`0x62d904`)
+/// and extra attacks (`0x62da73`-`0x62da83`). Your own trap, a game object that classifies as
+/// yours, gets no line from any of them.
+#[test]
+fn four_spell_lines_need_a_held_unit() {
+    const TRAP: u64 = 7;
+    let mut bench = Bench::new();
+    let e = bench.world.spawn_empty().id();
+    bench.index.0.insert(TRAP, e);
+    bench.stores.insert(
+        e,
+        ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+            (2, 0x21),
+            (6, ME as u32),
+            (7, (ME >> 32) as u32),
+        ])),
+    );
+    let insta_kill = |victim| {
+        let s = SpellInstaKillLog {
+            victim,
+            spell_id: FIREBALL,
+        };
+        bench.lines(|ctx, st, po, log| {
+            super::super::super::spell_insta_kill_log(s, ctx, st, po, log)
+        })
+    };
+    assert_eq!(insta_kill(ME).len(), 1);
+    assert!(insta_kill(TRAP).is_empty(), "instakill");
+    let execute = |caster, effect, row| {
+        let s = SpellLogExecute {
+            caster,
+            spell_id: FIREBALL,
+            effects: vec![(effect, vec![row])],
+        };
+        bench.lines(|ctx, st, po, log| {
+            super::super::super::spell_log_execute(&s, ctx, st, po, log)
+        })
+    };
+    let extra = |target| ExecuteLog::ExtraAttacks { target, count: 1 };
+    assert_eq!(execute(ME, 19, extra(ME)).len(), 1);
+    assert!(execute(ME, 19, extra(TRAP)).is_empty(), "extra attacks");
+    let create = ExecuteLog::CreateItem { item_entry: 2589 };
+    assert_eq!(execute(ME, 24, create).len(), 1);
+    assert!(execute(TRAP, 24, create).is_empty(), "create item");
+    let feed = ExecuteLog::FeedPet { item_entry: 2589 };
+    assert_eq!(execute(ME, 101, feed).len(), 1);
+    assert!(execute(TRAP, 101, feed).is_empty(), "feed pet");
 }
 
 fn party_kill(killer: u64, victim: u64) -> Vec<PendingCombat> {
