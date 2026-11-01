@@ -1006,7 +1006,9 @@ impl FollowedObject<'_, '_> {
             }
         }
         // A unit's slot (`0x5f1f30`) reads its mover's facing: ours while we move it, the relayed
-        // one, or where a creature with no relay stands turned.
+        // one, or where a creature with no relay stands turned. A corpse's own slot (`0x5d76c0`)
+        // is not read: vmangos's `Camera::SetView` seats only a unit or a dynamic object
+        // (`Camera.cpp:70`).
         let yaw = if mover {
             self.player.facing()
         } else if let Some(motion) = motion {
