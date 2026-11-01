@@ -723,6 +723,29 @@ pub(crate) struct CameraControl {
 }
 
 impl CameraControl {
+    /// What a new camera's constructor leaves of the rig (`0x50c0e0`): the mode word zero but for
+    /// bit 6 (`0x50c156`, `0x50c400`), the flip, the bias and the ground lean 0
+    /// (`0x50c1cc`-`0x50c1d8`) and every channel stopped. Its pose is the caller's, the file's in
+    /// the reference (`0x50c3ea`).
+    pub(super) fn new_camera(&mut self) {
+        self.view_axes = Default::default();
+        self.flip_yaw = 0.0;
+        self.view_moved = true;
+        self.view_blend = Default::default();
+        self.scoped = false;
+        self.follow = Default::default();
+        self.pivot = Default::default();
+        self.smart_pivot = Default::default();
+        self.terrain_tilt = Default::default();
+        self.head_bob = Default::default();
+    }
+
+    /// Whether the camera is new or has moved since, for a test of what builds one.
+    #[cfg(test)]
+    pub(crate) fn is_new_for_test(&self) -> bool {
+        self.view_moved
+    }
+
     /// Park the orbit distance at `d`, both the live value and the wheel target, or the glide
     /// drifts back; for the scripted camera park (`capture::probe_cam`).
     pub(crate) fn park_distance(&mut self, d: f32) {

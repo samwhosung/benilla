@@ -1176,6 +1176,9 @@ pub(crate) fn run_pending_reload(world: &mut World) {
     // A boot VM, never the glue's: the reload builds no glue (`0x495664` then `0x495669`), and the
     // load replaces this VM at once.
     close_ui_session(world, ShutdownRoot::Reload);
+    // The teardown destroys the camera with the world frame and the load builds a new one
+    // (`0x481e12`, `0x481b4e` → `0x50c0e0`), ahead of the new VM's first line.
+    crate::player::rebuild_camera(world);
     install_boot_vm(world);
     load_ingame_ui_seated(world, LoadSeat::Live);
     // `UI_Init` ends by re-entering the world-enter cascade (`0x490168`), its sends included, but

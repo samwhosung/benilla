@@ -663,6 +663,28 @@ fn item_locks_cross_a_reload_as_its_sweep_leaves_them() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// `ReloadUI()`'s teardown destroys the camera with the world frame and its load builds a new one
+/// (`0x481e12`, `0x481b4e` → `0x50c0e0`), which counts as moved (`0x50c400`).
+#[test]
+fn a_reload_builds_a_new_camera() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (tmp, _c, _h) = hermetic_probe("reload-camera");
+    let mut world = booted_world();
+    world.init_resource::<crate::player::CameraControl>();
+
+    log_in_as(&mut world, "Onehunter", 1);
+    reload(&mut world, crate::client_state::ClientState::InWorld);
+
+    let rig = world.resource::<crate::player::CameraControl>();
+    assert!(rig.is_new_for_test());
+
+    drop(world);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// `ReloadUI()` is the reference's teardown and rebuild pair (`0x495664`/`0x495669`): the logout
 /// and login edges, run without leaving the world.
 #[test]

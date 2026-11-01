@@ -92,6 +92,7 @@ pub(crate) struct ControlRestore;
 // The last writer of a self body part's render alpha: `entities::apply_unit_mat_alpha` orders
 // itself before it.
 pub(crate) use camera::apply_self_model_fade;
+pub(crate) use camera_saved::rebuild_camera;
 use controller::control;
 pub(crate) use controller::LookSample;
 // The private camera and `state` items are re-imported for the modules beside this one, which

@@ -331,7 +331,7 @@ impl ViewBlend {
 
     /// The pitch `SaveView` stores, `[cam+0x1e0]`, given the live pitch: the live one with no
     /// flight, else the flight's target moved by what else moved the live one ([`step_pitch`]).
-    fn pitch_target(&self, live: f32) -> f32 {
+    pub(super) fn pitch_target(&self, live: f32) -> f32 {
         if !self.pitch.in_flight() {
             return live;
         }
