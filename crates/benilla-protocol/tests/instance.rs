@@ -55,7 +55,8 @@ fn raid_instance_message_wire() {
     );
 }
 
-/// The seconds are a signed word (`0x49e1e9`, divided by `imul` at `0x49e259`): 2^31 reads negative.
+/// The seconds are a signed word (`0x49e1e9`, divided by `imul` at `0x49e259`): 2^31 reads
+/// negative.
 #[test]
 fn a_reset_word_past_the_sign_bit_reads_negative() {
     let body = hx(concat!("01000000", "99010000", "00000080"));
