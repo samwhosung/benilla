@@ -22,7 +22,7 @@ const CHR_RACES_FIELDS: usize = 29;
 
 /// Field 1, the flags (`+0x4`): bit 0 hides a row from an item's race lines (`0x52ce62`,
 /// `0x4fea2e`).
-const FLAGS_FIELD: usize = 0x4 / 4;
+const FLAGS_FIELD: usize = 1;
 
 /// Field 6, the client prefix (`+0x18`), the `%s` of a helm model's `<stem>_<prefix><sex>.m2`
 /// (`0x479a21`).
