@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::io::Cursor;
 
 use anyhow::Result;
-use benilla_bytes::capped;
+use benilla_bytes::{capped, ByteExt};
 use benilla_m2::parse_m2;
 
 use super::{le_f32, le_u16, le_u32};
@@ -131,7 +131,7 @@ pub struct StringAnchors {
 
 /// The `$WTT`/`$WTB` anchors from the raw event table (stride 44); `None` unless both exist.
 pub fn parse_m2_string_anchors(b: &[u8]) -> Option<StringAnchors> {
-    let (ev_count, ev_ofs) = (le_u32(b, 0x114) as usize, le_u32(b, 0x118) as usize);
+    let (ev_count, ev_ofs) = (b.u32_at(0x114)? as usize, b.u32_at(0x118)? as usize);
     let (mut top, mut bottom) = (None, None);
     for e in 0..ev_count {
         let erec = ev_ofs + e * 44;
@@ -163,7 +163,7 @@ pub fn parse_m2_string_anchors(b: &[u8]) -> Option<StringAnchors> {
 /// `0x7131b0`. The line reads only the pole's, though the bobber authors one; among weapons only
 /// the fishing pole does, so a held item keys on its presence.
 pub fn parse_m2_cch_marker(b: &[u8]) -> Option<(u16, [f32; 3])> {
-    let (ev_count, ev_ofs) = (le_u32(b, 0x114) as usize, le_u32(b, 0x118) as usize);
+    let (ev_count, ev_ofs) = (b.u32_at(0x114)? as usize, b.u32_at(0x118)? as usize);
     for e in 0..ev_count {
         let erec = ev_ofs + e * 44;
         if erec + 44 > b.len() {
@@ -541,7 +541,9 @@ pub fn hand_grip_finger_poses(bytes: &[u8], bones: &[u16]) -> Vec<(u16, [f32; 4]
 /// `0x1c`/`0x20` (stride `0x44`), bones at `0x34`/`0x38` (stride `0x6c`). Zero-length sequences
 /// are skipped.
 pub fn parse_m2_animations(b: &[u8]) -> Vec<ModelAnimation> {
-    if b.len() < 0x40 || &b[0..4] != b"MD20" {
+    // Short of the event table's header entry, the last word read here; the loader refuses any file
+    // short of the whole `0x154`-byte header (`0x71ce12`).
+    if b.len() < 0x11c || &b[0..4] != b"MD20" {
         return Vec::new();
     }
     let (seq_count, seq_ofs) = (le_u32(b, 0x1c) as usize, le_u32(b, 0x20) as usize);
@@ -806,6 +808,21 @@ mod tests {
         let ch = read_global_channel(&track, 0, 4, &|_: u16| Some(1000u32), le_u32)
             .expect("more than one key on a live global sequence is a channel");
         assert_eq!(ch.keys.len(), 7);
+    }
+
+    /// Cut anywhere before the end of the event table's header entry, a model reads as a whole
+    /// header with no events does.
+    #[test]
+    fn a_model_cut_before_its_event_table_has_no_events() {
+        let mut whole = vec![0u8; 0x11c];
+        whole[0..4].copy_from_slice(b"MD20");
+        whole[4..8].copy_from_slice(&256u32.to_le_bytes());
+        for len in 0..=whole.len() {
+            let b = &whole[..len];
+            assert!(parse_m2_string_anchors(b).is_none(), "{len} bytes");
+            assert!(parse_m2_cch_marker(b).is_none(), "{len} bytes");
+            assert!(parse_m2_animations(b).is_empty(), "{len} bytes");
+        }
     }
 
     /// `HumanMale.m2`'s one global-sequence bone, the eyelid (75), scales 0 (open) to 1 (shut).
