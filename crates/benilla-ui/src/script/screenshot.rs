@@ -26,7 +26,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 }
 
 impl super::UiScript {
-    /// `Screenshot()` calls since the last drain, each one capture.
+    /// `Screenshot()` calls since the last drain, which the host takes as one capture: the request
+    /// is one slot, overwritten by a second call (`0x442a10`).
     pub fn take_screenshot_asks(&mut self) -> u32 {
         std::mem::take(&mut self.model_mut().screenshot_asks)
     }

@@ -1271,8 +1271,9 @@ mod durability_tests;
 #[cfg(test)]
 pub(crate) mod world_state_tests;
 
+// `pub(crate)` for `harness`, which `crate::screenshot`'s test uses.
 #[cfg(test)]
-mod screenshot_tests;
+pub(crate) mod screenshot_tests;
 
 #[cfg(test)]
 mod questlog_tests;
