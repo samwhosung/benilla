@@ -59,7 +59,8 @@ pub(crate) struct BattlefieldScoreboard {
     /// the pending-name count (`0xb6ebd4`).
     name_waits: Vec<u64>,
     /// A teardown freed those waits with names pending: the count stands, holding the rebuild,
-    /// until the next packet zeroes it (`0x4aabb5`).
+    /// until the next packet (`0x4aabb5`), the world-enter cascade (`0x4909fb` → `0x4a9db0`,
+    /// `0x4a9e61`) or a login's init (`0x4a9c40`, `0x4a9cd9`) zeroes it.
     freed_pending: bool,
     last_request: Option<Instant>,
 }
@@ -106,7 +107,7 @@ pub(crate) struct BoardView<'a> {
 
 impl BattlefieldScoreboard {
     /// The teardown's free of the callbacks `0x4a9ef0`, running none (`0x55f990`). The pending count
-    /// stands until the next packet zeroes it (`0x4aabb5`).
+    /// stands ([`Self::freed_pending`]).
     pub(crate) fn free_store_callbacks(&mut self) {
         self.freed_pending |= !self.name_waits.is_empty();
         self.name_waits.clear();
@@ -439,7 +440,8 @@ mod tests {
     }
 
     /// A teardown frees the waits and the pending count stands (`0x4aa216`): no answer or filter
-    /// rebuilds the board until the next packet zeroes it (`0x4aabb5`).
+    /// rebuilds the board until the next packet zeroes it (`0x4aabb5`), as the world-enter cascade
+    /// also does (`0x4a9e61`, the reset's `Default`).
     #[test]
     fn a_freed_wait_holds_the_rebuild_until_the_next_packet() {
         let (mut app, _rx) = board();

@@ -1621,6 +1621,8 @@ mod tests {
         assert!(a.owner_armed && a.bidder_armed);
     }
 
+    /// A line is its callback's own data (`0x4ccf8d`, `0x4cd1d9`), so the teardown's free takes it,
+    /// and a later miss on the entry shows its own line, not the stale one first.
     #[test]
     fn a_freed_line_goes_with_its_callback_and_a_later_miss_shows_its_own() {
         let mut a = AuctionOpen::default();

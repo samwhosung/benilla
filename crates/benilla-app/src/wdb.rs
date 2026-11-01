@@ -345,20 +345,26 @@ fn clear_session_stores(
 /// The interface's teardown, on a `/reload` and a logout alike (`0x490bd0`): `0x490c35` →
 /// `0x5556c0` walks twelve query stores and frees every node's callbacks, running none, and leaves
 /// its record or in-flight ask (`0x555701` → `0x5615b0`). So an answer after it files its record
-/// and signals nothing. Each list here is what a store's lookups left that reaches the interface.
+/// and signals nothing. Each list here is what a store's lookups left: most tell the interface,
+/// and the guild store's `Members` and `NameText` (`0x5e29c0`, `0x5dd860`) renew engine name text.
 ///
-/// Deviation: the reference frees the waits below too, leaving an item locked, a swap unsent or a
-/// friend's row blank when a `/reload` falls between an ask and its answer; benilla runs them,
-/// because they do more than tell the interface:
+/// Deviation: the reference frees the waits below too, leaving an item locked, a swap unsent, a
+/// friend's row blank, a chat line unshown, a unit's name stale, a model held or a roll in its
+/// slot when a `/reload` falls between an ask and its answer; benilla runs them or ends them,
+/// because each strands more than a word to the interface:
 /// - the item store's engine work ([`Items::free_store_callbacks`]);
 /// - `SocialState`'s name waits, which write the friend rows and send a refused name's removal;
-/// - the chat's held lines, which are its data, and which its age pass shows with no answer;
+/// - the chat's held lines, which are its data: an answer releases them, and for any but a monster
+///   or battleground line (`Pending::held_for_subject`) its age pass does too;
+/// - a held unit's name callbacks (`0x5fb840`, `0x604660`), held in no list: an answer's handler
+///   derives `UNIT_NAME_UPDATE` and the plate's gate from the units it holds;
+/// - the equipment's re-derive, in no list either: `0x5ed880` freed, `[player+0x1d20]` stands and
+///   `0x5ec8f0` holds the model, where benilla dresses the player as the record lands;
 /// - a roll whose result line waited, which the freed callbacks would have closed (`0x61bd50`,
 ///   `0x61bc80`, `0x61b7d0`): it goes and the next opens ([`LootRolls::free_store_callbacks`]).
 ///
-/// What needs no entry: `ItemTextOpen`, whose sweep leg closes the read; a wait a VM keeps, which
-/// dies with it; and a unit's name notices, which an answer's handler derives from the units it
-/// holds and which no list holds.
+/// What needs no entry: `ItemTextOpen`, whose sweep leg closes the read, and a wait a VM keeps,
+/// which dies with it.
 pub(crate) fn free_store_callbacks(world: &mut World) {
     free::<Items>(world, Items::free_store_callbacks);
     free::<NameCache>(world, NameCache::free_store_callbacks);
