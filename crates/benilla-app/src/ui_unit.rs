@@ -2396,7 +2396,10 @@ mod tests {
                 "#,
             )
             .unwrap();
-        assert!(lines.contains("Races: 인간, 오크/Classes: 전사, 도적"), "{lines}");
+        assert!(
+            lines.contains("Races: 인간, 오크/Classes: 전사, 도적"),
+            "{lines}"
+        );
     }
 
     /// A new VM is seeded with the shipped `Languages.dbc`, so each race's own tongue resolves by

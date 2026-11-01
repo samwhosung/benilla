@@ -89,9 +89,7 @@ fn four_spell_lines_need_a_held_unit() {
             spell_id: FIREBALL,
             effects: vec![(effect, vec![row])],
         };
-        bench.lines(|ctx, st, po, log| {
-            super::super::super::spell_log_execute(&s, ctx, st, po, log)
-        })
+        bench.lines(|ctx, st, po, log| super::super::super::spell_log_execute(&s, ctx, st, po, log))
     };
     let extra = |target| ExecuteLog::ExtraAttacks { target, count: 1 };
     assert_eq!(execute(ME, 19, extra(ME)).len(), 1);
