@@ -1115,8 +1115,8 @@ impl UiScript {
     /// The Minimap's per-frame update (`0x4eb040`) on every Minimap's player arrow: once its model
     /// is loaded (`0x7103d0`), `0x4ee100` centres it on its own size, half its width and height
     /// (slots 0x1c and 0x20) in layout units; then `CMinimap::SetPlayerFacing` (`0x4eb8e0`, fed at
-    /// `0x4eb0a4`–`0x4eb0b1`) copies the player's facing (radians) raw into the field
-    /// `Model:SetFacing` (`0x76dce0`) writes, so the arrow's `GetFacing()` reads it.
+    /// `0x4eb0a4`–`0x4eb0b1`) copies the facing (radians) of the object the camera follows raw
+    /// into the field `Model:SetFacing` (`0x76dce0`) writes, so the arrow's `GetFacing()` reads it.
     pub fn set_minimap_player_facing(&mut self, facing: f32) {
         let mut model = self.model_mut();
         let unit = model.layout_unit();

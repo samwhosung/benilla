@@ -370,6 +370,10 @@ pub(super) const BUILT_OUTSIDE_THE_PACKETS_IN_THE_REFERENCE: &[(&str, &[&str], &
     ("::minimap::feed_minimap_arrows", &["death::DeathNet", "net::GuidIndex", "net::ObjectStore",
         "poi_marker::PoiMarker", "ui_party::GroupState"],
         "the arrow half of the minimap's render (`0x4ec950`), which aims them by bearing"),
+    ("::minimap::feed_minimap_player_facing", &["Transform", "net::GuidIndex", "net::ObjectStore",
+        "net::motion::remote::RemoteMotion", "player::view_subject::FarSight"],
+        "the minimap's frame update (`0x4eb040`), which reads the camera's object's facing \
+         (`0x4eb07e`-`0x4eb0a8`) in the frame pass after the packets"),
     ("::player::camera::focus_on_look_edges", &["player::camera::CameraControl"],
         "the mouse half of the freelook edges the frame's mouse made, which the input pass runs \
          ahead of its tick (`0x51491f` → `0x493070`, `0x493090`); a call's edge runs it inside"),
