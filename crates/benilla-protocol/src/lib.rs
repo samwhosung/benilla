@@ -251,7 +251,10 @@ pub struct RealmInfo {
 pub struct Logon {
     pub session_key: [u8; SESSION_KEY_LENGTH],
     pub realms: Vec<RealmInfo>,
-    /// `None` once a refresh has failed; the held list is then final.
+    /// The last reply was one the record fill refused ([`auth::RealmListRefused`]): `realms` is
+    /// empty and the link still up.
+    pub realms_refused: bool,
+    /// `None` once the link has failed a refresh; the held list is then final.
     stream: Option<TcpStream>,
     /// The PIN's digits, when the account asked for one: what the keys pressed showed.
     pin: Option<Vec<u8>>,
@@ -261,7 +264,8 @@ pub struct Logon {
 
 impl Logon {
     /// The reference's `RequestRealmList`: re-reads the list, keeping the old one and dropping
-    /// the socket on failure (realmd closes idle sockets); `timeout` bounds a silent server.
+    /// the socket on a failure of the link (realmd closes idle sockets), or emptying it with the
+    /// socket up on a reply the record fill refused; `timeout` bounds a silent server.
     pub fn refresh_realms(&mut self, timeout: std::time::Duration) -> bool {
         let Some(stream) = self.stream.as_mut() else {
             return false;
@@ -274,7 +278,13 @@ impl Logon {
         match refreshed {
             Ok(realms) => {
                 self.realms = realms;
+                self.realms_refused = false;
                 true
+            }
+            Err(e) if e.is::<auth::RealmListRefused>() => {
+                self.realms.clear();
+                self.realms_refused = true;
+                false
             }
             Err(_) => {
                 self.stream = None;
@@ -449,11 +459,16 @@ fn finish_logon(
     pin_asked: bool,
 ) -> Result<Logon> {
     auth::write_realm_list_request(&mut stream).context("requesting realm list")?;
-    let realms = auth::read_realm_list(&mut stream).context("reading realm list")?;
+    let (realms, realms_refused) = match auth::read_realm_list(&mut stream) {
+        Ok(realms) => (realms, false),
+        Err(e) if e.is::<auth::RealmListRefused>() => (Vec::new(), true),
+        Err(e) => return Err(e.context("reading realm list")),
+    };
 
     Ok(Logon {
         session_key,
         realms,
+        realms_refused,
         stream: Some(stream),
         pin,
         pin_asked,

@@ -190,8 +190,16 @@ fn on_login_edge(In(ev): In<SessionEvent>, mut e: Edges) {
         SessionEvent::LoginFailed {
             refusal, reason, ..
         } => login_failed(refusal, reason, &mut e.login_failures),
-        SessionEvent::RealmList { realms, failed } => {
-            e.realm_lists.write(RealmListMessage { realms, failed });
+        SessionEvent::RealmList {
+            realms,
+            failed,
+            emptied,
+        } => {
+            e.realm_lists.write(RealmListMessage {
+                realms,
+                failed,
+                emptied,
+            });
         }
         SessionEvent::CharActionResult { action, code } => {
             char_action_result(action, code, &mut e.char_actions)

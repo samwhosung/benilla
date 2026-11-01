@@ -8,7 +8,7 @@ use std::net::Ipv4Addr;
 use anyhow::{bail, Result};
 use sha1::{Digest, Sha1};
 
-use crate::wire::{read_array, read_cstring, read_f32_le, read_u16_le, read_u32_le, read_u8};
+use crate::wire::{read_array, read_cstring_capped, read_f32_le, read_u16_le, read_u32_le, read_u8};
 use crate::RealmInfo;
 
 pub mod pin;
@@ -445,28 +445,65 @@ fn clean_realm_name(name: &str) -> String {
     spaced.trim_end_matches([' ', '.']).to_string()
 }
 
-/// Read `CMD_REALM_LIST_Server` into the advertised realms, rewriting [`MAGIC_POPULATIONS`] here
-/// as the reference parser does: the realm-list screen averages every realm's population, and an
-/// unswapped Recommended `600.0` would skew that mean for every row. Each name is cleaned
-/// ([`clean_realm_name`]) before anything shows it.
+/// A realm list the link's walk passed and the record fill's refused, an address of 32 characters
+/// or more: the holder is emptied (`0x5b23ff`), the request fails `REALM_LIST_FAILED` (`0x5b240f`
+/// → `0x5abbd8`) and the link stays up. The reply was read whole, so the stream stays aligned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RealmListRefused;
+
+impl std::fmt::Display for RealmListRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("a realm's address is past the record fill's cap")
+    }
+}
+
+impl std::error::Error for RealmListRefused {}
+
+/// Read `CMD_REALM_LIST_Server` into the advertised realms: the link's walk over the size it read
+/// (`0x5ba8d0`), then the record fill's (`0x5b2230`), a failure of the first being malformed, which
+/// drops the link (`0x5baa0e`, `0x5bb1df`), and of the second [`RealmListRefused`].
 pub fn read_realm_list(r: &mut impl Read) -> Result<Vec<RealmInfo>> {
     let opcode = read_u8(r)?;
     if opcode != CMD_REALM_LIST {
         bail!("expected CMD_REALM_LIST (0x10), got {opcode:#x}");
     }
-    let _size = read_u16_le(r)?;
-    let _header_padding = read_u32_le(r)?;
-    let number_of_realms = read_u8(r)?;
-    let mut realms = Vec::with_capacity(number_of_realms as usize);
+    // The link waits for the whole size before it reads a record (`0x5ba90e`).
+    let size = read_u16_le(r)?;
+    let mut body = vec![0u8; usize::from(size)];
+    r.read_exact(&mut body)?;
+    // Past the u32 after the size, at the count byte both walks start from (`0x5ba933`,
+    // `0x5ba9ee`).
+    let Some(records) = body.get(4..) else {
+        bail!("a realm list of {size} bytes has no count");
+    };
+    // Both strings capped at 0x100 (`0x5ba974`, `0x5ba987`), and the bytes read after the size
+    // field are the size (`0x5ba9e7`).
+    let mut link = records;
+    if walk_realm_list(&mut link, 0x100).is_none() || !link.is_empty() {
+        bail!("a realm list of {size} bytes does not hold its records");
+    }
+    // The address capped at 0x20 (`0x5b22d9`), which poisons the store past it (`0x5b2321`).
+    let mut fill = records;
+    walk_realm_list(&mut fill, 0x20).ok_or_else(|| RealmListRefused.into())
+}
+
+/// One walk of a realm list from its count byte through its tail u16; `None` once a read runs past
+/// the end or a string past its cap, either of which poisons the reference's store (`0x4192aa`).
+/// It rewrites [`MAGIC_POPULATIONS`] as the reference parser does: the realm-list screen averages
+/// every realm's population, and an unswapped Recommended `600.0` would skew that mean for every
+/// row. Each name is cleaned ([`clean_realm_name`]) before anything shows it.
+fn walk_realm_list(r: &mut &[u8], address_cap: usize) -> Option<Vec<RealmInfo>> {
+    let number_of_realms = read_u8(r).ok()?;
+    let mut realms = Vec::with_capacity(usize::from(number_of_realms));
     for _ in 0..number_of_realms {
-        let realm_type = read_u32_le(r)?;
-        let mut flags = read_u8(r)?;
-        let name = read_cstring(r)?;
-        let address = read_cstring(r)?;
-        let mut population = read_f32_le(r)?;
-        let characters = read_u8(r)?;
-        let category = read_u8(r)?;
-        let id = read_u8(r)?;
+        let realm_type = read_u32_le(r).ok()?;
+        let mut flags = read_u8(r).ok()?;
+        let name = read_cstring_capped(r, 0x100)?;
+        let address = read_cstring_capped(r, address_cap)?;
+        let mut population = read_f32_le(r).ok()?;
+        let characters = read_u8(r).ok()?;
+        let category = read_u8(r).ok()?;
+        let id = read_u8(r).ok()?;
         // The sentinel swap, before anyone can average this number.
         if let Some(&(_, rewritten, bit)) = MAGIC_POPULATIONS
             .iter()
@@ -486,8 +523,8 @@ pub fn read_realm_list(r: &mut impl Read) -> Result<Vec<RealmInfo>> {
             id,
         });
     }
-    let _footer_padding = read_u16_le(r)?; // consume so the stream stays aligned
-    Ok(realms)
+    read_u16_le(r).ok()?;
+    Some(realms)
 }
 
 #[cfg(test)]
@@ -665,7 +702,7 @@ mod tests {
         body.push(9); // realm id
 
         let mut packet = vec![CMD_REALM_LIST];
-        packet.extend_from_slice(&(body.len() as u16 + 3).to_le_bytes()); // size
+        packet.extend_from_slice(&(body.len() as u16 + 7).to_le_bytes()); // size
         packet.extend_from_slice(&0u32.to_le_bytes()); // header padding
         packet.push(1); // number_of_realms
         packet.extend_from_slice(&body);
@@ -696,7 +733,7 @@ mod tests {
             body.extend_from_slice(&pop.to_le_bytes());
             body.extend_from_slice(&[0, 1, 0]);
             let mut packet = vec![CMD_REALM_LIST];
-            packet.extend_from_slice(&(body.len() as u16 + 3).to_le_bytes());
+            packet.extend_from_slice(&(body.len() as u16 + 7).to_le_bytes());
             packet.extend_from_slice(&0u32.to_le_bytes());
             packet.push(1);
             packet.extend_from_slice(&body);
@@ -722,23 +759,89 @@ mod tests {
         assert_eq!(plain.population, 1.5);
     }
 
-    /// A one-realm `CMD_REALM_LIST_Server` named `name`, whose address is `127.0.0.1:8085`.
-    fn realm_named(name: &[u8]) -> RealmInfo {
+    /// A one-realm `CMD_REALM_LIST_Server`, its size field the bytes after it.
+    fn realm_packet(name: &[u8], address: &[u8]) -> Vec<u8> {
         let mut body = Vec::new();
         body.extend_from_slice(&0u32.to_le_bytes());
         body.push(0);
         body.extend_from_slice(name);
         body.push(0);
-        body.extend_from_slice(b"127.0.0.1:8085\0");
+        body.extend_from_slice(address);
+        body.push(0);
         body.extend_from_slice(&1.5f32.to_le_bytes());
         body.extend_from_slice(&[0, 1, 0]);
         let mut packet = vec![CMD_REALM_LIST];
-        packet.extend_from_slice(&(body.len() as u16 + 3).to_le_bytes());
+        packet.extend_from_slice(&(body.len() as u16 + 7).to_le_bytes());
         packet.extend_from_slice(&0u32.to_le_bytes());
         packet.push(1);
         packet.extend_from_slice(&body);
         packet.extend_from_slice(&0u16.to_le_bytes());
+        packet
+    }
+
+    /// A one-realm list named `name`, whose address is `127.0.0.1:8085`, read.
+    fn realm_named(name: &[u8]) -> RealmInfo {
+        let packet = realm_packet(name, b"127.0.0.1:8085");
         read_realm_list(&mut packet.as_slice()).unwrap().remove(0)
+    }
+
+    /// The bytes read after the size field must equal the size (`0x5ba9e7`): any other size is
+    /// malformed (`0x5baa0e`), whether the bytes run short or run on.
+    #[test]
+    fn a_realm_list_whose_size_disagrees_with_its_records_is_malformed() {
+        let good = realm_packet(b"R", b"h:1");
+        assert_eq!(read_realm_list(&mut good.as_slice()).unwrap().len(), 1);
+        let off_by = |delta: i16, tail: &[u8]| {
+            let mut p = good.clone();
+            let size = u16::from_le_bytes([p[1], p[2]]).wrapping_add_signed(delta);
+            p[1..3].copy_from_slice(&size.to_le_bytes());
+            p.extend_from_slice(tail);
+            p
+        };
+        for p in [
+            off_by(-1, &[]),
+            off_by(-2, &[]),
+            off_by(1, &[]),
+            off_by(1, &[0]),
+            off_by(2, &[0, 0]),
+        ] {
+            let e = read_realm_list(&mut p.as_slice()).unwrap_err();
+            assert!(!e.is::<RealmListRefused>(), "{e}");
+        }
+    }
+
+    /// The link's walk caps both strings at 0x100 (`0x5ba974`, `0x5ba987`): 255 characters and the
+    /// NUL fit, and 256 poison the store, which is malformed.
+    #[test]
+    fn a_realm_string_of_256_characters_is_malformed() {
+        let fits = "a".repeat(255);
+        assert_eq!(realm_named(fits.as_bytes()).name, fits);
+        let long = "a".repeat(256);
+        for p in [
+            realm_packet(long.as_bytes(), b"h:1"),
+            realm_packet(b"R", long.as_bytes()),
+        ] {
+            let e = read_realm_list(&mut p.as_slice()).unwrap_err();
+            assert!(!e.is::<RealmListRefused>(), "{e}");
+        }
+    }
+
+    /// The record fill caps the address at 0x20 (`0x5b22d9`): 31 characters and the NUL fit, and 32
+    /// up to the link's cap pass the link's walk and poison the fill's, which refuses the list
+    /// (`0x5b23ff`) with the stream past it.
+    #[test]
+    fn a_realm_address_of_32_characters_is_refused_with_the_stream_aligned() {
+        let fits = "a".repeat(31);
+        let p = realm_packet(b"R", fits.as_bytes());
+        assert_eq!(read_realm_list(&mut p.as_slice()).unwrap()[0].address, fits);
+        for len in [32, 255] {
+            let mut p = realm_packet(b"R", "a".repeat(len).as_bytes());
+            p.push(0xee);
+            let mut r = p.as_slice();
+            let e = read_realm_list(&mut r).unwrap_err();
+            assert!(e.is::<RealmListRefused>(), "{e}");
+            assert_eq!(r, [0xeeu8], "the next reply's byte is next");
+        }
     }
 
     /// The realm record fill (`0x5b2230`) turns each of `"*/:<>?\|` in a name into a space

@@ -1281,10 +1281,18 @@ impl GlueMgr {
         self.outbox.push(Outgoing::Begin(Step::Connect));
     }
 
+    /// A reply the record fill refused empties the holder (`0x5b23ff`), its failure following; the
+    /// categories keep their indices, which answer null from then on (`0x5ab930`).
+    fn empty_holder(&mut self) {
+        self.holder.clear();
+        self.holder_moved = true;
+    }
+
     /// A realm list reply: the holder filled (`0x5b2230`), then the pending operation's arm of
     /// `0x5abb90`. A query's success is `REALM_LIST_SUCCESS`; a connect's dials the selected realm,
     /// or the one [`Self::connect_realm`] finds, and completes only through the dial (`0x5ab823`
-    /// calls no `SetStatus`); no answer fails either `REALM_LIST_FAILED`.
+    /// calls no `SetStatus`); no answer, or a reply the fill refused, fails either
+    /// `REALM_LIST_FAILED`.
     fn on_realm_list(
         &mut self,
         realms: Vec<RealmInfo>,
@@ -2154,10 +2162,10 @@ pub(crate) fn drive_glue_mgr(
                 mgr.on_stage(msg.stage, glue_up);
             }
             // The logon's list ends the logon, then answers the connect its latch begins.
-            let lists: Vec<(Vec<RealmInfo>, bool)> = news
+            let lists: Vec<(Vec<RealmInfo>, bool, bool)> = news
                 .realm_lists
                 .read()
-                .map(|m| (m.realms.clone(), m.failed))
+                .map(|m| (m.realms.clone(), m.failed, m.emptied))
                 .collect();
             if !lists.is_empty() {
                 mgr.on_logon_done();
@@ -2179,7 +2187,10 @@ pub(crate) fn drive_glue_mgr(
             let mut mgr = shared.get_mut();
             let player = RunModeRealm::default();
             let run = run.as_deref().unwrap_or(&player);
-            for (realms, failed) in lists {
+            for (realms, failed, emptied) in lists {
+                if emptied {
+                    mgr.empty_holder();
+                }
                 mgr.on_realm_list(realms, failed, &realm_name, run);
             }
             for msg in news.failures.read() {

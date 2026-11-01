@@ -2806,6 +2806,34 @@ fn the_stock_select_with_no_link_shows_the_selected_realms_pvp() {
     );
 }
 
+/// A reply the record fill refused empties the holder and fails the query `REALM_LIST_FAILED`
+/// (`0x5b23ff`, `0x5abbd8`); a query with no answer fails it and keeps the holder.
+#[test]
+fn a_refused_realm_list_empties_the_holder_and_fails_the_query() {
+    let _ = benilla_formats::wow_data_or_skip!();
+    let (mut app, _rx, _) = stock_app();
+    let query = |app: &mut App, failed, emptied| {
+        {
+            let mut m = mgr_mut(app);
+            m.state = ScreenState::RealmList;
+            m.op = Operation::begin(OpKind::GetRealms, STATUS_REALM_LIST_IN_PROGRESS);
+            m.holder = vec![realm("Fake")];
+        }
+        app.world_mut().write_message(RealmListMessage {
+            realms: Vec::new(),
+            failed,
+            emptied,
+        });
+        app.update();
+    };
+    query(&mut app, true, false);
+    assert_eq!(mgr(&app).holder.len(), 1, "no answer keeps the holder");
+    query(&mut app, true, true);
+    assert!(mgr(&app).holder.is_empty());
+    let failed = vm(&app).global_text("REALM_LIST_FAILED");
+    assert_eq!(dialog(&app), Some(("OKAY".into(), failed)));
+}
+
 /// The stock dialog over a world failure with no realm held: the failure's `OKAY` presses itself
 /// in state 2, the `CANCEL` "Retrieving realm list" follows, and the list's reply closes it.
 #[test]
@@ -2825,6 +2853,7 @@ fn the_stock_realm_list_dialog_after_a_world_failure_closes_on_its_reply() {
     app.world_mut().write_message(RealmListMessage {
         realms: vec![realm("Fake")],
         failed: false,
+        emptied: false,
     });
     app.update();
     assert_eq!(dialog(&app), None, "the query's success closes it");
@@ -2952,8 +2981,16 @@ fn pump(
                 }
                 stages.write(LoginStageMessage { stage });
             }
-            E::RealmList { realms, failed } => {
-                lists.write(RealmListMessage { realms, failed });
+            E::RealmList {
+                realms,
+                failed,
+                emptied,
+            } => {
+                lists.write(RealmListMessage {
+                    realms,
+                    failed,
+                    emptied,
+                });
             }
             E::LoginFailed {
                 refusal, reason, ..

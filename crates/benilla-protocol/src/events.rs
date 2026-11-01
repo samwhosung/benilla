@@ -174,10 +174,12 @@ pub enum SessionEvent {
     LoginStage { stage: LoginStage },
     /// The account's realms (`CMD_REALM_LIST`); emitted by the IO thread after the logon and for
     /// each query (the reference re-requests every 5 s). `failed` is a query that got no answer
-    /// (`REALM_LIST_FAILED`); `realms` is then the list last held, empty with no logon.
+    /// (`REALM_LIST_FAILED`); `realms` is then the list last held, empty with no logon. `emptied`
+    /// goes with a `failed` reply the record fill refused, which empties the holder (`0x5b23ff`).
     RealmList {
         realms: Vec<crate::RealmInfo>,
         failed: bool,
+        emptied: bool,
     },
     /// The world server accepted the authentication (`SMSG_AUTH_RESPONSE` `AUTH_OK`, `0x5ab2b8`
     /// → `0x5aab80`): the world connect is done and the IO thread is at the character park, with

@@ -60,7 +60,7 @@ fn enter(realm: RealmInfo) -> RealmRequest {
 /// The next realm list, its realms and whether the query failed.
 fn next_list(events: &crossbeam_channel::Receiver<SessionEvent>) -> (Vec<RealmInfo>, bool) {
     match next_event(events) {
-        SessionEvent::RealmList { realms, failed } => (realms, failed),
+        SessionEvent::RealmList { realms, failed, .. } => (realms, failed),
         other => panic!("expected the realm list, got {other:?}"),
     }
 }
@@ -300,6 +300,31 @@ fn an_empty_realm_list_is_published_and_parked() {
     cycles.realm.send(RealmRequest::Refresh).unwrap();
     assert!(!next_list(&cycles.events).1, "parked at the logon park");
     assert_eq!(realmd.lists(), 2);
+}
+
+/// A realm whose address is 32 characters or more passes the link's walk and poisons the record
+/// fill's (`0x5b22d9`): the list fails emptied (`0x5b23ff`, `0x5abbd8`) with the link up, so a
+/// query asks on it again and no second logon dials.
+#[test]
+fn a_realm_address_past_its_cap_fails_the_list_on_a_link_that_stays() {
+    let address = format!("{}:8085", "a".repeat(27));
+    let (realmd, _) = fake::servers(|_| vec![FakeRealm::new(REALM, &address)]);
+    let cycles = fake::spawn_cycles();
+    fake::login(&cycles, &realmd.addr);
+    for lists in 1..=2 {
+        match next_event(&cycles.events) {
+            SessionEvent::RealmList {
+                realms,
+                failed,
+                emptied,
+            } => assert!(realms.is_empty() && failed && emptied),
+            other => panic!("expected the refused list, got {other:?}"),
+        }
+        assert_eq!(realmd.lists(), lists);
+        cycles.realm.send(RealmRequest::Refresh).unwrap();
+    }
+    assert!(next_list(&cycles.events).1);
+    assert_eq!(realmd.logons(), 1, "the link stayed: no second logon");
 }
 
 /// Change Realm with the world up drops the session first (`0x46b22b`) and returns to the logon

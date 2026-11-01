@@ -385,44 +385,48 @@ enum WorldEnd {
 }
 
 /// Publish a realm list: a fresh one, or with `failed` the last one held, after a query that got
-/// no answer (`REALM_LIST_FAILED`). False once the app is gone.
+/// no answer (`REALM_LIST_FAILED`), and with `emptied` too none, after a reply the record fill
+/// refused. False once the app is gone.
 fn publish(
     events_tx: &Sender<SessionEvent>,
     realms: &[benilla_protocol::RealmInfo],
     failed: bool,
+    emptied: bool,
 ) -> bool {
     events_tx
         .send(SessionEvent::RealmList {
             realms: realms.to_vec(),
             failed,
+            emptied,
         })
         .is_ok()
 }
 
 /// A realm list query on the realmd link, `RequestRealmList`'s (`0x5ab840`) and the connect's
-/// own (`0x5aab6d`), then the answer published. A request that fails for any reason (the link
-/// realmd closed, the 5 s timeout, a reply that does not parse) dials realmd again and asks once
-/// more; vmangos closes every link after `MaxSessionDuration`, 300 s by default, while a list may
-/// stand longer. False once the app is gone.
+/// own (`0x5aab6d`), then the answer published. A request that fails the link (the link realmd
+/// closed, the 5 s timeout, a reply the link's walk calls malformed) dials realmd again and asks
+/// once more; vmangos closes every link after `MaxSessionDuration`, 300 s by default, while a list
+/// may stand longer. A reply only the record fill refuses fails the query with the link up
+/// (`0x5b23ff`). False once the app is gone.
 ///
 /// Deviation: the reference re-dials only from `RequestRealmList`, and only when the link is down
 /// (`[CLoginMgr+5]` clear, `0x5ab857` → `0x5b2200`), with the reconnect challenge (`0x5b2134`,
 /// `[Logon+0xc]`); the connect's query sends only on a link in state 6 (`0x5bc14c`) and otherwise
 /// nothing, leaving the screen on its connecting dialog for good. Here both queries re-dial on
-/// any failure, with a full logon from the cycle's credentials, because benilla's logon has no
-/// reconnect exchange and a connect that can never complete is a dead end, not a behaviour; the
-/// new session key serves the next world dial as the reconnect's would. A PIN account's re-dial
-/// presses the PIN the logon proved on its new challenge's grid, as the reconnect asks for none.
-/// A PIN a re-dial's proof has refused (a TOTP code moves on, vmangos `AuthSocket.cpp:720`) is
-/// forgotten and the logon dials no more, so every query fails from then on: each refusal is a
-/// wrong password to the server (`:856`), and the list asks every 5 s.
+/// any failure of the link, with a full logon from the cycle's credentials, because benilla's
+/// logon has no reconnect exchange and a connect that can never complete is a dead end, not a
+/// behaviour; the new session key serves the next world dial as the reconnect's would. A PIN
+/// account's re-dial presses the PIN the logon proved on its new challenge's grid, as the
+/// reconnect asks for none. A PIN a re-dial's proof has refused (a TOTP code moves on, vmangos
+/// `AuthSocket.cpp:720`) is forgotten and the logon dials no more, so every query fails from then
+/// on: each refusal is a wrong password to the server (`:856`), and the list asks every 5 s.
 fn query(
     logon: &mut benilla_protocol::Logon,
     req: &LoginRequest,
     events_tx: &Sender<SessionEvent>,
 ) -> bool {
     let mut ok = logon.refresh_realms(REALM_REFRESH_TIMEOUT);
-    if !ok && logon.can_redial() {
+    if !ok && !logon.realmd_live() && logon.can_redial() {
         let kept = logon.pin().map(<[u8]>::to_vec);
         let mut press = |grid: &[u8; 10]| {
             redial_digits(kept.as_deref(), crate::run_mode::EnvPin::process())
@@ -440,7 +444,7 @@ fn query(
         ) {
             Ok(fresh) => {
                 *logon = fresh;
-                ok = true;
+                ok = !logon.realms_refused;
             }
             Err(e) => {
                 bevy::log::warn!("net: realm list re-dial failed: {e:#}");
@@ -450,7 +454,7 @@ fn query(
             }
         }
     }
-    publish(events_tx, &logon.realms, !ok)
+    publish(events_tx, &logon.realms, !ok, logon.realms_refused)
 }
 
 /// The PIN digits a re-dial's prompt is answered with: the environment's, derived from the clock
@@ -478,7 +482,7 @@ fn login_park(parks: &Parks, events_tx: &Sender<SessionEvent>) -> Option<LoginRe
             recv(park_rx) -> msg => match msg {
                 Err(_) => Some(None),
                 Ok(ParkRequest::Realm(RealmRequest::Refresh)) => {
-                    (!publish(events_tx, &[], true)).then_some(None)
+                    (!publish(events_tx, &[], true, false)).then_some(None)
                 }
                 Ok(_) => None,
             },
@@ -671,7 +675,8 @@ fn run(
         //
         // An answer queued during a dead cycle must not answer this list.
         while parks.park_rx.try_recv().is_ok() {}
-        if !publish(events_tx, &logon.realms, false) {
+        let refused = logon.realms_refused;
+        if !publish(events_tx, &logon.realms, refused, refused) {
             return Ok(Cycle::Exit);
         }
         let mut pick = match logon_park(&mut logon, &req, parks, events_tx) {
