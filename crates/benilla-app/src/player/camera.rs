@@ -1135,16 +1135,25 @@ impl CameraControl {
         self.enter_in_place(button)
     }
 
-    /// `0x50fe30` inside a call: the mode bit, the session on `button`, a view's pitch stopped
-    /// (`0x50fe90`, `0x50fec2`), the cursor hidden and the device relative; the OS grab is owed to
-    /// the look session, which takes it once focused. Whether it entered: in freelook already, it
-    /// does nothing (`0x50fe3b`).
+    /// Freelook's entry and leave end a view's pitch, yaw and bias flights: each target takes the
+    /// live value (`0x50fe90`-`0x50fecd`, `0x50f978`-`0x50f984`), which stops its channel at the
+    /// next step (`0x50f6b7`).
+    fn stop_view_flights(&mut self) {
+        self.view_blend.cancel_pitch();
+        self.follow.cancel();
+        self.smart_pivot.stop();
+    }
+
+    /// `0x50fe30` inside a call: the mode bit, the session on `button`, a view's flights stopped,
+    /// the cursor hidden and the device relative; the OS grab is owed to the look session, which
+    /// takes it once focused. Whether it entered: in freelook already, it does nothing
+    /// (`0x50fe3b`).
     fn enter_in_place(&mut self, button: LookButton) -> bool {
         if self.look.is_some() {
             return false;
         }
         self.look = Some(button);
-        self.view_blend.cancel_pitch();
+        self.stop_view_flights();
         self.cursor_released = true;
         true
     }
@@ -1152,10 +1161,10 @@ impl CameraControl {
     /// `0x50f940(sticky)` → `0x50fdd0` inside a call: freelook left, a toggle's with it, and the
     /// sticky bit kept (`0x50f958`, `0x50f95d`); a held OS cursor goes back at the look session.
     /// Whether it left: out of freelook, the mode bit's test skips the leave (`0x50fddb`), and the
-    /// sticky bit is still written and a view's pitch still stopped (`0x50f978`).
+    /// sticky bit is still written and a view's flights still stopped.
     fn leave_in_place(&mut self, sticky: bool) -> bool {
         self.follow.sticky = sticky;
-        self.view_blend.cancel_pitch();
+        self.stop_view_flights();
         if self.look.is_none() {
             return false;
         }
@@ -1473,8 +1482,7 @@ fn engage_look(
     cursor_opts: &mut CursorOptions,
 ) {
     rig.look = Some(button);
-    // Entry stops a view's pitch (`0x50fe90`, `0x50fec2`).
-    rig.view_blend.cancel_pitch();
+    rig.stop_view_flights();
     if focused {
         take_cursor(rig, window, cursor_opts);
     } else {
@@ -1486,8 +1494,7 @@ fn engage_look(
 /// it was already free, when it is wherever the player left it.
 fn disengage_look(rig: &mut CameraControl, window: &mut Window, cursor_opts: &mut CursorOptions) {
     rig.look = None;
-    // The leave stops a view's pitch (`0x50f978`).
-    rig.view_blend.cancel_pitch();
+    rig.stop_view_flights();
     let stash = rig.cursor_stash.take();
     if !std::mem::take(&mut rig.cursor_released) {
         release_cursor(cursor_opts);

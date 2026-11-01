@@ -274,6 +274,18 @@ impl SmartPivot {
         self.bias.set_duration(duration);
     }
 
+    /// A bias on its way home, for a test of what stops it.
+    #[cfg(test)]
+    pub(super) fn ease_for_test(&mut self) {
+        self.bias.snap(0.5);
+        self.arm_view(90.0);
+    }
+
+    #[cfg(test)]
+    pub(super) fn easing_for_test(&self) -> bool {
+        self.bias.in_flight()
+    }
+
     /// An instant view's bias: 0, live and target (`0x51310b`, `0x513111`).
     pub(super) fn home(&mut self) {
         self.bias.snap(0.0);

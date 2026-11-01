@@ -267,16 +267,31 @@ fn a_mouse_turn_marks_the_camera_moved() {
     assert!(w.resource::<CameraControl>().view_moved);
 }
 
-/// Freelook's entry and its leave stop a view's pitch (`0x50fe90`, `0x50fec2`, `0x50f978`).
+/// Freelook's entry and its leave stop a view's pitch, yaw and bias (`0x50fe90`-`0x50fecd`,
+/// `0x50f978`-`0x50f984`), and a release out of freelook still does (`0x514c48`, `0x50fddb`).
 #[test]
-fn freelook_stops_a_views_pitch() {
+fn freelook_stops_a_views_flights() {
+    let arm = |rig: &mut CameraControl| {
+        rig.view_blend.arm_pitch_for_test();
+        rig.follow.arm_view(0.0, 1.0, 180.0);
+        rig.smart_pivot.ease_for_test();
+    };
+    let stopped = |rig: &CameraControl| {
+        !rig.view_blend.pitch_in_flight()
+            && rig.follow.target_offset().is_none()
+            && !rig.smart_pivot.easing_for_test()
+    };
     let mut rig = CameraControl::default();
-    rig.view_blend.arm_pitch_for_test();
+    arm(&mut rig);
+    assert!(!stopped(&rig), "all three armed");
     assert!(rig.enter_in_place(LookButton::Right));
-    assert!(!rig.view_blend.pitch_in_flight(), "the entry");
-    rig.view_blend.arm_pitch_for_test();
+    assert!(stopped(&rig), "the entry");
+    arm(&mut rig);
     assert!(rig.leave_in_place(false));
-    assert!(!rig.view_blend.pitch_in_flight(), "the leave");
+    assert!(stopped(&rig), "the leave");
+    arm(&mut rig);
+    assert!(!rig.leave_in_place(false));
+    assert!(stopped(&rig), "out of freelook");
 }
 
 /// The right button's session, entered with no button: the mouse turns the camera and the body
