@@ -293,7 +293,8 @@ impl WorldSession {
         )
     }
 
-    /// Request and return the character list, remembering each race for the chat language.
+    /// Request and return the character list, remembering each race for the chat language; a list
+    /// the reply failed is [`super::CharListFailed`], with the session unharmed.
     pub fn char_enum(&mut self) -> Result<Vec<Character>> {
         self.send(opcode::CMSG_CHAR_ENUM, &[])?;
         loop {
@@ -301,8 +302,11 @@ impl WorldSession {
                 continue;
             };
             match packet {
-                ServerPacket::CharEnum { characters } => {
+                ServerPacket::CharEnum { characters, failed } => {
                     self.link.roster_races = characters.iter().map(|c| (c.guid, c.race)).collect();
+                    if failed {
+                        return Err(super::CharListFailed.into());
+                    }
                     return Ok(characters);
                 }
                 other => self.note_stray(other),

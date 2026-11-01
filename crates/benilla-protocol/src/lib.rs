@@ -20,8 +20,8 @@ pub use messages::{
     CHARACTER_FLAG_HIDE_CLOAK, CHARACTER_FLAG_HIDE_HELM, CHARACTER_FLAG_RENAME,
 };
 pub use world::{
-    observe_sends, LinkTraffic, SendObserver, Unparsed, WorldAuthReject, WorldConnectEvent,
-    WorldReader, WorldSession, WorldWriter, WORLD_PORT,
+    observe_sends, CharListFailed, LinkTraffic, SendObserver, Unparsed, WorldAuthReject,
+    WorldConnectEvent, WorldReader, WorldSession, WorldWriter, WORLD_PORT,
 };
 
 use std::net::{SocketAddr, TcpStream};

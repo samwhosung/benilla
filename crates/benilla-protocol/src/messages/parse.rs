@@ -243,6 +243,22 @@ fn read_char_rename(r: &mut &[u8]) -> io::Result<ServerPacket> {
     Ok(ServerPacket::CharRename { result, renamed })
 }
 
+/// `SMSG_CHAR_ENUM`'s records as `0x5b42a0` keeps them, `None` for a list it empties
+/// (`0x5b4539`-`0x5b455d`): a count above 10 (`0x5b42d5`-`0x5b42e6`), or a store not read to its
+/// end (`0x5b4523`), as bytes after the last record leave it and a short read or a name past its
+/// cap ([`Character::read`]) poison it.
+fn read_char_enum(r: &mut &[u8]) -> Option<Vec<Character>> {
+    let count = read_u8(r).ok()?;
+    if count > 10 {
+        return None;
+    }
+    let mut characters = Vec::with_capacity(usize::from(count));
+    for _ in 0..count {
+        characters.push(Character::read(r).ok()??);
+    }
+    r.is_empty().then_some(characters)
+}
+
 fn skip(r: &mut &[u8], n: usize) -> Option<()> {
     (r.len() >= n).then(|| *r = &r[n..])
 }
@@ -309,24 +325,19 @@ fn parse_server_body(
                 billing,
             }
         }
-        opcode::SMSG_CHAR_ENUM => {
-            let count = read_u8(&mut r)?;
-            // vmangos clamps `CharactersPerRealm` to 10 (`World.cpp:629`).
-            let mut characters = Vec::with_capacity(capacity_hint(count, 10));
-            for _ in 0..count {
-                match Character::read(&mut r)? {
-                    Some(character) => characters.push(character),
-                    // A name past its cap poisons the store: every read after it fails, and the
-                    // end check (`0x5b4523`) empties the list (`0x5b4539`-`0x5b455d`).
-                    None => {
-                        characters.clear();
-                        r = &[];
-                        break;
-                    }
+        opcode::SMSG_CHAR_ENUM => match read_char_enum(&mut r) {
+            Some(characters) => ServerPacket::CharEnum {
+                characters,
+                failed: false,
+            },
+            None => {
+                r = &[];
+                ServerPacket::CharEnum {
+                    characters: Vec::new(),
+                    failed: true,
                 }
             }
-            ServerPacket::CharEnum { characters }
-        }
+        },
         opcode::SMSG_CHAR_DELETE => ServerPacket::CharDelete {
             result: read_u8(&mut r)?,
         },

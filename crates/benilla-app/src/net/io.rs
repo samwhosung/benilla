@@ -909,10 +909,27 @@ fn world(
                                 characters = c;
                                 Parked::Listed
                             }
+                            // The reply failed the list: it is emptied (`0x5b4539`-`0x5b455d`) and
+                            // the screen's query fails (`0x5ab300`), on a link that stays up.
+                            Err(e) if e.is::<benilla_protocol::CharListFailed>() => {
+                                characters.clear();
+                                let sent = events_tx.send(SessionEvent::RosterFailed {
+                                    epoch,
+                                    emptied: true,
+                                });
+                                if sent.is_ok() {
+                                    Parked::StayPut
+                                } else {
+                                    Parked::Exit
+                                }
+                            }
                             // The stream failed under the ask: the screen's query fails
                             // (`0x5ab300`), and the session ends as a dropped socket does.
                             Err(e) => {
-                                let _ = events_tx.send(SessionEvent::RosterFailed { epoch });
+                                let _ = events_tx.send(SessionEvent::RosterFailed {
+                                    epoch,
+                                    emptied: false,
+                                });
                                 return Err(e);
                             }
                         },

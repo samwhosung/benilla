@@ -982,11 +982,47 @@ fn a_failed_roster_ask_opens_okay_with_char_list_failed() {
     m.get_character_list();
     settle(&mut m);
     m.outbox.clear();
-    m.on_roster_failed(2);
+    m.on_roster_failed(2, false);
     m.tick();
     settle(&mut m);
     assert!(m.outbox.is_empty() && !m.op.done, "another link's failure");
-    m.on_roster_failed(3);
+    m.on_roster_failed(3, false);
+    m.tick();
+    settle(&mut m);
+    assert_eq!(
+        m.outbox,
+        [
+            Outgoing::Update {
+                text: Text::Key("CHAR_LIST_FAILED"),
+                button: None,
+            },
+            open("OKAY", Some("CHAR_LIST_FAILED")),
+        ]
+    );
+    assert_eq!(m.state, ScreenState::Idle);
+}
+
+/// A reply that failed the list empties it (`0x5b4539`-`0x5b455d`) and completes the query
+/// `CHAR_LIST_FAILED`; a failure on the stream reaches no such reply and leaves the last list.
+#[test]
+fn a_failed_character_list_empties_the_roster_and_opens_okay() {
+    let asked = |emptied| {
+        let mut m = fresh();
+        m.connected = true;
+        m.on_world_authenticated(realm("Fake"), 3);
+        settle(&mut m);
+        m.get_character_list();
+        settle(&mut m);
+        m.characters = 1;
+        m.roster = vec![crate::glue_session::roster::test_character(7, "Alpha")];
+        m.on_roster_failed(3, emptied);
+        m
+    };
+    let m = asked(false);
+    assert_eq!((m.characters, m.roster.len()), (1, 1));
+    let mut m = asked(true);
+    assert_eq!((m.characters, m.roster.len()), (0, 0));
+    m.outbox.clear();
     m.tick();
     settle(&mut m);
     assert_eq!(
@@ -3022,8 +3058,8 @@ fn pump(
                     generation,
                 });
             }
-            E::RosterFailed { epoch } => {
-                failed_rosters.write(RosterFailedMessage { epoch });
+            E::RosterFailed { epoch, emptied } => {
+                failed_rosters.write(RosterFailedMessage { epoch, emptied });
             }
             E::LoginQueued { position, realm } => {
                 queued.write(LoginQueuedMessage { position, realm });

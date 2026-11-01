@@ -119,6 +119,19 @@ impl std::fmt::Display for Unparsed {
 
 impl std::error::Error for Unparsed {}
 
+/// A character list the reply failed (`ServerPacket::CharEnum`'s `failed`). The link is unharmed:
+/// the reference reports it to the screen and reads on (`0x5b4574`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CharListFailed;
+
+impl std::fmt::Display for CharListFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the server's character list is over 10 or not read to its end")
+    }
+}
+
+impl std::error::Error for CharListFailed {}
+
 /// What [`observe_sends`] takes: called with a sent packet's opcode and its body, the bytes after
 /// the header and as plain as the caller built them (encryption covers the header alone).
 pub type SendObserver = fn(opcode: u16, body: &[u8]);

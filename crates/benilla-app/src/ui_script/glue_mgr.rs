@@ -1568,15 +1568,21 @@ impl GlueMgr {
         self.op.complete(true, STATUS_CHAR_LIST_RETRIEVED);
     }
 
-    /// The roster ask failed on the stream: the query completes `CHAR_LIST_FAILED` (`0x5ab300`'s
-    /// failure leg, `SetStatus(0, 0x2c)`), which the tick opens as `OKAY`. The session ends behind
-    /// it as a dropped socket does, so the disconnect handler follows (`0x46c540`).
-    fn on_roster_failed(&mut self, epoch: u64) {
+    /// The roster ask failed: the query completes `CHAR_LIST_FAILED` (`0x5ab300`'s failure leg,
+    /// `SetStatus(0, 0x2c)`), which the tick opens as `OKAY`. `emptied` is a reply that failed the
+    /// list itself, which it empties (`0x5b4539`-`0x5b455d`) on a link that stays up; on a failed
+    /// stream the session ends behind it as a dropped socket does, so the disconnect handler
+    /// follows (`0x46c540`).
+    fn on_roster_failed(&mut self, epoch: u64, emptied: bool) {
         if epoch != self.link
             || self.state != ScreenState::CharList
             || self.op.kind != OpKind::CharList
         {
             return;
+        }
+        if emptied {
+            self.characters = 0;
+            self.roster.clear();
         }
         self.op.complete(false, STATUS_CHAR_LIST_FAILED);
     }
@@ -2215,7 +2221,7 @@ pub(crate) fn drive_glue_mgr(
         {
             let mut mgr = shared.get_mut();
             for msg in news.roster_failures.read() {
-                mgr.on_roster_failed(msg.epoch);
+                mgr.on_roster_failed(msg.epoch, msg.emptied);
             }
             for msg in news.rosters.read() {
                 mgr.on_roster(msg.characters.clone(), msg.cause, msg.epoch);

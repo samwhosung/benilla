@@ -523,13 +523,45 @@ fn a_roster_ask_cut_on_the_stream_reports_its_failure_then_the_loss() {
     };
     cycles.pick.send(CharRequest::Enumerate).unwrap();
     match next_event(&cycles.events) {
-        SessionEvent::RosterFailed { epoch: failed } => assert_eq!(failed, epoch),
+        SessionEvent::RosterFailed {
+            epoch: failed,
+            emptied,
+        } => {
+            assert_eq!(failed, epoch);
+            assert!(!emptied, "the stream failed, not the list");
+        }
         other => panic!("expected the failed roster ask, got {other:?}"),
     }
     assert!(matches!(
         next_event(&cycles.events),
         SessionEvent::Disconnected { .. }
     ));
+}
+
+/// A reply that fails the list, here a count above 10 (`0x5b42d5`), tells the screen its query
+/// failed (`0x5ab300`'s `0x2c` leg) and ends nothing: the next ask is answered on the same link.
+#[test]
+fn a_failed_character_list_fails_the_ask_on_a_link_that_stays() {
+    let (realmd, world) = fake::servers(|world| vec![FakeRealm::new(REALM, world)]);
+    let cycles = fake::spawn_cycles();
+    fake::login(&cycles, &realmd.addr);
+    let (realms, _) = next_list(&cycles.events);
+    let epoch = dial(&cycles, realms[0].clone());
+    world.answer_roster_asks(Some(vec![11]));
+    cycles.pick.send(CharRequest::Enumerate).unwrap();
+    match next_event(&cycles.events) {
+        SessionEvent::RosterFailed {
+            epoch: failed,
+            emptied,
+        } => {
+            assert_eq!(failed, epoch);
+            assert!(emptied, "the list failed, not the stream");
+        }
+        other => panic!("expected the failed roster ask, got {other:?}"),
+    }
+    world.answer_roster_asks(None);
+    assert_eq!(ask_roster(&cycles), epoch);
+    assert_eq!(world.open(), 1, "the link stayed");
 }
 
 /// The reference keeps servicing the connection at character select, and a server that drops it

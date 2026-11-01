@@ -199,10 +199,11 @@ pub enum SessionEvent {
     AddonInfo {
         records: Vec<crate::messages::AddonRecord>,
     },
-    /// A roster ask on the parked session failed on the stream (`0x5ab300`'s failure leg,
-    /// `SetStatus(0, 0x2c)`, `CHAR_LIST_FAILED`); the session ends after it. Emitted by the IO
-    /// thread, never wire-decoded.
-    RosterFailed { epoch: u64 },
+    /// A roster ask on the parked session failed (`0x5ab300`'s failure leg, `SetStatus(0, 0x2c)`,
+    /// `CHAR_LIST_FAILED`). `emptied` is a reply that failed the list itself, which empties it
+    /// (`0x5b4539`-`0x5b455d`), on a link that stays up; else the stream failed under the ask and
+    /// the session ends after it. Emitted by the IO thread, never wire-decoded.
+    RosterFailed { epoch: u64, emptied: bool },
     /// Queued for a full realm (`AUTH_WAIT_QUEUE`), per queue packet: a wait, not an outcome.
     LoginQueued {
         position: Option<u32>,

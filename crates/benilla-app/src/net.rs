@@ -2364,10 +2364,12 @@ pub(crate) struct WorldAuthMessage {
     pub(crate) generation: u64,
 }
 
-/// A roster ask on the world session `epoch` failed on the stream.
+/// A roster ask on the world session `epoch` failed: on the stream, or with `emptied` in a reply
+/// that failed the list itself (`0x5b4539`-`0x5b455d`).
 #[derive(Message)]
 pub(crate) struct RosterFailedMessage {
     pub(crate) epoch: u64,
+    pub(crate) emptied: bool,
 }
 
 /// The world session read `SMSG_ADDON_INFO` (the handler `0x5b4260`): the addons it hid from the

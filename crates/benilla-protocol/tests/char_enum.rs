@@ -71,7 +71,7 @@ fn char_enum_roster_parses_and_decodes() {
     ));
 
     let p = messages::parse_server(messages::opcode::SMSG_CHAR_ENUM, &body).unwrap();
-    let ServerPacket::CharEnum { ref characters } = p else {
+    let ServerPacket::CharEnum { ref characters, .. } = p else {
         panic!("char enum")
     };
     assert_eq!(characters.len(), 2);
@@ -143,7 +143,7 @@ fn a_level_zero_record_is_stored_as_level_one_and_flagged_new() {
         ));
     }
     let p = messages::parse_server(messages::opcode::SMSG_CHAR_ENUM, &body).unwrap();
-    let ServerPacket::CharEnum { characters } = p else {
+    let ServerPacket::CharEnum { characters, .. } = p else {
         panic!("char enum")
     };
     let read: Vec<_> = characters
@@ -163,7 +163,7 @@ fn a_name_past_the_cap_empties_the_character_list() {
         body.extend(enum_entry(7, "Two", 1, 1, 0, 1, 0, [1.0, 2.0, 3.0], 0));
         body.extend(enum_entry(9, second, 1, 8, 1, 60, 1, [1.0, 2.0, 3.0], 0));
         let p = messages::parse_server(messages::opcode::SMSG_CHAR_ENUM, &body).unwrap();
-        let ServerPacket::CharEnum { characters } = p else {
+        let ServerPacket::CharEnum { characters, .. } = p else {
             panic!("char enum")
         };
         characters
@@ -179,6 +179,42 @@ fn a_name_past_the_cap_empties_the_character_list() {
     );
     // Twelve four-byte characters: 48 bytes in 12 characters.
     assert!(roster(&"\u{1F600}".repeat(12)).is_empty());
+}
+
+/// A list's parse, as `(records kept, failed)`.
+fn read_list(body: &[u8]) -> (usize, bool) {
+    let p = messages::parse_server(messages::opcode::SMSG_CHAR_ENUM, body).unwrap();
+    let ServerPacket::CharEnum { characters, failed } = p else {
+        panic!("char enum")
+    };
+    (characters.len(), failed)
+}
+
+/// `0x5b42a0` fails a list, emptied, with a count above 10 (`0x5b42d5`-`0x5b42e6`) or a store not
+/// read to its end (`0x5b4523`-`0x5b455d`): bytes after the last record, a record cut short, a name
+/// past its cap or no count at all. Up to ten records read to the end pass.
+#[test]
+fn a_list_over_ten_or_not_read_to_its_end_fails_emptied() {
+    let list = |count: u8, records: u64, name: &str| {
+        let mut body = vec![count];
+        for guid in 0..records {
+            body.extend(enum_entry(guid, name, 1, 1, 0, 1, 0, [1.0, 2.0, 3.0], 0));
+        }
+        body
+    };
+    assert_eq!(read_list(&[0]), (0, false));
+    assert_eq!(read_list(&list(10, 10, "Ten")), (10, false));
+    assert_eq!(read_list(&list(11, 11, "Eleven")), (0, true));
+    assert_eq!(read_list(&[255]), (0, true), "the count alone fails it");
+    assert_eq!(read_list(&[0, 0]), (0, true), "a byte after no record");
+    let mut trailing = list(2, 2, "Two");
+    trailing.push(0);
+    assert_eq!(read_list(&trailing), (0, true), "a byte after the last");
+    let mut cut = list(2, 2, "Two");
+    cut.pop();
+    assert_eq!(read_list(&cut), (0, true), "the last record cut short");
+    assert_eq!(read_list(&list(1, 1, &"a".repeat(48))), (0, true));
+    assert_eq!(read_list(&[]), (0, true), "no count");
 }
 
 #[test]

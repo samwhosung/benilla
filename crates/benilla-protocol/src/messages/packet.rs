@@ -76,6 +76,9 @@ pub enum ServerPacket {
     },
     CharEnum {
         characters: Vec<Character>,
+        /// The list failed, `characters` then empty: the flag `0x5b42a0` passes to `0x5ab300`,
+        /// which completes the query `0x2c` for `0x2b` (`0x5b4574`).
+        failed: bool,
     },
     CharCreate {
         result: u8,

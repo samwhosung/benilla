@@ -436,6 +436,8 @@ pub(crate) struct World {
     creates: Arc<Mutex<u8>>,
     /// How long a `CMSG_CHAR_ENUM` waits before its answer.
     enum_delay: Arc<Mutex<Duration>>,
+    /// The body a `CMSG_CHAR_ENUM` is answered with in place of the roster's, while set.
+    enum_body: Arc<Mutex<Option<Vec<u8>>>>,
     /// Send `SMSG_WARDEN_DATA` behind the authentication answer, as vmangos does with Warden on.
     warden: Arc<AtomicBool>,
     /// Close the socket on `CMSG_CHAR_ENUM` instead of answering.
@@ -509,6 +511,11 @@ impl World {
         for s in self.links.lock().unwrap().drain(..) {
             let _ = s.shutdown(std::net::Shutdown::Both);
         }
+    }
+
+    /// Answer every `CMSG_CHAR_ENUM` with `body` from now on, or with the roster again for `None`.
+    pub(crate) fn answer_roster_asks(&self, body: Option<Vec<u8>>) {
+        *self.enum_body.lock().unwrap() = body;
     }
 
     /// Have the server cut the connection on the next roster ask.
@@ -641,6 +648,8 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
     let session_log = Arc::clone(&session_packets);
     let enum_delay = Arc::new(Mutex::new(Duration::ZERO));
     let enum_wait = Arc::clone(&enum_delay);
+    let enum_body = Arc::new(Mutex::new(None::<Vec<u8>>));
+    let enum_answer = Arc::clone(&enum_body);
     let warden = Arc::new(AtomicBool::new(false));
     let warden_flag = Arc::clone(&warden);
     let cut = Arc::new(AtomicBool::new(false));
@@ -724,6 +733,7 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
             let create_answer = Arc::clone(&create_answer);
             let session_log = Arc::clone(&session_log);
             let enum_wait = Arc::clone(&enum_wait);
+            let enum_answer = Arc::clone(&enum_answer);
             let cut_flag = Arc::clone(&cut_flag);
             let refuse_flag = Arc::clone(&refuse_flag);
             let refuse_wait = Arc::clone(&refuse_wait);
@@ -740,6 +750,7 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
                                 let all = roster_bodies.lock().unwrap();
                                 char_enum_body(&all[index.min(all.len() - 1)])
                             };
+                            let body = enum_answer.lock().unwrap().clone().unwrap_or(body);
                             let wait = *enum_wait.lock().unwrap();
                             thread::sleep(wait);
                             if cut_flag.load(Ordering::SeqCst) {
@@ -843,6 +854,7 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
         results,
         creates,
         enum_delay,
+        enum_body,
         warden,
         cut,
         refuse,
