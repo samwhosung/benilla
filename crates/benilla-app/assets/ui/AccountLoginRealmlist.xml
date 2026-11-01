@@ -4,6 +4,9 @@
          change it. The address is the realmList CVar, written through ConsoleExec; the host keeps
          BENILLA_REALMLIST and BENILLA_REALMLIST_PINNED (set while $WOW_HOST fixes the address),
          and reopens the dialog with the typed text when it is not an address. -->
+    <!-- Deviation: this control, where 1.12.1 has only realmlist.wtf beside the executable and no
+         interface for it, because the install is read-only, so that file cannot hold the address
+         a player picks. -->
     <Script>
         GlueDialogTypes["BENILLA_REALMLIST"] = {
             -- The realmList CVar's registered help text.
