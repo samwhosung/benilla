@@ -12,7 +12,7 @@ use bevy::prelude::*;
 use super::roster::Roster;
 use crate::net::{
     CharPick, CharRequest, LoginAbandon, RealmChoice, RealmListMessage, RealmRequest,
-    RosterFailedMessage, WorldAuthMessage,
+    WorldAuthMessage,
 };
 
 /// Answer the realm list and the character park of a reconnect while a pick is kept: the realm the
@@ -21,8 +21,6 @@ pub(super) fn answer_reconnect(
     roster: Res<Roster>,
     mut lists: MessageReader<RealmListMessage>,
     mut auths: MessageReader<WorldAuthMessage>,
-    mut failures: MessageReader<RosterFailedMessage>,
-    mut exit: MessageWriter<AppExit>,
     choice: Res<RealmChoice>,
     pick: Res<CharPick>,
     abandon: Option<Res<LoginAbandon>>,
@@ -49,15 +47,6 @@ pub(super) fn answer_reconnect(
     if auths.read().last().is_some() && kept {
         let _ = pick.0.send(CharRequest::Enumerate);
     }
-    // No roster comes to re-make the pick and no screen stands to ask again: a driverless run fails
-    // rather than idles. Every failure is read with or without a pick kept: one left unread would
-    // fire a frame later, once a pick is.
-    if failures.read().filter(|f| f.emptied).count() != 0
-        && kept
-        && crate::run_mode::fatal_when_driverless("the character list failed with a pick kept")
-    {
-        exit.write(AppExit::error());
-    }
 }
 
 #[cfg(test)]
@@ -65,7 +54,6 @@ mod tests {
     use super::*;
 
     use crate::glue_session::roster::test_character;
-    use crate::local_state::test_env::{EnvGuard, ENV_LOCK};
 
     fn realm(name: &str) -> benilla_protocol::RealmInfo {
         benilla_protocol::RealmInfo {
@@ -97,7 +85,6 @@ mod tests {
             .insert_resource(CharPick(pick_tx.into()))
             .add_message::<RealmListMessage>()
             .add_message::<WorldAuthMessage>()
-            .add_message::<RosterFailedMessage>()
             .add_systems(Update, answer_reconnect);
         (app, realm_rx, pick_rx)
     }
@@ -117,25 +104,6 @@ mod tests {
         app.update();
     }
 
-    fn fail_the_list(app: &mut App) {
-        app.world_mut().write_message(RosterFailedMessage {
-            epoch: 2,
-            emptied: true,
-        });
-        app.update();
-    }
-
-    /// One failure written inside the frame, as the wire edge does: the next frame still holds it.
-    fn fail_once(mut failures: MessageWriter<RosterFailedMessage>, mut sent: Local<bool>) {
-        if !*sent {
-            *sent = true;
-            failures.write(RosterFailedMessage {
-                epoch: 2,
-                emptied: true,
-            });
-        }
-    }
-
     /// With a pick kept, the reconnect dials the realm the session was on and asks the roster
     /// the pick is re-made from; with none, a realm list and an authentication ask nothing, as at
     /// a first login, where the stock screens make both asks.
@@ -153,41 +121,5 @@ mod tests {
         reconnect(&mut app);
         assert!(realms.try_recv().is_err());
         assert!(picks.try_recv().is_err());
-    }
-
-    /// A failed character list asks nothing again for a kept pick, which would ask without end: a
-    /// driverless run exits non-zero, and a person's run stays up.
-    #[test]
-    fn a_failed_list_with_a_kept_pick_exits_only_a_driverless_run() {
-        let _lock = ENV_LOCK.lock();
-        let _cap = EnvGuard::unset("WOW_CAPTURE");
-        let _rig = EnvGuard::unset("WOW_RIG");
-        let _decl = EnvGuard::unset("WOW_UNATTENDED");
-        let (mut app, realms, picks) = reconnect_app(true);
-        fail_the_list(&mut app);
-        assert_eq!(app.should_exit(), None);
-        assert!(realms.try_recv().is_err());
-        assert!(picks.try_recv().is_err());
-
-        let _decl = EnvGuard::set("WOW_UNATTENDED", "1");
-        let (mut app, realms, picks) = reconnect_app(true);
-        fail_the_list(&mut app);
-        assert_eq!(app.should_exit(), Some(AppExit::error()));
-        assert!(realms.try_recv().is_err());
-        assert!(picks.try_recv().is_err());
-    }
-
-    /// A failure read with no pick kept is spent: a pick kept in the next frame, while the failure
-    /// is still in the buffer, does not end the run on it.
-    #[test]
-    fn a_failure_ahead_of_the_pick_does_not_exit() {
-        let _lock = ENV_LOCK.lock();
-        let _decl = EnvGuard::set("WOW_UNATTENDED", "1");
-        let (mut app, _realms, _picks) = reconnect_app(false);
-        app.add_systems(PreUpdate, fail_once);
-        app.update();
-        app.world_mut().resource_mut::<Roster>().pending_pick = Some(7);
-        app.update();
-        assert_eq!(app.should_exit(), None);
     }
 }

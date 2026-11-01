@@ -5,7 +5,7 @@
 use benilla_protocol::Character;
 use bevy::prelude::*;
 
-use crate::net::{CharListMessage, CharPick, CharRequest};
+use crate::net::{CharListMessage, CharPick, CharRequest, RosterFailedMessage};
 use crate::ui_script::glue::{StockGlueProbe, StockVm};
 
 // ── The roster and pick policy ──────────────────────────────────────────────────────────────────
@@ -182,9 +182,12 @@ pub(crate) fn send_pick(roster: &mut Roster, pick: &CharPick, guid: u64, eyes: &
 
 /// Drain each [`CharListMessage`] into the roster, then answer it with the pending pick
 /// (reconnect), or arm the run's own pick for the select screen to take ([`enter_run_pick`]):
-/// `WOW_CHAR` on the first roster only, `WOW_CHARSELECT_PICK` on every one.
+/// `WOW_CHAR` on the first roster only, `WOW_CHARSELECT_PICK` on every one. A failed list with a
+/// pick kept brings no roster to re-make it, and no screen stands to ask again: a driverless run
+/// fails rather than idles.
 pub(super) fn apply_roster_policy(
     mut msgs: MessageReader<CharListMessage>,
+    mut failures: MessageReader<RosterFailedMessage>,
     mut roster: ResMut<Roster>,
     pick: Res<CharPick>,
     eyes: IntroEyes,
@@ -249,6 +252,14 @@ pub(super) fn apply_roster_policy(
                 }
             }
         }
+    }
+    // Every failure is read with or without a pick kept: one left unread would fire a frame later,
+    // once a pick is.
+    if failures.read().filter(|f| f.emptied).count() != 0
+        && roster.pending_pick.is_some()
+        && crate::run_mode::fatal_when_driverless("the character list failed with a pick kept")
+    {
+        exit.write(AppExit::error());
     }
 }
 
@@ -334,6 +345,8 @@ pub(crate) fn test_character(guid: u64, name: &str) -> Character {
 mod tests {
     use super::*;
 
+    use crate::local_state::test_env::{EnvGuard, ENV_LOCK};
+
     fn at(mut c: Character, map: u32, xyz: [f32; 3]) -> Character {
         c.map = map;
         c.position = benilla_protocol::wire::Vector3d {
@@ -395,6 +408,7 @@ mod tests {
             .insert_resource(CharPick(tx.into()))
             .init_resource::<RunPick>()
             .add_message::<CharListMessage>()
+            .add_message::<RosterFailedMessage>()
             .add_systems(Update, apply_roster_policy);
         app.world_mut().write_message(CharListMessage {
             characters: vec![new],
@@ -427,5 +441,71 @@ mod tests {
         roster.pending_pick = Some(2);
         roster.resolve_entry_eye(|race| Some([f32::from(race), 0.0, 0.0]));
         assert_eq!(roster.pending_entry().map(|e| e.1[0]), Some(8.0));
+    }
+
+    /// The policy alone, with `kept` as the pick the session keeps, and what it asks of the IO
+    /// thread.
+    fn policy_app(kept: bool) -> (App, crossbeam_channel::Receiver<CharRequest>) {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut roster = Roster::with_pending_pick(Vec::new(), 7).env_settled();
+        roster.pending_pick = kept.then_some(7);
+        let mut app = App::new();
+        app.insert_resource(roster)
+            .insert_resource(CharPick(tx.into()))
+            .init_resource::<RunPick>()
+            .add_message::<CharListMessage>()
+            .add_message::<RosterFailedMessage>()
+            .add_systems(Update, apply_roster_policy);
+        (app, rx)
+    }
+
+    /// One failure written inside the frame, as the wire edge does: the next frame still holds it.
+    fn fail_once(mut failures: MessageWriter<RosterFailedMessage>, mut sent: Local<bool>) {
+        if !*sent {
+            *sent = true;
+            failures.write(RosterFailedMessage {
+                epoch: 2,
+                emptied: true,
+            });
+        }
+    }
+
+    /// A failed character list asks nothing again for a kept pick, which would ask without end: a
+    /// driverless run exits non-zero, a person's run stays up, and a failed stream, which is the
+    /// session's end and not the list's, exits neither.
+    #[test]
+    fn a_failed_list_with_a_kept_pick_exits_only_a_driverless_run() {
+        let _lock = ENV_LOCK.lock();
+        let _cap = EnvGuard::unset("WOW_CAPTURE");
+        let _rig = EnvGuard::unset("WOW_RIG");
+        let fail = |emptied| {
+            let (mut app, picks) = policy_app(true);
+            app.world_mut()
+                .write_message(RosterFailedMessage { epoch: 2, emptied });
+            app.update();
+            assert!(picks.try_recv().is_err());
+            app.should_exit()
+        };
+
+        let _decl = EnvGuard::unset("WOW_UNATTENDED");
+        assert_eq!(fail(true), None);
+
+        let _decl = EnvGuard::set("WOW_UNATTENDED", "1");
+        assert_eq!(fail(true), Some(AppExit::error()));
+        assert_eq!(fail(false), None);
+    }
+
+    /// A failure read with no pick kept is spent: a pick kept in the next frame, while the failure
+    /// is still in the buffer, does not end the run on it.
+    #[test]
+    fn a_failure_ahead_of_the_pick_does_not_exit() {
+        let _lock = ENV_LOCK.lock();
+        let _decl = EnvGuard::set("WOW_UNATTENDED", "1");
+        let (mut app, _picks) = policy_app(false);
+        app.add_systems(PreUpdate, fail_once);
+        app.update();
+        app.world_mut().resource_mut::<Roster>().pending_pick = Some(7);
+        app.update();
+        assert_eq!(app.should_exit(), None);
     }
 }

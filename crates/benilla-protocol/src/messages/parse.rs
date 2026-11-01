@@ -252,7 +252,7 @@ fn read_char_enum(r: &mut &[u8]) -> Option<Vec<Character>> {
     if count > 10 {
         return None;
     }
-    let mut characters = Vec::with_capacity(usize::from(count));
+    let mut characters = Vec::with_capacity(capacity_hint(count, 10));
     for _ in 0..count {
         characters.push(Character::read(r).ok()??);
     }
