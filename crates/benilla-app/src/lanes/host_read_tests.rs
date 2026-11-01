@@ -151,6 +151,10 @@ const AFTER_THE_PACKETS_IN_THE_REFERENCE: &[(&str, &[&str], &str)] = &[
          update (`0x6d93a0`, its clears at `0x6d93fb` and `0x6d9a3a`), which the minimap frame's \
          draw runs (`0x4ebea0` → `0x4ec950`) in the frame pass, after the packets (`0x420d6a` \
          after `0x420d55`)"),
+    ("::minimap::feed_minimap_player_facing", &["player::view_subject::FarSight"],
+        "reads the camera's object off the far-sight machine and writes nothing of it, in the \
+         minimap's frame update (`0x4eb079`-`0x4eb07e`), which the frame pass runs after the \
+         packets (`0x420d6a` after `0x420d55`)"),
     ("::ui_battlefield::drive_battlefield_leash", &["ui_battlefield::BattlefieldLeash"],
         "the list's leash (`0x4aa090`), polled in the world frame's update (`0x4818d5`), which \
          the frame pass runs after the packets (`0x420d6a` after `0x420d55`)"),
