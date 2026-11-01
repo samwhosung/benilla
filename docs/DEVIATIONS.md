@@ -29,7 +29,7 @@ A setting boots at the reference's default unless it is listed here (`docs/METHO
 
 Each entry is the first sentence of a `Deviation:` comment, linking to where it lives.
 
-- [benilla-app](#benilla-app): 255
+- [benilla-app](#benilla-app): 257
 - [benilla-assets](#benilla-assets): 5
 - [benilla-blp](#benilla-blp): 1
 - [benilla-formats](#benilla-formats): 24
@@ -130,10 +130,11 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### death
 
-- `0x492130` compares the positions whatever map we stand on, so a ghost on another map at the corpse's coordinates reads in range for a reclaim the server refuses; here only the corpse's display map counts because the server refuses that reclaim. ([`src/death/mod.rs:308`](../crates/benilla-app/src/death/mod.rs#L308))
+- `0x492130` compares the positions whatever map we stand on, so a ghost on another map at the corpse's coordinates reads in range for a reclaim the server refuses; here only the corpse's display map counts because the server refuses that reclaim. ([`src/death/mod.rs:316`](../crates/benilla-app/src/death/mod.rs#L316))
 
 #### entities
 
+- `0x472420` installs a landed guild's crest on the record selected at that moment (`0x4724a4`), whichever record's guild it is (`0x472455`), so a late answer can paint another character's guild; benilla paints only the standing record's own, because that paint is a quirk that is a bug. ([`src/entities/attach/preview.rs:1036`](../crates/benilla-app/src/entities/attach/preview.rs#L1036))
 - A cap on one hop's sub-segment count, which the reference lacks, because that way a vertex run is never sized off table data alone; shipped rows peak at 12 (30 yd at `avgSegLen` 2.78). ([`src/entities/chain_beam.rs:54`](../crates/benilla-app/src/entities/chain_beam.rs#L54))
 - Not the reference's generator (`((rand & 0x7fffff) | 0x3f800000)` re-centred through `2.0`), because the look rests on the amplitude and the advection, both exact, never on the draw sequence. ([`src/entities/chain_beam.rs:111`](../crates/benilla-app/src/entities/chain_beam.rs#L111))
 - The reference updates every unit every frame; here only units showing a flagged visual are tracked, and a parked rig skips its ray and re-seeds at the slope on waking, because that bounds the cost at one ray per flagged unit on screen. Nothing shows: an unflagged unit's vector is never read, and a first-sight seed at the slope seats a mount-up at once, as the reference does. ([`src/entities/conform.rs:67`](../crates/benilla-app/src/entities/conform.rs#L67))
@@ -182,8 +183,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 - UTC days, where `mktime` reads the host's local time zone, because the app has no time zone source (`benilla_ui::civil` has the same). A zone east of UTC moves every date's number down one together, which no difference between two dates sees, and a daylight-saving change can give two dates one number, which the sync (`0x6436c0`) would see. ([`src/net/game_time.rs:354`](../crates/benilla-app/src/net/game_time.rs#L354))
 - The reference loads the world first and logs in after: the entry's first frame starts the load at the record's map and position (`0x401570`, called at `0x46c236`), and a later one, once its file reader is idle (`0x46c247`), sends the login (`0x46c272`). Here the two overlap because that way entry is a round trip faster; a refusal ends the cycle as a logout does. ([`src/net/io.rs:10`](../crates/benilla-app/src/net/io.rs#L10))
-- The reference re-dials only from `RequestRealmList`, and only when the link is down (`[CLoginMgr+5]` clear, `0x5ab857` → `0x5b2200`), with the reconnect challenge (`0x5b2134`, `[Logon+0xc]`); the connect's query sends only on a link in state 6 (`0x5bc14c`) and otherwise nothing, leaving the screen on its connecting dialog for good. Here both queries re-dial on any failure of the link, with a full logon from the cycle's credentials, because benilla's logon has no reconnect exchange and a connect that can never complete is a dead end, not a behaviour; the new session key serves the next world dial as the reconnect's would. A PIN account's re-dial presses the PIN the logon proved on its new challenge's grid, as the reconnect asks for none. A PIN a re-dial's proof has refused (a TOTP code moves on, vmangos `AuthSocket.cpp:720`) is forgotten and the logon dials no more, so every query fails from then on: each refusal is a wrong password to the server (`:856`), and the list asks every 5 s. ([`src/net/io.rs:413`](../crates/benilla-app/src/net/io.rs#L413))
-- The reference's guard at `0x537e85` sends 0 whenever the write index is 0, one ping in sixteen; we send 0 only before the first pong, because the rest is an artefact of its index arithmetic that only the server stores. ([`src/net/io.rs:1343`](../crates/benilla-app/src/net/io.rs#L1343))
+- The reference re-dials only from `RequestRealmList`, and only when the link is down (`[CLoginMgr+5]` clear, `0x5ab857` → `0x5b2200`), with the reconnect challenge (`0x5b2134`, `[Logon+0xc]`); the connect's query sends only on a link in state 6 (`0x5bc14c`) and otherwise nothing, leaving the screen on its connecting dialog for good. Here both queries re-dial on any failure of the link, with a full logon from the cycle's credentials, because benilla's logon has no reconnect exchange and a connect that can never complete is a dead end, not a behaviour; the new session key serves the next world dial as the reconnect's would. A PIN account's re-dial presses the PIN the logon proved on its new challenge's grid, as the reconnect asks for none. A PIN a re-dial's proof has refused (a TOTP code moves on, vmangos `AuthSocket.cpp:720`) is forgotten and the logon dials no more, so every query fails from then on: each refusal is a wrong password to the server (`:856`), and the list asks every 5 s. ([`src/net/io.rs:415`](../crates/benilla-app/src/net/io.rs#L415))
+- The reference's guard at `0x537e85` sends 0 whenever the write index is 0, one ping in sixteen; we send 0 only before the first pong, because the rest is an artefact of its index arithmetic that only the server stores. ([`src/net/io.rs:1360`](../crates/benilla-app/src/net/io.rs#L1360))
 - The reference places collision and culling by the raw facing, ours follow the display facing, because a capsule and a sphere barely change under rotation. ([`src/net/motion/facing.rs:10`](../crates/benilla-app/src/net/motion/facing.rs#L10))
 - The reference paces a self move through the same replay chain as a remote's; benilla hands it over at arrival because pacing it would only delay a correction to our own pose. ([`src/net/motion/remote.rs:110`](../crates/benilla-app/src/net/motion/remote.rs#L110))
 - Its rate-limited hover climb (`0x636fa1`, 7 yd/s) is not reproduced, because the cache gate needs a pure function; it converges to this answer. ([`src/net/motion/spline.rs:789`](../crates/benilla-app/src/net/motion/spline.rs#L789))
@@ -316,7 +317,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### ui_chat
 
-- Not run on benilla's same-character reconnect, which the reference lacks (it returns to the login screen), because that way the window keeps its scrollback there. ([`src/ui_chat.rs:267`](../crates/benilla-app/src/ui_chat.rs#L267))
+- Not run on benilla's same-character reconnect, which the reference lacks (it returns to the login screen), because that way the window keeps its scrollback there. ([`src/ui_chat.rs:268`](../crates/benilla-app/src/ui_chat.rs#L268))
 - A missing global prints nothing, where the reference prints an empty line (`0x703c02`), because benilla's other `DisplayError` routes do the same. ([`src/ui_chat/broadcast.rs:167`](../crates/benilla-app/src/ui_chat/broadcast.rs#L167))
 - A dropped link re-enters the world in this session, where the reference logs in anew, because of benilla's same-character reconnect, which the reference lacks. ([`src/ui_chat/channels.rs:49`](../crates/benilla-app/src/ui_chat/channels.rs#L49))
 - In a capital with a blank city word the walk composes `"Trade - "` (it tests the row pointer, not the string, `0x49a2e4`-`0x49a2ed`); we decline, because a wrong channel name is joined silently and for good. ([`src/ui_chat/channels.rs:160`](../crates/benilla-app/src/ui_chat/channels.rs#L160))
@@ -335,7 +336,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### ui_duel
 
 - The challenger's name comes from the `NameCache`, so a name still being queried delays the popup to the name's answer rather than dropping it; the reference reads it off the streamed player and fires nothing without one (`0x4d4a72`). ([`src/ui_duel.rs:8`](../crates/benilla-app/src/ui_duel.rs#L8))
-- Zero arms nothing, because the reference prints 0 and re-arms forever on the `dec`'s wraparound, a bug vmangos never reaches (it sends 3000). ([`src/ui_duel.rs:95`](../crates/benilla-app/src/ui_duel.rs#L95))
+- Zero arms nothing, because the reference prints 0 and re-arms forever on the `dec`'s wraparound, a bug vmangos never reaches (it sends 3000). ([`src/ui_duel.rs:100`](../crates/benilla-app/src/ui_duel.rs#L100))
 
 #### ui_gamma
 
@@ -354,7 +355,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 - A script's 16-letter name, which the reference's bindings pass (1 to 16 code points, `0x4d20d0`, `0x4d2210`), is dropped rather than sent or truncated, because vmangos would kick the session. ([`src/ui_guild/feed.rs:72`](../crates/benilla-app/src/ui_guild/feed.rs#L72))
 - Bounded at the ten slots, because the reference's read (`0x4c93e7`) runs past its array. ([`src/ui_guild/mod.rs:87`](../crates/benilla-app/src/ui_guild/mod.rs#L87))
-- Clamped to ten, because the reference's unbounded loop (`0x4d0bb0`) overruns its ten-slot array from a hostile `rankCount` of 11: index 10 is `0xb726f8`, a float its initializer writes (`0x4d279c`). ([`src/ui_guild/mod.rs:562`](../crates/benilla-app/src/ui_guild/mod.rs#L562))
+- Clamped to ten, because the reference's unbounded loop (`0x4d0bb0`) overruns its ten-slot array from a hostile `rankCount` of 11: index 10 is `0xb726f8`, a float its initializer writes (`0x4d279c`). ([`src/ui_guild/mod.rs:587`](../crates/benilla-app/src/ui_guild/mod.rs#L587))
 - An exact tie is `Equal` where the reference answers ±1, and a NaN has a place (`total_cmp`), because Rust's sort requires a total order. ([`src/ui_guild/sort.rs:72`](../crates/benilla-app/src/ui_guild/sort.rs#L72))
 - The reference ties a miss with a hit (`0x4d0e27`, `0x4d0ea1`), no total order. ([`src/ui_guild/sort.rs:89`](../crates/benilla-app/src/ui_guild/sort.rs#L89))
 
@@ -382,9 +383,9 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 - A negative answer releases the row, where the reference's callback `0x4c2ac0` returns on a failed query and the window never opens, because an entry the server cannot describe would otherwise keep the loot shut for good. ([`src/ui_loot/mod.rs:243`](../crates/benilla-app/src/ui_loot/mod.rs#L243))
 - It is the display row, where the reference's is the item index plus one (`0x4c2885`), because that way an addon's `GetLootSlotInfo(arg1)` reads the row the dialog is for. ([`src/ui_loot/mod.rs:336`](../crates/benilla-app/src/ui_loot/mod.rs#L336))
-- A row cleared meanwhile stops counting, because `ClearLootRow` (`0x4c1f00`) cancels its callback (`0x4c1f52`) and never lowers the count (its writers are `0x4c1def`, `0x4c1e94` and `0x4c2af6` alone), so in 1.12.1 a group member's take of an uncached item before the answer leaves that corpse's window shut until the next loot response resets the count (`0x4c1def`), and ours opens. ([`src/ui_loot/mod.rs:904`](../crates/benilla-app/src/ui_loot/mod.rs#L904))
-- `autoLootDefault` is benilla's own option, 1.12 auto-looting only on a shift-click, and off is 1.12's behaviour. On, every window auto-loots unless Shift is held: an interaction stores the byte inverted by it (`interaction_byte`), and a pickpocket or disenchant window, which no interaction stores the byte for, takes it at its copier's end from the Shift held then. ([`src/ui_loot/mod.rs:934`](../crates/benilla-app/src/ui_loot/mod.rs#L934))
-- Our close paths clear it guid-matched, where `CloseInteraction` clears it unconditionally (`0x48f2c9`), because that way closing an old window keeps a newer `CMSG_LOOT`'s latch. ([`src/ui_loot/mod.rs:962`](../crates/benilla-app/src/ui_loot/mod.rs#L962))
+- A row cleared meanwhile stops counting, because `ClearLootRow` (`0x4c1f00`) cancels its callback (`0x4c1f52`) and never lowers the count (its writers are `0x4c1def`, `0x4c1e94` and `0x4c2af6` alone), so in 1.12.1 a group member's take of an uncached item before the answer leaves that corpse's window shut until the next loot response resets the count (`0x4c1def`), and ours opens. ([`src/ui_loot/mod.rs:911`](../crates/benilla-app/src/ui_loot/mod.rs#L911))
+- `autoLootDefault` is benilla's own option, 1.12 auto-looting only on a shift-click, and off is 1.12's behaviour. On, every window auto-loots unless Shift is held: an interaction stores the byte inverted by it (`interaction_byte`), and a pickpocket or disenchant window, which no interaction stores the byte for, takes it at its copier's end from the Shift held then. ([`src/ui_loot/mod.rs:941`](../crates/benilla-app/src/ui_loot/mod.rs#L941))
+- Our close paths clear it guid-matched, where `CloseInteraction` clears it unconditionally (`0x48f2c9`), because that way closing an old window keeps a newer `CMSG_LOOT`'s latch. ([`src/ui_loot/mod.rs:969`](../crates/benilla-app/src/ui_loot/mod.rs#L969))
 
 #### ui_loot_roll
 
@@ -489,7 +490,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### ui_trade
 
-- An out-of-range slot is dropped, where the reference indexes its 7-slot mirror unchecked, because an out-of-bounds write is not a behaviour to reproduce. ([`src/ui_trade/mod.rs:411`](../crates/benilla-app/src/ui_trade/mod.rs#L411))
+- An out-of-range slot is dropped, where the reference indexes its 7-slot mirror unchecked, because an out-of-bounds write is not a behaviour to reproduce. ([`src/ui_trade/mod.rs:416`](../crates/benilla-app/src/ui_trade/mod.rs#L416))
 
 #### ui_trainer
 
@@ -515,7 +516,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### wdb
 
 - The files are `benilla-config/cache/<realm>/<store>.bin` through `crate::local_state`, not `WDB/` in the install, which is read-only; they are per realm, because another server may hold another template under the same key; and a store is written ten seconds after an answer lands as well as at exit, so a crash costs only re-asking. ([`src/wdb.rs:38`](../crates/benilla-app/src/wdb.rs#L38))
-- The reference keeps a saved store's ask "pending" for the rest of the process (`0x555740` clears only the stores built with persistence off), so a query a lost link dropped is never sent again until restart; benilla's reconnect asks it again because the name or text it was for would otherwise stay blank until restart. ([`src/wdb.rs:344`](../crates/benilla-app/src/wdb.rs#L344))
+- The reference frees the waits below too, leaving an item locked, a swap unsent, a friend's row blank, a chat line unshown, a unit's name stale, a model held or a roll in its slot when a `/reload` falls between an ask and its answer; benilla runs them or ends them, because each strands more than a word to the interface. ([`src/wdb.rs:351`](../crates/benilla-app/src/wdb.rs#L351))
+- The reference keeps a saved store's ask "pending" for the rest of the process (`0x555740` clears only the stores built with persistence off), so a query a lost link dropped is never sent again until restart; benilla's reconnect asks it again because the name or text it was for would otherwise stay blank until restart. ([`src/wdb.rs:419`](../crates/benilla-app/src/wdb.rs#L419))
 
 #### world_console
 
@@ -691,9 +693,9 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - A size past 23 bits is refused, where the reference sends it with bit 23 folded into the flag (`0x5b5712` `or dl,0x80` keeps one byte), because no client packet comes near 8 MB and a refusal beats a corrupt header. ([`src/world/mod.rs:152`](../crates/benilla-protocol/src/world/mod.rs#L152))
 - 10 s of silence ends the wait, where the reference has no timer and waits for the reply, a disconnect or the player's Cancel (`0x46b720`; its connect reports only success or a socket error, `0x5b60c6`-`0x5b61ac`), because each wait here is a blocking read on the net thread, which a server that stays connected and never answers would hold for good. ([`src/world/session.rs:15`](../crates/benilla-protocol/src/world/session.rs#L15))
 - The reference waits forever; here the wait is bounded because that tells a server that died mid-queue from a long wait. ([`src/world/session.rs:22`](../crates/benilla-protocol/src/world/session.rs#L22))
-- Zeros until one does, because the reference's words are never initialised (the session is allocated without zero-fill, `ui/billing` in benilla-re). ([`src/world/session.rs:66`](../crates/benilla-protocol/src/world/session.rs#L66))
-- Checked per queue packet where the reference checks each tick, so a cancel can lag one server update. ([`src/world/session.rs:103`](../crates/benilla-protocol/src/world/session.rs#L103))
-- Benilla runs no Warden module and answers nothing, because the answers come from native Win32 x86 code the server sends, which the client maps, links and runs in its own process (`0x7a79d0`), and benilla runs no such code on any platform (`crate::auth::AuthReject::reply` gives the rule). The reference hands `SMSG_WARDEN_DATA` to the module its connect loads (`0x6ca2f0`, `0x6ca5c0`) and sends that module's answer as `CMSG_WARDEN_DATA` (`0x6ca6a0`); here the message is read past like any stray and the login goes on. What follows is the server's policy (vmangos kicks after `Warden.ClientResponseDelay`, `Warden.cpp:686-691`). ([`src/world/session.rs:245`](../crates/benilla-protocol/src/world/session.rs#L245))
+- Zeros until one does, because the reference's words are never initialised (the session is allocated without zero-fill, `ui/billing` in benilla-re). ([`src/world/session.rs:69`](../crates/benilla-protocol/src/world/session.rs#L69))
+- Checked per queue packet where the reference checks each tick, so a cancel can lag one server update. ([`src/world/session.rs:106`](../crates/benilla-protocol/src/world/session.rs#L106))
+- Benilla runs no Warden module and answers nothing, because the answers come from native Win32 x86 code the server sends, which the client maps, links and runs in its own process (`0x7a79d0`), and benilla runs no such code on any platform (`crate::auth::AuthReject::reply` gives the rule). The reference hands `SMSG_WARDEN_DATA` to the module its connect loads (`0x6ca2f0`, `0x6ca5c0`) and sends that module's answer as `CMSG_WARDEN_DATA` (`0x6ca6a0`); here the message is read past like any stray and the login goes on. What follows is the server's policy (vmangos kicks after `Warden.ClientResponseDelay`, `Warden.cpp:686-691`). ([`src/world/session.rs:251`](../crates/benilla-protocol/src/world/session.rs#L251))
 ### benilla-srp
 
 #### (crate root)
