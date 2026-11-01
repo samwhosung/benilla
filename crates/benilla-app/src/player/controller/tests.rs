@@ -1126,3 +1126,29 @@ fn a_standing_jump_keeps_its_air_nudge_for_a_key_pressed_mid_arc() {
         "the forward press nudges the arc: {speed}"
     );
 }
+
+/// One frame with the spyglass's aura as `zoom` leaves it.
+fn scope_frame(client: &mut Client, zoom: Option<f32>) {
+    let world = client.app.world_mut();
+    world.resource_mut::<scoped_view::ScopedView>().zoom = zoom;
+    client.frame(vec![], vec![]);
+}
+
+/// The aura's start and end reach the camera in the frame's controller (`0x5ff462`, `0x61236e` →
+/// `0x50d320`): view 0 at once and the bit, then the bit cleared and view 1 at once, which takes
+/// the camera back out with no zoom asked.
+#[test]
+fn the_spyglass_selects_its_views_at_its_start_and_end() {
+    let mut client = Client::new(Body::Own, |_| {});
+    scope_frame(&mut client, Some(1.0 / 6.0));
+    let world = client.app.world();
+    let rig = world.resource::<CameraControl>();
+    assert!(rig.scoped);
+    assert_eq!(rig.distance, 0.0);
+    assert!(world.resource::<camera_view::CameraViews>().owes_active());
+
+    scope_frame(&mut client, None);
+    let rig = client.app.world().resource::<CameraControl>();
+    assert!(!rig.scoped);
+    assert_eq!((rig.distance, rig.target_distance), (5.55, 5.55));
+}

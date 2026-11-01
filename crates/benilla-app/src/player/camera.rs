@@ -685,6 +685,9 @@ pub(crate) struct CameraControl {
     pub(super) view_moved: bool,
     /// A timed view's distance and pitch channels ([`super::camera_view::ViewBlend`]).
     pub(super) view_blend: super::camera_view::ViewBlend,
+    /// Mode bit 3, `[cam+0x90] & 0x8`, set and cleared by the scope's edges (`0x50d33f`,
+    /// `0x50d368`): a view request returns before it writes (`0x512ea3`).
+    pub(super) scoped: bool,
     /// Logical cursor position captured when look began, to restore on release.
     pub(super) cursor_stash: Option<Vec2>,
     /// A look session is running with the OS cursor handed back: the window is unfocused.
@@ -1682,7 +1685,7 @@ pub(super) fn seat_camera(
     // The ground tilt is part of the arm's pitch, unlike the bias: `0x50f710` clamps
     // `[cam+0xf4] + [cam+0x108]` to ±89° before the basis is built.
     let arm_pitch = (cam.pitch + rig.terrain_tilt.pitch()).clamp(-CAM_PITCH_LIMIT, CAM_PITCH_LIMIT);
-    // The view's yaw is the offset and facing `cam.yaw` holds plus the flip (`0x50f7de`-`0x50f7f2`).
+    // The view's yaw is the offset and facing in `cam.yaw` plus the flip (`0x50f7de`-`0x50f7f2`).
     let view_yaw = cam.yaw + rig.flip_yaw;
     let arm_rotation = Quat::from_euler(EulerRot::YXZ, view_yaw, arm_pitch, 0.0);
     // Not re-clamped: the bias is composed after that clamp (`0x50ee58`), bounded only by its own
@@ -1695,7 +1698,13 @@ pub(super) fn seat_camera(
     // `Transform::forward()` is exactly `rotation * -Z`; computed here so the write can be gated.
     let cam_fwd = arm_rotation * Vec3::NEG_Z;
     let pivot = player_pos + Vec3::Y * cam_pivot_height;
-    let seat = pivot - cam_fwd * rig.distance;
+    // Under a scope the eye takes distance 0 whatever the zoom holds (`0x50edb7`-`0x50edc0`).
+    let orbit = if dynamics.subject.scoped {
+        0.0
+    } else {
+        rig.distance
+    };
+    let seat = pivot - cam_fwd * orbit;
     let boom = seat - head;
     let boom_len = boom.length().max(1.0e-3);
     // The camera collides with the WMO camera/LOS faces (DETAIL kept, NOCAMCOLLIDE dropped),

@@ -250,7 +250,7 @@ pub(super) fn control(
     keys: Res<ButtonInput<KeyCode>>,
     buttons: Res<ButtonInput<MouseButton>>,
     // Tupled parameters keep this system under Bevy's limit of 16.
-    pointer: (
+    mut pointer: (
         Res<AccumulatedMouseMotion>,
         Res<camera::LookConfig>,
         Res<camera_zoom::ZoomLimit>,
@@ -258,8 +258,9 @@ pub(super) fn control(
         Res<camera_dynamics::CameraOptions>,
         // Only `nearclip` is read here, for the self-avatar fade.
         Res<benilla_world::view::ViewDistance>,
-        // Whether the live view is customised, the auto-return's view gate (`0x50fc30`).
-        Option<Res<camera_view::CameraViews>>,
+        // Whether the live view is customised, the auto-return's view gate (`0x50fc30`), and the
+        // views a scope's start and end select.
+        Option<ResMut<camera_view::CameraViews>>,
     ),
     mut net: (
         Res<NetCommands>,
@@ -361,6 +362,12 @@ pub(super) fn control(
     let view_subject = &speed_capsule.5;
     let self_guid = speed_capsule.6 .0;
     let scoped = &speed_capsule.7;
+    // The aura's start and end, each a selected view (`0x5ff462`, `0x61236e` → `0x50d320`).
+    if scoped.active() != rig.scoped {
+        if let Some(views) = pointer.6.as_deref_mut() {
+            camera_view::scope_edge(views, &mut rig, &mut cam, player.facing(), scoped.active());
+        }
+    }
     // Far sight turns the auto-follow off: our facing is not "behind" for a body we only watch.
     let follow_cfg = camera::FollowConfig {
         style: if view_subject.remote.is_some() {
@@ -961,11 +968,6 @@ pub(super) fn control(
 
         // The camera sweep's root: the capsule's top hemisphere centre, not the framing pivot.
         let head = player.pos + Vec3::Y * (CAPSULE_HEIGHT - CAPSULE_RADIUS);
-        // The spyglass lock (aura 76): re-parking each frame stands in for the reference's camera
-        // flag `0x8`, which makes `SetCameraView` return early.
-        if scoped.active() {
-            rig.park_distance(0.0);
-        }
         // Far sight moves only the picture: `seat_on_subject` orbits the object, all else runs.
 
         // `WOW_CAM_DUMP`: this frame's input beside `seat_camera`'s realized `[cam]` line.

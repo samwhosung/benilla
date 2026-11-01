@@ -16,7 +16,8 @@
 //! persistence; the reference (`0x50fae0`) touches no CVar, so its reset reverts at next launch.
 //!
 //! A view is seated by `cameraViewBlendStyle` ([`set_view`]): style 1 runs the distance, pitch, yaw
-//! and pivot bias channels over one shared time, style 2 writes the pose at once.
+//! and pivot bias channels over one shared time, style 2 writes the pose at once. While a scope is
+//! held it refuses every request; only the scope's own start and end select one ([`scope_edge`]).
 
 use bevy::prelude::*;
 
@@ -109,6 +110,9 @@ pub(crate) struct CameraViews {
     views: [ViewPose; VIEW_COUNT],
     /// The live view, persisted as [`CVAR_ACTIVE_VIEW`].
     current: usize,
+    /// A scope's start or end moved the live view, and the frame's sync owes it `CVar::Set`
+    /// (`0x512f17`).
+    owed_active: bool,
 }
 
 impl Default for CameraViews {
@@ -118,6 +122,7 @@ impl Default for CameraViews {
             current: ACTIVE_VIEW_DEFAULT
                 .parse::<usize>()
                 .expect("the registrar default is an index"),
+            owed_active: false,
         }
     }
 }
@@ -167,6 +172,17 @@ impl CameraViews {
         } else {
             self.current.checked_sub(1)
         }
+    }
+
+    /// Whether a scope's start or end owes [`CVAR_ACTIVE_VIEW`] its write.
+    pub(crate) fn owes_active(&self) -> bool {
+        self.owed_active
+    }
+
+    /// The owed write's value, and it is no longer owed.
+    pub(crate) fn take_owed_active(&mut self) -> String {
+        self.owed_active = false;
+        self.current.to_string()
     }
 }
 
@@ -441,7 +457,7 @@ impl ViewSteps<'_, '_> {
                 }
             }
             CameraViewRequest::FlipYaw(degrees) => {
-                // `[cam+0x100] += arg * pi/180` (`0x50b6c9`-`0x50b6d8`), wrapped as `0x50d779` does.
+                // `[cam+0x100] += arg * pi/180` (`0x50b6c9`-`0x50b6d8`), wrapped as at `0x50d779`.
                 rig.flip_yaw = wrap_pi(rig.flip_yaw + degrees.to_radians());
             }
         }
@@ -477,6 +493,10 @@ fn set_view(
     view: usize,
     cvars: &ViewCvars,
 ) -> bool {
+    // Mode bit 3 returns ahead of every write below (`0x512ea3`).
+    if rig.scoped {
+        return false;
+    }
     let at_once = views.current == view && !rig.view_moved && cvars.style != 0;
     let style = if at_once { STYLE_INSTANT } else { cvars.style };
     let (pose, moved) = views.set(view);
@@ -530,6 +550,32 @@ fn set_view(
         _ => {}
     }
     moved
+}
+
+/// `0x50d320`, a scope's start or end on the camera: the start selects view 0 at once and then sets
+/// mode bit 3 (`0x50d32d`-`0x50d33f`), the end clears the bit and then selects view 1 at once
+/// (`0x50d368`-`0x50d378`). The controller that runs this holds no registry, so a moved index's
+/// `cameraView` write waits for the frame's sync ([`CameraViews::take_owed_active`]).
+pub(super) fn scope_edge(
+    views: &mut CameraViews,
+    rig: &mut CameraControl,
+    cam: &mut FlyCam,
+    face_yaw: f32,
+    held: bool,
+) {
+    let instant = ViewCvars {
+        style: STYLE_INSTANT,
+        ..ViewCvars::read(None, None)
+    };
+    let moved = if held {
+        let moved = set_view(views, rig, cam, face_yaw, 0, &instant);
+        rig.scoped = true;
+        moved
+    } else {
+        rig.scoped = false;
+        set_view(views, rig, cam, face_yaw, 1, &instant)
+    };
+    views.owed_active |= moved;
 }
 
 pub(super) fn plugin(app: &mut App) {
@@ -1186,6 +1232,123 @@ mod tests {
             (forward - Vec3::Z).length() < 1e-3,
             "the view still looks back: {forward}"
         );
+    }
+
+    /// Mode bit 3 returns ahead of every write of `0x512e90` (`0x512ea3`), whatever the style.
+    #[test]
+    fn a_held_scope_refuses_a_view_before_it_writes() {
+        for word in [STYLE_TIMED, STYLE_INSTANT] {
+            let (mut views, mut rig, mut cam) = on_view_one();
+            rig.scoped = true;
+            rig.view_moved = true;
+            let pitch = cam.pitch;
+            let moved = set_view(&mut views, &mut rig, &mut cam, 0.5, 3, &style(word));
+            assert!(!moved, "no index moved");
+            assert_eq!(views.current, 1);
+            assert_eq!(rig.distance, views.pose(1).distance);
+            assert!(!rig.view_blend.distance_in_flight());
+            assert!(rig.view_moved, "bit 6 clears below the return");
+            assert_eq!((cam.yaw, cam.pitch), (0.0, pitch));
+        }
+    }
+
+    /// The verbs that select a view reach that return, so `cameraView` stands. `SaveView` writes
+    /// its slot with no view (`0x50fa09`), a reset of the live view its slot alone, and
+    /// `FlipCameraYaw` never reaches `0x512e90`.
+    #[test]
+    fn a_held_scope_refuses_only_the_verbs_that_select_a_view() {
+        let mut world = verb_world();
+        world.resource_mut::<CameraControl>().scoped = true;
+        for request in [
+            CameraViewRequest::Set(3),
+            CameraViewRequest::Next,
+            CameraViewRequest::Prev,
+        ] {
+            assert!(verb(&mut world, request).is_empty());
+            assert_eq!(world.resource::<CameraViews>().current, 1);
+        }
+        assert_eq!(verb(&mut world, CameraViewRequest::Save(2)).len(), 3);
+        assert_eq!(verb(&mut world, CameraViewRequest::Reset(1)).len(), 3);
+        assert_eq!(world.resource::<CameraControl>().distance, 0.0);
+        verb(&mut world, CameraViewRequest::FlipYaw(90.0));
+        assert_ne!(world.resource::<CameraControl>().flip_yaw, 0.0);
+    }
+
+    /// A scope's start selects view 0 at once and then sets the bit (`0x50d32d`-`0x50d33f`); its
+    /// `cameraView` write is gated on the index moving (`0x512ee6`).
+    #[test]
+    fn a_scope_start_selects_view_zero_at_once() {
+        let (mut views, mut rig, mut cam) = on_view_one();
+        scope_edge(&mut views, &mut rig, &mut cam, 0.5, true);
+        let pose = views.pose(0);
+        assert_eq!(views.current, 0);
+        assert!(rig.scoped);
+        assert_eq!((rig.distance, rig.target_distance), (0.0, 0.0));
+        assert_eq!(cam.pitch, pose.pitch);
+        assert_eq!(cam.yaw, wrap_pi(0.5 + pose.yaw));
+        assert!(views.owes_active());
+
+        let (mut views, mut rig, mut cam) = on_view_one();
+        views.set(0);
+        scope_edge(&mut views, &mut rig, &mut cam, 0.5, true);
+        assert!(!views.owes_active(), "already on view 0");
+    }
+
+    /// A scope's end clears the bit and then selects view 1 at once (`0x50d368`-`0x50d378`), over
+    /// what the zoom did in between, which nothing gates (`0x50edb7` only holds the eye).
+    #[test]
+    fn a_scope_end_selects_view_one_at_once() {
+        let (mut views, mut rig, mut cam) = on_view_one();
+        scope_edge(&mut views, &mut rig, &mut cam, 0.5, true);
+        assert_eq!(views.take_owed_active(), "0");
+        rig.distance = 20.0;
+        rig.target_distance = 20.0;
+        scope_edge(&mut views, &mut rig, &mut cam, 0.5, false);
+        let pose = views.pose(1);
+        assert_eq!(views.current, 1);
+        assert!(!rig.scoped);
+        assert_eq!(rig.distance, pose.distance);
+        assert_eq!(rig.target_distance, pose.distance);
+        assert_eq!(rig.collision_distance, pose.distance);
+        assert!(!rig.view_blend.distance_in_flight());
+        assert_eq!(cam.pitch, pose.pitch);
+        assert_eq!(cam.yaw, wrap_pi(0.5 + pose.yaw));
+        assert_eq!(views.take_owed_active(), "1");
+    }
+
+    /// While the bit is set the eye takes distance 0 and the zoom stands (`0x50edb7`-`0x50edc0`).
+    #[test]
+    fn a_held_scope_seats_the_eye_on_the_pivot() {
+        let mut app = seat_app();
+        let world = app.world_mut();
+        {
+            let mut rig = world.resource_mut::<CameraControl>();
+            rig.distance = 5.55;
+            rig.target_distance = 5.55;
+            rig.collision_distance = 5.55;
+        }
+        let eye = seat(world, 0, 1.0 / 60.0, true).translation;
+        assert!((eye - Vec3::new(0.0, 1.8, 0.0)).length() < 1e-4, "{eye}");
+        assert_eq!(world.resource::<CameraControl>().distance, 5.55);
+    }
+
+    /// The frame's sync makes the `CVar::Set` a scope's edge owes (`0x512f17`), once.
+    #[test]
+    fn the_sync_writes_the_view_a_scope_selected() {
+        let mut world = World::new();
+        world.init_resource::<crate::cvars::Cvars>();
+        world.init_resource::<LookConfig>();
+        world.init_resource::<ZoomLimit>();
+        world.init_resource::<FollowConfig>();
+        let (mut views, mut rig, mut cam) = on_view_one();
+        scope_edge(&mut views, &mut rig, &mut cam, 0.0, true);
+        world.insert_resource(views);
+        world
+            .run_system_once(|mut steps: crate::cvars::CvarSteps| steps.sync(None))
+            .expect("the sync runs");
+        let cvars = world.resource::<crate::cvars::Cvars>();
+        assert_eq!(cvars.get(CVAR_ACTIVE_VIEW), Some("0"));
+        assert!(!world.resource::<CameraViews>().owes_active());
     }
 
     #[test]

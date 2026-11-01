@@ -156,6 +156,8 @@ pub(crate) fn on_cvar_changed(
 pub(crate) struct CvarSteps<'w> {
     cvars: Option<ResMut<'w, Cvars>>,
     callbacks: CvarCallbacks<'w>,
+    /// The camera's views, whose `cameraView` write a scope's start or end leaves to the sync.
+    views: Option<ResMut<'w, crate::player::camera_view::CameraViews>>,
 }
 
 impl CvarSteps<'_> {
@@ -183,6 +185,10 @@ impl CvarSteps<'_> {
         let Some(cvars) = self.cvars.as_deref_mut() else {
             return;
         };
+        if let Some(views) = self.views.as_mut().filter(|v| v.owes_active()) {
+            let view = views.take_owed_active();
+            cvars.set(crate::player::camera_view::CVAR_ACTIVE_VIEW, &view);
+        }
         let script = match script {
             Some(script) => {
                 if script.has_cvar_traffic() || script.cvar_lua_created() != cvars.lua_created {

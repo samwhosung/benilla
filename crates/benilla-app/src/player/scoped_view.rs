@@ -4,7 +4,8 @@
 //! and `0x612320` (remove), which match each effect's `EffectApplyAuraName` (`SpellRec+0x16c`)
 //! against 76 and call `0x50d320(camera, EffectMiscValue[i])`: first person, locked (camera flag
 //! `0x8` makes `SetCameraView` return early), with `[camera+0x40] = n × π/180`; removal restores
-//! `π/2` and unlocks. The Ornate Spyglass (item 5507, spell 12883) passes 15, a 6× zoom.
+//! `π/2`, unlocks and selects view 1. The Ornate Spyglass (item 5507, spell 12883) passes 15, a 6×
+//! zoom.
 //!
 //! The ratio is applied to `[camera+0x40]`, which defaults to 90°; the world projection then turns
 //! it into the vertical field of view by the frame's aspect (`0x5c3cc0`, [`benilla_world::view`]).

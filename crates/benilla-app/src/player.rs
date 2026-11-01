@@ -385,8 +385,8 @@ impl Plugin for PlayerPlugin {
                 Update,
                 (
                     view_subject::publish_view_subject,
-                    // The spyglass zoom (aura 76), before `control`, which reads it to hold the
-                    // rig in first person.
+                    // The spyglass zoom (aura 76), before `control`, which takes its start and end
+                    // onto the camera.
                     scoped_view::apply_scoped_view,
                 )
                     .in_set(WorldStage::Input)
