@@ -360,8 +360,9 @@ pub struct WorldMapState {
     /// The arrow frames' wrapper ids, built once per session; `None` until created.
     pub arrow_world: Option<u32>,
     pub arrow_mini: Option<u32>,
-    /// Radians, 0 north, counterclockwise-positive; `UpdateWorldMapArrowFrames` turns the arrows.
-    pub player_facing: f32,
+    /// The facing of the object the camera follows, radians, 0 north, counterclockwise-positive,
+    /// `None` where it does not resolve; `UpdateWorldMapArrowFrames` turns the arrows.
+    pub followed_facing: Option<f32>,
     /// `PLAYER_EXPLORED_ZONES_1`, 64 words, bit n being `AreaTable.dbc` exploreFlag n, as the
     /// setter's last run or the explored bytes' watcher read them.
     pub explored: Vec<u32>,
@@ -686,18 +687,18 @@ impl super::UiScript {
         model.worldmap.landmarks = build_landmarks(&model);
     }
 
-    /// Pushes the per-frame feed: the player's zone, its projected position and facing, which the
-    /// arrows draw.
+    /// Pushes the per-frame feed: the player's zone, its projected position, which the arrows draw
+    /// at, and the facing of the object the camera follows.
     pub fn set_world_map_feed(
         &mut self,
         player_zone: Option<(u32, u32)>,
         player_uv: Option<(f32, f32)>,
-        player_facing: f32,
+        followed_facing: Option<f32>,
     ) {
         let mut model = self.model_mut();
         model.worldmap.player_zone = player_zone;
         model.worldmap.player_uv = player_uv;
-        model.worldmap.player_facing = player_facing;
+        model.worldmap.followed_facing = followed_facing;
     }
 
     /// The selection's three cells, which the app reads each frame to project the feed: continent,

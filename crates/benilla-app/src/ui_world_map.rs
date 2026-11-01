@@ -802,18 +802,20 @@ fn drop_landmark_signals(mut lane: ResMut<LandmarkLane>) {
     lane.items.clear();
 }
 
-/// The frame's feed: the player's zone and position on the displayed map, the projection's
-/// install, and the engine's world-enter selection. The explored bytes and the landmark sources
-/// the setter builds over are read at its run, and the corpse at `GetCorpseMapPosition`'s call,
-/// through the host ([`LandmarkReads`], [`MapPositionLive`]).
+/// The frame's feed: the player's zone and position on the displayed map, the facing of the object
+/// the camera follows, the projection's install, and the engine's world-enter selection. The
+/// explored bytes and the landmark sources the setter builds over are read at its run, and the
+/// corpse at `GetCorpseMapPosition`'s call, through the host ([`LandmarkReads`],
+/// [`MapPositionLive`]).
 fn feed_world_map(
-    mut vm: crate::script_calls::HostedVm,
+    mut vm: crate::script_calls::VmWith<crate::player::FollowedObject<'static, 'static>>,
     data: Option<Res<WorldMapUiData>>,
     player: Res<Player>,
     map: Option<Res<CurrentMap>>,
     committed: Res<crate::area::CommittedZone>,
     mut memo: Local<crate::ui_script::VmMemo<FeedMemos>>,
 ) {
+    let followed_facing = vm.own().facing();
     vm.run(|script| {
         let (Some(script), Some(data), Some(map)) = (script, data, map) else {
             return;
@@ -853,7 +855,7 @@ fn feed_world_map(
         }
 
         let uv = project_on_displayed(&data, script.world_map_selection(), map.0, wx, wy);
-        script.set_world_map_feed(player_sel.zone, uv, player.facing());
+        script.set_world_map_feed(player_sel.zone, uv, followed_facing);
         // The instance-map leg for `SetMapToCurrentZone`, which the battlefield minimap calls on
         // `PLAYER_ENTERING_WORLD` (`Blizzard_BattlefieldMinimap.lua:58-62`).
         script.set_world_map_player_direct_area(player_sel.direct);
@@ -1354,6 +1356,51 @@ mod player_zone_tests {
         app.world_mut()
             .insert_resource(crate::area::CommittedZone(Some(905)));
         assert_eq!(selection(&mut app), (2, 6, None));
+    }
+
+    /// The arrows take the facing of the object the camera follows (`0x4a7c7c`-`0x4a7cd5`), and a
+    /// lookup that fails writes nothing (`0x4a7ca2`).
+    #[test]
+    fn the_arrows_take_the_followed_objects_facing() {
+        use benilla_ui::script::UiScript;
+
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        let world = app.world_mut();
+        benilla_world::world_point::init_world_point_resources(world);
+        world.insert_resource(crate::player::Player::default());
+        world.insert_resource(benilla_world::world_map::CurrentMap(0));
+        world.insert_resource(data());
+        world.insert_resource(crate::area::AreaTableRes(
+            benilla_formats::AreaTableCatalog::from_rows(Vec::new()),
+        ));
+        crate::player::camera_on_an_eye(world, 4.0);
+        let script = UiScript::new().expect("a VM");
+        script
+            .run(
+                r#"P = CreateFrame("Frame", "P") CreateWorldMapArrowFrame(P)
+                arrow = ({P:GetChildren()})[1]"#,
+            )
+            .expect("the arrow");
+        world.insert_non_send_resource(script);
+        let turned = |app: &mut App| {
+            app.world_mut()
+                .run_system_cached(feed_world_map)
+                .expect("the feed runs");
+            let world = app.world();
+            world
+                .non_send_resource::<UiScript>()
+                .run("UpdateWorldMapArrowFrames()")
+                .expect("the update");
+            crate::script_calls::eval_in_vm::<f32>(world, "return arrow:GetFacing()")
+        };
+
+        assert_eq!(turned(&mut app), 4.0);
+
+        app.world_mut()
+            .resource_mut::<crate::net::GuidIndex>()
+            .0
+            .clear();
+        assert_eq!(turned(&mut app), 4.0, "kept");
     }
 
     #[test]

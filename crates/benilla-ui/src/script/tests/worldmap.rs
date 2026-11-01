@@ -160,7 +160,7 @@ fn a_direct_area_is_the_third_selection_state() {
 
     // In Warsong Gulch `0x4a6650`'s continent loop misses (map 489 is no continent's) and the
     // orphan loop selects the row's own id.
-    s.set_world_map_feed(None, Some((0.5, 0.5)), 0.0);
+    s.set_world_map_feed(None, Some((0.5, 0.5)), Some(0.0));
     s.set_world_map_player_direct_area(Some(443));
     s.run("SetMapToCurrentZone()").unwrap();
 
@@ -412,7 +412,7 @@ fn worldmap_current_zone_and_player_feed() {
         ..Default::default()
     });
 
-    s.set_world_map_feed(Some((1, 2)), Some((0.25, 0.75)), 1.5);
+    s.set_world_map_feed(Some((1, 2)), Some((0.25, 0.75)), Some(1.5));
     s.run("SetMapToCurrentZone()").unwrap();
     assert_eq!(
         s.eval::<(i64, i64)>("return GetCurrentMapContinent(), GetCurrentMapZone()")
@@ -487,7 +487,7 @@ fn worldmap_current_zone_and_player_feed() {
     }
 
     // No feed → the world sheet (never an error).
-    s.set_world_map_feed(None, None, 0.0);
+    s.set_world_map_feed(None, None, None);
     s.run("SetMapToCurrentZone()").unwrap();
     assert_eq!(s.eval::<i64>("return GetCurrentMapContinent()").unwrap(), 0);
 }
@@ -505,7 +505,7 @@ fn a_member_the_live_roster_holds_reads_its_position_by_guid() {
         party: [10, 0, 0, 0],
         ..Default::default()
     });
-    s.set_world_map_feed(Some((1, 2)), Some((0.25, 0.75)), 0.0);
+    s.set_world_map_feed(Some((1, 2)), Some((0.25, 0.75)), Some(0.0));
     let mut host = Lent {
         at: [(10, on_ours(0.1, 0.2)), (12, on_ours(0.6, 0.7))].into(),
         party1: Some(12),
@@ -823,7 +823,7 @@ fn worldmap_zone_level_hover_names_without_highlight() {
 fn worldmap_update_fires_inside_the_verb_that_moves_the_selection() {
     let mut s = script();
     push_catalog(&mut s);
-    s.set_world_map_feed(Some((2, 1)), None, 0.0);
+    s.set_world_map_feed(Some((2, 1)), None, None);
     // Drain the catalog push's own queued event first.
     s.tick(0.01);
     s.run(

@@ -374,6 +374,11 @@ pub(super) const BUILT_OUTSIDE_THE_PACKETS_IN_THE_REFERENCE: &[(&str, &[&str], &
         "net::motion::remote::RemoteMotion", "player::view_subject::FarSight"],
         "the minimap's frame update (`0x4eb040`), which reads the camera's object's facing \
          (`0x4eb07e`-`0x4eb0a8`) in the frame pass after the packets"),
+    ("::ui_world_map::feed_world_map", &["Transform", "net::GuidIndex", "net::ObjectStore",
+        "net::motion::remote::RemoteMotion", "player::view_subject::FarSight"],
+        "`UpdateWorldMapArrowFrames` (`0x4a7c20`), which reads the camera's object's facing \
+         (`0x4a7c7c`-`0x4a7cd5`), called by `WorldMapButton_OnUpdate` in the frame pass after the \
+         packets"),
     ("::player::camera::focus_on_look_edges", &["player::camera::CameraControl"],
         "the mouse half of the freelook edges the frame's mouse made, which the input pass runs \
          ahead of its tick (`0x51491f` → `0x493070`, `0x493090`); a call's edge runs it inside"),

@@ -958,74 +958,12 @@ fn clear_quest_blip_on_world_entry(
     })
 }
 
-/// `OBJECT_FIELD_TYPE`'s game object bit.
-const TYPEMASK_GAMEOBJECT: u32 = 0x20;
-/// `OBJECT_FIELD_TYPE`'s dynamic object bit.
-const TYPEMASK_DYNAMICOBJECT: u32 = 0x40;
-
-/// What the minimap's frame update reads of the object the camera follows: far sight's, or with
-/// none the active player, which a 0 seats (`0x490930` → `0x48ec90`).
-#[derive(bevy::ecs::system::SystemParam)]
-#[allow(clippy::type_complexity)]
-struct FollowedObject<'w, 's> {
-    player: Res<'w, Player>,
-    far_sight: Res<'w, crate::player::FarSight>,
-    index: Res<'w, crate::net::GuidIndex>,
-    objects: Query<
-        'w,
-        's,
-        (
-            Has<crate::net::ActiveMover>,
-            Option<&'static crate::net::RemoteMotion>,
-            Option<&'static crate::net::ObjectStore>,
-            Option<&'static Transform>,
-        ),
-    >,
-}
-
-impl FollowedObject<'_, '_> {
-    /// Slot 6 of the object `[camera+0x88]` finds (`0x4eb07e`-`0x4eb0a8`), none where the lookup
-    /// fails (`0x4eb0a2`). A unit's facing and our accumulator are normalized to `[0, 2π)`, the
-    /// range a reference mover's facing keeps; an object's field is copied raw.
-    fn facing(&self) -> Option<f32> {
-        use std::f32::consts::TAU;
-        let Some(guid) = self.far_sight.camera() else {
-            let player = &self.player;
-            return player.active.then(|| player.facing().rem_euclid(TAU));
-        };
-        let entity = self.index.0.get(&guid).copied()?;
-        let (mover, motion, store, transform) = self.objects.get(entity).ok()?;
-        if let Some(fields) = store.map(|s| &s.0) {
-            let mask = fields.object_type_mask().unwrap_or(0);
-            // A dynamic object's slot (`0x5d5f40`) and a game object's (`0x5f9fb0`) read its field.
-            if mask & TYPEMASK_DYNAMICOBJECT != 0 {
-                return Some(fields.dynamicobject_position().map_or(0.0, |(_, f)| f));
-            }
-            if mask & TYPEMASK_GAMEOBJECT != 0 {
-                return Some(fields.gameobject_position().map_or(0.0, |(_, f)| f));
-            }
-        }
-        // A unit's slot (`0x5f1f30`) reads its mover's facing: ours while we move it, the relayed
-        // one, or where a creature with no relay stands turned. A corpse's own slot (`0x5d76c0`)
-        // is not read: vmangos's `Camera::SetView` seats only a unit or a dynamic object
-        // (`Camera.cpp:70`).
-        let yaw = if mover {
-            self.player.facing()
-        } else if let Some(motion) = motion {
-            motion.orientation
-        } else {
-            transform.map_or(0.0, |t| t.rotation.to_euler(EulerRot::YXZ).0)
-        };
-        Some(yaw.rem_euclid(TAU))
-    }
-}
-
 /// The Minimap's per-frame update (`0x4eb040`) on its player-arrow `Model`: the centring, then the
 /// followed object's facing, as `CMinimap::SetPlayerFacing` (`0x4eb8e0`) writes `[+0x39c]`, what
 /// `Model:GetFacing()` reads. An object that does not resolve leaves the facing as it stands
 /// (`0x4eb0a2`), past the centring (`0x4eb074`).
 fn feed_minimap_player_facing(
-    mut vm: crate::script_calls::VmWith<FollowedObject<'static, 'static>>,
+    mut vm: crate::script_calls::VmWith<crate::player::FollowedObject<'static, 'static>>,
 ) {
     let facing = vm.own().facing();
     vm.run(|script| {
@@ -1157,114 +1095,26 @@ mod stage_mask_tests {
 #[cfg(test)]
 mod followed_facing_tests {
     use super::*;
-    use crate::net::{ActiveMover, GuidIndex, NetCommands, ObjectStore, RemoteMotion};
-    use crate::player::FarSight;
-    use benilla_protocol::ObjectFields;
+    use crate::net::GuidIndex;
+    use crate::player::{camera_on_an_eye, FarSight};
     use benilla_ui::script::UiScript;
     use bevy::ecs::system::RunSystemOnce;
-    use std::f32::consts::TAU;
 
-    const EYE: u64 = 0xF130_0000_0000_0042;
-    /// Our own mover's facing in every world here, so a read of it shows.
-    const OURS: f32 = 1.5;
-
+    /// A VM's world, its camera on a dynamic object facing 4.0.
     fn world() -> World {
         let mut world = World::new();
         world.init_resource::<Player>();
         world.init_resource::<FarSight>();
         world.init_resource::<GuidIndex>();
-        world.resource_mut::<Player>().turn_aim(OURS);
+        camera_on_an_eye(&mut world, 4.0);
+        crate::script_calls::insert_test_vm(&mut world);
         world
     }
 
-    fn follow(world: &mut World, guid: u64) {
-        let (tx, _rx) = crossbeam_channel::unbounded();
+    fn feed(world: &mut World) {
         world
-            .resource::<FarSight>()
-            .start(Some(guid), |_| true, &NetCommands(tx));
-    }
-
-    /// An active player's world whose camera follows `EYE`, held with `bundle`.
-    fn following(bundle: impl Bundle) -> World {
-        let mut world = world();
-        world.resource_mut::<Player>().active = true;
-        let eye = world.spawn(bundle).id();
-        world.resource_mut::<GuidIndex>().0.insert(EYE, eye);
-        follow(&mut world, EYE);
-        world
-    }
-
-    fn read(world: &mut World) -> Option<f32> {
-        fn facing(followed: FollowedObject) -> Option<f32> {
-            followed.facing()
-        }
-        world.run_system_once(facing).expect("the read runs")
-    }
-
-    fn turned(yaw: f32) -> Transform {
-        Transform::from_rotation(Quat::from_rotation_y(yaw))
-    }
-
-    fn typed(mask: u32, facing_field: u16, facing: f32) -> ObjectStore {
-        ObjectStore(ObjectFields::from_pairs(&[
-            (2, mask),
-            (facing_field - 3, 0),
-            (facing_field - 2, 0),
-            (facing_field - 1, 0),
-            (facing_field, facing.to_bits()),
-        ]))
-    }
-
-    fn unit() -> ObjectStore {
-        ObjectStore(ObjectFields::from_pairs(&[(2, 0x9)]))
-    }
-
-    fn relayed(orientation: f32) -> RemoteMotion {
-        RemoteMotion {
-            wow_pos: [0.0; 3],
-            orientation,
-            flags: 0,
-            pitch: 0.0,
-            speed: 0.0,
-            vertical_velocity: 0.0,
-            jump_xy_vel: [0.0; 2],
-            fall_start: None,
-            pending: std::collections::VecDeque::new(),
-            relay: Default::default(),
-            last_apply_ms: 0.0,
-            last_apply_pos: [0.0; 3],
-            fired_at_ms: None,
-        }
-    }
-
-    /// With no far sight the camera's object is the active player, or none before there is one.
-    #[test]
-    fn with_no_far_sight_the_arrow_reads_the_active_player() {
-        let mut world = world();
-        assert_eq!(read(&mut world), None);
-        world.resource_mut::<Player>().active = true;
-        assert_eq!(read(&mut world), Some(OURS));
-        world.resource_mut::<Player>().turn_aim(TAU);
-        let wrapped = read(&mut world).expect("the player");
-        assert!((wrapped - OURS).abs() < 1e-5, "normalized: {wrapped}");
-    }
-
-    /// Slot 6 by the followed object's kind (`0x4eb0a4`).
-    #[test]
-    fn the_arrow_reads_the_object_the_camera_follows() {
-        // `DYNAMICOBJECT_FACING` is field 14, `GAMEOBJECT_FACING` field 18.
-        let mut eye = following((typed(0x41, 14, 4.0), turned(0.5)));
-        assert_eq!(read(&mut eye), Some(4.0), "a dynamic object's field");
-        let mut go = following((typed(0x21, 18, 3.0), turned(0.5)));
-        assert_eq!(read(&mut go), Some(3.0), "a game object's field");
-
-        let mut relay = following((unit(), relayed(2.5), turned(0.5)));
-        assert_eq!(read(&mut relay), Some(2.5), "a relayed mover");
-        let mut still = following((unit(), turned(-1.0)));
-        let yaw = read(&mut still).expect("a creature");
-        assert!((yaw - (TAU - 1.0)).abs() < 1e-5, "its rotation: {yaw}");
-        let mut ours = following((unit(), ActiveMover, relayed(2.5), turned(0.5)));
-        assert_eq!(read(&mut ours), Some(OURS), "the unit we move");
+            .run_system_once(feed_minimap_player_facing)
+            .expect("the feed runs");
     }
 
     /// The arrow takes the feed, and an object that does not resolve leaves it (`0x4eb0a2`).
@@ -1276,23 +1126,16 @@ mod followed_facing_tests {
                 "return ({m:GetChildren()})[9]:GetFacing()",
             )
         };
-        let mut world = following(typed(0x41, 14, 4.0));
-        crate::script_calls::insert_test_vm(&mut world);
+        let mut world = world();
         world
             .non_send_resource::<UiScript>()
             .run(r#"m = CreateFrame("Minimap", "TestMinimap")"#)
             .expect("the frame");
-        let feed = |world: &mut World| {
-            world
-                .run_system_once(feed_minimap_player_facing)
-                .expect("the feed runs");
-        };
 
         feed(&mut world);
         assert_eq!(facing(&world), 4.0);
 
-        world.resource_mut::<GuidIndex>().0.remove(&EYE);
-        assert_eq!(read(&mut world), None);
+        world.resource_mut::<GuidIndex>().0.clear();
         feed(&mut world);
         assert_eq!(facing(&world), 4.0, "kept");
     }
@@ -1301,8 +1144,7 @@ mod followed_facing_tests {
     /// resolve still centres the arrow.
     #[test]
     fn a_followed_object_lost_still_centres_the_arrow() {
-        let mut world = following(typed(0x41, 14, 4.0));
-        crate::script_calls::insert_test_vm(&mut world);
+        let mut world = world();
         {
             let mut script = world.non_send_resource_mut::<UiScript>();
             script
@@ -1320,10 +1162,8 @@ mod followed_facing_tests {
                 },
             );
         }
-        world.resource_mut::<GuidIndex>().0.remove(&EYE);
-        world
-            .run_system_once(feed_minimap_player_facing)
-            .expect("the feed runs");
+        world.resource_mut::<GuidIndex>().0.clear();
+        feed(&mut world);
         let x = crate::script_calls::eval_in_vm::<f32>(
             &world,
             "local x = arrow:GetPosition() return x",
