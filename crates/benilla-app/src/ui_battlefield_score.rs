@@ -112,15 +112,17 @@ impl BattlefieldScoreboard {
         self.name_waits.clear();
     }
 
-    /// `MSG_PVP_LOG_DATA` (`0x4aab30`): the flags and the blocks stored, each row's name asked
-    /// with a callback (`0x4aac79`), a miss pending (`0x4aac82`); then the rebuild unless a name
-    /// is pending (`0x4aaca1`). Whether it rebuilt, when the caller signals.
+    /// `MSG_PVP_LOG_DATA` (`0x4aab30`): the old rows' pending callbacks cancelled
+    /// (`0x4aab43`-`0x4aab69`) and the count zeroed (`0x4aabb5`), the flags and the blocks stored,
+    /// each row's name asked with a callback (`0x4aac79`), a miss pending (`0x4aac82`); then the
+    /// rebuild unless a name is pending (`0x4aaca1`). Whether it rebuilt, when the caller signals.
     pub(crate) fn apply(
         &mut self,
         data: PvpLogData,
         commands: &NetCommands,
         at: BoardView,
     ) -> bool {
+        self.name_waits.clear();
         self.freed_pending = false;
         self.ended = data.ended;
         self.winner = data.winner.unwrap_or(0);
@@ -458,6 +460,26 @@ mod tests {
             packet(&mut app, log(false, rows)),
             [BattlefieldEvent::Score],
             "the packet zeroes it"
+        );
+    }
+
+    /// A packet cancels the old rows' callbacks and zeroes the count (`0x4aab43`-`0x4aab69`,
+    /// `0x4aabb5`): a row that left the board holds no rebuild, and its name's answer counts nothing.
+    #[test]
+    fn a_packet_cancels_a_departed_rows_name_wait() {
+        let (mut app, _rx) = board();
+        packet(&mut app, named(0x1, "bob", 2));
+        let both = vec![score(0x1, 3, 1, 50), score(0x2, 5, 2, 10)];
+        assert_eq!(packet(&mut app, log(false, both)), [], "0x2 pending");
+        assert_eq!(
+            packet(&mut app, log(false, vec![score(0x1, 3, 1, 50)])),
+            [BattlefieldEvent::Score],
+            "0x2 left the board"
+        );
+        assert_eq!(
+            packet(&mut app, named(0x2, "Alice", 1)),
+            [],
+            "its callback was cancelled"
         );
     }
 
