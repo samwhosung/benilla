@@ -680,8 +680,8 @@ pub(crate) struct CameraControl {
     /// the follow arms (`0x50f7de`), so only another flip moves it.
     pub(super) flip_yaw: f32,
     /// Mode bit 6, `[cam+0x90] & 0x40`: the mouse or an axis moved the camera since the last view
-    /// (`0x50fee9`, `0x51131e`, cleared at `0x512f60`), so a request for the current view stays
-    /// timed (`0x512eb4`).
+    /// (`0x50fee9`, `0x51131e`, cleared at `0x512f60`), or it is new (`0x50c400`), so a request for
+    /// the current view stays timed (`0x512eb4`).
     pub(super) view_moved: bool,
     /// A timed view's distance and pitch channels ([`super::camera_view::ViewBlend`]).
     pub(super) view_blend: super::camera_view::ViewBlend,

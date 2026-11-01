@@ -112,9 +112,9 @@ fn load_camera_pose(
     rig.target_distance = CAM_DIST_DEFAULT;
     rig.collision_distance = CAM_DIST_DEFAULT;
     // A new camera object, whose constructor zeroes the flip and the mode word (`0x50c1cc`,
-    // `0x50c156`).
+    // `0x50c156`) and ends by setting bit 6 (`0x50c400`).
     rig.flip_yaw = 0.0;
-    rig.view_moved = false;
+    rig.view_moved = true;
     rig.scoped = false;
     rig.view_blend.stop();
     rig.follow.cancel();
@@ -292,6 +292,34 @@ mod login_tests {
             }],
             guid,
         )
+    }
+
+    /// A new camera's constructor ends by setting mode bit 6 (`0x50c400`), so the first request
+    /// for its own view stays timed (`0x512eb4`).
+    #[test]
+    fn a_new_camera_counts_as_moved() {
+        let _l = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tmp = std::env::temp_dir().join(format!("benilla-cam-new-{}", std::process::id()));
+        let _c = EnvGuard::unset("WOW_CAPTURE");
+        let _h = EnvGuard::set("BENILLA_HOME", tmp.to_str().unwrap());
+        let mut app = App::new();
+        app.init_resource::<CameraPoseFile>()
+            .init_resource::<CameraControl>()
+            .init_resource::<Player>()
+            .insert_resource(roster("Tank", 7));
+        app.world_mut().spawn((
+            FlyCam {
+                yaw: 0.0,
+                pitch: 0.0,
+                speed: 1.0,
+            },
+            WorldCamera,
+        ));
+        app.world_mut().run_system_once(load_camera_pose).unwrap();
+        assert!(app.world().resource::<CameraControl>().view_moved);
+        std::fs::remove_dir_all(&tmp).ok();
     }
 
     #[test]
