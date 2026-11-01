@@ -50,9 +50,10 @@ pub(super) fn answer_reconnect(
         let _ = pick.0.send(CharRequest::Enumerate);
     }
     // No roster comes to re-make the pick and no screen stands to ask again: a driverless run fails
-    // rather than idles.
-    if kept
-        && failures.read().any(|f| f.emptied)
+    // rather than idles. Every failure is read with or without a pick kept: one left unread would
+    // fire a frame later, once a pick is.
+    if failures.read().filter(|f| f.emptied).count() != 0
+        && kept
         && crate::run_mode::fatal_when_driverless("the character list failed with a pick kept")
     {
         exit.write(AppExit::error());
@@ -64,6 +65,7 @@ mod tests {
     use super::*;
 
     use crate::glue_session::roster::test_character;
+    use crate::local_state::test_env::{EnvGuard, ENV_LOCK};
 
     fn realm(name: &str) -> benilla_protocol::RealmInfo {
         benilla_protocol::RealmInfo {
@@ -115,6 +117,25 @@ mod tests {
         app.update();
     }
 
+    fn fail_the_list(app: &mut App) {
+        app.world_mut().write_message(RosterFailedMessage {
+            epoch: 2,
+            emptied: true,
+        });
+        app.update();
+    }
+
+    /// One failure written inside the frame, as the wire edge does: the next frame still holds it.
+    fn fail_once(mut failures: MessageWriter<RosterFailedMessage>, mut sent: Local<bool>) {
+        if !*sent {
+            *sent = true;
+            failures.write(RosterFailedMessage {
+                epoch: 2,
+                emptied: true,
+            });
+        }
+    }
+
     /// With a pick kept, the reconnect dials the realm the session was on and asks the roster
     /// the pick is re-made from; with none, a realm list and an authentication ask nothing, as at
     /// a first login, where the stock screens make both asks.
@@ -134,16 +155,39 @@ mod tests {
         assert!(picks.try_recv().is_err());
     }
 
-    /// A failed character list asks nothing again for a kept pick, which would ask without end.
+    /// A failed character list asks nothing again for a kept pick, which would ask without end: a
+    /// driverless run exits non-zero, and a person's run stays up.
     #[test]
-    fn a_failed_list_asks_nothing_for_a_kept_pick() {
+    fn a_failed_list_with_a_kept_pick_exits_only_a_driverless_run() {
+        let _lock = ENV_LOCK.lock();
+        let _cap = EnvGuard::unset("WOW_CAPTURE");
+        let _rig = EnvGuard::unset("WOW_RIG");
+        let _decl = EnvGuard::unset("WOW_UNATTENDED");
         let (mut app, realms, picks) = reconnect_app(true);
-        app.world_mut().write_message(RosterFailedMessage {
-            epoch: 2,
-            emptied: true,
-        });
-        app.update();
+        fail_the_list(&mut app);
+        assert_eq!(app.should_exit(), None);
         assert!(realms.try_recv().is_err());
         assert!(picks.try_recv().is_err());
+
+        let _decl = EnvGuard::set("WOW_UNATTENDED", "1");
+        let (mut app, realms, picks) = reconnect_app(true);
+        fail_the_list(&mut app);
+        assert_eq!(app.should_exit(), Some(AppExit::error()));
+        assert!(realms.try_recv().is_err());
+        assert!(picks.try_recv().is_err());
+    }
+
+    /// A failure read with no pick kept is spent: a pick kept in the next frame, while the failure
+    /// is still in the buffer, does not end the run on it.
+    #[test]
+    fn a_failure_ahead_of_the_pick_does_not_exit() {
+        let _lock = ENV_LOCK.lock();
+        let _decl = EnvGuard::set("WOW_UNATTENDED", "1");
+        let (mut app, _realms, _picks) = reconnect_app(false);
+        app.add_systems(PreUpdate, fail_once);
+        app.update();
+        app.world_mut().resource_mut::<Roster>().pending_pick = Some(7);
+        app.update();
+        assert_eq!(app.should_exit(), None);
     }
 }
