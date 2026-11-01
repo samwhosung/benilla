@@ -3,7 +3,9 @@
 //! `0x4d10d0`, `0x4d1cb0` → `0x4d0fb0`, `0x4d1e10` → `0x4d0f70`, `0x4d15e0`), and the roster's
 //! status return reads the `CHAT_FLAG_*` globals at the call (`0x4d13ed`, `0x4d1404`).
 
-use benilla_protocol::messages::{guild_presence, GuildRoster, GuildRosterMember};
+use benilla_protocol::messages::{
+    guild_presence, GuildQueryResponse, GuildRoster, GuildRosterMember,
+};
 use benilla_protocol::SessionEvent;
 use benilla_ui::script::UiScript;
 use bevy::prelude::*;
@@ -17,6 +19,12 @@ struct Guild {
     rx: Receiver<ClientCommand>,
 }
 
+/// A frame that counts `GUILD_ROSTER_UPDATE`.
+const COUNT_UPDATES: &str = r#"UPDATES = 0
+    local f = CreateFrame("Frame")
+    f:RegisterEvent("GUILD_ROSTER_UPDATE")
+    f:SetScript("OnEvent", function() UPDATES = UPDATES + 1 end)"#;
+
 /// The whole client, headless, with a VM that counts `GUILD_ROSTER_UPDATE`, and our player in
 /// guild 7, whose record is cached: the roster getters need both (`0x4d1200`).
 fn client() -> Guild {
@@ -24,14 +32,7 @@ fn client() -> Guild {
     let (tx, rx) = crossbeam_channel::unbounded();
     app.insert_resource(NetCommands(tx));
     let script = UiScript::new().expect("a VM");
-    script
-        .run(
-            r#"UPDATES = 0
-            local f = CreateFrame("Frame")
-            f:RegisterEvent("GUILD_ROSTER_UPDATE")
-            f:SetScript("OnEvent", function() UPDATES = UPDATES + 1 end)"#,
-        )
-        .expect("the counter installs");
+    script.run(COUNT_UPDATES).expect("the counter installs");
     app.world_mut().insert_non_send_resource(script);
     // Fields 191 and 192: `PLAYER_GUILDID` and `PLAYER_GUILDRANK`.
     app.world_mut().spawn((
@@ -322,4 +323,49 @@ fn a_login_empties_the_roster_and_the_ranks_and_a_reload_keeps_them() {
         (0, 0),
         "the login's InitGuildRoster zeroed them"
     );
+}
+
+/// A roster getter's miss on `guild_id`, which leaves its callback (`0x4d1291`).
+fn miss_roster(g: &Guild, guild_id: u32) {
+    let world = g.app.world();
+    world
+        .resource::<super::GuildState>()
+        .wait_for_roster(guild_id, world.resource::<NetCommands>());
+}
+
+/// `guild_id`'s record as `SMSG_GUILD_QUERY_RESPONSE`, what it raised fired.
+fn land(g: &mut Guild, guild_id: u32) {
+    crate::net::handlers::dispatch(
+        g.app.world_mut(),
+        vec![SessionEvent::GuildQueryResponse(GuildQueryResponse {
+            guild_id,
+            name: "Other".to_string(),
+            ..Default::default()
+        })],
+    );
+    fire(g);
+}
+
+/// A `/reload`'s teardown frees the guild store's callbacks and runs none (`0x490c35` →
+/// `0x5615b0`), so an answer that lands in the new VM files its record and signals nothing.
+#[test]
+fn a_reload_frees_the_guild_stores_callbacks_and_their_answer_signals_nothing() {
+    let mut g = client();
+    miss_roster(&g, 8);
+    land(&mut g, 8);
+    assert_eq!(
+        eval::<i64>(&mut g, "return UPDATES"),
+        1,
+        "a callback that stands signals"
+    );
+
+    miss_roster(&g, 9);
+    new_vm(&mut g, true);
+    run(&mut g, COUNT_UPDATES);
+    let guild = g.app.world().resource::<super::GuildState>();
+    assert!(guild.identities.is_pending(9), "the ask stays in flight");
+    land(&mut g, 9);
+    assert_eq!(eval::<i64>(&mut g, "return UPDATES"), 0, "none runs");
+    let guild = g.app.world().resource::<super::GuildState>();
+    assert!(guild.identities.get(9).is_some(), "its record is filed");
 }
