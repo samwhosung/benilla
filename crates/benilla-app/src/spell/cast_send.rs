@@ -374,6 +374,24 @@ pub(crate) fn reaches_tail(
     )
 }
 
+/// `ReportCastFailure`'s auto-repeat leg, ahead of its line (`0x6e1cd9`-`0x6e1cea`): with a player
+/// (`0x6e1c69`), a report of the running repeat spell stops it (`0x6ea080`), for any reason but
+/// 0x17 (`0x6e1ce4`), and the stop's pop (`0x6ea160`) leaves the tail no cancel to send.
+fn report_stops_repeat(
+    fail: &CastFail,
+    me: Option<Entity>,
+    auto_repeat: &mut AutoRepeatActive,
+    edits: &crate::creature_anim::UnitEdits,
+    core: &mut CastCore,
+) {
+    if me.is_some()
+        && auto_repeat.0 == Some(fail.spell_id)
+        && fail.reason != super::report::REASON_DONT_REPORT
+    {
+        crate::creature_anim::cancel_auto_repeat_local(me, auto_repeat, edits, core);
+    }
+}
+
 /// The client's own refusal through the reporter: its line, then its tail.
 fn refuse(
     core: &mut CastCore,
@@ -420,9 +438,24 @@ impl CastLadder<'_, '_> {
         }
     }
 
-    /// A refusal of the client's own through `ReportCastFailure 0x6e1a00`: its line, then its
-    /// tail.
+    /// [`report_stops_repeat`] for a refusal the ladder is about to report.
+    fn stop_refused_repeat(&mut self, fail: &CastFail) {
+        let me = self.self_player.single().ok().map(|(e, _)| e);
+        let mut core = CastCore {
+            pending: &mut self.pending,
+            queued_melee: &mut self.queued_melee,
+            ground: &mut self.ground,
+            reports: &mut self.reports,
+            net: &self.commands,
+            tutorials: self.tutorials.as_deref(),
+        };
+        report_stops_repeat(fail, me, &mut self.auto_repeat, &self.edits, &mut core);
+    }
+
+    /// A refusal of the client's own through `ReportCastFailure 0x6e1a00`: its auto-repeat leg, its
+    /// line, then its tail.
     pub(crate) fn report_local(&mut self, fail: CastFail) {
+        self.stop_refused_repeat(&fail);
         let reaches = reaches_tail(&fail, self.spells.as_deref(), &self.items, &self.commands);
         self.core().report(fail, false, reaches);
     }
@@ -864,6 +897,7 @@ impl CastLadder<'_, '_> {
         // once they have run ([`Self::reread_refused`]).
         let standing = self.ground.take_word();
         let fail = CastFail::local(record, reason);
+        self.stop_refused_repeat(&fail);
         let reaches = reaches_tail(&fail, self.spells.as_deref(), &self.items, &self.commands);
         self.core().report_line(fail);
         Some(OwedRefusal {
@@ -1038,6 +1072,7 @@ impl CastLadder<'_, '_> {
                 );
                 self.drop_word();
                 let fail = CastFail::local(spell_id, reason);
+                self.stop_refused_repeat(&fail);
                 let reaches =
                     reaches_tail(&fail, self.spells.as_deref(), &self.items, &self.commands);
                 self.core().report_line(fail);
@@ -1492,7 +1527,10 @@ fn send_spell_cast(
     // A refusal through the reporter, then the attempt's `xor al,al` exit.
     macro_rules! refuse {
         ($fail:expr) => {{
-            refuse(core, spells, items, commands, $fail);
+            let fail = $fail;
+            let me = self_player.single().ok().map(|(e, _)| e);
+            report_stops_repeat(&fail, me, auto_repeat, edits, core);
+            refuse(core, spells, items, commands, fail);
             return;
         }};
     }
@@ -1502,6 +1540,8 @@ fn send_spell_cast(
     macro_rules! refuse_ahead_of_bail {
         ($fail:expr) => {{
             let fail = $fail;
+            let me = self_player.single().ok().map(|(e, _)| e);
+            report_stops_repeat(&fail, me, auto_repeat, edits, core);
             let reaches = reaches_tail(&fail, spells, items, commands);
             core.report_line(fail);
             *sent = Some(CastStage::Refused {
@@ -3018,6 +3058,56 @@ mod tests {
         assert!(matches!(rx.try_recv(), Ok(ClientCommand::CancelAutoRepeat)));
         assert!(rx.try_recv().is_err(), "the refused cast sends nothing");
         assert_eq!(world.resource::<AutoRepeatActive>().0, None);
+    }
+
+    /// The reporter's auto-repeat leg, ahead of its line (`0x6e1cd9`-`0x6e1cea` → `0x6ea080`): an arm
+    /// refusal of the running repeat spell, which the attempt pushed (`0x6e5026`), stops it with
+    /// `CMSG_CANCEL_AUTO_REPEAT_SPELL`, and the stop's pop (`0x6ea160`) leaves the tail no spell in
+    /// flight to cancel (`0x6e2201`), so `SPELLCAST_FAILED` fires by itself (`0x6e224a`). Another
+    /// spell's refusal leaves the repeat running.
+    #[test]
+    fn a_refusal_of_the_running_repeat_spell_stops_it_and_sends_no_cancel_cast() {
+        use benilla_formats::SpellDisplay;
+        use std::collections::HashMap;
+        const FIREBALL: u32 = 133;
+        let (mut world, rx) = world();
+        let mut spells = Spells::empty_for_tests();
+        // An enemy word with nothing to bind is refused at the arm (`0x6e507b`-`0x6e50a9`).
+        let enemy = |attributes_ex2: u32| SpellDisplay {
+            implicit_target_a1: 6,
+            attributes_ex2,
+            ..Default::default()
+        };
+        spells.catalog = benilla_formats::SpellCatalog::from_displays(HashMap::from([
+            (AUTO_SHOT, enemy(0x20)),
+            (FIREBALL, enemy(0)),
+        ]));
+        world.insert_resource(spells);
+        world.spawn(SelfPlayer);
+        world.resource_mut::<AutoRepeatActive>().0 = Some(AUTO_SHOT);
+
+        send(&mut world, FIREBALL, CastCommit::Spell);
+        let sent: Vec<_> = rx.try_iter().collect();
+        assert!(
+            matches!(sent[..], [ClientCommand::CancelCast { spell_id: FIREBALL }]),
+            "{sent:?}"
+        );
+        assert_eq!(world.resource::<AutoRepeatActive>().0, Some(AUTO_SHOT));
+        let _ = stream(&mut world);
+
+        send(&mut world, AUTO_SHOT, CastCommit::Spell);
+        let sent: Vec<_> = rx.try_iter().collect();
+        assert!(
+            matches!(sent[..], [ClientCommand::CancelAutoRepeat]),
+            "{sent:?}"
+        );
+        assert_eq!(world.resource::<AutoRepeatActive>().0, None);
+        assert!(!world.resource::<crate::spell::PendingCast>().in_flight());
+        let edges: Vec<_> = stream(&mut world)
+            .into_iter()
+            .filter(|r| *r != "CHANGED")
+            .collect();
+        assert_eq!(edges, ["STOP_AUTOREPEAT", "REFUSED", "FAILED"]);
     }
 
     /// Not yet swinging: the tail fires, `0x6131a0` → `0x5ecb70` runs, and its `0x5ecd8c` cancels

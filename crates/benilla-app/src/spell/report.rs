@@ -280,7 +280,9 @@ impl CastCore<'_> {
     /// `reaches_tail` says the reporter gets to ([`crate::ui_action::report_reaches_pop`]): the
     /// spell in flight is cancelled with its failed flag, sending only for the client's own
     /// refusal (`0x6e2213 sete`); another spell in flight fires nothing (`0x6e2228`), nor does
-    /// "Another action is in progress" (`0x6e2234`); anything else fires the failure's edge.
+    /// "Another action is in progress" (`0x6e2234`); anything else fires the failure's edge. Its
+    /// auto-repeat leg (`0x6e1cd9`-`0x6e1cea`), ahead of the line, reads the key and our unit, so
+    /// each caller runs it first: the ladder's refusals and the failed cast's handler.
     pub(crate) fn report(&mut self, fail: CastFail, from_server: bool, reaches_tail: bool) {
         self.report_line(fail);
         self.report_tail(fail, from_server, reaches_tail);
