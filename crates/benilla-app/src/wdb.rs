@@ -55,6 +55,7 @@ use crate::item_names::ItemNames;
 use crate::items::Items;
 use crate::names::NameCache;
 use crate::net::NetHandlerApp;
+use crate::portrait::PortraitMarks;
 use crate::query_cache::QueryCache;
 use crate::ui_auction::HouseLane;
 use crate::ui_battlefield::Battlefield;
@@ -361,6 +362,7 @@ fn clear_session_stores(
 pub(crate) fn free_store_callbacks(world: &mut World) {
     free::<Items>(world, Items::free_store_callbacks);
     free::<NameCache>(world, NameCache::free_store_callbacks);
+    free::<PortraitMarks>(world, PortraitMarks::free_store_callbacks);
     free::<GameObjectTemplates>(world, GameObjectTemplates::free_store_callbacks);
     free::<GuildState>(world, GuildState::free_store_callbacks);
     free::<QuestLog>(world, QuestLog::free_store_callbacks);

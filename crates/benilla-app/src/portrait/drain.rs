@@ -58,6 +58,12 @@ impl PortraitMarks {
         &self.pending
     }
 
+    /// The teardown's free of the callbacks `0x51a100` (`0x51a08e`), running none (`0x55f990`), so
+    /// a name that lands after it marks no portrait.
+    pub(crate) fn free_store_callbacks(&mut self) {
+        self.asked.clear();
+    }
+
     /// Leaving the world frees every node (`0x524b70`, `0x524c60`-`0x524c89`), and the name
     /// cache drops its callbacks with its records.
     pub(crate) fn clear(&mut self) {
@@ -427,6 +433,20 @@ mod tests {
         assert_eq!(notices(&mut app), pair(B));
         app.update();
         assert_eq!(notices(&mut app), [], "the callback runs once");
+    }
+
+    /// The teardown frees the callback `0x51a100` (`0x55f990`): the record's landing marks nothing.
+    #[test]
+    fn a_freed_portrait_ask_marks_nothing_when_its_name_lands() {
+        let mut app = app();
+        let mut marks = app.world_mut().resource_mut::<PortraitMarks>();
+        marks.ask(B);
+        marks.free_store_callbacks();
+        app.world_mut()
+            .resource_mut::<crate::names::NameCache>()
+            .insert_player(B, "Brisca".into(), Some((4, 1, 1)));
+        app.update();
+        assert_eq!(notices(&mut app), []);
     }
 
     /// The durability watcher `0x5d97c0` marks the item's owner when the item and its owner, a
