@@ -286,11 +286,8 @@ impl ViewSteps<'_, '_> {
                 }
             }
             CameraViewRequest::FlipYaw(degrees) => {
-                // `cam[+0x100] += arg * pi/180` (`0x50b6a0`). The reference keeps the flip in its
-                // own yaw field, added outside the follow channel (`0x50f7de`), so it survives
-                // re-centring; the rig has one yaw, so auto-follow reels the flip back in on Smart
-                // and Always.
-                cam.yaw = wrap_pi(cam.yaw + degrees.to_radians());
+                // `[cam+0x100] += arg * pi/180` (`0x50b6c9`-`0x50b6d8`), wrapped as `0x50d779` does.
+                rig.flip_yaw = wrap_pi(rig.flip_yaw + degrees.to_radians());
             }
         }
         if write_active {
@@ -336,7 +333,10 @@ pub(super) fn plugin(app: &mut App) {
 
 #[cfg(test)]
 mod tests {
+    use super::super::camera::{follow_cmd, seat_camera, FollowConfig, FollowInput, FollowStyle};
+    use super::super::camera_dynamics::{CameraOptions, DynamicsInput, SubjectState};
     use super::*;
+    use bevy::ecs::system::RunSystemOnce;
 
     /// `SetView` writes `cameraView` inside its call (`0x512f17`) and `SaveView` the view's three
     /// fields (`0x50fa09`), so the chunk's next line reads both: view 4's distance is the rig's
@@ -570,22 +570,142 @@ mod tests {
         assert_eq!(views.step(false), None);
     }
 
-    /// 180 is the stock binding's argument (`Bindings.xml:796`).
+    /// A world with what the view verbs read: the camera, the rig and a body facing 0.
+    fn verb_world() -> World {
+        let mut world = World::new();
+        world.init_resource::<CameraViews>();
+        world.init_resource::<CameraControl>();
+        world.insert_resource(Player::default());
+        world.spawn((
+            FlyCam {
+                yaw: 0.0,
+                pitch: 0.0,
+                speed: 0.0,
+            },
+            WorldCamera,
+        ));
+        world
+    }
+
+    /// One view verb as the call host applies it, and the CVar writes it made.
+    fn verb(world: &mut World, request: CameraViewRequest) -> Vec<(&'static str, String)> {
+        world
+            .run_system_once(move |mut steps: ViewSteps| steps.apply(request))
+            .expect("the verb runs")
+    }
+
+    /// `FlipCameraYaw` adds its radians to `[cam+0x100]` (`0x50b6c9`-`0x50b6d8`) and to no other
+    /// word: the offset stands, and a view leaves the term, as `0x512e90` never writes it. 180 is
+    /// the stock binding's argument (`Bindings.xml:796`).
     #[test]
-    fn flipping_the_yaw_twice_returns_the_original() {
-        let flip = |yaw: f32, degrees: f32| wrap_pi(yaw + degrees.to_radians());
-        for start in [0.0_f32, 1.3, -2.9, std::f32::consts::PI] {
-            let once = flip(start, 180.0);
-            assert!(
-                (wrap_pi(once - start).abs() - std::f32::consts::PI).abs() < 1e-5,
-                "one flip is half a turn"
-            );
-            let twice = flip(once, 180.0);
-            assert!(
-                wrap_pi(twice - start).abs() < 1e-5,
-                "two flips return: {twice} vs {start}"
-            );
+    fn a_flip_is_a_term_of_its_own() {
+        let mut world = verb_world();
+        let flip = |world: &World| world.resource::<CameraControl>().flip_yaw;
+        assert!(verb(&mut world, CameraViewRequest::FlipYaw(180.0)).is_empty());
+        assert!(
+            (flip(&world).abs() - std::f32::consts::PI).abs() < 1e-5,
+            "one flip is half a turn"
+        );
+        let yaw = world.query::<&FlyCam>().single(&world).unwrap().yaw;
+        assert_eq!(yaw, 0.0, "the offset stands");
+        verb(&mut world, CameraViewRequest::FlipYaw(180.0));
+        assert!(flip(&world).abs() < 1e-5, "two flips return");
+        verb(&mut world, CameraViewRequest::FlipYaw(90.0));
+        verb(&mut world, CameraViewRequest::Set(3));
+        assert!(
+            (flip(&world) - std::f32::consts::FRAC_PI_2).abs() < 1e-5,
+            "a view leaves it"
+        );
+    }
+
+    /// The whole client's world, for [`seat`], with the view verbs' state and no other camera.
+    fn seat_app() -> App {
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        let world = app.world_mut();
+        world.init_resource::<CameraControl>();
+        world.insert_resource(Player::default());
+        world.spawn((
+            Transform::default(),
+            FlyCam {
+                yaw: 0.0,
+                pitch: 0.0,
+                speed: 0.0,
+            },
+            WorldCamera,
+        ));
+        app
+    }
+
+    /// One [`seat_camera`] of the camera on a body at the origin facing 0, in an empty world, with
+    /// the Always follow style and `word` as the input word: the transform it wrote.
+    fn seat(world: &mut World, word: u32, dt: f32, scoped: bool) -> Transform {
+        world
+            .run_system_once(
+                move |collide: benilla_world::collision::WorldCollision,
+                      mut rig: ResMut<CameraControl>,
+                      mut q: Query<(&mut Transform, &mut FlyCam)>| {
+                    let (mut t, mut cam) = q.single_mut().expect("the camera");
+                    let follow = FollowInput {
+                        cfg: FollowConfig {
+                            style: FollowStyle::Always,
+                            tracking_style: FollowStyle::Always,
+                            ..FollowConfig::default()
+                        },
+                        face_yaw: 0.0,
+                        command: word,
+                    };
+                    let dynamics = DynamicsInput {
+                        options: CameraOptions::default(),
+                        smooth_style: FollowStyle::Always,
+                        tracking_style: FollowStyle::Always,
+                        subject: SubjectState {
+                            scoped,
+                            ..Default::default()
+                        },
+                        nearclip: 0.2,
+                        surface_y: None,
+                    };
+                    seat_camera(
+                        dt,
+                        0.0,
+                        Vec3::ZERO,
+                        Vec3::Y,
+                        1.8,
+                        &mut rig,
+                        &mut cam,
+                        &mut t,
+                        &collide,
+                        &follow,
+                        &dynamics,
+                    );
+                    *t
+                },
+            )
+            .expect("the seat runs")
+    }
+
+    /// The view's yaw is the offset, the flip and the facing (`0x50f7de`-`0x50f7f2`), and a return
+    /// arms the offset alone (`0x512c70`): the walk brings the offset home and the view stays
+    /// flipped, looking back at the character.
+    #[test]
+    fn a_follow_return_keeps_the_flip_in_the_view() {
+        const DT: f32 = 1.0 / 60.0;
+        let mut app = seat_app();
+        let world = app.world_mut();
+        // An offset a drag left, then the stock binding's flip.
+        world.query::<&mut FlyCam>().single_mut(world).unwrap().yaw = 1.0;
+        verb(world, CameraViewRequest::FlipYaw(180.0));
+        let mut seated = seat(world, 0, DT, false);
+        for _ in 0..60 {
+            seated = seat(world, follow_cmd::FORWARD, DT, false);
         }
+        let yaw = world.query::<&FlyCam>().single(world).unwrap().yaw;
+        assert!(yaw.abs() < 1e-3, "the offset came home: {yaw}");
+        let forward = seated.rotation * Vec3::NEG_Z;
+        assert!(
+            (forward - Vec3::Z).length() < 1e-3,
+            "the view still looks back: {forward}"
+        );
     }
 
     #[test]

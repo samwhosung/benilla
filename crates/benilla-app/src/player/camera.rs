@@ -584,6 +584,9 @@ pub(crate) struct CameraControl {
     pub(super) toggled: bool,
     /// The keyboard axes the `MoveView*` pairs drive ([`super::camera_axes`]).
     pub(super) view_axes: super::camera_axes::ViewAxes,
+    /// `FlipCameraYaw`'s term `[cam+0x100]`, radians: the view's yaw adds it outside the offset
+    /// the follow arms (`0x50f7de`), so only another flip moves it.
+    pub(super) flip_yaw: f32,
     /// Logical cursor position captured when look began, to restore on release.
     pub(super) cursor_stash: Option<Vec2>,
     /// A look session is running with the OS cursor handed back: the window is unfocused.
@@ -1572,13 +1575,15 @@ pub(super) fn seat_camera(
     // The ground tilt is part of the arm's pitch, unlike the bias: `0x50f710` clamps
     // `[cam+0xf4] + [cam+0x108]` to ±89° before the basis is built.
     let arm_pitch = (cam.pitch + rig.terrain_tilt.pitch()).clamp(-CAM_PITCH_LIMIT, CAM_PITCH_LIMIT);
-    let arm_rotation = Quat::from_euler(EulerRot::YXZ, cam.yaw, arm_pitch, 0.0);
+    // The view's yaw is the offset and facing `cam.yaw` holds plus the flip (`0x50f7de`-`0x50f7f2`).
+    let view_yaw = cam.yaw + rig.flip_yaw;
+    let arm_rotation = Quat::from_euler(EulerRot::YXZ, view_yaw, arm_pitch, 0.0);
     // Not re-clamped: the bias is composed after that clamp (`0x50ee58`), bounded only by its own
     // one-sided accumulate (`SmartPivot::route_pitch`) and ±89° at the body hand-off (`0x5103e0`).
     let rotation = if bias == 0.0 {
         arm_rotation
     } else {
-        Quat::from_euler(EulerRot::YXZ, cam.yaw, arm_pitch + bias, 0.0)
+        Quat::from_euler(EulerRot::YXZ, view_yaw, arm_pitch + bias, 0.0)
     };
     // `Transform::forward()` is exactly `rotation * -Z`; computed here so the write can be gated.
     let cam_fwd = arm_rotation * Vec3::NEG_Z;
