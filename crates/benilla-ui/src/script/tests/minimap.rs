@@ -233,6 +233,50 @@ fn a_minimap_is_born_with_nine_model_children_and_the_ninth_is_the_player_arrow(
     );
 }
 
+/// The frame update centres the arrow ahead of its object lookup (`0x4eb04f`-`0x4eb074`) and writes
+/// its facing past it (`0x4eb0b1`), so neither writes the other's field. A model not loaded is not
+/// centred (`0x4eb070`).
+#[test]
+fn the_arrow_centres_apart_from_its_facing() {
+    let mut s = script();
+    s.run(
+        r#"m = CreateFrame("Minimap", "TestMinimap")
+        arrow = ({m:GetChildren()})[9] arrow:SetWidth(20) arrow:SetHeight(10)"#,
+    )
+    .unwrap();
+    let position = |s: &UiScript| {
+        s.eval::<(f32, f32, f32)>("return arrow:GetPosition()")
+            .unwrap()
+    };
+    let facing = |s: &UiScript| s.eval::<f32>("return arrow:GetFacing()").unwrap();
+
+    let before = position(&s);
+    s.centre_minimap_player_arrows();
+    assert_eq!(position(&s), before, "no model loaded");
+
+    s.set_model_facts(
+        crate::widget::MINIMAP_DEFAULT_PLAYER_MODEL,
+        crate::widget::ModelFileFacts {
+            sequences: Vec::new(),
+            bbox: ([-0.01; 3], [0.01; 3]),
+            cameras: 0,
+        },
+    );
+    s.centre_minimap_player_arrows();
+    let (x, y, z) = position(&s);
+    assert!(x > 0.0 && y > 0.0 && z == 0.0, "{x} {y} {z}");
+    assert_eq!(facing(&s), 0.0, "the centring writes no facing");
+
+    s.run("arrow:SetPosition(0, 0, 0)").unwrap();
+    s.set_minimap_player_facing(2.5);
+    assert_eq!(
+        position(&s),
+        (0.0, 0.0, 0.0),
+        "the facing writes no position"
+    );
+    assert_eq!(facing(&s), 2.5);
+}
+
 /// `SetMaskTexture` (`0x4ee4a0`), a 1.12 method with no getter, so the test reads the statics;
 /// pfUI's `modules/minimap.lua:27` squares its minimap with it. The load runs inside the call: a
 /// file that does not resolve stores the green fallback and then raises, and an empty name stores

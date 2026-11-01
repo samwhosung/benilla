@@ -674,6 +674,7 @@ fn the_stock_minimaps_arrows_are_its_children_s_panes_above_its_own_draw() {
             cameras: 0,
         },
     );
+    s.centre_minimap_player_arrows();
     s.set_minimap_player_facing(0.5);
     s.set_minimap_arrows(
         &[MinimapRimArrow {

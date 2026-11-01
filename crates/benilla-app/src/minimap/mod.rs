@@ -1018,18 +1018,20 @@ impl FollowedObject<'_, '_> {
     }
 }
 
-/// Push the followed object's facing onto the Minimap's player-arrow `Model` every frame, as the
-/// reference's per-frame `CMinimap::SetPlayerFacing` (`0x4eb8e0`) writes `[+0x39c]`, what
-/// `Model:GetFacing()` reads. An object that does not resolve leaves it as it stands (`0x4eb0a2`).
+/// The Minimap's per-frame update (`0x4eb040`) on its player-arrow `Model`: the centring, then the
+/// followed object's facing, as `CMinimap::SetPlayerFacing` (`0x4eb8e0`) writes `[+0x39c]`, what
+/// `Model:GetFacing()` reads. An object that does not resolve leaves the facing as it stands
+/// (`0x4eb0a2`), past the centring (`0x4eb074`).
 fn feed_minimap_player_facing(
     mut vm: crate::script_calls::VmWith<FollowedObject<'static, 'static>>,
 ) {
-    let Some(facing) = vm.own().facing() else {
-        return;
-    };
+    let facing = vm.own().facing();
     vm.run(|script| {
         let Some(script) = script else { return };
-        script.set_minimap_player_facing(facing);
+        script.centre_minimap_player_arrows();
+        if let Some(facing) = facing {
+            script.set_minimap_player_facing(facing);
+        }
     })
 }
 
@@ -1291,6 +1293,40 @@ mod followed_facing_tests {
         assert_eq!(read(&mut world), None);
         feed(&mut world);
         assert_eq!(facing(&world), 4.0, "kept");
+    }
+
+    /// The centring sits ahead of the lookup (`0x4eb04f`-`0x4eb074`), so an object that does not
+    /// resolve still centres the arrow.
+    #[test]
+    fn a_followed_object_lost_still_centres_the_arrow() {
+        let mut world = following(typed(0x41, 14, 4.0));
+        crate::script_calls::insert_test_vm(&mut world);
+        {
+            let mut script = world.non_send_resource_mut::<UiScript>();
+            script
+                .run(
+                    r#"m = CreateFrame("Minimap", "TestMinimap")
+                    arrow = ({m:GetChildren()})[9] arrow:SetWidth(20) arrow:SetHeight(10)"#,
+                )
+                .expect("the arrow");
+            script.set_model_facts(
+                benilla_ui::widget::MINIMAP_DEFAULT_PLAYER_MODEL,
+                benilla_ui::widget::ModelFileFacts {
+                    sequences: Vec::new(),
+                    bbox: ([-0.01; 3], [0.01; 3]),
+                    cameras: 0,
+                },
+            );
+        }
+        world.resource_mut::<GuidIndex>().0.remove(&EYE);
+        world
+            .run_system_once(feed_minimap_player_facing)
+            .expect("the feed runs");
+        let x = crate::script_calls::eval_in_vm::<f32>(
+            &world,
+            "local x = arrow:GetPosition() return x",
+        );
+        assert!(x > 0.0, "centred at half its width: {x}");
     }
 }
 

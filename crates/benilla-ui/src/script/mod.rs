@@ -1112,24 +1112,13 @@ impl UiScript {
         self.model_mut().minimap.inside = inside;
     }
 
-    /// The Minimap's per-frame update (`0x4eb040`) on every Minimap's player arrow: once its model
-    /// is loaded (`0x7103d0`), `0x4ee100` centres it on its own size, half its width and height
-    /// (slots 0x1c and 0x20) in layout units; then `CMinimap::SetPlayerFacing` (`0x4eb8e0`, fed at
-    /// `0x4eb0a4`–`0x4eb0b1`) copies the facing (radians) of the object the camera follows raw
-    /// into the field `Model:SetFacing` (`0x76dce0`) writes, so the arrow's `GetFacing()` reads it.
-    pub fn set_minimap_player_facing(&mut self, facing: f32) {
+    /// The Minimap's per-frame update (`0x4eb040`) on every Minimap's player arrow, ahead of its
+    /// object lookup (`0x4eb04f`-`0x4eb074`): once its model is loaded (`0x7103d0`), `0x4ee100`
+    /// centres it on its own size, half its width and height (slots 0x1c and 0x20) in layout units.
+    pub fn centre_minimap_player_arrows(&mut self) {
         let mut model = self.model_mut();
         let unit = model.layout_unit();
-        let arrows: Vec<crate::widget::FrameHandle> = model
-            .arena
-            .minimap_kinds()
-            .iter()
-            .filter_map(|&h| match model.arena.frame(h).map(|f| &f.kind_state) {
-                Some(KindState::Minimap(m)) => m.player_arrow,
-                _ => None,
-            })
-            .collect();
-        for h in arrows {
+        for h in minimap::player_arrows(&model) {
             let size = model.layout_inputs.get(&h).map_or((0.0, 0.0), |i| {
                 let u = model.layout_units();
                 (i.width.script(u), i.height.script(u))
@@ -1141,12 +1130,26 @@ impl UiScript {
                     .is_some_and(|p| model.model_facts.contains_key(&crate::widget::model_key(p))),
                 _ => false,
             };
+            if !loaded {
+                continue;
+            }
             if let Some(KindState::Model(state)) =
                 model.arena.frame_mut(h).map(|f| &mut f.kind_state)
             {
-                if loaded {
-                    state.position = (size.0 / unit * 0.5, size.1 / unit * 0.5, 0.0);
-                }
+                state.position = (size.0 / unit * 0.5, size.1 / unit * 0.5, 0.0);
+            }
+        }
+    }
+
+    /// `CMinimap::SetPlayerFacing` (`0x4eb8e0`, fed at `0x4eb0a4`–`0x4eb0b1`) on every Minimap's
+    /// player arrow: copies the facing (radians) of the object the camera follows raw into the
+    /// field `Model:SetFacing` (`0x76dce0`) writes, so the arrow's `GetFacing()` reads it.
+    pub fn set_minimap_player_facing(&mut self, facing: f32) {
+        let mut model = self.model_mut();
+        for h in minimap::player_arrows(&model) {
+            if let Some(KindState::Model(state)) =
+                model.arena.frame_mut(h).map(|f| &mut f.kind_state)
+            {
                 state.facing = facing;
             }
         }

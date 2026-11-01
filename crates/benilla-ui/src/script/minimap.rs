@@ -195,6 +195,19 @@ fn load_arrow_model(model: &mut Model, minimap: FrameHandle, path: &str) -> bool
     true
 }
 
+/// Every Minimap's player arrow, the frame update's `[minimap+0x338]`.
+pub(super) fn player_arrows(model: &Model) -> Vec<FrameHandle> {
+    model
+        .arena
+        .minimap_kinds()
+        .iter()
+        .filter_map(|&h| match model.arena.frame(h).map(|f| &f.kind_state) {
+            Some(KindState::Minimap(m)) => m.player_arrow,
+            _ => None,
+        })
+        .collect()
+}
+
 /// `LoadPlayerModel` (`0x4ee260`): `SetModel` on the player arrow (slot 0x94, `0x76cce0`), which
 /// clears it for an empty name; 0 when the arrow is left with no model (`0x4ee286`).
 fn load_player_model(model: &mut Model, minimap: FrameHandle, path: &str) -> bool {
