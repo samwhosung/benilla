@@ -670,8 +670,6 @@ pub(crate) fn form_refuses_item(
             .is_some_and(|row| !row.is_stance() && !row.allows_items(equippable))
 }
 
-/// `ITEM_FIELD_FLAGS` bit `0x8`, a wrapped gift, which no durability refuses (`0x5d900a`).
-const ITEM_FLAG_WRAPPED: u32 = 0x8;
 /// The worn and bag slots that open the player's list, the slots past them a copy held in its
 /// backpack or vault (`0x5d90fc`).
 const LIST_WORN_SLOTS: u8 = 23;
@@ -689,7 +687,9 @@ pub(crate) fn equip_gate_refusal(
     if item.item_contained() != me {
         return Some("ERR_MUST_EQUIP_ITEM");
     }
-    if item.item_flags().unwrap_or(0) & ITEM_FLAG_WRAPPED == 0
+    // A wrapped gift has no durability to refuse (`0x5d900a`).
+    let flags = item.item_flags().unwrap_or(0);
+    if flags & benilla_protocol::messages::ITEM_DYNFLAG_WRAPPED == 0
         && item.item_max_durability().unwrap_or(0) > 0
         && item.item_durability().unwrap_or(0) == 0
     {
