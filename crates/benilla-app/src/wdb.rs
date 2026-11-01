@@ -57,7 +57,7 @@ use crate::names::NameCache;
 use crate::net::NetHandlerApp;
 use crate::portrait::PortraitMarks;
 use crate::query_cache::QueryCache;
-use crate::ui_auction::HouseLane;
+use crate::ui_auction::{AuctionOpen, HouseLane};
 use crate::ui_battlefield::Battlefield;
 use crate::ui_battlefield_positions::BattlefieldPositions;
 use crate::ui_battlefield_score::BattlefieldScoreboard;
@@ -377,6 +377,7 @@ pub(crate) fn free_store_callbacks(world: &mut World) {
     free::<LootState>(world, LootState::free_store_callbacks);
     free::<LootRolls>(world, LootRolls::free_store_callbacks);
     free::<HouseLane>(world, HouseLane::free_store_callbacks);
+    free::<AuctionOpen>(world, AuctionOpen::free_store_callbacks);
     free::<ChannelRosters>(world, ChannelRosters::free_store_callbacks);
     free::<MeetingStone>(world, MeetingStone::free_store_callbacks);
     free::<DressUpRoom>(world, DressUpRoom::free_store_callbacks);

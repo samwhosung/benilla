@@ -1622,6 +1622,29 @@ mod tests {
     }
 
     #[test]
+    fn a_freed_line_goes_with_its_callback_and_a_later_miss_shows_its_own() {
+        let mut a = AuctionOpen::default();
+        let mut lane = HouseLane::default();
+        let mut items = Items::default();
+        a.messages
+            .push(AuctionMessage::chat_item("ERR_AUCTION_SOLD_S", 2589));
+        a.free_store_callbacks();
+        a.messages
+            .push(AuctionMessage::chat_item("ERR_AUCTION_WON_S", 2589));
+        items.insert_template(2589, Some(crate::items::test_template("Cloth")));
+        message_answered(&mut a, &mut lane, &items, 2589);
+        let shown: Vec<&str> = lane
+            .steps
+            .iter()
+            .filter_map(|(_, step)| match step {
+                HouseStep::Line { msg, .. } => Some(msg.key),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(shown, ["ERR_AUCTION_WON_S"]);
+    }
+
+    #[test]
     fn closing_the_window_does_not_swallow_a_pending_notice() {
         let rig = Rig::new();
         let mut a = AuctionOpen::default();

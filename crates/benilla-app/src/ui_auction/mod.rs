@@ -502,6 +502,12 @@ impl AuctionOpen {
         self.query_gate = None;
     }
 
+    /// The teardown's free of the lines' callbacks `0x4cd190`, running none (`0x55c1b0`): each line
+    /// is its callback's own data (`0x4ccf8d`, freed at `0x4cd1d9`), out of reach once it goes.
+    pub(crate) fn free_store_callbacks(&mut self) {
+        self.messages.clear();
+    }
+
     /// The socket's end: the close's clear, and the lines waiting on records, whose callbacks the
     /// item cache drops with its in-flight asks ([`Items::clear_session`]).
     pub(crate) fn clear_session(&mut self) {
