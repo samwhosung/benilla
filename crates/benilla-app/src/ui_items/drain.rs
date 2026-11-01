@@ -2297,8 +2297,7 @@ mod bind_confirm_tests {
     }
 
     /// Right-clicks a bind-on-use item in a bag (the use arm, `0x5d8d00`, event 290);
-    /// `no_use_spell` drops its on-use spell, since four of `0x5d91d3`'s five predecessors are
-    /// failed spell lookups and the reference still asks.
+    /// `no_use_spell` drops its on-use spell, which leaves ahead of the bind test (`0x5d8fc1`).
     fn right_click_a_bind_on_use_item(
         no_use_spell: bool,
     ) -> (App, crossbeam_channel::Receiver<ClientCommand>) {
@@ -2524,15 +2523,15 @@ mod bind_confirm_tests {
     }
 
     #[test]
-    fn a_bind_on_use_item_with_no_on_use_spell_still_asks() {
+    fn a_bind_on_use_item_with_no_on_use_spell_never_asks() {
         benilla_formats::wow_data_or_skip!();
         let (mut app, rx) = right_click_a_bind_on_use_item(true);
         app.world_mut()
             .non_send_resource_mut::<UiScript>()
             .tick(0.01);
         assert!(
-            shown(&mut app, "USE_BIND"),
-            "the reference's bind arm sits BELOW the on-use lookup's failure exits, not above them"
+            !shown(&mut app, "USE_BIND"),
+            "the use leaves at `0x5d8fc1`, ahead of the bind arm at `0x5d91d3`"
         );
         assert!(rx.try_iter().next().is_none());
     }

@@ -637,8 +637,8 @@ pub(crate) enum ItemUseRoute {
     ToggleCancel(u32),
     /// The cast tail (`0x5d9249`-`0x5d9258` → `0x6e5a90` → `TryCast`): the whole ladder.
     Cast(u32),
-    /// No ON_USE block: `TryCast` gets spell id 0, whose record (`[0xc0d788 + 0]`) is null, and
-    /// bails at `0x6e4bac` with nothing sent.
+    /// No use spell (`0x5d8c00` finds none): the silent return (`0x5d8fc1` → `0x5d9275`), past the
+    /// quest and charter arms and ahead of the equip, disarm, form and bind tests.
     Nothing,
     /// The charter arm, rung 9 (`0x5d8f95`, template `Flags & 0x2000`): `0x5eef40`, whose sole
     /// caller is `0x5d8fa6`, sends `CMSG_PETITION_SHOW_SIGNATURES` (`0x1BE`), one `u64` guid,
@@ -699,10 +699,10 @@ pub(crate) fn equip_gate_refusal(
 }
 
 /// [`ItemUseRoute`]'s decision, in the reference's order: quest offer (`0x5d8dcc`), charter
-/// (`0x5d8f95`), disarmed refusal, form refusal (`0x5d9105`), toggle scan (`0x5d9157`), cast tail
-/// (`0x5d9249`). The toggle predicate, the disarmed hand and the form refusal are caster state,
-/// passed in; a `None` guid cannot address a
-/// questgiver, so it falls through to the ordinary path.
+/// (`0x5d8f95`), no use spell (`0x5d8fc1`), disarmed refusal, form refusal (`0x5d9105`), toggle
+/// scan (`0x5d9157`), cast tail (`0x5d9249`). The toggle predicate, the disarmed hand and the form
+/// refusal are caster state, passed in; a `None` guid cannot address a questgiver, so it falls
+/// through to the ordinary path.
 pub(crate) fn item_use_route(
     it: ItemUse,
     aura_cancels: impl Fn(u32) -> bool,
@@ -719,6 +719,9 @@ pub(crate) fn item_use_route(
     if let Some(item) = it.guid.filter(|_| it.is_charter) {
         return ItemUseRoute::ShowPetition { item };
     }
+    let Some(spell) = it.use_spell else {
+        return ItemUseRoute::Nothing;
+    };
     // Rung 15: in the player array `slot` is the equipment index, which the reference finds by
     // scanning the worn guids for the item.
     if disarmed_hand.is_some() && it.bag_index == PLAYER_ARRAY && Some(it.slot) == disarmed_hand {
@@ -727,10 +730,10 @@ pub(crate) fn item_use_route(
     if form_refuses {
         return ItemUseRoute::NoItemsShapeshifted;
     }
-    match it.use_spell {
-        Some(spell) if aura_cancels(spell) => ItemUseRoute::ToggleCancel(spell),
-        Some(spell) => ItemUseRoute::Cast(spell),
-        None => ItemUseRoute::Nothing,
+    if aura_cancels(spell) {
+        ItemUseRoute::ToggleCancel(spell)
+    } else {
+        ItemUseRoute::Cast(spell)
     }
 }
 
@@ -864,9 +867,10 @@ pub(crate) fn send_item_use(
         }
         // The bind-on-use deferral (`0x5d91d3`-`0x5d91f2`), the last rung of `0x5d8d00`: every
         // arm above has claimed the click first, so re-pressing a bind-on-use trinket to cancel
-        // its aura never asks. It covers `Nothing` too: four of `0x5d91d3`'s five predecessors
-        // are on-use spell lookup failures, so the reference asks with no usable on-use spell.
-        ItemUseRoute::Nothing | ItemUseRoute::Cast(_)
+        // its aura never asks. A use spell with no record asks too: the toggle scan's failed
+        // lookups fall to it (`0x5d9166`-`0x5d917a`). With no use spell the route has left already
+        // (`0x5d8fc1`).
+        ItemUseRoute::Cast(_)
             if !suppress
                 && it
                     .guid
@@ -877,7 +881,7 @@ pub(crate) fn send_item_use(
         }
         ItemUseRoute::Nothing => {
             debug!(
-                "ui_items: the item at wire {}/{} has no ON_USE block — nothing sent (TryCast's null-rec bail)",
+                "ui_items: the item at wire {}/{} has no use spell — nothing sent",
                 it.bag_index, it.slot
             );
             false
@@ -1578,6 +1582,51 @@ mod tests {
         assert_eq!(
             item_use_route(it, toggling, None, false),
             ItemUseRoute::ToggleCancel(8690)
+        );
+    }
+
+    /// With no use spell the use leaves silently (`0x5d8fc1`), past the quest and charter arms and
+    /// ahead of the disarm and form refusals and the toggle scan.
+    #[test]
+    fn an_item_with_no_use_spell_leaves_ahead_of_the_refusals() {
+        let it = ItemUse {
+            entry: 7,
+            guid: Some(1),
+            start_quest: 0,
+            bag_index: super::PLAYER_ARRAY,
+            slot: 15,
+            spell_index: 0,
+            use_spell: None,
+            on_object: None,
+            is_charter: false,
+        };
+        assert_eq!(
+            item_use_route(it, |_| true, Some(15), true),
+            ItemUseRoute::Nothing
+        );
+        assert_eq!(
+            item_use_route(
+                ItemUse {
+                    start_quest: 373,
+                    ..it
+                },
+                |_| true,
+                Some(15),
+                true
+            ),
+            ItemUseRoute::QuestOffer { npc: 1, quest: 373 }
+        );
+        assert_eq!(
+            item_use_route(
+                ItemUse {
+                    is_charter: true,
+                    ..it
+                },
+                |_| true,
+                Some(15),
+                true
+            ),
+            ItemUseRoute::ShowPetition { item: 1 }
         );
     }
 
