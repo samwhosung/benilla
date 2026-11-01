@@ -29,7 +29,7 @@ A setting boots at the reference's default unless it is listed here (`docs/METHO
 
 Each entry is the first sentence of a `Deviation:` comment, linking to where it lives.
 
-- [benilla-app](#benilla-app): 257
+- [benilla-app](#benilla-app): 258
 - [benilla-assets](#benilla-assets): 5
 - [benilla-blp](#benilla-blp): 1
 - [benilla-formats](#benilla-formats): 24
@@ -47,6 +47,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### assets/ui
 
+- This control, where 1.12.1 has only realmlist.wtf beside the executable and no interface for it, because the install is read-only, so that file cannot hold the address a player picks. ([`assets/ui/AccountLoginRealmlist.xml:7`](../crates/benilla-app/assets/ui/AccountLoginRealmlist.xml#L7))
 - `OpenBackpack` opens every equipped bag, not only the backpack, because that way the vendor and mailbox windows that call it (MerchantFrame.lua:35, MailFrame.lua:39) bring up every bag to sell or mail from. The was-open memory is keyed by bag id: `ContainerFrame1..12` are recycled across bags. The stock `CloseAllBags` (ContainerFrame.lua:702-707) runs unchanged: it calls this `CloseBackpack`, then closes bags 1 and up. ([`assets/ui/ContainerFrameAdapters.xml:9`](../crates/benilla-app/assets/ui/ContainerFrameAdapters.xml#L9))
 - The stock FCF\_ChatTabFadeFinished (FloatingChatFrame.lua:989-992) nils oldAlpha even under a live hover, so leaving and re-entering within CHAT\_FRAME\_FADE\_TIME (a flick to the scroll buttons, outside the hover box, does it) stops the plate fading in (l.873) for the rest of the session; this keeps oldAlpha while hover is set because the stock one nils it even under a live hover. ([`assets/ui/FrameXMLFixes.xml:6`](../crates/benilla-app/assets/ui/FrameXMLFixes.xml#L6))
 - Re-runs UIParent\_ManageFramePositions after DurabilityFrame's own OnEvent. The pass seats the frame 20 further in while a side glyph shows (UIParent.lua:1759-1768); a glyph appearing while the frame is shown leaves the shield's overhang off the screen edge because the stock frame runs it only from OnShow/OnHide. The stock handler runs first, unchanged, on the this/event/arg1 already set for the dispatch. ([`assets/ui/FrameXMLFixes.xml:20`](../crates/benilla-app/assets/ui/FrameXMLFixes.xml#L20))
@@ -241,7 +242,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - The value lives in `config.toml` with every other CVar and is edited from a login-screen control, because local state is one folder and one config file. ([`src/realmlist.rs:6`](../crates/benilla-app/src/realmlist.rs#L6))
 - The local machine's server, not the reference's `us.logon.worldofwarcraft.com:3724`, because that host no longer resolves. ([`src/realmlist.rs:44`](../crates/benilla-app/src/realmlist.rs#L44))
 - 64, where the reference's login boxes cap at 16 (`AccountLogin.xml`), because a hostname needs more. ([`src/realmlist.rs:48`](../crates/benilla-app/src/realmlist.rs#L48))
-- A host name may carry a port, where the reference resolves a name whole (`0x43ba0e`) and takes a port only on a dotted address (`0x43f3d0`), because a server on a non-default logon port behind a host name is everyday use. ([`src/realmlist.rs:151`](../crates/benilla-app/src/realmlist.rs#L151))
+- A host name may carry a port, where the reference resolves a name whole (`0x43ba0e`) and takes a port only on a dotted address (`0x43f3d0`), because a self-hosted server on another logon port is usually written that way (`localhost:3725`), and an address 1.12.1 can dial means the same here. ([`src/realmlist.rs:151`](../crates/benilla-app/src/realmlist.rs#L151))
 
 #### screenshot
 
