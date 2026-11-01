@@ -3047,9 +3047,13 @@ mod tests {
             recovery_ms: 60_000,
             ..Default::default()
         };
-        world
-            .resource_mut::<crate::spell::Cooldowns>()
-            .start_spell(SMITE, &smite, 0, Instant::now(), None);
+        world.resource_mut::<crate::spell::Cooldowns>().start_spell(
+            SMITE,
+            &smite,
+            0,
+            Instant::now(),
+            None,
+        );
         send_at(&mut world, SMITE, MOB);
         assert!(
             matches!(rx.try_recv(), Ok(ClientCommand::CancelCast { spell_id }) if spell_id == SHOOT),

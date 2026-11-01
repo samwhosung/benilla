@@ -131,12 +131,12 @@ use state::{
 /// The swim boundary `0.75·h`, also the wade ceiling, for the creature swim marker and the
 /// footstep splash, which have no `Player`.
 pub(crate) use swim::{may_swim, swim_enter_depth};
-/// The camera's followed unit when not our body; [`crate::camera_shake`] takes its body frame and
-/// two suspend gates from it, as the reference does from `[cam+0x88]`.
-pub(crate) use view_subject::{FarSight, FollowedObject, ViewSubject};
 /// The camera on a followed object, for the tests of the arrows' feeds.
 #[cfg(test)]
 pub(crate) use view_subject::followed_tests::camera_on_an_eye;
+/// The camera's followed unit when not our body; [`crate::camera_shake`] takes its body frame and
+/// two suspend gates from it, as the reference does from `[cam+0x88]`.
+pub(crate) use view_subject::{FarSight, FollowedObject, ViewSubject};
 
 /// `UNIT_FLAG_STUNNED`, the `UNIT_FIELD_FLAGS` bit that stops turning. The reference reads it off
 /// the descriptor (`[[unit+0x110]+0xa0]`, predicate `0x5145b0`, an inverted `not/shr/and` test) at
