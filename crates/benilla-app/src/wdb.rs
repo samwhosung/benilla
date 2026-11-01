@@ -346,7 +346,9 @@ fn clear_session_stores(
 /// its record or in-flight ask (`0x555701` → `0x5615b0`). So an answer after it files its record
 /// and signals nothing. Each list here is what a store's lookups left that reaches the interface.
 ///
-/// What stays, because it does more than tell the interface:
+/// Deviation: the reference frees the waits below too, leaving an item locked, a swap unsent or a
+/// friend's row blank when a `/reload` falls between an ask and its answer; benilla runs them,
+/// because they do more than tell the interface:
 /// - the item store's engine work ([`Items::free_store_callbacks`]);
 /// - `SocialState`'s name waits, which write the friend rows and send a refused name's removal;
 /// - the chat's held lines, which are its data, and which its age pass shows with no answer.
