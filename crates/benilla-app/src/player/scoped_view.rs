@@ -7,11 +7,13 @@
 //! `π/2`, unlocks and selects view 1. The Ornate Spyglass (item 5507, spell 12883) passes 15, a 6×
 //! zoom.
 //!
-//! So the scope moves on a change of the aura, not on its standing. A create's `PostInit` shows
-//! every standing aura (`0x5fbb3c` → `0x5ff130`), which starts the scope, and our own arrival ends
-//! it at once and selects view 1 (`0x5deb44`, `0x50d320(0)`); a fresh create runs no field watcher
-//! (`0x465d79`), so a scope held across a worldport comes back off, under the same aura. A
-//! `/reload`'s new camera holds no scope either, and nothing shows the aura to it.
+//! [`ScopedView`] follows a change of the aura. A create's `PostInit` shows every standing aura
+//! (`0x5fbb3c` → `0x5ff130`), which starts the scope, and our own arrival ends it at once and
+//! selects view 1 (`0x5deb44`, `0x50d320(0)`); a fresh create runs no field watcher (`0x465d79`),
+//! so a scope held across a worldport comes back off, under the same aura. A `/reload`'s new camera
+//! holds no scope either, and the reload itself shows no aura. In the reference the display watcher
+//! shows it again (`0x604990` → `0x60abe0` → `0x60ada6` → `0x5ff130` → `0x5ff350` → `0x5ff462`), so
+//! a shapeshift or morph under a standing aura restarts the scope; that path is not built here.
 //!
 //! The ratio is applied to `[camera+0x40]`, which defaults to 90°; the world projection then turns
 //! it into the vertical field of view by the frame's aspect (`0x5c3cc0`, [`benilla_world::view`]).
@@ -49,7 +51,7 @@ impl ScopedView {
         self.zoom.is_some()
     }
 
-    /// A new camera (`0x50c0e0`) holds no scope, and nothing shows a standing aura to it.
+    /// A new camera (`0x50c0e0`) holds no scope, and building it shows no aura.
     pub(super) fn new_camera(&mut self) {
         self.zoom = None;
         self.camera_rebuilt = true;
@@ -152,7 +154,7 @@ mod tests {
     }
 
     /// The create's `PostInit` starts the scope (`0x5fbb3c`) and the arrival ends it (`0x5deb44`),
-    /// and the standing aura starts nothing until it changes (`0x604d00`).
+    /// and here the standing aura starts nothing until it changes (`0x604d00`).
     #[test]
     fn an_arrival_ends_the_scope_under_a_standing_aura() {
         let mut scoped = ScopedView::default();
@@ -176,7 +178,7 @@ mod tests {
         assert!(!scoped.arrival_end);
     }
 
-    /// A new camera holds no scope, nothing shows the standing aura to it, and it selects no view.
+    /// A new camera holds no scope, building it shows no aura, and it selects no view.
     #[test]
     fn a_new_camera_ends_the_scope_under_a_standing_aura() {
         let mut scoped = ScopedView::default();
