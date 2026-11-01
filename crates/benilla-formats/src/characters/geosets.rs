@@ -75,9 +75,10 @@ impl CharacterGeosets {
         // The naked set: the region bases and geoset 0, the body.
         let mut set = REGION_BASES.to_vec();
         set.push(0);
-        // Hair: `0x478540` returns `max(1, geosetId)`, so a bald style shows geoset 1, the scalp.
+        // Hair: `0x478540` returns `max(1, geosetId)`, signed (`0x47859d`), so a bald style shows
+        // geoset 1, the scalp.
         if let Some(&g) = self.hair.get(&(race, sex, hair_style)) {
-            set[0] = g.max(1);
+            set[0] = (g as i32).max(1) as u32;
         }
         // Facial hair: `0x478660` adds 100/300/200 to the row's fields; no row keeps the bases.
         if let Some(&[a, b, c]) = self.facial.get(&(race, sex, facial_hair)) {
@@ -345,7 +346,9 @@ mod tests {
     #[test]
     fn a_group_past_u16_names_no_geoset() {
         let cg = CharacterGeosets {
-            hair: [((1, 0, 0), 65_537)].into_iter().collect(),
+            hair: [((1, 0, 0), 65_537), ((1, 0, 1), 0x8000_0000)]
+                .into_iter()
+                .collect(),
             facial: [((1, 0, 0), [65_537; 3]), ((1, 0, 1), [u32::MAX; 3])]
                 .into_iter()
                 .collect(),
@@ -369,6 +372,9 @@ mod tests {
             assert!(!bare.contains(&id), "{id}");
         }
         assert!(selected(1, &EquipGeosets::default()).contains(&99));
+        // A hair id with its top bit set is negative to `0x47859d`: the scalp.
+        let negative = cg.visible_geosets(1, 0, 1, 0, &EquipGeosets::default());
+        assert!(negative.selected.contains(&1));
         assert!(selected(0, &gloves(u32::MAX - 398)).contains(&2));
     }
 
