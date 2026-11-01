@@ -48,11 +48,11 @@ generated from the code.
 
 ## Status
 
-Complete and fully playable. What is left:
+Fully playable on any 1.12.1 server. What is left:
 
-- The long tail of small features that separates a working client from a finished one, tracked
-  as [issues](https://github.com/samwhosung/benilla/issues).
-- Addons, options and performance, ongoing.
+- The long tail of small differences from 1.12.1, tracked as
+  [issues](https://github.com/samwhosung/benilla/issues).
+- Addon compatibility, the remaining options and performance, ongoing.
 
 benilla is a faithful 1.12.1 client and the foundation people build on. There are no prebuilt
 downloads: a packaged build, a particular server's changes or anything 1.12.1 never had belongs
