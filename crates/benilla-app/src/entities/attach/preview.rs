@@ -1048,7 +1048,8 @@ impl PreviewState {
                 }
             }
             Some(GlueLook::Create(_)) => {}
-            // Off the select screen the world's cache takes over, and a return asks again.
+            // Off the select screen the world's cache takes over, and a return asks again for a
+            // guild it does not hold.
             None => self.asked.clear(),
         }
     }
@@ -1169,8 +1170,27 @@ mod tests {
         assert_eq!(rx.try_iter().count(), 0);
     }
 
-    /// The asks last while the screen stands: a return from the world asks again, and a create look
-    /// leaves them be.
+    /// A guild held on the return from the world crests the first build (`0x472cde` hits, so
+    /// `0x472d13` installs it in the build) and sends nothing.
+    #[test]
+    fn a_held_guild_crests_the_first_build_and_asks_nothing() {
+        let displays = tabards();
+        let mut guilds = GuildState::default();
+        guilds.land_for_test(5, "Guild");
+        let (pick, rx) = park();
+        let mut state = PreviewState::default();
+        state.watch_crest(
+            tabarded(5, GUILD_TABARD),
+            Some(&displays),
+            Some(&guilds),
+            Some(&pick),
+        );
+        assert_eq!(state.emblem, Some(benilla_formats::GuildEmblem::default()));
+        assert_eq!(rx.try_iter().count(), 0);
+    }
+
+    /// The asks last while the screen stands: a return from the world asks again for a guild still
+    /// not held, and a create look leaves them be.
     #[test]
     fn a_return_to_the_select_screen_asks_again() {
         let displays = tabards();

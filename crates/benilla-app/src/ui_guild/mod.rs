@@ -118,7 +118,7 @@ impl RosterUpdate {
 
 /// The `guildMemberNotify` CVar, Guild Member Alert on the Chat options page (help string at
 /// `0x860320`). Off by default: its register site `0x5e24c7` pushes `"0"` (`0x82e570`). Kept apart
-/// from [`GuildState`], which is cleared on disconnect.
+/// from [`GuildState`], which a session's end resets.
 #[derive(Resource, Default)]
 pub(crate) struct GuildMemberNotify(pub(crate) bool);
 
@@ -143,7 +143,8 @@ pub(crate) enum Waiter {
 }
 
 /// The guild session mirror: filled by the packet handlers, read by the getters through the call
-/// host, reset on disconnect, and its roster and ranks at each world entry ([`seed_vm_guild`]).
+/// host, reset at a session's end but for the guild store ([`Self::end_session`]), and its roster
+/// and ranks at each world entry ([`seed_vm_guild`]).
 #[derive(Resource)]
 pub(crate) struct GuildState {
     /// Our `PLAYER_GUILDID` (field 191), `0` when guildless; mirrored from our descriptor as the
@@ -262,6 +263,24 @@ impl GuildState {
         self.identity_generation = self.identity_generation.wrapping_add(1);
         Arc::make_mut(&mut self.now.identities).clear();
         self.settle();
+    }
+
+    /// A session's end: the next login may be another character, so all but the guild store goes.
+    /// The store, its in-flight asks with it, lasts until the world entry's clear, the one caller
+    /// of `0x555740` (`0x48f586`), so the select screen reads what the world asked. Only its
+    /// callbacks go, freed node by node at the interface's teardown (`0x490c35` → `0x5615b0`).
+    fn end_session(&mut self) {
+        let now = GuildView {
+            identities: std::mem::take(&mut self.now.identities),
+            ..GuildView::default()
+        };
+        *self = Self {
+            identities: std::mem::take(&mut self.identities),
+            identity_generation: self.identity_generation,
+            lane: GuildLane::new(now.clone()),
+            now,
+            ..Self::default()
+        };
     }
 
     /// The deadline `GuildRoster()` waits for (`0xb73130`), in real-time seconds.
@@ -904,11 +923,10 @@ pub(crate) mod net {
         }
     }
 
-    /// Reset at session end: the next login may be another character. The identity store goes
-    /// too, which the next world entry would clear anyway (`0x5557c0`). The verbs' own state
-    /// resets at that entry ([`seed_vm_guild`]).
+    /// A session's end ([`GuildState::end_session`]). The verbs' own state resets at the next
+    /// world entry ([`seed_vm_guild`]).
     fn on_session_end(In(_): In<SessionEvent>, mut guild: ResMut<GuildState>) {
-        *guild = GuildState::default();
+        guild.end_session();
     }
 
     /// Queue the message ids [`lines`] named.
@@ -1105,6 +1123,58 @@ mod tests {
         assert_eq!(select_guild_emblem(6, &guild), None, "undesigned");
         land(&mut guild, 0, 12);
         assert_eq!(select_guild_emblem(0, &guild), None, "no guild");
+    }
+
+    /// Through the real registration: a session's end takes the character's guild and the store's
+    /// callbacks (`0x490c35` → `0x5615b0`) and leaves the store, records and in-flight asks, to the
+    /// next world entry's clear (`0x48f586` → `0x5557c0`).
+    #[test]
+    fn a_session_end_leaves_the_guild_store_to_the_next_world_entry() {
+        let (commands, _rx) = net_commands();
+        let mut app = App::new();
+        app.add_plugins(UiGuildPlugin);
+        let mut guild = app.world_mut().resource_mut::<GuildState>();
+        guild.apply_query_response(GuildQueryResponse {
+            guild_id: 5,
+            name: "Legacy".to_string(),
+            emblem_style: 12,
+            ..Default::default()
+        });
+        guild.resolve_identity(8, Ask::New(&commands));
+        guild.waiters().entry(8).or_default().push(Waiter::Roster);
+        guild.mirror_self(5, 1);
+        guild.apply_roster(GuildRoster {
+            motd: "Raid at eight".into(),
+            members: vec![member(1, "Tigole", guild_presence::ONLINE)],
+            ..Default::default()
+        });
+        let generation = guild.identity_generation();
+
+        crate::net::handlers::dispatch(
+            app.world_mut(),
+            vec![benilla_protocol::SessionEvent::Disconnected {
+                reason: "logged out".into(),
+                end: benilla_protocol::SessionEnd::LoggedOut,
+            }],
+        );
+
+        let mut guild = app.world_mut().resource_mut::<GuildState>();
+        assert_eq!(
+            select_guild_emblem(5, &guild).map(|e| e.emblem_style),
+            Some(12),
+            "the select screen wears it at once"
+        );
+        assert!(guild.seen().identities.contains_key(&5));
+        assert!(guild.identities.is_pending(8), "an ask stays in flight");
+        assert_eq!(guild.identity_generation(), generation);
+        assert!(guild.waiters().is_empty(), "its callbacks went");
+        assert!(guild.mirrors(0, 0), "the character's guild went");
+        assert_eq!(guild.now.roster.motd, "");
+        assert!(guild.now.roster.members.is_empty());
+
+        guild.clear_world_session();
+        assert!(!guild.identity_known(5), "the world entry clears it");
+        assert!(!guild.identity_known(8));
     }
 
     #[test]
