@@ -408,8 +408,8 @@ impl SpellDisplay {
         self.attributes_ex4 & ATTR_EX4_ALLOW_CLIENT_TARGETING != 0
     }
 
-    /// `AttributesEx3 & 0x400000`: a running auto-repeat with this bit ends when any new cast
-    /// begins (`0x60959e`). Only wand Shoot 5019 has it; Auto Shot survives, so hunters weave.
+    /// `AttributesEx3 & 0x400000`, wand Shoot 5019's: a running auto-repeat with this bit ends when
+    /// the validator refuses a spell as not ready (`0x60959e`), and a cast that commits leaves it.
     pub fn casting_cancels_autorepeat(&self) -> bool {
         self.attributes_ex3 & 0x0040_0000 != 0
     }

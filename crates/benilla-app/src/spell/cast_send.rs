@@ -634,9 +634,6 @@ impl CastLadder<'_, '_> {
                     }
                     return None;
                 };
-                if attempt.is_some() {
-                    self.wand_handoff(me);
-                }
                 // The send stores the record's spell (`0x6e585a`), which `TryCast`'s attack tail
                 // compares with its own (`0x6e51be`): a record a listener's attempt refilled
                 // starts no swing of this attempt's.
@@ -1124,42 +1121,6 @@ impl CastLadder<'_, '_> {
             &mut self.stand,
             &self.edits,
             self.spells.as_deref(),
-            &mut core,
-        );
-    }
-
-    /// The wand handoff ahead of the send: the running repeat is cancelled when it carries
-    /// `AttributesEx3 & 0x400000` (wand Shoot 5019), so Auto Shot survives. `CMSG_CANCEL_CAST`
-    /// naming it goes first, then the local cancel and its ack.
-    fn wand_handoff(&mut self, me: Option<Entity>) {
-        let Some(cached) = self.auto_repeat.0 else {
-            return;
-        };
-        if !self
-            .spells
-            .as_ref()
-            .and_then(|s| s.catalog.get(cached))
-            .is_some_and(|d| d.casting_cancels_autorepeat())
-        {
-            return;
-        }
-        debug!("ui_action: a new cast cancels the running wand repeat {cached}");
-        let _ = self
-            .commands
-            .0
-            .send(ClientCommand::CancelCast { spell_id: cached });
-        let mut core = CastCore {
-            pending: &mut self.pending,
-            queued_melee: &mut self.queued_melee,
-            ground: &mut self.ground,
-            reports: &mut self.reports,
-            net: &self.commands,
-            tutorials: self.tutorials.as_deref(),
-        };
-        crate::creature_anim::cancel_auto_repeat_local(
-            me,
-            &mut self.auto_repeat,
-            &self.edits,
             &mut core,
         );
     }
@@ -1754,9 +1715,9 @@ fn send_spell_cast(
         .map_or(0, |u| u.category);
     if cooldowns.not_ready(spell_id, queried_item, item_category, def, now) {
         debug!("ui_action: cast {spell_id} refused locally — not ready (the validator's rung 1)");
-        // The one packet a local refusal sends (`0x609576–0x60960f`, spell leg only): a running
-        // repeat with AttributesEx3 0x400000 (wand Shoot) gets `CMSG_CANCEL_CAST`, then the local
-        // cancel.
+        // The spell leg's own packet, ahead of its report (`0x609576`-`0x60960f`), and the one read
+        // of the bit (`0x60959e`): a running repeat with AttributesEx3 0x400000 (wand Shoot) gets
+        // `CMSG_CANCEL_CAST`, then the local cancel. A ready cast passes it by (`0x609570`).
         if !commit.is_item() {
             if let Some(cached) = auto_repeat.0 {
                 if spells
@@ -2985,6 +2946,78 @@ mod tests {
             Some(RAPTOR_STRIKE),
             "the strike still queues — only the attack-start was skipped"
         );
+    }
+
+    /// The wand repeat's cancel sits inside the validator's not-ready refusal alone (`0x609570 je`
+    /// passes a ready cast by, `0x60959e`), so a cast that commits leaves it running, with no
+    /// `CMSG_CANCEL_CAST` for it; the same cast refused not ready stops it (`0x6095e7`,
+    /// `0x6095ec`).
+    #[test]
+    fn a_committed_cast_leaves_the_wand_repeat_running() {
+        use benilla_formats::SpellDisplay;
+        use std::collections::HashMap;
+        const SHOOT: u32 = 5019;
+        const SMITE: u32 = 585;
+        let (mut world, rx) = world();
+        let mut spells = Spells::empty_for_tests();
+        spells.catalog = benilla_formats::SpellCatalog::from_displays(HashMap::from([
+            (
+                SHOOT,
+                SpellDisplay {
+                    targets: 0x2,
+                    attributes_ex2: 0x20,
+                    attributes_ex3: 0x0040_0000,
+                    ..Default::default()
+                },
+            ),
+            (
+                SMITE,
+                SpellDisplay {
+                    targets: 0x2,
+                    recovery_ms: 60_000,
+                    ..Default::default()
+                },
+            ),
+        ]));
+        world.insert_resource(spells);
+        world.spawn(SelfPlayer);
+        world.resource_mut::<AutoRepeatActive>().0 = Some(SHOOT);
+
+        send_at(&mut world, SMITE, MOB);
+        assert!(
+            matches!(rx.try_recv(), Ok(ClientCommand::CastSpell { spell_id, .. }) if spell_id == SMITE),
+            "the cast goes out"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "no CANCEL_CAST for the wand and no CANCEL_AUTO_REPEAT"
+        );
+        assert_eq!(world.resource::<AutoRepeatActive>().0, Some(SHOOT));
+        assert!(
+            !stream(&mut world).contains(&"STOP_AUTOREPEAT"),
+            "and no STOP_AUTOREPEAT_SPELL"
+        );
+
+        // Refused not ready, the spell's own recovery running: the validator's cancel, then its
+        // stop.
+        world
+            .resource_mut::<crate::spell::PendingCast>()
+            .clear_if(SMITE);
+        let smite = SpellDisplay {
+            recovery_ms: 60_000,
+            ..Default::default()
+        };
+        world
+            .resource_mut::<crate::spell::Cooldowns>()
+            .start_spell(SMITE, &smite, 0, Instant::now(), None);
+        send_at(&mut world, SMITE, MOB);
+        assert!(
+            matches!(rx.try_recv(), Ok(ClientCommand::CancelCast { spell_id }) if spell_id == SHOOT),
+            "`0x6095e7` names the wand"
+        );
+        assert!(matches!(rx.try_recv(), Ok(ClientCommand::CancelAutoRepeat)));
+        assert!(rx.try_recv().is_err(), "the refused cast sends nothing");
+        assert_eq!(world.resource::<AutoRepeatActive>().0, None);
     }
 
     /// Not yet swinging: the tail fires, `0x6131a0` → `0x5ecb70` runs, and its `0x5ecd8c` cancels
