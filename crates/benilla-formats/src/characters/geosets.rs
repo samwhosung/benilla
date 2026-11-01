@@ -13,7 +13,7 @@ const HELMET_GEOSET_VIS: &str = "DBFilesClient\\HelmetGeosetVisData.dbc";
 /// The 16 default region bases of `cc+0x144` (ctors `0x476810`/`0x476960`); group 7's is 702.
 /// Entries 0–3, hair and facial hair, are replaced by the customization; 4–15 are the equipment
 /// groups' bare defaults.
-const REGION_BASES: [u16; 16] = [
+const REGION_BASES: [u32; 16] = [
     1, 101, 201, 301, 401, 501, 601, 702, 801, 901, 1001, 1101, 1201, 1301, 1401, 1501,
 ];
 
@@ -77,20 +77,20 @@ impl CharacterGeosets {
         set.push(0);
         // Hair: `0x478540` returns `max(1, geosetId)`, so a bald style shows geoset 1, the scalp.
         if let Some(&g) = self.hair.get(&(race, sex, hair_style)) {
-            set[0] = g.max(1) as u16;
+            set[0] = g.max(1);
         }
         // Facial hair: `0x478660` adds 100/300/200 to the row's fields; no row keeps the bases.
         if let Some(&[a, b, c]) = self.facial.get(&(race, sex, facial_hair)) {
-            set[1] = (a + 100) as u16;
-            set[3] = (b + 300) as u16;
-            set[2] = (c + 200) as u16;
+            set[1] = a.wrapping_add(100);
+            set[3] = b.wrapping_add(300);
+            set[2] = c.wrapping_add(200);
         }
         // A helm's vis row (`0x4799a0`) forces slots back to their bases, the ears to 701, after
         // the customization; its slots {0,1,2,3,7} are disjoint from every equipment branch.
         if let Some(rows) = equip.helm_vis {
             let row = rows[usize::from(sex == 1)];
             if let Some(masks) = self.helmet_vis.get(&row) {
-                const FORCED: [(usize, u16); 5] = [(0, 1), (1, 101), (2, 201), (3, 301), (7, 701)];
+                const FORCED: [(usize, u32); 5] = [(0, 1), (1, 101), (2, 201), (3, 301), (7, 701)];
                 let bit = 1u32 << (race & 0x1f);
                 for (mask, (slot, forced)) in masks.iter().zip(FORCED) {
                     if mask & bit != 0 {
@@ -106,20 +106,20 @@ impl CharacterGeosets {
                 .map(|groups| groups[sub])
                 .filter(|v| *v != 0)
         };
-        let disable = |set: &mut Vec<u16>, lo: u16, hi: u16| set.retain(|id| *id < lo || *id > hi);
+        let disable = |set: &mut Vec<u32>, lo: u32, hi: u32| set.retain(|id| *id < lo || *id > hi);
         // The robe bit (chest or pants geosetGroup[2]) gates B4, B5 and B6; B7 reads the chest's.
         let robe = g(1, 2).or_else(|| g(3, 2));
         // B1/B2 (`0x477564`): gloves replace the glove group, else the chest's sleeves show.
         if let Some(v) = g(6, 0) {
             disable(&mut set, 401, 499);
-            set.push(401 + v as u16);
+            set.push(v.wrapping_add(401));
         } else if let Some(v) = g(1, 0) {
-            set.push(801 + v as u16);
+            set.push(v.wrapping_add(801));
         }
         // B3 (`0x4775bd`): the shirt's cuff, unless something else dresses the forearm.
         if !equip.forearm_dressed {
             if let Some(v) = g(0, 0) {
-                set.push(801 + v as u16);
+                set.push(v.wrapping_add(801));
             }
         }
         // B4 (`0x4775fb`): a robe hides the leg groups and shows its skirt, else boots replace the
@@ -130,22 +130,22 @@ impl CharacterGeosets {
             disable(&mut set, 902, 999);
             disable(&mut set, 1100, 1199);
             disable(&mut set, 1300, 1399);
-            set.push(1301 + v as u16);
+            set.push(v.wrapping_add(1301));
         } else if let Some(v) = g(4, 0) {
             // `0x477639` disables the whole boot group first: the bare foot, 501, is a real submesh
             // on 11 of the 18 character models.
             disable(&mut set, 501, 599);
             set.push(901);
-            set.push(501 + v as u16);
+            set.push(v.wrapping_add(501));
         } else if let Some(v) = g(3, 1) {
-            set.push(901 + v as u16);
+            set.push(v.wrapping_add(901));
         } else {
             set.push(901);
         }
         // B5 (`0x477706`): the tabard flap, hidden by a robe.
         if robe.is_none() {
             if let Some(v) = g(7, 0) {
-                set.push(1201 + v as u16);
+                set.push(v.wrapping_add(1201));
             }
         }
         // B6 (`0x477752`): the designer preview wears 1201, the group's empty base, and without a
@@ -160,21 +160,27 @@ impl CharacterGeosets {
         // under a chest robe (`0x4777a4`, not a legs robe) or a tabard (`0x4777b8`).
         if g(1, 2).is_none() && g(7, 0).is_none() {
             if let Some(v) = g(0, 1) {
-                set.push(1001 + v as u16);
+                set.push(v.wrapping_add(1001));
             }
             if let Some(v) = g(3, 0) {
-                set.push(1102 + v as u16);
+                set.push(v.wrapping_add(1102));
             }
         }
         // B8 (`0x47780a`): a cloak replaces the cloak group.
         if let Some(v) = equip.cloak.filter(|v| *v != 0) {
             disable(&mut set, 1500, 1599);
-            set.push(1501 + v as u16);
+            set.push(v.wrapping_add(1501));
         }
         // The client sets a flag per submesh (`0x7110d0`), so a repeated enable is a no-op there.
         set.sort_unstable();
         set.dedup();
-        VisibleGeosets { selected: set }
+        // The sums and the compare are 32-bit (`0x477592`, `0x711109`): an id past `u16` names no
+        // submesh.
+        let selected = set
+            .into_iter()
+            .filter_map(|id| u16::try_from(id).ok())
+            .collect();
+        VisibleGeosets { selected }
     }
 
     /// Load the customization DBCs from the patch chain. A repeated `(race, sex, variation)` key
@@ -331,6 +337,39 @@ mod tests {
             visible.contains(&503),
             "the equipped boot variant is visible"
         );
+    }
+
+    /// An id too large for a `u16` turns nothing on, in every build, where the group cast to `u16`
+    /// aliased another geoset or overflowed the sum; a sum past `u32` wraps as the reference's
+    /// `add` does (`0x47869a`, `0x477592`).
+    #[test]
+    fn a_group_past_u16_names_no_geoset() {
+        let cg = CharacterGeosets {
+            hair: [((1, 0, 0), 65_537)].into_iter().collect(),
+            facial: [((1, 0, 0), [65_537; 3]), ((1, 0, 1), [u32::MAX; 3])]
+                .into_iter()
+                .collect(),
+            helmet_vis: HashMap::new(),
+        };
+        let gloves = |v: u32| {
+            let mut e = EquipGeosets::default();
+            e.bodyslots[6] = Some([v, 0, 0]);
+            e
+        };
+        let selected =
+            |facial_hair, e: &EquipGeosets| cg.visible_geosets(1, 0, 0, facial_hair, e).selected;
+        assert!(selected(0, &gloves(1)).contains(&402));
+        assert!(selected(0, &gloves(65_134)).contains(&u16::MAX), "it fits");
+        for (group, alias) in [(65_535, 400), (65_537, 402), (131_072, 401)] {
+            assert!(!selected(0, &gloves(group)).contains(&alias), "{group}");
+        }
+        // Hair and the three facial-hair slots past `u16`: neither they nor their bases show.
+        let bare = selected(0, &EquipGeosets::default());
+        for id in [1, 101, 201, 301] {
+            assert!(!bare.contains(&id), "{id}");
+        }
+        assert!(selected(1, &EquipGeosets::default()).contains(&99));
+        assert!(selected(0, &gloves(u32::MAX - 398)).contains(&2));
     }
 
     /// Both Night Elf sexes carry two eye-glow cards (on geoset 0 in the stock data; an asset pack
