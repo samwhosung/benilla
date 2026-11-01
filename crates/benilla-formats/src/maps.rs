@@ -110,6 +110,11 @@ impl MapCatalog {
         self.dirs.get(&map_id).map(String::as_str)
     }
 
+    /// Whether `Map.dbc` has a row for `map_id`, whatever its strings hold.
+    pub fn has_row(&self, map_id: u32) -> bool {
+        self.area_table_ids.contains_key(&map_id)
+    }
+
     /// The display name (`MapName_Lang`) for `map_id`, "Eastern Kingdoms".
     pub fn name(&self, map_id: u32) -> Option<&str> {
         self.names.get(&map_id).map(String::as_str)

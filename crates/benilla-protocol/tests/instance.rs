@@ -55,6 +55,16 @@ fn raid_instance_message_wire() {
     );
 }
 
+/// The seconds are a signed word (`0x49e1e9`, divided by `imul` at `0x49e259`): 2^31 reads negative.
+#[test]
+fn a_reset_word_past_the_sign_bit_reads_negative() {
+    let body = hx(concat!("01000000", "99010000", "00000080"));
+    match messages::parse_server(opcode::SMSG_RAID_INSTANCE_MESSAGE, &body).unwrap() {
+        ServerPacket::RaidInstanceMessage { message } => assert_eq!(message.reset, i32::MIN),
+        other => panic!("expected RaidInstanceMessage, got {}", other.name()),
+    }
+}
+
 /// The four warning types; the reference's jump table (`0x49e246`) prints nothing for 0 or 5 and
 /// up, including 5, which later clients call `RAID_INSTANCE_EXPIRED`.
 #[test]

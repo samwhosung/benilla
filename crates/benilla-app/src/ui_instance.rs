@@ -54,8 +54,9 @@ pub(crate) struct LockoutLine {
     ordinal: Option<u32>,
     /// The `Map.dbc` id whose name fills `%s`; `None` for `INSTANCE_SAVED`, which has no `%s`.
     map: Option<u32>,
-    /// The `%d` fills in template order (`RAID_INSTANCE_WELCOME` takes three).
-    numbers: Vec<u32>,
+    /// The `%d` fills in template order (`RAID_INSTANCE_WELCOME` takes three), signed as the
+    /// reference's divisions leave them (`0x49e259`).
+    numbers: Vec<i32>,
     /// The `"(Debug-Only Lock Notice) %s"` wrapper, `SMSG_INSTANCE_SAVE_CREATED`'s flag-1 arm
     /// (`0x4e7eb3`).
     debug_notice: bool,
@@ -183,30 +184,31 @@ pub(crate) fn lockout_text(
 /// GlobalString. Only flag 1 shows it; vmangos sends 0 (`Map.cpp:2289`, `Map.cpp:2389`).
 const DEBUG_LOCK_NOTICE_PREFIX: &str = "(Debug-Only Lock Notice) ";
 
-/// A template's `%s`: the `Map.dbc` name, or the id in decimal when there is no row, as the
-/// reference prints it (`0x49e228`, `"%d"` at `0x835154`, when `[0xc0daa8][id]` is null).
+/// A template's `%s`: a `Map.dbc` row's name, copied even when empty (`0x49e221`, `0x49e4bd`,
+/// `0x49e596`), or with no row the id through `"%d"` (`0x49e228`, `0x835154`), signed.
 fn map_name(map: u32, catalog: Option<&benilla_assets::MapCatalogRes>) -> String {
-    catalog
-        .and_then(|c| c.0.name(map))
-        .filter(|n| !n.is_empty())
-        .map_or_else(|| map.to_string(), str::to_string)
+    match catalog.filter(|c| c.0.has_row(map)) {
+        Some(c) => c.0.name(map).unwrap_or_default().to_string(),
+        None => (map as i32).to_string(),
+    }
 }
 
 /// The line for one `SMSG_RAID_INSTANCE_MESSAGE`, `None` for a type the jump table drops (0 and 5
-/// up, `0x49e246`). The reference divides with truncation (hours `0x49e259`, minutes `0x49e2c8`
-/// and `0x49e337`, the welcome's days, hours and minutes `0x49e3a6`), and the plural follows the
-/// truncated number.
+/// up, `0x49e246`). The reference divides signed, truncating toward zero (hours `0x49e259`, minutes
+/// `0x49e2c8` and `0x49e337`, the welcome's days, hours and minutes `0x49e3a6`), and the plural
+/// follows the truncated number; a negative one fails `GetText`'s `jge` (`0x703c0d`) and reads the
+/// bare token, as the welcome's `or edx,-1` does.
 fn raid_instance_line(message: &RaidInstanceMessage) -> Option<LockoutLine> {
     let warning = RaidInstanceWarning::from_wire(message.message_type)?;
     let t = message.reset;
     let (ordinal, numbers) = match warning {
         RaidInstanceWarning::Hours => {
             let hours = t / 3_600;
-            (Some(hours), vec![hours])
+            (u32::try_from(hours).ok(), vec![hours])
         }
         RaidInstanceWarning::Minutes | RaidInstanceWarning::MinutesSoon => {
             let mins = t / 60;
-            (Some(mins), vec![mins])
+            (u32::try_from(mins).ok(), vec![mins])
         }
         RaidInstanceWarning::Welcome => {
             let days = t / 86_400;
@@ -523,7 +525,7 @@ mod tests {
         lockout_text(line, name, benilla_ui::strings::Strings::Host(&globals))
     }
 
-    fn warning(message_type: u32, map: u32, reset: u32) -> Option<LockoutLine> {
+    fn warning(message_type: u32, map: u32, reset: i32) -> Option<LockoutLine> {
         raid_instance_line(&RaidInstanceMessage {
             message_type,
             map,
@@ -582,6 +584,23 @@ mod tests {
                  you will be returned to your bind location!"
             )
         );
+    }
+
+    /// `0x49e1e9` keeps the seconds as a signed word and each division truncates toward zero
+    /// (`0x49e259`, `0x49e2c8`, `0x49e3a6`): a word of 2^31 or more prints negative numbers, whose
+    /// ordinal fails `GetText`'s `jge` (`0x703c0d`) and reads the bare token.
+    #[test]
+    fn a_reset_past_the_sign_bit_divides_signed() {
+        let hours = warning(1, 409, i32::MIN).expect("type 1");
+        assert_eq!(hours.numbers, vec![-596_523]);
+        assert_eq!(hours.ordinal, None);
+        assert_eq!(
+            line_text(&hours, Some("Molten Core")).as_deref(),
+            Some("WARNING! Molten Core is scheduled to reset in -596523 hour.")
+        );
+        assert_eq!(warning(2, 409, -119).expect("type 2").numbers, vec![-1]);
+        let welcome = warning(4, 409, i32::MIN).expect("type 4");
+        assert_eq!(welcome.numbers, vec![-24_855, -3, -14]);
     }
 
     /// The jump table drops type 5 too, which later clients call `RAID_INSTANCE_EXPIRED`.
@@ -736,6 +755,25 @@ mod tests {
         assert_eq!(
             line_text(&line, Some(&map_name(9999, None))).as_deref(),
             Some("Welcome to 9999. This raid instance is scheduled to reset in 0d 1h 0m.")
+        );
+    }
+
+    /// A `Map.dbc` row's name is copied even when empty (`0x49e221`), and only an id with no row
+    /// prints, through `"%d"` (`0x49e228`), so one past the sign bit reads negative.
+    #[test]
+    fn a_map_row_names_its_map_even_when_the_name_is_empty() {
+        let maps = benilla_assets::MapCatalogRes(
+            benilla_formats::MapCatalog::from_rows([(409, "MoltenCore", 0), (30, "PVPZone01", 0)])
+                .with_names([(409, "Molten Core")]),
+        );
+        assert_eq!(map_name(409, Some(&maps)), "Molten Core");
+        assert_eq!(map_name(30, Some(&maps)), "", "a row with an empty name");
+        assert_eq!(map_name(9999, Some(&maps)), "9999", "no row");
+        assert_eq!(map_name(u32::MAX, Some(&maps)), "-1", "signed");
+        let line = warning(4, 30, 3_600).expect("type 4");
+        assert_eq!(
+            line_text(&line, Some(&map_name(30, Some(&maps)))).as_deref(),
+            Some("Welcome to . This raid instance is scheduled to reset in 0d 1h 0m.")
         );
     }
 

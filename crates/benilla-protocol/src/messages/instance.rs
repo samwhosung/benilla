@@ -6,7 +6,7 @@
 
 use std::io;
 
-use crate::wire::read_u32_le;
+use crate::wire::{read_i32_le, read_u32_le};
 
 /// `SMSG_RAID_INSTANCE_MESSAGE`'s `type` (`Objects/Player.h:568-573`). Outside 1-4 the reference
 /// prints nothing (jump table `0x49e45c`), even for 5, later clients' `RAID_INSTANCE_EXPIRED`.
@@ -50,8 +50,9 @@ pub struct RaidInstanceMessage {
     /// The raw wire type; [`RaidInstanceWarning::from_wire`] resolves it.
     pub message_type: u32,
     pub map: u32,
-    /// Seconds until the reset, a duration rather than a timestamp (`SendInstanceResetWarning`).
-    pub reset: u32,
+    /// Seconds until the reset, a duration rather than a timestamp (`SendInstanceResetWarning`),
+    /// which the reference divides signed (`0x49e259`).
+    pub reset: i32,
 }
 
 /// `SMSG_INSTANCE_RESET_FAILED`'s `reason` (ladder at `0x49e5b7`; vmangos
@@ -102,7 +103,7 @@ pub(super) fn read_raid_instance_message(r: &mut &[u8]) -> io::Result<RaidInstan
     Ok(RaidInstanceMessage {
         message_type: read_u32_le(r)?,
         map: read_u32_le(r)?,
-        reset: read_u32_le(r)?,
+        reset: read_i32_le(r)?,
     })
 }
 
