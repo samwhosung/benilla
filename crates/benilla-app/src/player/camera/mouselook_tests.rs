@@ -275,6 +275,9 @@ fn freelook_stops_a_views_flights() {
         rig.view_blend.arm_pitch_for_test();
         rig.follow.arm_view(0.0, 1.0, 180.0);
         rig.smart_pivot.ease_for_test();
+        assert!(rig.view_blend.pitch_in_flight(), "the pitch armed");
+        assert!(rig.follow.target_offset().is_some(), "the yaw armed");
+        assert!(rig.smart_pivot.easing_for_test(), "the bias armed");
     };
     let stopped = |rig: &CameraControl| {
         !rig.view_blend.pitch_in_flight()
@@ -283,7 +286,6 @@ fn freelook_stops_a_views_flights() {
     };
     let mut rig = CameraControl::default();
     arm(&mut rig);
-    assert!(!stopped(&rig), "all three armed");
     assert!(rig.enter_in_place(LookButton::Right));
     assert!(stopped(&rig), "the entry");
     arm(&mut rig);
