@@ -94,6 +94,7 @@ const VERDICTS: &[(&str, Verdict)] = &[
     ("MouseScrollUnit", Plumbing),
     ("NativeKey", Plumbing),
     ("NativeKeyCode", Plumbing),
+    ("ACCESS_KIT_ADAPTERS", Plumbing),
     ("ExitCondition", Plumbing),
     ("Monitor", Plumbing),
     ("MonitorSelection", Plumbing),
