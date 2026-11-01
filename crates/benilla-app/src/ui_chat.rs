@@ -81,6 +81,7 @@ pub(crate) use input::{chat_world, run_chat};
 /// The host's chat appliers ([`crate::script_calls::ScriptCallHost`]).
 pub(crate) use input::{ChatSender, ChatStep, EmoteDoer};
 pub(crate) use recruitment::{GuildRecruitmentCascade, RecruitmentLive};
+pub(crate) use roster::ChannelRosters;
 
 /// The chat feed once, for a test over the whole client: the `CHAT_MSG_*` fan-out of what the
 /// log holds, with the call host the world lends.

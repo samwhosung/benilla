@@ -345,6 +345,11 @@ impl NameCache {
         self.players.clear();
         self.player_traits.clear();
         self.pets.clear();
+        self.free_store_callbacks();
+    }
+
+    /// The teardown's free of the lookups' callbacks, running none (`0x55f990`).
+    pub(crate) fn free_store_callbacks(&mut self) {
         self.player_waits
             .get_mut()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

@@ -490,11 +490,11 @@ fn a_sellers_name_signals_the_list_without_sorting_it() {
     assert_eq!(h.sellers("list"), "Bob,Al", "and does not sort it");
 }
 
-/// A name wait outlives the VM that made it: the list callbacks are engine code (`0x4cf290`,
-/// `0x4cf2b0`, `0x4cf2d0`) that only `0x55f870` cancels, and no auction caller does, so a `/reload`
-/// keeps them and the name's landing signals the list in the new VM.
+/// A `/reload` frees the list callbacks (`0x4cf290`, `0x4cf2b0`, `0x4cf2d0`) with every other on
+/// the name store, running none (`0x490c35` → `0x5556c0` → `0x55f990`), so the name's landing
+/// signals nothing in the new VM.
 #[test]
-fn a_name_wait_outlives_a_reload_and_signals_the_new_vm() {
+fn a_reload_frees_a_name_wait_and_its_landing_signals_nothing() {
     const AL: u64 = 0x61;
     let mut h = House::new();
     h.item(1, "Cloth", 10, 1);
@@ -503,17 +503,14 @@ fn a_name_wait_outlives_a_reload_and_signals_the_new_vm() {
     al.owner_guid = AL;
     h.land(LIST, vec![al]);
     assert_eq!(h.sellers("list"), "?");
+    crate::wdb::free_store_callbacks(h.app.world_mut());
     h.new_vm();
     h.app.update();
     h.script().run("SEEN = {}").unwrap();
     h.name(AL, "Al");
     h.app.update();
     super::net::fire_house_lane(h.app.world_mut());
-    assert_eq!(
-        h.seen(),
-        ["AUCTION_ITEM_LIST_UPDATE=Cloth"],
-        "the new VM hears the list the old one read"
-    );
+    assert_eq!(h.seen(), Vec::<String>::new(), "the new VM hears nothing");
 }
 
 /// The duration sort compares each row's deadline, the result's tick plus the wire's

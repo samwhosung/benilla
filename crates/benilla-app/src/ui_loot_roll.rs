@@ -249,6 +249,12 @@ pub(crate) struct RollLookups<'a> {
 }
 
 impl LootRolls {
+    /// The teardown's free of the lines' item and name callbacks, running none (`0x55c1b0`,
+    /// `0x55f990`), with the lines they held.
+    pub(crate) fn free_store_callbacks(&mut self) {
+        self.pending.clear();
+    }
+
     /// Queue `event` stamped now, behind everything stamped before it.
     fn push(&mut self, event: RollEvent) {
         let stamp = crate::lanes::stamp();

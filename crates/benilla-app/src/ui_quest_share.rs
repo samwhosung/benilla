@@ -41,6 +41,13 @@ fn waiting(at: u32, now: u32) -> bool {
 }
 
 impl QuestShare {
+    /// What waits on a member's or a sender's name goes as the name store's callbacks do
+    /// (`0x55f990`).
+    pub(crate) fn free_store_callbacks(&mut self) {
+        self.verdicts.clear();
+        self.pending_confirm = None;
+    }
+
     /// Drops the lines that have waited out their bound.
     fn expire(&mut self, now: u32) {
         self.verdicts.retain(|&(_, _, at)| waiting(at, now));

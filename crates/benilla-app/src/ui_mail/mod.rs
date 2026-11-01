@@ -151,6 +151,11 @@ pub(crate) enum MailWait {
 }
 
 impl MailOpen {
+    /// The teardown's free of the getters' name and body callbacks, running none (`0x5556c0`).
+    pub(crate) fn free_store_callbacks(&mut self) {
+        self.waits.clear();
+    }
+
     /// The open core's cell write (`0x4acd27`): the guid, keeping the rows whichever mailbox they
     /// came from. [`open_mailbox`] registers on the latch first.
     pub(crate) fn click(&mut self, mailbox: u64) {

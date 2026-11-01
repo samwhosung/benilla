@@ -393,11 +393,11 @@ fn a_build_with_no_player_empties_the_book_silently() {
     assert_eq!(first, None, "the rows are gone");
 }
 
-/// A `/reload` with a product's record in flight: the open's build kept the callback `0x4fc8e0`
-/// in the item cache, which outlives the VM, so the record's answer rebuilds the book with flag 1
-/// into the new interface at its packet (`0x4fc8fb`, `0x4fc900`), which then lists it.
+/// A `/reload` with a product's record in flight: its teardown frees the callback `0x4fc8e0` the
+/// open's build kept, running none (`0x490c35` → `0x5556c0` → `0x55c1b0`), so the record's answer
+/// signals no update in the new interface.
 #[test]
-fn a_products_record_answer_rebuilds_the_book_after_a_reload() {
+fn a_reload_frees_a_products_callback_and_its_answer_signals_nothing() {
     let mut app = crafter();
     app.world_mut()
         .resource_mut::<crate::items::Items>()
@@ -407,7 +407,8 @@ fn a_products_record_answer_rebuilds_the_book_after_a_reload() {
         ["TRADE_SKILL_SHOW"],
         "the pending build signals no update"
     );
-    // The reload: a new VM, seeded and entered as the load and the cascade do.
+    // The reload: the free, then a new VM, seeded and entered as the load and the cascade do.
+    crate::wdb::free_store_callbacks(app.world_mut());
     let mut script = UiScript::new().unwrap();
     crate::ui_tradeskill::seed_repeat(app.world(), &mut script);
     script.reset_crafts_on_world_enter();
@@ -428,14 +429,8 @@ fn a_products_record_answer_rebuilds_the_book_after_a_reload() {
     };
     assert_eq!(
         frame(&mut app, vec![fall(5), answer, fall(6)]),
-        ["UNIT_COMBAT", "TRADE_SKILL_UPDATE", "UNIT_COMBAT"]
+        ["UNIT_COMBAT", "UNIT_COMBAT"]
     );
-    let rows = app
-        .world()
-        .non_send_resource::<UiScript>()
-        .eval::<i64>("return GetNumTradeSkills()")
-        .unwrap();
-    assert!(rows > 0, "{rows}");
 }
 
 /// A product's record the cache refused is looked up again by `GetTradeSkillItemStats`, which

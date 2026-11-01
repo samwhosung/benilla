@@ -403,6 +403,12 @@ const LOOT_METHOD_KEYS: [&str; 5] = [
 const LOOT_METHOD_MASTER: u8 = 2;
 
 impl GroupState {
+    /// The teardown's free of the handlers' name callbacks, running none (`0x55f990`); the raid's
+    /// pending count stands until the next list writes it.
+    pub(crate) fn free_store_callbacks(&mut self) {
+        self.name_waits.clear();
+    }
+
     /// Apply one `SMSG_GROUP_LIST` and return what it shows, in the reference's order: the party
     /// slots' joins, the new-group line, the party slots' leaves, then the raid roster's lines.
     /// Kick, leave (`0x5e690b`) and disband lines come from their opcodes. Every name is taken as

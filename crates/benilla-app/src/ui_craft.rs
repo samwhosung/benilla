@@ -41,8 +41,9 @@ pub(crate) struct CraftOpen {
 
 /// A craft getter's lookup of a record in flight, inside its call
 /// ([`benilla_ui::script::ItemCallback::Craft`]): the item cache asks a miss, a refused entry
-/// again, and keeps the callback `0x4f7710` on it, one per call, which outlives a VM and rebuilds
-/// the list when its record lands (`0x4f75dd`, `0x4f79f2`, `0x4f771a`).
+/// again, and keeps the callback `0x4f7710` on it, one per call, which rebuilds the list when its
+/// record lands (`0x4f75dd`, `0x4f79f2`, `0x4f771a`) unless the interface's teardown frees it first
+/// ([`crate::wdb::free_store_callbacks`]).
 pub(crate) fn ask_item_record(items: &Items, commands: &NetCommands, entry: u32, owner: u64) {
     if items.template(entry, owner, Ask::Event(commands)).is_none() {
         items.wait(entry, crate::items::RecordCallback::Craft);

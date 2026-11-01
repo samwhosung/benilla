@@ -48,6 +48,7 @@ use benilla_protocol::messages::opcode;
 use benilla_protocol::{SessionEvent, SessionEventKind};
 use bevy::prelude::*;
 
+use crate::death::DeathNet;
 use crate::glue_session::roster::Roster;
 use crate::go_templates::GameObjectTemplates;
 use crate::item_names::ItemNames;
@@ -55,12 +56,27 @@ use crate::items::Items;
 use crate::names::NameCache;
 use crate::net::NetHandlerApp;
 use crate::query_cache::QueryCache;
+use crate::ui_auction::HouseLane;
+use crate::ui_battlefield::Battlefield;
+use crate::ui_battlefield_positions::BattlefieldPositions;
+use crate::ui_battlefield_score::BattlefieldScoreboard;
+use crate::ui_chat::ChannelRosters;
+use crate::ui_dialog_verbs::MeetingStone;
+use crate::ui_dressup::DressUpRoom;
+use crate::ui_duel::DuelState;
 use crate::ui_gossip::GossipState;
 use crate::ui_guild::GuildState;
 use crate::ui_item_text::PageTexts;
+use crate::ui_loot::LootState;
+use crate::ui_loot_roll::LootRolls;
 use crate::ui_mail::MailOpen;
-use crate::ui_petition::PetitionRecords;
+use crate::ui_party::GroupState;
+use crate::ui_petition::{PetitionRecords, PetitionState};
+use crate::ui_quest::QuestLines;
 use crate::ui_quest_log::QuestLog;
+use crate::ui_quest_share::QuestShare;
+use crate::ui_stable::StableCreatureWaits;
+use crate::ui_trade::TradeSession;
 
 /// Seconds between writes: answers arrive in bursts on zone-in, and a crash costs only re-asking.
 const SAVE_DEBOUNCE: f32 = 10.0;
@@ -322,6 +338,52 @@ fn clear_session_stores(
     if let SessionEvent::Connected { .. } = ev {
         guilds.clear_world_session();
         petitions.clear_world_session();
+    }
+}
+
+/// The interface's teardown, on a `/reload` and a logout alike (`0x490bd0`): `0x490c35` →
+/// `0x5556c0` walks twelve query stores and frees every node's callbacks, running none, and leaves
+/// its record or in-flight ask (`0x555701` → `0x5615b0`). So an answer after it files its record
+/// and signals nothing. Each list here is what a store's lookups left that reaches the interface.
+///
+/// What stays, because it does more than tell the interface:
+/// - the item store's engine work ([`Items::free_store_callbacks`]);
+/// - `SocialState`'s name waits, which write the friend rows and send a refused name's removal;
+/// - the chat's held lines, which are its data, and which its age pass shows with no answer.
+///
+/// What needs no entry: `ItemTextOpen`, whose sweep leg closes the read; a wait a VM keeps, which
+/// dies with it; and a unit's name notices, which an answer's handler derives from the units it
+/// holds and which no list holds.
+pub(crate) fn free_store_callbacks(world: &mut World) {
+    free::<Items>(world, Items::free_store_callbacks);
+    free::<NameCache>(world, NameCache::free_store_callbacks);
+    free::<GameObjectTemplates>(world, GameObjectTemplates::free_store_callbacks);
+    free::<GuildState>(world, GuildState::free_store_callbacks);
+    free::<QuestLog>(world, QuestLog::free_store_callbacks);
+    free::<QuestLines>(world, QuestLines::free_store_callbacks);
+    free::<QuestShare>(world, QuestShare::free_store_callbacks);
+    free::<MailOpen>(world, MailOpen::free_store_callbacks);
+    free::<PetitionState>(world, PetitionState::free_store_callbacks);
+    free::<StableCreatureWaits>(world, StableCreatureWaits::free_store_callbacks);
+    free::<Battlefield>(world, Battlefield::free_store_callbacks);
+    free::<BattlefieldPositions>(world, BattlefieldPositions::free_store_callbacks);
+    free::<BattlefieldScoreboard>(world, BattlefieldScoreboard::free_store_callbacks);
+    free::<LootState>(world, LootState::free_store_callbacks);
+    free::<LootRolls>(world, LootRolls::free_store_callbacks);
+    free::<HouseLane>(world, HouseLane::free_store_callbacks);
+    free::<ChannelRosters>(world, ChannelRosters::free_store_callbacks);
+    free::<MeetingStone>(world, MeetingStone::free_store_callbacks);
+    free::<DressUpRoom>(world, DressUpRoom::free_store_callbacks);
+    free::<GroupState>(world, GroupState::free_store_callbacks);
+    free::<TradeSession>(world, TradeSession::free_store_callbacks);
+    free::<DuelState>(world, DuelState::free_store_callbacks);
+    free::<DeathNet>(world, DeathNet::free_store_callbacks);
+}
+
+/// One resource's lists, where it stands; no reader sees a change, as no record moved.
+fn free<R: Resource>(world: &mut World, free: fn(&mut R)) {
+    if let Some(mut lists) = world.get_resource_mut::<R>() {
+        free(lists.bypass_change_detection());
     }
 }
 

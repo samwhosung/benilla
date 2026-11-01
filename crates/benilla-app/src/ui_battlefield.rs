@@ -50,6 +50,11 @@ pub(crate) struct Battlefield {
 }
 
 impl Battlefield {
+    /// The teardown's free of the notices' name callbacks, running none (`0x55f990`).
+    pub(crate) fn free_store_callbacks(&mut self) {
+        self.players.clear();
+    }
+
     pub(crate) fn apply_list(&mut self, list: BattlefieldList) {
         self.list = Some(list);
     }

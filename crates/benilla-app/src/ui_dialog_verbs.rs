@@ -359,6 +359,11 @@ pub(crate) struct MeetingStone {
 }
 
 impl MeetingStone {
+    /// The teardown's free of the member lines' callbacks `0x4ca510`, running none (`0x55f990`).
+    pub(crate) fn free_store_callbacks(&mut self) {
+        self.pending_members.clear();
+    }
+
     /// `SMSG 0x295` (`0x4ca230`): the old area remembered, the new one stored (`0x4ca24a`), the text
     /// rebuilt (`0x4ca385`); the old area, for the line.
     pub(crate) fn apply(&mut self, area: u32) -> u32 {

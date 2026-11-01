@@ -298,6 +298,13 @@ pub(crate) struct Window<'a> {
 }
 
 impl PetitionState {
+    /// The teardown's free of the window's name and record callbacks, running none (`0x55f990`,
+    /// `0x5685c0`); the pending count stands.
+    pub(crate) fn free_store_callbacks(&mut self) {
+        self.name_waits.clear();
+        self.record_waits.clear();
+    }
+
     /// `0x4f3ef0`: with names pending, each signer's callback `0x4f3f50` cancelled (`0x4f3f29`),
     /// then no signer and none pending.
     fn free_signers(&mut self) {

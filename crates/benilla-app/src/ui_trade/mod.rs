@@ -95,6 +95,11 @@ pub(crate) struct TradeSession {
 }
 
 impl TradeSession {
+    /// The teardown's free of the initiates' callbacks `0x5d4080`, running none (`0x55f990`).
+    pub(crate) fn free_store_callbacks(&mut self) {
+        self.initiate_waits.clear();
+    }
+
     /// Our `CMSG_INITIATE_TRADE` is out (`0x5d3fb0`): a fresh session with the target as partner,
     /// the pending flag set and the starter's mode beside it (`0x5d4021`, `0x5d402b`). The offers
     /// stay for the next open to clear.

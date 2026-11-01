@@ -926,3 +926,102 @@ fn a_quest_log_updates_listener_runs_ahead_of_the_entrys_next_callback() {
     );
     assert_eq!(rolls_and_swaps(&sent), ["roll", "Swap"]);
 }
+
+/// `/reload` through its real path frees every store's callbacks, running none (`0x495664` →
+/// `0x490bd0`, `0x490c35` → `0x5556c0`): the same waits that signal at their answers before it
+/// signal nothing after it, in the item, the name and the guild stores, and the records file.
+#[test]
+fn pending_records_answered_after_a_reload_raise_nothing() {
+    use crate::ui_battlefield_positions::BattlefieldPositions;
+
+    const SPY: &str = r#"
+        Heard = {}
+        local f = CreateFrame("Frame")
+        for _, e in ipairs({"GUILD_ROSTER_UPDATE", "TRADE_UPDATE", "WORLD_MAP_NAME_UPDATE"}) do
+            f:RegisterEvent(e)
+        end
+        f:SetScript("OnEvent", function() table.insert(Heard, event) end)
+    "#;
+    fn wait(world: &mut World, entry: u32, guid: u64, guild: u32) {
+        world
+            .resource::<crate::items::Items>()
+            .wait_for_trade_record(entry);
+        world.resource_scope(|world, mut positions: Mut<BattlefieldPositions>| {
+            positions.wait_for_name(
+                world.resource::<crate::names::NameCache>(),
+                world.resource::<crate::net::NetCommands>(),
+                guid,
+            );
+        });
+        world
+            .resource::<crate::ui_guild::GuildState>()
+            .wait_for_roster(guild, world.resource::<crate::net::NetCommands>());
+    }
+    fn answer(world: &mut World, entry: u32, guid: u64, guild: u32) -> Vec<String> {
+        crate::net::handlers::dispatch(
+            world,
+            vec![
+                SessionEvent::ItemTemplate {
+                    entry,
+                    info: Some(Box::new(crate::items::test_template("Sword"))),
+                },
+                SessionEvent::PlayerName {
+                    guid,
+                    name: "Mate".into(),
+                    race: 1,
+                    gender: 0,
+                    class: 1,
+                },
+                SessionEvent::GuildQueryResponse(benilla_protocol::messages::GuildQueryResponse {
+                    guild_id: guild,
+                    name: "Legacy".to_string(),
+                    ..Default::default()
+                }),
+            ],
+        );
+        crate::lanes::fire_in_order(world);
+        let script = world.non_send_resource::<UiScript>();
+        let mut heard = script.eval::<Vec<String>>("return Heard").unwrap();
+        script.run("Heard = {}").unwrap();
+        heard.sort();
+        heard
+    }
+
+    let mut app = client();
+    let world = app.world_mut();
+    world.non_send_resource::<UiScript>().run(SPY).unwrap();
+    wait(world, 4_301, 0x22, 8);
+    assert_eq!(
+        answer(world, 4_301, 0x22, 8),
+        [
+            "GUILD_ROSTER_UPDATE",
+            "TRADE_UPDATE",
+            "WORLD_MAP_NAME_UPDATE",
+        ],
+        "the waits that stand signal"
+    );
+
+    wait(world, 4_302, 0x23, 9);
+    world.resource_mut::<crate::ui_script::ReloadUiPending>().0 = true;
+    crate::ui_script::run_pending_reload(world);
+    // The reload's own cascade, spent ahead of the new VM's listener.
+    crate::lanes::fire_in_order(world);
+    world.non_send_resource::<UiScript>().run(SPY).unwrap();
+    assert_eq!(
+        answer(world, 4_302, 0x23, 9),
+        Vec::<String>::new(),
+        "none runs"
+    );
+    assert!(world
+        .resource::<crate::names::NameCache>()
+        .resolve_player(0x23, crate::query_cache::Ask::Read)
+        .is_some());
+    assert!(world
+        .resource::<crate::items::Items>()
+        .template(4_302, 0, crate::query_cache::Ask::Read)
+        .is_some());
+    assert!(world
+        .resource::<crate::ui_guild::GuildState>()
+        .own_emblem_record(9)
+        .is_some());
+}

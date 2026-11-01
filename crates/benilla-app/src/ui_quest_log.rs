@@ -63,6 +63,14 @@ pub(crate) struct QuestLog {
 }
 
 impl QuestLog {
+    /// The teardown's free of the leaderboard's creature callbacks `0x4e07d0`, the failures'
+    /// `0x5dc920` and the item adds' `0x5dd180`, running none (`0x5556c0`), with what those held.
+    pub(crate) fn free_store_callbacks(&mut self) {
+        self.creature_waits.clear();
+        self.giver_failures.clear();
+        self.deferred_item_adds.clear();
+    }
+
     /// The template, read as `ask` says: an ask sends `CMSG_QUEST_QUERY`, once while in flight.
     /// vmangos answers nothing for an id it does not know (`QuestHandler.cpp:229-231`); an answer
     /// with an empty title is a refusal ([`Self::insert_template`]).

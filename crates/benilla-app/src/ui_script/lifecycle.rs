@@ -1102,6 +1102,8 @@ fn close_ui_session(world: &mut World, root: ShutdownRoot) {
     if silenced {
         unsilence_ui_shutdown(world);
     }
+    // Every store's callbacks freed, running none, behind the shutdown's event (`0x490c35`).
+    crate::wdb::free_store_callbacks(world);
     // After the shutdown events (a `PLAYER_LOGOUT` handler may `SetCVar`, which in the reference
     // lands in an engine-side store that survives) and before the VM is replaced.
     crate::cvars::fold_dying_vm_cvars(world);

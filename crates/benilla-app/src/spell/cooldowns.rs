@@ -529,8 +529,8 @@ impl Cooldowns {
 
     /// A cooldown query's lookup of `item_entry` (`0x6e2ed0`, `0x6e2fc0`), its miss leaving the
     /// callback `0x6e2f70` on the item cache with the dedupe flag set (`0x6e2ef4`-`0x6e2f0d`), so it
-    /// outlives the asking slot and a `/reload`: `ask` sends the query, as a getter's lookup inside
-    /// its call does ([`benilla_ui::script::RecordAsk::CooldownItem`]), else only a first one.
+    /// outlives the asking slot: `ask` sends the query, as a getter's lookup inside its call does
+    /// ([`benilla_ui::script::RecordAsk::CooldownItem`]), else only a first one.
     pub(crate) fn query_record(
         items: &crate::items::Items,
         commands: &crate::net::NetCommands,

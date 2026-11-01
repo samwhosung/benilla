@@ -101,6 +101,12 @@ pub(crate) struct BoardView<'a> {
 }
 
 impl BattlefieldScoreboard {
+    /// The teardown's free of the callbacks `0x4a9ef0`, running none (`0x55f990`). The reference's
+    /// pending count stands until the next packet zeroes it (`0x4aabb5`); this one is the list.
+    pub(crate) fn free_store_callbacks(&mut self) {
+        self.name_waits.clear();
+    }
+
     /// `MSG_PVP_LOG_DATA` (`0x4aab30`): the flags and the blocks stored, each row's name asked
     /// with a callback (`0x4aac79`), a miss pending (`0x4aac82`); then the rebuild unless a name
     /// is pending (`0x4aaca1`). Whether it rebuilt, when the caller signals.

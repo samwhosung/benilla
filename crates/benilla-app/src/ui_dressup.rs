@@ -126,6 +126,12 @@ pub(crate) struct DressUpRoom {
 }
 
 impl DressUpRoom {
+    /// The teardown's free of the try-ons' callbacks `0x504ba0`, running none (`0x55c1b0`), with
+    /// what they held.
+    pub(crate) fn free_store_callbacks(&mut self) {
+        self.pending.clear();
+    }
+
     /// One verb, as its call does it. Returns 1 for a try-on that raised `ERR_NOT_EQUIPPABLE`.
     fn apply(&mut self, intent: DressUpIntent, items: &Items, commands: &NetCommands) -> u32 {
         match intent {

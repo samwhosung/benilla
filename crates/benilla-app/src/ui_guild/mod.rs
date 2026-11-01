@@ -231,9 +231,7 @@ pub(crate) fn fold_dying_vm_guild(world: &mut World) {
 }
 
 /// Seat a new in-game VM's roster state before its load runs. A `/reload` runs only the teardown
-/// and `UI_Init` (`0x495664`, `0x495669`), so its VM keeps the last one's cells, and that teardown
-/// frees the guild store's callbacks, running none, and leaves its records and in-flight asks
-/// (`0x490c35` → `0x5556c0` → `0x555701` → `0x5615b0`). A world entry runs
+/// and `UI_Init` (`0x495664`, `0x495669`), so its VM keeps the last one's cells. A world entry runs
 /// `InitGuildRoster` from `InitializeGame` (`0x48f5ea`), which zeroes the show-offline flag, the
 /// selection and the request deadline and unstages the rank (`0x4d0a25`-`0x4d0a41`), the member, online and rank counts
 /// (`0x4d0a13`-`0x4d0a1f`), and seeds the sort chain afresh (`0x4d0a50`). The message of the day
@@ -244,9 +242,6 @@ pub(crate) fn seed_vm_guild(world: &mut World, script: &mut UiScript, reload: bo
         .unwrap_or_default();
     if reload {
         script.seed_guild_cells(carried.0);
-        if let Some(guild) = world.get_resource::<GuildState>() {
-            guild.waiters().clear();
-        }
         return;
     }
     if let Some(mut local) = world.get_resource_mut::<GuildLocal>() {
@@ -286,6 +281,12 @@ impl GuildState {
             now,
             ..Self::default()
         };
+    }
+
+    /// The teardown's free of the store's callbacks, running none, its records and in-flight asks
+    /// left (`0x5615b0`).
+    pub(crate) fn free_store_callbacks(&mut self) {
+        self.waiters().clear();
     }
 
     /// The deadline `GuildRoster()` waits for (`0xb73130`), in real-time seconds.

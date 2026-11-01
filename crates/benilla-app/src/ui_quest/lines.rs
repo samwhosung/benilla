@@ -38,6 +38,12 @@ pub(crate) enum QuestLine {
 pub(crate) struct QuestLines(Vec<QuestLine>);
 
 impl QuestLines {
+    /// The teardown's free of the lines' record callbacks, running none (`0x5556c0`), with the
+    /// lines they held.
+    pub(crate) fn free_store_callbacks(&mut self) {
+        self.0.clear();
+    }
+
     #[cfg(test)]
     pub(crate) fn queued(&self) -> &[QuestLine] {
         &self.0

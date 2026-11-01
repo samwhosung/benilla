@@ -595,6 +595,18 @@ pub(crate) enum RecordCallback {
     AuctionList(usize),
 }
 
+impl RecordCallback {
+    /// Whether it does the engine's work rather than only telling the interface: an item's set-up
+    /// replays its enchant times onto its countdowns and unlocks it, a held item cooldown fills
+    /// the cooldown table, and the equips send the player's parked move and free its row.
+    fn is_engine_work(self) -> bool {
+        matches!(
+            self,
+            Self::SetUp(_) | Self::ItemCooldown | Self::Swap | Self::AutoEquip
+        )
+    }
+}
+
 impl Items {
     /// Queue an `SMSG_ITEM_ENCHANT_TIME_UPDATE` for an item not held. The caller has checked the
     /// active player resolves: the reference drops the update when none does.
@@ -752,6 +764,15 @@ impl Items {
     /// (`0x55c0c0`).
     pub(crate) fn cancel_waits(&self, kind: RecordCallback) {
         self.callbacks.lock_recover().retain(|&(_, cb)| cb != kind);
+    }
+
+    /// The teardown's free of this store's callbacks, running none (`0x55c1b0`), but for the
+    /// engine's work ([`RecordCallback::is_engine_work`]), which the world still needs done.
+    pub(crate) fn free_store_callbacks(&mut self) {
+        self.callbacks
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|&(_, cb)| cb.is_engine_work());
     }
 
     /// Whether a `callback` waits on `entry`'s record.
@@ -1281,6 +1302,34 @@ mod tests {
         let gift_box = plain(ITEM_FLAG_WRAPPER | ITEM_FLAG_LOOTABLE, 7);
         assert!(gift_box.unwraps_gift(ITEM_DYNFLAG_WRAPPED));
         assert!(gift_box.shows_open_line(ITEM_DYNFLAG_WRAPPED));
+    }
+
+    /// The teardown frees what only tells the interface (`0x55c1b0`) and keeps the engine's work.
+    #[test]
+    fn the_teardown_frees_the_interfaces_callbacks_and_keeps_the_engines() {
+        let mut items = Items::default();
+        for callback in [
+            RecordCallback::SetUp(0x31),
+            RecordCallback::ItemCooldown,
+            RecordCallback::Swap,
+            RecordCallback::AutoEquip,
+            RecordCallback::Trade,
+            RecordCallback::Ammo,
+            RecordCallback::Entry(0x31),
+            RecordCallback::TradeSkillBuild,
+        ] {
+            items.wait(7, callback);
+        }
+        items.free_store_callbacks();
+        assert_eq!(
+            items.take_callbacks(7),
+            [
+                RecordCallback::SetUp(0x31),
+                RecordCallback::ItemCooldown,
+                RecordCallback::Swap,
+                RecordCallback::AutoEquip,
+            ]
+        );
     }
 
     /// `0x55bdf7`: an item key with its top bit set is a refusal. The waiters read unknown

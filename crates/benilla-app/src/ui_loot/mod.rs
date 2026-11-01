@@ -378,6 +378,13 @@ pub(crate) struct LootState {
 }
 
 impl LootState {
+    /// The teardown's free of the candidates' callbacks `0x4c2fb0` and the pushes' `0x491ee0`,
+    /// running none (`0x55f990`, `0x55c1b0`), with what the pushes held for them.
+    pub(crate) fn free_store_callbacks(&mut self) {
+        self.name_waits.clear();
+        self.waiting.clear();
+    }
+
     /// The copier (`0x4c1cb0`) at a response: it ends the session in progress, then fills the
     /// window; quest items ride the same rows at `slot = items.len() + i`.
     pub(crate) fn open(&mut self, source: u64, loot_type: u8, gold: u32, items: Vec<LootItem>) {

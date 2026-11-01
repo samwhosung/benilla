@@ -180,6 +180,11 @@ pub(crate) struct HouseLane {
 }
 
 impl HouseLane {
+    /// The teardown's free of the lists' name callbacks, running none (`0x55f990`).
+    pub(crate) fn free_store_callbacks(&mut self) {
+        self.waits.clear();
+    }
+
     pub(super) fn push(&mut self, step: HouseStep) {
         let stamp = crate::lanes::stamp();
         let at = self.steps.partition_point(|(s, _)| *s < stamp);
@@ -198,9 +203,9 @@ impl HouseLane {
     }
 
     /// Keep a name's wait for `list`, once per name and list (`0x55f080`'s dedupe flag 1). The
-    /// list callbacks (`0x4cf290`, `0x4cf2b0`, `0x4cf2d0`) are engine code that only the name
-    /// cache's cancel `0x55f870` removes, and no auction caller makes it, so a wait outlives the VM
-    /// whose getter made it and signals the next one.
+    /// list callbacks (`0x4cf290`, `0x4cf2b0`, `0x4cf2d0`) are engine code no auction caller
+    /// cancels (`0x55f870`), so a wait outlives the window and ends at its answer or at the
+    /// interface's teardown ([`crate::wdb::free_store_callbacks`]).
     pub(super) fn wait_for_name(&mut self, guid: u64, list: usize) {
         if !self.waits.contains(&(guid, list)) {
             self.waits.push((guid, list));

@@ -360,6 +360,7 @@ fn a_reload_frees_the_guild_stores_callbacks_and_their_answer_signals_nothing() 
     );
 
     miss_roster(&g, 9);
+    crate::wdb::free_store_callbacks(g.app.world_mut());
     new_vm(&mut g, true);
     run(&mut g, COUNT_UPDATES);
     let guild = g.app.world().resource::<super::GuildState>();

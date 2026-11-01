@@ -91,6 +91,14 @@ pub(crate) struct DeathNet {
 }
 
 impl DeathNet {
+    /// The teardown's free of the offer's name callback (`0x5e7d02`, `0x55f990`): the offer stays,
+    /// and no answer shows it.
+    pub(crate) fn free_store_callbacks(&mut self) {
+        if let Some(offer) = self.resurrect.as_mut() {
+            offer.waits_name = false;
+        }
+    }
+
     /// Our own death's timer, by `PLAYER_FIELD_BYTES` bit 0x8 as the death finds it (`0x5e9a27`):
     /// armed at `now` plus the window when set, else off.
     pub(crate) fn arm_release(&mut self, timer_bit: bool, now: f64) {

@@ -164,6 +164,11 @@ pub(crate) struct GameObjectTemplates {
 }
 
 impl GameObjectTemplates {
+    /// The teardown's free of the leaderboard's callbacks, running none (`0x558ce0`).
+    pub(crate) fn free_store_callbacks(&mut self) {
+        self.quest_waits.lock_recover().clear();
+    }
+
     /// The key an object's template is cached under: its descriptor's `OBJECT_FIELD_ENTRY`
     /// (`[descriptor+0xc]`, `0x5f7d77`), never the guid, whose bits carry the entry only on some
     /// cores. `None` for a descriptor that has not received the field.

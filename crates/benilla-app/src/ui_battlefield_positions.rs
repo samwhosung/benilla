@@ -34,6 +34,11 @@ pub(crate) struct BattlefieldPositions {
 }
 
 impl BattlefieldPositions {
+    /// The teardown's free of the callbacks `0x4ac190`, running none (`0x55f990`).
+    pub(crate) fn free_store_callbacks(&mut self) {
+        self.name_callbacks.clear();
+    }
+
     /// `MSG_BATTLEGROUND_PLAYER_POSITIONS` in: kept as sent, as the handler (`0x4aad40`) does.
     pub(crate) fn apply(&mut self, packet: PositionsPacket) {
         self.packet = Some(packet);

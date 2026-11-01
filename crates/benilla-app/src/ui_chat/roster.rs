@@ -16,6 +16,11 @@ use crate::query_cache::Ask;
 pub(crate) struct ChannelRosters(std::collections::BTreeMap<u32, Roster>);
 
 impl ChannelRosters {
+    /// The teardown's free of the printer's name callback (`0x55f990`), with the lists it held.
+    pub(crate) fn free_store_callbacks(&mut self) {
+        self.0.clear();
+    }
+
     /// Every list dropped with the slots that held them: the session's end.
     pub(super) fn clear(&mut self) {
         self.0.clear();

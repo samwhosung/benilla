@@ -732,8 +732,9 @@ impl crate::script_calls::live::LiveFamily for TradeSkillLive<'_, '_> {
 
 /// A trade-skill getter's lookup of a record in flight, inside its call
 /// ([`benilla_ui::script::ItemCallback::TradeSkill`]): the item cache asks a miss, a refused
-/// entry again, and keeps the callback `0x4fdc30` on it, one per call, which outlives a VM and no
-/// cancel removes (`0x4fdb90`, `0x4fdf77`, `0x4ff6cd`, `0x4ffac6`, `0x4fc890`).
+/// entry again, and keeps the callback `0x4fdc30` on it, one per call, which no cancel removes
+/// (`0x4fdb90`, `0x4fdf77`, `0x4ff6cd`, `0x4ffac6`, `0x4fc890`) and only the interface's teardown
+/// frees ([`crate::wdb::free_store_callbacks`]).
 pub(crate) fn ask_item_record(items: &Items, commands: &NetCommands, entry: u32, owner: u64) {
     if items.template(entry, owner, Ask::Event(commands)).is_none() {
         items.wait(entry, crate::items::RecordCallback::TradeSkill);
