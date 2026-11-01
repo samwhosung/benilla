@@ -366,8 +366,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 - Walking out of a party dungeon ourselves also counts as holding a bind (`InstanceState::saw_own_dungeon`), because vmangos reports only permanent binds (`Player.cpp:16175`) and makes only raid binds permanent (`Map.cpp:3528`), so the server alone would never offer the reset after a 5-man. ([`src/ui_instance.rs:7`](../crates/benilla-app/src/ui_instance.rs#L7))
 - The app's monotonic clock, not `time(0)`, because it cannot run backwards; they differ only across a suspend. ([`src/ui_instance.rs:35`](../crates/benilla-app/src/ui_instance.rs#L35))
-- Reason 3 and up prints nothing, where the reference prints an uninitialized 2 KB stack buffer, because that is a bug and vmangos means 3 and up as silent (`MapPersistentStateMgr.h:275`). ([`src/ui_instance.rs:352`](../crates/benilla-app/src/ui_instance.rs#L352))
-- Flag 2 and up prints nothing, where the reference prints an uninitialized 2 KB stack buffer, because that is a bug, not a mechanism. ([`src/ui_instance.rs:396`](../crates/benilla-app/src/ui_instance.rs#L396))
+- Reason 3 and up prints nothing, where the reference prints an uninitialized 2 KB stack buffer, because that is a bug and vmangos means 3 and up as silent (`MapPersistentStateMgr.h:275`). ([`src/ui_instance.rs:354`](../crates/benilla-app/src/ui_instance.rs#L354))
+- Flag 2 and up prints nothing, where the reference prints an uninitialized 2 KB stack buffer, because that is a bug, not a mechanism. ([`src/ui_instance.rs:398`](../crates/benilla-app/src/ui_instance.rs#L398))
 
 #### ui_item_text
 
@@ -678,7 +678,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - Text without a NUL stops at `length`, because the reference reads on out of bounds. ([`src/messages/broadcast.rs:29`](../crates/benilla-protocol/src/messages/broadcast.rs#L29))
 - The 1.12 client appends a zlib chat transcript to a category 2 ticket (`0x5ef936`); we omit it because vmangos never reads it and logs the leftover bytes. The client also cuts the text at 1999 chars (`0x5ef7fd`); we do not, as the Help window stops at 500. ([`src/messages/gm_ticket.rs:48`](../crates/benilla-protocol/src/messages/gm_ticket.rs#L48))
 - String reads are unbounded. The reference `0x4191b0` caps each field, counting the NUL (roster name `0x30`, notes `0x80`, MOTD `0x200`, info `0x7d0`, guild name `0x60`, rank name `0x40`), and on overflow empties it and no-ops every later read in the packet. Reads stay unbounded because unbounded reads cannot poison a packet, and every cap is far above the server's own length limits, so a legitimate packet reads the same. ([`src/messages/guild.rs:4`](../crates/benilla-protocol/src/messages/guild.rs#L4))
-- A reason of 3 or more is silent, where the reference prints an uninitialized stack buffer, because 3 is the server's `INSTANCERESET_FAIL_SILENTLY`. ([`src/messages/instance.rs:70`](../crates/benilla-protocol/src/messages/instance.rs#L70))
+- A reason of 3 or more is silent, where the reference prints an uninitialized stack buffer, because 3 is the server's `INSTANCERESET_FAIL_SILENTLY`. ([`src/messages/instance.rs:71`](../crates/benilla-protocol/src/messages/instance.rs#L71))
 - 2 or more prints nothing, because the reference prints an uninitialized buffer. ([`src/messages/opcode.rs:1063`](../crates/benilla-protocol/src/messages/opcode.rs#L1063))
 - The consumer refuses 64 and up, because there the reference's store overruns its table. ([`src/messages/packet.rs:662`](../crates/benilla-protocol/src/messages/packet.rs#L662))
 - A body too short for the position gives `None` where the client redisplays a stale global, because showing a stale queue position as current is a client bug. ([`src/messages/parse.rs:302`](../crates/benilla-protocol/src/messages/parse.rs#L302))
