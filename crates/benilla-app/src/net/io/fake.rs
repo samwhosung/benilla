@@ -390,7 +390,7 @@ pub(crate) fn char_enum_body(characters: &[benilla_protocol::Character]) -> Vec<
         for v in [c.position.x, c.position.y, c.position.z] {
             b.extend_from_slice(&v.to_le_bytes());
         }
-        b.extend_from_slice(&0u32.to_le_bytes()); // guild
+        b.extend_from_slice(&c.guild_id.to_le_bytes());
         b.extend_from_slice(&c.flags.to_le_bytes());
         b.push(0); // first login
         for v in [c.pet_display_id, c.pet_level, c.pet_family] {
@@ -831,6 +831,22 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
                                 Some(&mut crypto),
                                 opcode::SMSG_CHARACTER_LOGIN_FAILED,
                                 &[1],
+                            );
+                        }
+                        // Every guild it is asked for exists, with no ranks and these five tabard
+                        // fields (`Server/Packets/Guild.cpp:118-131`).
+                        opcode::CMSG_GUILD_QUERY => {
+                            let mut body = packet[6..10].to_vec();
+                            body.extend_from_slice(b"Probe Guild\0");
+                            body.extend_from_slice(&[0u8; 10]);
+                            for field in [1i32, 2, 3, 4, 5] {
+                                body.extend_from_slice(&field.to_le_bytes());
+                            }
+                            send(
+                                &mut s,
+                                Some(&mut crypto),
+                                opcode::SMSG_GUILD_QUERY_RESPONSE,
+                                &body,
                             );
                         }
                         opcode::CMSG_LOGOUT_REQUEST => {

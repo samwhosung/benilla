@@ -189,6 +189,79 @@ fn read_client(stream: &mut TcpStream, crypto: &mut HeaderCrypto) -> Option<u16>
     Some(u16::from_le_bytes([header[2], header[3]]))
 }
 
+/// The select build's guild lookup at character select (`0x560e30`): the guild cache's query,
+/// opcode 0x54 and the key with no guid (`0x560f68`), byte for byte, and its answer kept for the
+/// taking from a read that waits on nothing.
+#[test]
+fn a_parked_session_asks_for_a_guild_and_keeps_its_answer() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        send(
+            &mut stream,
+            None,
+            opcode::SMSG_AUTH_CHALLENGE,
+            &SERVER_SEED.to_le_bytes(),
+        );
+        read_auth_session(&mut stream);
+        let mut crypto = HeaderCrypto::from_session_key(SESSION_KEY);
+        send(
+            &mut stream,
+            Some(&mut crypto),
+            opcode::SMSG_AUTH_RESPONSE,
+            &[messages::AUTH_OK],
+        );
+        let mut header = [0u8; 6];
+        stream.read_exact(&mut header).unwrap();
+        crypto.decrypter().decrypt(&mut header);
+        let mut body = [0u8; 4];
+        stream.read_exact(&mut body).unwrap();
+        let mut reply = 0x1234u32.to_le_bytes().to_vec();
+        reply.extend_from_slice(b"Legacy\0");
+        reply.extend_from_slice(&[0u8; 10]); // ten empty rank names
+        for field in [1i32, 2, 3, 4, 5] {
+            reply.extend_from_slice(&field.to_le_bytes());
+        }
+        send(
+            &mut stream,
+            Some(&mut crypto),
+            opcode::SMSG_GUILD_QUERY_RESPONSE,
+            &reply,
+        );
+        // Open until the client has read it.
+        let mut end = [0u8; 1];
+        let _ = stream.read(&mut end);
+        (header, body)
+    });
+
+    let mut session = WorldSession::connect(&addr, "one", SESSION_KEY).unwrap();
+    session.guild_query(0x1234).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let answers = loop {
+        session.poll_link().unwrap();
+        let answers = session.take_guild_answers();
+        if !answers.is_empty() {
+            break answers;
+        }
+        assert!(std::time::Instant::now() < deadline, "no answer read");
+        thread::sleep(std::time::Duration::from_millis(2));
+    };
+    assert_eq!(answers.len(), 1);
+    let answer = &answers[0];
+    assert_eq!((answer.guild_id, answer.name.as_str()), (0x1234, "Legacy"));
+    assert_eq!((answer.emblem_style, answer.background_color), (1, 5));
+    assert!(session.take_guild_answers().is_empty(), "taken once");
+    drop(session);
+    let (header, body) = server.join().unwrap();
+    assert_eq!(
+        header,
+        [0x00, 0x08, 0x54, 0x00, 0x00, 0x00],
+        "size and opcode"
+    );
+    assert_eq!(body, [0x34, 0x12, 0x00, 0x00], "the key alone");
+}
+
 /// A session split for the world and joined again after the logout is the same connection: the
 /// header cipher goes on from where each direction stood, so the next `CMSG_CHAR_ENUM` is read and
 /// answered on it, and the `SMSG_ADDON_INFO` the connection got once still stands for the next

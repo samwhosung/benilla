@@ -172,8 +172,10 @@ impl PingClock {
 /// Cap on send warnings per connection, so a movement stream during an outage cannot flood the log.
 const SEND_WARN_CAP: u32 = 8;
 
-/// How often the character park looks at the world socket for a server that dropped it.
-const PARK_LINK_CHECK: Duration = Duration::from_millis(500);
+/// How often the character park looks at the world socket, for a server that dropped it and for
+/// what it sent unasked: a guild's answer, which a tabard on the select screen waits on, is read
+/// here.
+const PARK_LINK_CHECK: Duration = Duration::from_millis(50);
 
 /// What one wake-up at the character park asked for, so every jump out is made outside `select!`.
 enum Parked {
@@ -953,6 +955,12 @@ fn world(
                                 return Err(e);
                             }
                         },
+                        // The select build's guild lookup missed (`0x560e30`): the query goes out,
+                        // and nothing here waits for its answer.
+                        Ok(ParkRequest::Char(CharRequest::GuildQuery(guild_id))) => {
+                            session.guild_query(guild_id)?;
+                            Parked::StayPut
+                        }
                     },
                     recv(login_rx) -> msg => msg.map_or(Parked::Exit, Parked::Login),
                     recv(link_check) -> _ => match session.poll_link() {
@@ -963,6 +971,15 @@ fn world(
                     },
                 };
                 note_warden(&session, &mut warden_noted);
+                // A guild's answer, whichever read took it, goes up as in the world stream.
+                for record in session.take_guild_answers() {
+                    if events_tx
+                        .send(SessionEvent::GuildQueryResponse(record))
+                        .is_err()
+                    {
+                        return Ok(WorldEnd::Cycle(Cycle::Exit));
+                    }
+                }
                 let (action, code) = match answer {
                     Parked::Exit => return Ok(WorldEnd::Cycle(Cycle::Exit)),
                     Parked::Repark => return Ok(WorldEnd::Cycle(Cycle::Repark)),

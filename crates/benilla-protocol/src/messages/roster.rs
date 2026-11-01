@@ -77,6 +77,9 @@ pub struct Character {
     pub zone: u32,
     pub map: u32,
     pub position: Vector3d,
+    /// The guild id, 0 for none: the record's `+0x40`, which the select build's emblem lookup keys
+    /// on (`0x472cde`).
+    pub guild_id: u32,
     /// `CHARACTER_FLAG_*` bits.
     pub flags: u32,
     /// Equipment order: head, neck, shoulders, shirt, chest, waist, legs, feet, wrists, hands,
@@ -113,7 +116,7 @@ impl Character {
         let zone = read_u32_le(r)?;
         let map = read_u32_le(r)?;
         let position = Vector3d::read(r)?;
-        let _guild_id = read_u32_le(r)?;
+        let guild_id = read_u32_le(r)?;
         let flags = read_u32_le(r)?;
         let _first_login = read_u8(r)?;
         let pet_display_id = read_u32_le(r)?;
@@ -142,6 +145,7 @@ impl Character {
             zone,
             map,
             position,
+            guild_id,
             flags,
             equipment,
             pet_display_id,

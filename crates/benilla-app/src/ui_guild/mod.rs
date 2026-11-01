@@ -727,6 +727,12 @@ pub(crate) fn corpse_guild_emblem(
     guild_emblem(fields.corpse_guild(), guild, ask)
 }
 
+/// A select record's crest, off its roster guild, as far as the cache holds it: the select build
+/// asks a miss itself, over the character park, where no world writer stands.
+pub(crate) fn select_guild_emblem(guild_id: u32, guild: &GuildState) -> Option<GuildEmblem> {
+    guild_emblem(guild_id, guild, Ask::Read)
+}
+
 fn guild_emblem(guild_id: u32, guild: &GuildState, ask: Ask<'_>) -> Option<GuildEmblem> {
     let emblem = guild.resolve_identity(guild_id, ask)?.emblem;
     emblem.is_designed().then_some(emblem)
@@ -1074,6 +1080,31 @@ mod tests {
             params: params.iter().map(|p| (*p).to_string()).collect(),
             guid,
         }
+    }
+
+    /// The select build's read of a record: never the store's key 0 (`0x560e3d`), and no crest for
+    /// one undesigned, whose `-1`s fail `0x6d6d20` (`0x6d6d73`-`0x6d6d93`).
+    #[test]
+    fn a_select_crest_is_a_designed_record_of_a_real_guild() {
+        let mut guild = GuildState::default();
+        let land = |guild: &mut GuildState, guild_id: u32, emblem_style: i32| {
+            guild.apply_query_response(GuildQueryResponse {
+                guild_id,
+                name: "Guild".to_string(),
+                emblem_style,
+                ..Default::default()
+            });
+        };
+        assert_eq!(select_guild_emblem(5, &guild), None, "nothing held");
+        land(&mut guild, 5, 12);
+        assert_eq!(
+            select_guild_emblem(5, &guild).map(|e| e.emblem_style),
+            Some(12)
+        );
+        land(&mut guild, 6, -1);
+        assert_eq!(select_guild_emblem(6, &guild), None, "undesigned");
+        land(&mut guild, 0, 12);
+        assert_eq!(select_guild_emblem(0, &guild), None, "no guild");
     }
 
     #[test]

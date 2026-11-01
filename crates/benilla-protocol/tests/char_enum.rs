@@ -29,7 +29,7 @@ fn enum_entry(
     for c in pos {
         b.extend_from_slice(&c.to_le_bytes());
     }
-    b.extend_from_slice(&0u32.to_le_bytes()); // guild id
+    b.extend_from_slice(&(guid as u32 + 40).to_le_bytes()); // guild id
     b.extend_from_slice(&0x0200_0000u32.to_le_bytes()); // character flags (DECLINED, a junk value)
     b.push(1); // first login
     b.extend_from_slice(&pet_display.to_le_bytes()); // pet display id
@@ -84,7 +84,7 @@ fn char_enum_roster_parses_and_decodes() {
         (c.skin, c.face, c.hair_style, c.hair_color, c.facial_hair),
         (3, 4, 5, 6, 7)
     );
-    assert_eq!((c.zone, c.flags), (12, 0x0200_0000));
+    assert_eq!((c.zone, c.guild_id, c.flags), (12, 47, 0x0200_0000));
     // The pet triple sits before the equipment array: a misread slides every display id below.
     assert_eq!(
         (c.pet_display_id, c.pet_level, c.pet_family),

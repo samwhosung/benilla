@@ -817,6 +817,7 @@ mod tests {
                 y: 0.0,
                 z: 0.0,
             },
+            guild_id: 0,
             flags: 0,
             equipment: [Default::default(); 19],
             pet_display_id: 0,

@@ -623,6 +623,10 @@ pub(crate) enum CharRequest {
     /// Fetch the roster again (`CMSG_CHAR_ENUM`) on the parked session, then stay parked with
     /// the fresh roster: `GetCharacterListUpdate`, which the stock screen calls whenever it shows.
     Enumerate,
+    /// Ask for a guild's record (`CMSG_GUILD_QUERY`) on the parked session and stay parked: the
+    /// select build's emblem lookup (`0x472cde` → `0x6d6d20` → `0x560e30`). The answer comes when
+    /// the server sends it, as any session's `SMSG_GUILD_QUERY_RESPONSE` does.
+    GuildQuery(u32),
 }
 
 /// The realm channel: the answer to each [`RealmListMessage`]. Two parks listen, the login-side

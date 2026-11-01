@@ -2575,6 +2575,7 @@ fn the_chat_cache_restore_is_finished_before_player_login() {
                 y: 0.0,
                 z: 0.0,
             },
+            guild_id: 0,
             flags: 0,
             equipment: [benilla_protocol::CharEnumItem::default(); 19],
             pet_display_id: 0,

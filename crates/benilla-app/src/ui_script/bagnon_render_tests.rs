@@ -96,6 +96,7 @@ fn roster() -> crate::glue_session::roster::Roster {
             y: 0.0,
             z: 0.0,
         },
+        guild_id: 0,
         flags: 0,
         equipment: [benilla_protocol::CharEnumItem::default(); 19],
         pet_display_id: 0,

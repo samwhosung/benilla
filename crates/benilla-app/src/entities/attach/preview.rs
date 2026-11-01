@@ -11,11 +11,13 @@ use benilla_protocol::{
 };
 use bevy::prelude::*;
 
+use crate::net::{CharPick, CharRequest};
 use crate::portrait::{
     BoothTwins, DressUpBake, DressUpLook, DressUpPreview, GhostKit, GlueLook, GluePetBake,
     GluePreview, GluePreviewBake, PetLook, PreviewBillboard, PreviewEffects, PreviewPart,
-    PreviewRider,
+    PreviewRider, SelectLook,
 };
+use crate::ui_guild::GuildState;
 use benilla_assets::materials::WowModelMaterial;
 
 use super::super::equipment::{attach_id, ensure_item_model, placement, ItemModelKind};
@@ -32,6 +34,8 @@ const ENUM_BODYSLOTS: [usize; 8] = [3, 4, 5, 6, 7, 8, 9, 18];
 const ENUM_HELM: usize = 0;
 const ENUM_SHOULDER: usize = 2;
 const ENUM_CLOAK: usize = 14;
+/// The equipment slot of the tabard, whose display decides whether the record asks for a crest.
+const ENUM_TABARD: usize = 18;
 /// Main hand, off hand, ranged: [`placement`]'s held slots 0, 1, 2.
 const ENUM_HELD: [usize; 3] = [15, 16, 17];
 
@@ -127,11 +131,20 @@ pub(in crate::entities) fn build_glue_preview(
     visuals: Option<Res<crate::creature_anim::SpellVisuals>>,
     mut fx: Option<ResMut<super::super::spell_fx::SpellFx>>,
     mut state: Local<PreviewState>,
+    // The guild cache a tabard's crest comes from, and the park its query goes out through.
+    crest: (Option<Res<GuildState>>, Option<Res<CharPick>>),
 ) {
     if state.last_look != preview.look {
         state.last_look = preview.look;
         state.built = false;
+        state.emblem = None;
     }
+    state.watch_crest(
+        preview.look,
+        displays.as_deref(),
+        crest.0.as_deref(),
+        crest.1.as_deref(),
+    );
     if state.built {
         return;
     }
@@ -192,9 +205,8 @@ pub(in crate::entities) fn build_glue_preview(
         hair_color,
         facial_hair,
         equipment,
-        // No crest: `SMSG_CHAR_ENUM` has no emblem and there is no session to query, so a guild
-        // tabard wears its own art, as with the reference's empty guild cache.
-        emblem: None,
+        // Until the record's guild answers, a guild tabard wears its own art (`0x6d6d20` fails).
+        emblem: state.emblem,
         flags,
         // The select build skips the ranged slot (`0x472bfe`).
         ranged_in_hand: false,
@@ -269,6 +281,7 @@ pub(in crate::entities) fn build_glue_preview(
         billboards: a.billboards,
         grip: a.grip,
         ghost,
+        emblem: state.emblem,
         revision: bake.revision + 1,
     };
     state.built = true;
@@ -1007,6 +1020,64 @@ pub(in crate::entities) struct PetState {
 pub(in crate::entities) struct PreviewState {
     last_look: Option<GlueLook>,
     built: bool,
+    /// The crest the look's tabard wears ([`Self::watch_crest`]).
+    emblem: Option<benilla_formats::GuildEmblem>,
+    /// The guilds asked for while the select screen stands: the guild cache's pending node, which
+    /// leaves the query to the first caller (`0x560e30`). Kept here and not as that cache's
+    /// pending mark: a world entry can overtake the ask, which then never goes out, and the mark
+    /// would keep the world from asking.
+    asked: Vec<u32>,
+}
+
+impl PreviewState {
+    /// The select build's tabard crest, against the look that stands: a new answer re-arms the
+    /// build, as `0x472420` installs it on the selected record's model (`0x4724a4` → `0x47a610`).
+    fn watch_crest(
+        &mut self,
+        look: Option<GlueLook>,
+        displays: Option<&ItemDisplays>,
+        guilds: Option<&GuildState>,
+        pick: Option<&CharPick>,
+    ) {
+        match look {
+            Some(GlueLook::Select(l)) => {
+                let emblem = select_crest(&l, displays, guilds, pick, &mut self.asked);
+                if emblem.is_some() && emblem != self.emblem {
+                    self.emblem = emblem;
+                    self.built = false;
+                }
+            }
+            Some(GlueLook::Create(_)) => {}
+            // Off the select screen the world's cache takes over, and a return asks again.
+            None => self.asked.clear(),
+        }
+    }
+}
+
+/// The crest of a select record's tabard, its guild's record asked for on a miss: slot 18 with
+/// `ItemDisplayInfo +0x24` bit 0 (`0x472c9b`-`0x472ca4`) looks guild `+0x40` up (`0x472cde` →
+/// `0x6d6d20` → `0x560e30`), which sends `CMSG_GUILD_QUERY` for a record it does not hold and
+/// nothing for guild 0 (`0x560e3d`).
+fn select_crest(
+    look: &SelectLook,
+    displays: Option<&ItemDisplays>,
+    guilds: Option<&GuildState>,
+    pick: Option<&CharPick>,
+    asked: &mut Vec<u32>,
+) -> Option<benilla_formats::GuildEmblem> {
+    let tabard = displays?
+        .catalog
+        .get(look.equipment[ENUM_TABARD].display_id)?;
+    if !tabard.takes_guild_emblem() {
+        return None;
+    }
+    let guilds = guilds?;
+    let missed = !guilds.identity_known(look.guild_id) && !asked.contains(&look.guild_id);
+    if let (true, Some(pick)) = (missed, pick) {
+        asked.push(look.guild_id);
+        let _ = pick.0.send(CharRequest::GuildQuery(look.guild_id));
+    }
+    crate::ui_guild::select_guild_emblem(look.guild_id, guilds)
 }
 
 /// [`build_dressup_preview`]'s per-run memory.
@@ -1019,6 +1090,102 @@ pub(in crate::entities) struct DressUpState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const GUILD_TABARD: u32 = 77;
+    const PLAIN_TABARD: u32 = 78;
+
+    /// A roster record of guild `guild_id` wearing the tabard display `tabard`.
+    fn tabarded(guild_id: u32, tabard: u32) -> Option<GlueLook> {
+        let mut c = crate::glue_session::roster::test_character(1, "Rec");
+        c.guild_id = guild_id;
+        c.equipment[ENUM_TABARD].display_id = tabard;
+        Some(GlueLook::Select(SelectLook::from(&c)))
+    }
+
+    /// `ItemDisplayInfo` with one tabard of each kind (`+0x24` bit 0).
+    fn tabards() -> ItemDisplays {
+        let guild = benilla_formats::ItemDisplay {
+            flags: 1,
+            ..Default::default()
+        };
+        let plain = benilla_formats::ItemDisplay::default();
+        ItemDisplays::icons_for_tests(benilla_formats::ItemDisplayCatalog::from_displays(
+            std::collections::HashMap::from([(GUILD_TABARD, guild), (PLAIN_TABARD, plain)]),
+        ))
+    }
+
+    /// The park's end of the select build's asks, and what reached it.
+    fn park() -> (CharPick, crossbeam_channel::Receiver<CharRequest>) {
+        let (tx, rx) = crossbeam_channel::unbounded::<CharRequest>();
+        (CharPick(tx.into()), rx)
+    }
+
+    /// The build's lookup misses and asks once (`0x560e30`, a pending node leaves the query to the
+    /// first caller); the answer re-arms the build once with the crest (`0x472420`).
+    #[test]
+    fn a_guild_tabard_asks_once_and_its_answer_rearms_the_build_once() {
+        let displays = tabards();
+        let mut guilds = GuildState::default();
+        let (pick, rx) = park();
+        let look = tabarded(5, GUILD_TABARD);
+        let mut state = PreviewState {
+            built: true,
+            ..Default::default()
+        };
+        for _ in 0..3 {
+            state.watch_crest(look, Some(&displays), Some(&guilds), Some(&pick));
+        }
+        assert!(matches!(
+            rx.try_iter().collect::<Vec<_>>().as_slice(),
+            [CharRequest::GuildQuery(5)]
+        ));
+        assert!(state.built && state.emblem.is_none(), "nothing has landed");
+
+        guilds.land_for_test(5, "Guild");
+        state.watch_crest(look, Some(&displays), Some(&guilds), Some(&pick));
+        assert_eq!(state.emblem, Some(benilla_formats::GuildEmblem::default()));
+        assert!(!state.built, "the answer re-arms the build");
+        state.built = true;
+        state.watch_crest(look, Some(&displays), Some(&guilds), Some(&pick));
+        assert!(state.built, "once");
+        assert_eq!(rx.try_iter().count(), 0, "a held record sends nothing");
+    }
+
+    /// Slot 18's gates (`0x472ca0`, `0x472ca4`) and guild 0 (`0x560e3d`) ask for nothing.
+    #[test]
+    fn only_a_guild_tabard_on_a_guilded_record_asks() {
+        let displays = tabards();
+        let guilds = GuildState::default();
+        let (pick, rx) = park();
+        for look in [
+            tabarded(5, PLAIN_TABARD),
+            tabarded(5, 0),
+            tabarded(0, GUILD_TABARD),
+        ] {
+            let mut state = PreviewState::default();
+            state.watch_crest(look, Some(&displays), Some(&guilds), Some(&pick));
+            assert!(state.emblem.is_none());
+        }
+        assert_eq!(rx.try_iter().count(), 0);
+    }
+
+    /// The asks last while the screen stands: a return from the world asks again, and a create look
+    /// leaves them be.
+    #[test]
+    fn a_return_to_the_select_screen_asks_again() {
+        let displays = tabards();
+        let guilds = GuildState::default();
+        let (pick, rx) = park();
+        let look = tabarded(5, GUILD_TABARD);
+        let mut state = PreviewState::default();
+        state.watch_crest(look, Some(&displays), Some(&guilds), Some(&pick));
+        assert_eq!(rx.try_iter().count(), 1);
+        state.watch_crest(look, Some(&displays), Some(&guilds), Some(&pick));
+        assert_eq!(rx.try_iter().count(), 0);
+        state.watch_crest(None, Some(&displays), Some(&guilds), Some(&pick));
+        state.watch_crest(look, Some(&displays), Some(&guilds), Some(&pick));
+        assert_eq!(rx.try_iter().count(), 1);
+    }
 
     /// Against the shipped `SpellVisualKit.dbc`: row 989's `+0x3c` reads
     /// `01 00 00 00  0e 00 00 00  ff ff ff ff  ff ff ff ff  fd b9 0c 4b  00 00 00 3f`, and it fills

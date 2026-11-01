@@ -616,6 +616,38 @@ fn a_create_sends_its_result_alone() {
     assert_eq!(world.enumerations(), 0);
 }
 
+/// The select build's guild lookup goes out at the park as the guild cache's query (`0x560e30`),
+/// opcode 0x54 and the key with no guid (`0x560f68`), byte for byte, and its answer goes up as the
+/// world stream's does, with nothing at the park waiting on it.
+#[test]
+fn the_park_asks_for_a_guild_and_hands_up_its_answer() {
+    let (realmd, world) = fake::servers(|world| vec![FakeRealm::new(REALM, world)]);
+    let cycles = fake::spawn_cycles();
+    fake::login(&cycles, &realmd.addr);
+    let (realms, _) = next_list(&cycles.events);
+    dial(&cycles, realms[0].clone());
+    cycles.pick.send(CharRequest::GuildQuery(0x1234)).unwrap();
+    match next_event(&cycles.events) {
+        SessionEvent::GuildQueryResponse(answer) => {
+            assert_eq!(
+                (answer.guild_id, answer.name.as_str()),
+                (0x1234, "Probe Guild")
+            );
+            assert_eq!((answer.emblem_style, answer.background_color), (1, 5));
+        }
+        other => panic!("expected the guild's answer, got {other:?}"),
+    }
+    let packets = world.packets.lock().unwrap();
+    let asked = packets
+        .iter()
+        .find(|p| p[2..4] == opcode::CMSG_GUILD_QUERY.to_le_bytes())
+        .expect("the query went out");
+    assert_eq!(
+        asked.as_slice(),
+        [0x00, 0x08, 0x54, 0x00, 0x00, 0x00, 0x34, 0x12, 0x00, 0x00]
+    );
+}
+
 /// The park serves a rename in place: the reply goes out as it came, with no roster asked, and
 /// the park's own copy of the roster takes the new name, so the world entry names the character
 /// by it. A refused rename changes nothing.

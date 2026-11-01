@@ -57,6 +57,8 @@ pub(crate) struct SelectLook {
     pub(crate) hair_style: u8,
     pub(crate) hair_color: u8,
     pub(crate) facial_hair: u8,
+    /// The record's guild, which a guild tabard's crest comes from; 0 for none.
+    pub(crate) guild_id: u32,
     /// `CHARACTER_FLAG_*` bits; the builder honours hide-helm and hide-cloak.
     pub(crate) flags: u32,
     pub(crate) equipment: [benilla_protocol::CharEnumItem; 19],
@@ -86,6 +88,7 @@ impl From<&benilla_protocol::Character> for SelectLook {
             hair_style: c.hair_style,
             hair_color: c.hair_color,
             facial_hair: c.facial_hair,
+            guild_id: c.guild_id,
             flags: c.flags,
             equipment: c.equipment,
             pet_display_id: c.pet_display_id,
@@ -735,6 +738,8 @@ pub(crate) struct GluePreviewBake {
     pub(crate) grip: [bool; 2],
     /// The selection's ghost kit ([`GhostKit`]); its effect models are already in the lists above.
     pub(crate) ghost: Option<GhostKit>,
+    /// The crest a select record's tabard wears in these parts, once its guild's record is held.
+    pub(crate) emblem: Option<benilla_formats::GuildEmblem>,
     pub(crate) revision: u64,
 }
 
@@ -1487,13 +1492,17 @@ type StageLanes<'w> = (
 pub(super) struct GlueStanding {
     /// The bake revision, yaw and scene revision last committed.
     last: Option<(u64, f32, u64)>,
-    /// The create character standing as one instance a re-dress keeps. `None` for a select
-    /// record, an empty stage or a boneless bake.
-    create: Option<StandingCreate>,
+    /// The body standing as one instance a re-dress keeps. `None` for an empty stage or a
+    /// boneless bake.
+    body: Option<StandingBody>,
 }
 
-/// The create body standing: one `CharacterModel` while its display and its stage last.
-struct StandingCreate {
+/// The body standing: one `CharacterModel` while its display and its stage last.
+struct StandingBody {
+    /// The look it stands for: another select record is another model (`record+0x110`).
+    look: GlueLook,
+    /// The crest its tabard wears.
+    emblem: Option<benilla_formats::GuildEmblem>,
     /// The race and sex body: a change is the builder's new model (`0x470b70`).
     display: u32,
     /// The stage it was built on ([`GluePreview::stage`]): every create `OnShow` builds anew, its
@@ -1562,7 +1571,8 @@ type StandingRig<'a> = (
 /// The create character is one model across its customizations and class re-dresses, which
 /// update it in place (`0x478790` and kin, `0x470800`); only the race and sex builder `0x470b70`
 /// makes a new one. So a create bake on the standing body display re-dresses the standing
-/// instance ([`redress_booth_batches`]) and its clock runs on; anything else spawns afresh.
+/// instance ([`redress_booth_batches`]) and its clock runs on. A select record's model stays too
+/// when its crest lands (`0x472420` → `0x47a610`); anything else spawns afresh.
 pub(super) fn sync_glue_booth(
     mut commands: Commands,
     preview: Res<GluePreview>,
@@ -1616,7 +1626,7 @@ pub(super) fn sync_glue_booth(
             booth.rigged = false;
             booth.parked = false;
             state.last = Some((bake.revision, preview.yaw, scene_rev));
-            state.create = None;
+            state.body = None;
             apply_yaw(
                 &mut commands,
                 booth.root,
@@ -1787,15 +1797,17 @@ pub(super) fn sync_glue_booth(
             &booth_effects,
             scene_buf.as_ref(),
         );
-        // The standing create body, kept when this bake wears the same display on the same stage
-        // ([`StandingCreate`]).
-        let create = matches!(bake.look, Some(GlueLook::Create(_)));
-        let keep = create
-            && !instance.feathering()
-            && state
-                .create
-                .as_ref()
-                .is_some_and(|c| c.display == bake.display_id && c.stage == preview.stage);
+        // The standing body, kept when this bake wears the same display on the same stage
+        // ([`StandingBody`]): a create look's every dressing, or a select record's new crest.
+        let keep = !instance.feathering()
+            && state.body.as_ref().is_some_and(|b| {
+                let same_model = match (b.look, bake.look) {
+                    (GlueLook::Create(_), Some(GlueLook::Create(_))) => true,
+                    (GlueLook::Select(_), Some(look)) => look == b.look && bake.emblem != b.emblem,
+                    _ => false,
+                };
+                same_model && b.display == bake.display_id && b.stage == preview.stage
+            });
         let standing = if keep {
             standing_rigs
                 .get(booth.root)
@@ -1834,7 +1846,7 @@ pub(super) fn sync_glue_booth(
                     slot,
                     instance,
                 );
-                if state.create.as_ref().is_none_or(|c| c.hung != hung) {
+                if state.body.as_ref().is_none_or(|b| b.hung != hung) {
                     // The outfit changed: the old items come off with their anchors, and the new
                     // ones hang on a fresh pose buffer the root's player re-poses before it draws.
                     for c in kids.iter().filter(|c| !worn.iter().any(|(w, _)| w == *c)) {
@@ -1918,11 +1930,16 @@ pub(super) fn sync_glue_booth(
                 None => benilla_world::instance_tint::IDENTITY,
             },
         );
-        state.create = (create && booth.rigged).then_some(StandingCreate {
-            display: bake.display_id,
-            stage: preview.stage,
-            hung,
-        });
+        state.body = match bake.look {
+            Some(look) if booth.rigged => Some(StandingBody {
+                look,
+                emblem: bake.emblem,
+                display: bake.display_id,
+                stage: preview.stage,
+                hung,
+            }),
+            _ => None,
+        };
         // The fallback framing with no scene up: the model's `<PlayerModel>` pane camera, at the
         // bake's aspect, as it shows only for the frames before the scene's camera takes over.
         let (t, _) = body_frame(&anchors, 1.0);
@@ -2661,6 +2678,7 @@ mod tests {
                 y: 0.0,
                 z: 0.0,
             },
+            guild_id: 0,
             flags: 0,
             equipment: [benilla_protocol::CharEnumItem::default(); 19],
             pet_display_id: 517,
@@ -3227,6 +3245,43 @@ mod tests {
             [false, false],
         );
         assert_eq!(stand_at(&app, root), 0.0);
+    }
+
+    /// A crest landing on the record that stands (`0x472420` → `0x47a610`) dresses its model in
+    /// place: the same batches, on the crested body, with the Stand clock running on.
+    #[test]
+    fn a_landed_crest_keeps_the_select_model_and_its_clock() {
+        let (mut app, root) = booth_app();
+        let record = GlueLook::Select(SelectLook::from(
+            &crate::glue_session::roster::test_character(1, "Rec"),
+        ));
+        bake(
+            &mut app,
+            record,
+            HUMAN_MALE,
+            vec![part(1, 10)],
+            Vec::new(),
+            [false, false],
+        );
+        run_stand_to(&mut app, root, 1.25);
+        let before = worn(&mut app, root);
+
+        let mut baked = app.world_mut().resource_mut::<GluePreviewBake>();
+        let revision = baked.revision + 1;
+        *baked = GluePreviewBake {
+            look: Some(record),
+            display_id: HUMAN_MALE,
+            parts: vec![part(1, 20)],
+            emblem: Some(benilla_formats::GuildEmblem::default()),
+            revision,
+            ..default()
+        };
+        app.update();
+
+        assert_eq!(stand_at(&app, root), 1.25, "the crest keeps the clock");
+        let after = worn(&mut app, root);
+        assert_eq!(after[0].1, before[0].1, "the same batch entity stands");
+        assert_eq!(after[0].2, handle::<WowModelMaterial>(20).id());
     }
 
     /// A select record's model registers the Stand chain (`0x472b87` → `0x473090`), and the bake
