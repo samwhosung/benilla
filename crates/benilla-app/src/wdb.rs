@@ -351,7 +351,9 @@ fn clear_session_stores(
 /// because they do more than tell the interface:
 /// - the item store's engine work ([`Items::free_store_callbacks`]);
 /// - `SocialState`'s name waits, which write the friend rows and send a refused name's removal;
-/// - the chat's held lines, which are its data, and which its age pass shows with no answer.
+/// - the chat's held lines, which are its data, and which its age pass shows with no answer;
+/// - a roll whose result line waited, which the freed callbacks would have closed (`0x61bd50`,
+///   `0x61bc80`, `0x61b7d0`): it goes and the next opens ([`LootRolls::free_store_callbacks`]).
 ///
 /// What needs no entry: `ItemTextOpen`, whose sweep leg closes the read; a wait a VM keeps, which
 /// dies with it; and a unit's name notices, which an answer's handler derives from the units it
