@@ -358,6 +358,10 @@ pub fn decode_level(texels: BlpTexels, width: u32, height: u32, bytes: &[u8]) ->
     let Some(fmt) = texels.codec() else {
         return bytes.to_vec();
     };
+    // Texpresso splits its output into rows of `width * 16` bytes, and an empty row panics.
+    if width == 0 {
+        return Vec::new();
+    }
     let blocks = pad_to(bytes, fmt.compressed_size(width as usize, height as usize));
     let mut out = vec![0u8; (width as usize) * (height as usize) * 4];
     fmt.decompress(&blocks, width as usize, height as usize, &mut out);
@@ -432,11 +436,7 @@ fn decode_raw3(data: &[u8], w: u32, h: u32) -> Result<Vec<u8>> {
 
 /// DXTC to RGBA8; a level the file ends inside is zero-padded first.
 fn decode_dxt(data: &[u8], w: u32, h: u32, texels: BlpTexels) -> Result<Vec<u8>> {
-    let fmt = texels.codec().expect("dxt_texels never returns Rgba8Unorm");
-    let blocks = pad_to(data, fmt.compressed_size(w as usize, h as usize));
-    let mut out = vec![0u8; (w as usize) * (h as usize) * 4];
-    fmt.decompress(&blocks, w as usize, h as usize, &mut out);
-    Ok(out)
+    Ok(decode_level(texels, w, h, data))
 }
 
 #[cfg(test)]
@@ -632,6 +632,33 @@ mod tests {
         let mut out = vec![0u8; 2 * 2 * 4];
         texpresso::Format::Bc1.decompress(&tail.bytes, 2, 2, &mut out);
         assert_eq!(out, decoded.mips[2].rgba);
+    }
+
+    /// A zero width reads as a zero height does, an empty level; no shipped BLP has either.
+    #[test]
+    fn a_zero_dimension_decodes_to_an_empty_level() {
+        let dxt1 = |width, height| {
+            let mut offsets = [0u32; 16];
+            let mut sizes = [0u32; 16];
+            offsets[0] = HEADER_SIZE as u32;
+            sizes[0] = 8;
+            let mut b = header(2, 0, 0, 0, width, height, offsets, sizes);
+            b.extend_from_slice(&[0; 8]);
+            b
+        };
+        for (w, h) in [(0, 4), (4, 0), (0, 0)] {
+            let b = dxt1(w, h);
+            assert!(decode(&b).unwrap().mips[0].rgba.is_empty(), "{w}x{h}");
+            assert!(
+                decode_native(&b).unwrap().mips[0].bytes.is_empty(),
+                "{w}x{h}"
+            );
+            assert!(
+                decode_level(BlpTexels::Bc1, w, h, &[0; 8]).is_empty(),
+                "{w}x{h}"
+            );
+        }
+        assert_eq!(decode(&dxt1(4, 4)).unwrap().mips[0].rgba.len(), 64);
     }
 
     /// The header's size bounds nothing (`0x5a8558` tests it for zero): a level recorded at or past
