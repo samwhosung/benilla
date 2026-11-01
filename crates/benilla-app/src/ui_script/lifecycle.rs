@@ -530,6 +530,7 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
         return;
     }
     mint_entry_vm(world);
+    crate::player::camera_at_interface_load(world);
     let Some(mut script) = world.remove_non_send_resource::<UiScript>() else {
         warn!("ui_script: entering the world with no VM — the in-game UI will not load");
         return;

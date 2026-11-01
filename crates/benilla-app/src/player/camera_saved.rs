@@ -20,6 +20,7 @@ use bevy::prelude::*;
 use crate::client_state::{ClientState, InWorldGated};
 
 use super::camera::{CameraControl, FlyCam, CAM_PITCH_LIMIT};
+use super::camera_view::CameraViews;
 use super::camera_zoom::{CAM_DIST_DEFAULT, CAM_DIST_MAX, CAM_DIST_MIN};
 use super::Player;
 use benilla_world::view::WorldCamera;
@@ -137,6 +138,16 @@ fn load_camera_pose(
         player.login_pitch = Some(p);
     }
     info!("camera pose: restored from {}", path.display());
+}
+
+/// What a new camera reads at the interface load that builds it, a login's as a `/reload`'s
+/// (`0x481b4e` → `0x50c0e0`): the views, off the registry the dying VM has folded into.
+pub(crate) fn camera_at_interface_load(world: &mut World) {
+    world.try_resource_scope(|world, mut views: Mut<CameraViews>| {
+        if let Some(cvars) = world.get_resource::<crate::cvars::Cvars>() {
+            views.reseed(cvars);
+        }
+    });
 }
 
 /// A `/reload`'s new camera: the teardown saves the pose's targets (`0x50c48a`, `0x50c4ff`,

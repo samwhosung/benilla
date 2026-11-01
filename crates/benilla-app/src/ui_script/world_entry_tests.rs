@@ -663,6 +663,38 @@ fn item_locks_cross_a_reload_as_its_sweep_leaves_them() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// The interface load builds a new camera, a login's as a `/reload`'s, which reads the views off
+/// their CVars (`0x481b4e` → `0x50c0e0`, `0x50c3db` → `0x50fb80`).
+#[test]
+fn the_interface_load_rereads_the_camera_views() {
+    use crate::cvars::Cvars;
+    use crate::player::camera_view::CameraViews;
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (tmp, _c, _h) = hermetic_probe("reload-views");
+    let mut world = booted_world();
+    world.init_resource::<Cvars>();
+    world.init_resource::<CameraViews>();
+
+    world.resource_mut::<Cvars>().set("cameraDistanceA", "20");
+    log_in_as(&mut world, "Onehunter", 1);
+    assert!(
+        world.resource::<CameraViews>().current_customised(),
+        "the login's new camera read the row"
+    );
+    world.resource_mut::<Cvars>().set("cameraDistanceA", "5.55");
+    reload(&mut world, crate::client_state::ClientState::InWorld);
+    assert!(
+        !world.resource::<CameraViews>().current_customised(),
+        "and so did the reload's"
+    );
+
+    drop(world);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// `ReloadUI()`'s teardown destroys the camera with the world frame and its load builds a new one
 /// (`0x481e12`, `0x481b4e` → `0x50c0e0`), which counts as moved (`0x50c400`).
 #[test]

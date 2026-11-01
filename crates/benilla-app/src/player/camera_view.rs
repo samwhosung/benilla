@@ -7,10 +7,10 @@
 //! `0.0` is real first person ([`CAM_DIST_MIN`] is `0.0`).
 //!
 //! The views persist as the reference's archived CVars (registered at `0x50b9b0`). [`CameraViews`]
-//! is seeded from them once and writes every change back, so a live `SetCVar` does not reach the
-//! slots; the reference also loads them only at camera construction (`0x50fb80`). The live view is
-//! remembered, not applied at startup: [`super::camera_saved`]'s pose lands over it, as the
-//! reference's saved pose lands over `cameraView`'s row at UI load.
+//! is seeded from them at each new camera and writes every change back, so a live `SetCVar` reaches
+//! the slots only at the next one, as the reference loads them only at camera construction
+//! (`0x50fb80`). The live view is remembered, not applied at startup: [`super::camera_saved`]'s
+//! pose lands over it, as the reference's saved pose lands over `cameraView`'s row at UI load.
 //!
 //! Deviation: `ResetView` writes the CVars back to their defaults, because the CVar store is our
 //! persistence; the reference (`0x50fae0`) touches no CVar, so its reset reverts at next launch.
@@ -174,6 +174,40 @@ impl CameraViews {
         }
     }
 
+    /// What a new camera reads of the CVars: the fifteen slots (`0x50c3db` → `0x50fb80`) and the
+    /// live index (`0x50c17a`), an absent key being the shipped default. An index whose write a
+    /// scope's edge still owes is newer than its row, and stands.
+    pub(super) fn reseed(&mut self, cvars: &crate::cvars::Cvars) {
+        for (view, slot) in self.views.iter_mut().enumerate() {
+            // Each field falls back on its own: a bad value costs that number, not the view.
+            let field = |i: usize| {
+                cvars
+                    .get(VIEW_CVARS[view][i])
+                    .and_then(|s| s.trim().parse::<f32>().ok())
+                    .filter(|v| v.is_finite())
+            };
+            let shipped_row = VIEW_DEFAULTS[view];
+            let raw = |i: usize| {
+                field(i).unwrap_or_else(|| {
+                    shipped_row[i]
+                        .parse()
+                        .expect("the reference's default strings are floats")
+                })
+            };
+            *slot = ViewPose::from_reference(raw(0), raw(1), raw(2));
+        }
+        if self.owed_active {
+            return;
+        }
+        if let Some(v) = cvars
+            .get(CVAR_ACTIVE_VIEW)
+            .and_then(|s| s.trim().parse::<usize>().ok())
+            .filter(|v| *v < VIEW_COUNT)
+        {
+            self.current = v;
+        }
+    }
+
     /// Whether a scope's start or end owes [`CVAR_ACTIVE_VIEW`] its write.
     pub(crate) fn owes_active(&self) -> bool {
         self.owed_active
@@ -189,31 +223,7 @@ impl CameraViews {
 /// Startup: seed the views and the live index from the CVar registry, which exists from `CvarLoad`
 /// on while the VM's mirror does not yet; an absent key is the shipped default.
 fn load_saved_views(cvars: Res<crate::cvars::Cvars>, mut views: ResMut<CameraViews>) {
-    for (view, slot) in views.views.iter_mut().enumerate() {
-        // Each field falls back on its own: a bad value costs that number, not the view.
-        let field = |i: usize| {
-            cvars
-                .get(VIEW_CVARS[view][i])
-                .and_then(|s| s.trim().parse::<f32>().ok())
-                .filter(|v| v.is_finite())
-        };
-        let shipped_row = VIEW_DEFAULTS[view];
-        let raw = |i: usize| {
-            field(i).unwrap_or_else(|| {
-                shipped_row[i]
-                    .parse()
-                    .expect("the reference's default strings are floats")
-            })
-        };
-        *slot = ViewPose::from_reference(raw(0), raw(1), raw(2));
-    }
-    if let Some(v) = cvars
-        .get(CVAR_ACTIVE_VIEW)
-        .and_then(|s| s.trim().parse::<usize>().ok())
-        .filter(|v| *v < VIEW_COUNT)
-    {
-        views.current = v;
-    }
+    views.reseed(&cvars);
 }
 
 /// `0x512e90`'s style for a timed view.
@@ -1232,6 +1242,26 @@ mod tests {
             (forward - Vec3::Z).length() < 1e-3,
             "the view still looks back: {forward}"
         );
+    }
+
+    /// A new camera reads the slots and the live index off their CVars (`0x50fb80`, `0x50c17a`),
+    /// except an index whose write a scope's edge still owes.
+    #[test]
+    fn a_new_camera_reads_the_views_off_the_cvars() {
+        let mut cvars = crate::cvars::Cvars::default();
+        cvars.set("cameraDistanceA", "20");
+        cvars.set(CVAR_ACTIVE_VIEW, "3");
+        let mut views = CameraViews::default();
+        views.reseed(&cvars);
+        assert_eq!(views.pose(1).distance, 20.0);
+        assert_eq!(views.current, 3);
+
+        cvars.set(CVAR_ACTIVE_VIEW, "2");
+        views.current = 0;
+        views.owed_active = true;
+        views.reseed(&cvars);
+        assert_eq!(views.current, 0);
+        assert_eq!(views.take_owed_active(), "0");
     }
 
     /// Mode bit 3 returns ahead of every write of `0x512e90` (`0x512ea3`), whatever the style.
