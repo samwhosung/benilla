@@ -498,10 +498,20 @@ pub fn makes_device_texture(width: u32, height: u32) -> bool {
     fits(width) && fits(height)
 }
 
+/// A side of 0 makes no texture: it passes the power-of-two test (`0x4484ae`) and `GxTexCreate`
+/// refuses a side below 8 (`0x58ab40`, `0x58ab4c`). A zero extent would panic the device here.
+fn refuse_zero_side(width: u32, height: u32) -> Result<()> {
+    if width == 0 || height == 0 {
+        anyhow::bail!("a BLP of {width}x{height} makes no texture");
+    }
+    Ok(())
+}
+
 /// Decode a BLP's level 0 to RGBA8: `(width, height, pixels)`.
 pub fn blp_to_rgba(blp_bytes: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
     let decoded =
         benilla_blp::decode(blp_bytes).map_err(|e| anyhow::anyhow!("decoding BLP: {e}"))?;
+    refuse_zero_side(decoded.width, decoded.height)?;
     let level0 = decoded
         .mips
         .into_iter()
@@ -587,6 +597,7 @@ pub fn read_texture_native_chain(chain: &mut Chain, path: &str) -> Result<BlpMip
 /// Decode every authored level of an in-memory BLP to `Rgba8Unorm`, as stored.
 pub fn blp_bytes_to_mip_chain(bytes: &[u8]) -> Result<BlpMipChain> {
     let decoded = benilla_blp::decode(bytes).map_err(|e| anyhow::anyhow!("decoding BLP: {e}"))?;
+    refuse_zero_side(decoded.width, decoded.height)?;
     // A no-mipmaps BLP counts 0 levels, yet `decode` always fills `mips[0]`: take at least one.
     let (width, height, count) = (
         decoded.width,
@@ -613,6 +624,7 @@ pub fn blp_bytes_to_mip_chain(bytes: &[u8]) -> Result<BlpMipChain> {
 pub fn blp_bytes_to_native_chain(bytes: &[u8]) -> Result<BlpMipChain> {
     let decoded =
         benilla_blp::decode_native(bytes).map_err(|e| anyhow::anyhow!("decoding BLP: {e}"))?;
+    refuse_zero_side(decoded.width, decoded.height)?;
     // At least one level, as in `blp_bytes_to_mip_chain`.
     let (width, height, count) = (
         decoded.width,
@@ -851,6 +863,24 @@ mod tests {
             b[84 + i * 4..88 + i * 4].copy_from_slice(&s.to_le_bytes());
         }
         b
+    }
+
+    /// A BLP with a side of 0 decodes to an empty level but makes no texture (`0x58ab40`,
+    /// `0x58ab4c`), so no zero extent reaches the device.
+    #[test]
+    fn a_zero_sided_blp_makes_no_texture() {
+        let mut offsets = [0u32; 16];
+        let mut sizes = [0u32; 16];
+        offsets[0] = 148;
+        sizes[0] = 8;
+        for (w, h) in [(0, 4), (4, 0), (0, 0)] {
+            let mut b = blp2_header(2, 0, 0, 0, w, h, offsets, sizes);
+            b.extend_from_slice(&[0; 8]);
+            assert!(benilla_blp::decode(&b).is_ok(), "{w}x{h}");
+            assert!(blp_to_rgba(&b).is_err(), "{w}x{h}");
+            assert!(blp_bytes_to_mip_chain(&b).is_err(), "{w}x{h}");
+            assert!(blp_bytes_to_native_chain(&b).is_err(), "{w}x{h}");
+        }
     }
 
     /// `has_mipmaps = 0` counts 0 levels, and consumers index `mips[0]`.
