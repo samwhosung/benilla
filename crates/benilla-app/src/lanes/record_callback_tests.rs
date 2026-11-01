@@ -989,6 +989,8 @@ fn pending_records_answered_after_a_reload_raise_nothing() {
 
     let mut app = client();
     let world = app.world_mut();
+    // The battleground's lane reads it, and this client's `Startup` never ran.
+    world.init_resource::<crate::player::Player>();
     world.non_send_resource::<UiScript>().run(SPY).unwrap();
     wait(world, 4_301, 0x22, 8);
     assert_eq!(

@@ -447,7 +447,11 @@ mod tests {
         let (mut app, _rx) = board();
         packet(&mut app, named(0x1, "bob", 2));
         let rows = vec![score(0x1, 3, 1, 50), score(0x2, 5, 2, 10)];
-        assert_eq!(packet(&mut app, log(false, rows.clone())), [], "one pending");
+        assert_eq!(
+            packet(&mut app, log(false, rows.clone())),
+            [],
+            "one pending"
+        );
         app.world_mut()
             .resource_mut::<BattlefieldScoreboard>()
             .free_store_callbacks();
