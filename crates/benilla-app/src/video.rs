@@ -495,7 +495,27 @@ impl Plugin for VideoPlugin {
                         .after(crate::cvars::sync_cvars),
                 ),
             );
+        #[cfg(windows)]
+        app.add_message::<bevy::window::WindowCreated>()
+            .add_systems(First, drop_accessibility_adapter);
     }
+}
+
+/// Drops the AccessKit adapter `bevy_winit` gives a new window, which restores winit's window
+/// procedure. The reference's window serves no accessibility client (`WoW.exe` imports no such
+/// library and names none of its calls), and benilla builds no tree for one to read. The adapter's
+/// UI Automation provider is not inert where a client runs: Proton-based Wine's `tabtip.exe` queries
+/// the focused window, and that traffic faults in `rpcrt4` on reused memory and damages the heap.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn drop_accessibility_adapter(
+    mut created: MessageReader<bevy::window::WindowCreated>,
+    _main_thread: bevy::ecs::system::NonSendMarker,
+) {
+    bevy::winit::accessibility::ACCESS_KIT_ADAPTERS.with_borrow_mut(|adapters| {
+        for created in created.read() {
+            adapters.remove(&created.window);
+        }
+    });
 }
 
 /// How many `RestartGx()` calls the interface has made. A counter, not a flag: each applier keeps
