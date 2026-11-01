@@ -1030,8 +1030,13 @@ pub(in crate::entities) struct PreviewState {
 }
 
 impl PreviewState {
-    /// The select build's tabard crest, against the look that stands: a new answer re-arms the
-    /// build, as `0x472420` installs it on the selected record's model (`0x4724a4` → `0x47a610`).
+    /// The select build's tabard crest, against the look that stands: a new answer for its own
+    /// guild re-arms the build, which wears it (`0x47a610`).
+    ///
+    /// Deviation: `0x472420` installs a landed guild's crest on the record selected at that moment
+    /// (`0x4724a4`), whichever record's guild it is (`0x472455`), so a late answer can paint another
+    /// character's guild; benilla paints only the standing record's own, because that paint is a
+    /// quirk that is a bug.
     fn watch_crest(
         &mut self,
         look: Option<GlueLook>,
