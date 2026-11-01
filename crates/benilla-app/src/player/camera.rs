@@ -111,6 +111,17 @@ pub(crate) fn on_cvar(
         // follow reader takes the stored value as is (`0x512d75`).
         "camerayawsmoothspeed" => follow.yaw_speed = v,
         "cameracustomviewsmoothing" => follow.custom_view_smoothing = ev.flag(),
+        // A timed view's rates, past their validators (`0x50c000`, `0x50c040`), read at `0x512935`
+        // and `0x5121be`.
+        "camerapitchsmoothspeed" => follow.pitch_speed = v,
+        "cameradistancesmoothspeed" => follow.distance_speed = v,
+        // One arm's duration bound, read at `0x510f4d` and `0x513255`.
+        "camerasmoothtimemin" => follow.time_min = v,
+        "camerasmoothtimemax" => follow.time_max = v,
+        // The record's integer, as `0x50b5db` passes it.
+        "cameraviewblendstyle" => {
+            follow.view_blend_style = benilla_ui::script::s_str_to_int(&ev.new);
+        }
         _ => {}
     }
 }
@@ -173,11 +184,29 @@ impl LookConfig {
 /// `cameraYawSmoothSpeed`, default 180°/s (`[0xbe1070]`, read at `0x512d75`): a duration divisor,
 /// as a return lasts `|Δyaw| / rate × factor`. The AUTO_FOLLOW_SPEED slider, greyed under Never.
 pub(crate) const FOLLOW_SPEED_DEFAULT: f32 = 180.0;
-/// `cameraSmoothTimeMin`/`Max`: 0.1 s and 2.0 s (`[0xbe105c]`/`[0xbe1038]`, clamped at `0x510f4d`).
+/// `cameraSmoothTimeMin`/`Max`'s defaults: 0.1 s and 2.0 s (`[0xbe105c]`/`[0xbe1038]`).
 const FOLLOW_TIME_MIN: f32 = 0.1;
 const FOLLOW_TIME_MAX: f32 = 2.0;
+/// `cameraDistanceSmoothSpeed`'s default, yd/s (`[0xbe106c]`).
+const VIEW_DISTANCE_SPEED: f32 = 8.33;
+/// `cameraPitchSmoothSpeed`'s default, °/s (`[0xbe0ce4]`).
+const VIEW_PITCH_SPEED: f32 = 45.0;
+/// `cameraViewBlendStyle`'s default (`[0xbe10b0]`): a timed view.
+const VIEW_BLEND_STYLE: i32 = 1;
 /// The reference's 0.001 already-there and same-arm epsilon (`[0x801360]`, `0x512ce4`/`0x512d41`).
 const FOLLOW_EPS: f32 = 1.0e-3;
+
+/// One arm's duration under `cameraSmoothTimeMin` and `cameraSmoothTimeMax`, two ordered compares
+/// (`0x510f62`-`0x510f85`, `0x513265`-`0x513286`): under the min takes it, then over the max takes
+/// that, so an inverted pair, which the validators pass, lands on the max.
+pub(super) fn bound_smooth_time(duration: f32, min: f32, max: f32) -> f32 {
+    let duration = if duration < min { min } else { duration };
+    if duration > max {
+        max
+    } else {
+        duration
+    }
+}
 
 /// Camera Following Style, 1.12's `cameraSmoothStyle`: whether the camera returns behind the
 /// character on its own. The engine's enum is 0 Never, 1 Smart, 2 Always (`0x50b6f0` registers
@@ -286,7 +315,7 @@ pub(super) mod follow_cmd {
         MOVE_BITS | STRAFE_BITS | TURN_BITS | RIGHT_MOUSE | LEFT_MOUSE | TRACK | FEAR;
 }
 
-/// The auto-follow's knobs: three 1.12 CVars at the reference's defaults.
+/// The auto-follow's and a timed view's knobs: 1.12 CVars at the reference's defaults.
 #[derive(Resource, Clone, Copy, PartialEq, Debug)]
 pub(crate) struct FollowConfig {
     /// `cameraSmoothStyle`.
@@ -301,6 +330,16 @@ pub(crate) struct FollowConfig {
     /// Not a CVar: the live view is customised ([`super::camera_view::CameraViews`]), set per
     /// frame by the controller.
     pub(crate) view_customised: bool,
+    /// `cameraSmoothTimeMin`, seconds ([`bound_smooth_time`]).
+    pub(crate) time_min: f32,
+    /// `cameraSmoothTimeMax`, seconds ([`bound_smooth_time`]).
+    pub(crate) time_max: f32,
+    /// `cameraViewBlendStyle`, the style a view verb passes `0x512e90` (`0x50b5db`).
+    pub(crate) view_blend_style: i32,
+    /// `cameraDistanceSmoothSpeed`, yd/s.
+    pub(crate) distance_speed: f32,
+    /// `cameraPitchSmoothSpeed`, °/s.
+    pub(crate) pitch_speed: f32,
 }
 
 impl Default for FollowConfig {
@@ -311,6 +350,11 @@ impl Default for FollowConfig {
             yaw_speed: FOLLOW_SPEED_DEFAULT,
             custom_view_smoothing: false,
             view_customised: false,
+            time_min: FOLLOW_TIME_MIN,
+            time_max: FOLLOW_TIME_MAX,
+            view_blend_style: VIEW_BLEND_STYLE,
+            distance_speed: VIEW_DISTANCE_SPEED,
+            pitch_speed: VIEW_PITCH_SPEED,
         }
     }
 }
@@ -377,7 +421,7 @@ struct FollowArm {
     /// The target offset: 0, directly behind, at the defaults, since `cameraYawSmoothMin`/`Max`
     /// are both 0 and the reference substitutes the crossed bound when the offset is outside them.
     to: f32,
-    /// Seconds the move takes, already clamped to `[FOLLOW_TIME_MIN, FOLLOW_TIME_MAX]`.
+    /// Seconds the move takes, already bounded ([`bound_smooth_time`]).
     dur: f32,
     /// Seconds of dead time before it starts (`Track`/`Fear` under Smart: 0.4).
     delay: f32,
@@ -478,7 +522,7 @@ impl FollowRig {
             return;
         }
         let rate = input.cfg.yaw_speed.to_radians().max(FOLLOW_EPS);
-        let dur = (gap / rate * factor).clamp(FOLLOW_TIME_MIN, FOLLOW_TIME_MAX);
+        let dur = bound_smooth_time(gap / rate * factor, input.cfg.time_min, input.cfg.time_max);
         self.arm = Some(FollowArm {
             from,
             to,
@@ -487,6 +531,54 @@ impl FollowRig {
             elapsed: 0.0,
             armed_with: (delay, factor),
         });
+    }
+
+    /// A timed view's arm of the same yaw channel (`0x5131b8` → `0x512c70`): delay 0, factor 1 and
+    /// the offset rewrapped to within π of the target (`0x512c97`-`0x512cc0`), `rate` in degrees a
+    /// second. The duration armed, `None` already there (`0x512d53`).
+    pub(super) fn arm_view(&mut self, offset: f32, to: f32, rate: f32) -> Option<f32> {
+        let from = to + wrap_pi(offset - to);
+        let gap = (to - from).abs();
+        if gap < FOLLOW_EPS {
+            return None;
+        }
+        let dur = gap / rate.to_radians().max(FOLLOW_EPS);
+        self.arm = Some(FollowArm {
+            from,
+            to,
+            dur,
+            delay: 0.0,
+            elapsed: 0.0,
+            armed_with: (0.0, 1.0),
+        });
+        Some(dur)
+    }
+
+    /// A timed view's shared duration (`0x5132a1`).
+    pub(super) fn set_duration(&mut self, dur: f32) {
+        if let Some(arm) = self.arm.as_mut() {
+            arm.dur = dur;
+        }
+    }
+
+    /// A view's stop of the channel: the target takes the live offset (`0x512f48`), no flight.
+    pub(super) fn cancel(&mut self) {
+        self.arm = None;
+    }
+
+    /// The offset the channel in flight is going to, `[cam+0x210]`.
+    pub(super) fn target_offset(&self) -> Option<f32> {
+        self.arm.map(|a| a.to)
+    }
+
+    /// A keyboard axis's step under the channel in flight, which moves the target alone
+    /// (`0x511519`-`0x51152f`); `false` with no flight.
+    pub(super) fn move_target(&mut self, step: f32) -> bool {
+        let Some(arm) = self.arm.as_mut() else {
+            return false;
+        };
+        arm.to += step;
+        true
     }
 }
 
@@ -587,6 +679,12 @@ pub(crate) struct CameraControl {
     /// `FlipCameraYaw`'s term `[cam+0x100]`, radians: the view's yaw adds it outside the offset
     /// the follow arms (`0x50f7de`), so only another flip moves it.
     pub(super) flip_yaw: f32,
+    /// Mode bit 6, `[cam+0x90] & 0x40`: the mouse or an axis moved the camera since the last view
+    /// (`0x50fee9`, `0x51131e`, cleared at `0x512f60`), so a request for the current view stays
+    /// timed (`0x512eb4`).
+    pub(super) view_moved: bool,
+    /// A timed view's distance and pitch channels ([`super::camera_view::ViewBlend`]).
+    pub(super) view_blend: super::camera_view::ViewBlend,
     /// Logical cursor position captured when look began, to restore on release.
     pub(super) cursor_stash: Option<Vec2>,
     /// A look session is running with the OS cursor handed back: the window is unfocused.
@@ -1011,24 +1109,27 @@ impl CameraControl {
         self.enter_in_place(button)
     }
 
-    /// `0x50fe30` inside a call: the mode bit, the session on `button`, the cursor hidden and the
-    /// device relative; the OS grab is owed to the look session, which takes it once focused.
-    /// Whether it entered: in freelook already, it does nothing (`0x50fe3b`).
+    /// `0x50fe30` inside a call: the mode bit, the session on `button`, a view's pitch stopped
+    /// (`0x50fe90`, `0x50fec2`), the cursor hidden and the device relative; the OS grab is owed to
+    /// the look session, which takes it once focused. Whether it entered: in freelook already, it
+    /// does nothing (`0x50fe3b`).
     fn enter_in_place(&mut self, button: LookButton) -> bool {
         if self.look.is_some() {
             return false;
         }
         self.look = Some(button);
+        self.view_blend.cancel_pitch();
         self.cursor_released = true;
         true
     }
 
     /// `0x50f940(sticky)` → `0x50fdd0` inside a call: freelook left, a toggle's with it, and the
     /// sticky bit kept (`0x50f958`, `0x50f95d`); a held OS cursor goes back at the look session.
-    /// Whether it left: out of freelook, the mode bit's test skips the leave (`0x50fddb`) and the
-    /// sticky bit is still written.
+    /// Whether it left: out of freelook, the mode bit's test skips the leave (`0x50fddb`), and the
+    /// sticky bit is still written and a view's pitch still stopped (`0x50f978`).
     fn leave_in_place(&mut self, sticky: bool) -> bool {
         self.follow.sticky = sticky;
+        self.view_blend.cancel_pitch();
         if self.look.is_none() {
             return false;
         }
@@ -1303,6 +1404,8 @@ pub(super) fn run_look_session(
     let mut handed = false;
     if rig.look.is_some() {
         let delta = motion;
+        // A mouse turn sets mode bit 6 (`0x50fee9`).
+        rig.view_moved |= delta != Vec2::ZERO;
         let d_yaw = -delta.x * yaw_rate;
         cam.yaw += d_yaw;
         // `mouseInvertPitch` flips only the pitch axis.
@@ -1344,6 +1447,8 @@ fn engage_look(
     cursor_opts: &mut CursorOptions,
 ) {
     rig.look = Some(button);
+    // Entry stops a view's pitch (`0x50fe90`, `0x50fec2`).
+    rig.view_blend.cancel_pitch();
     if focused {
         take_cursor(rig, window, cursor_opts);
     } else {
@@ -1355,6 +1460,8 @@ fn engage_look(
 /// it was already free, when it is wherever the player left it.
 fn disengage_look(rig: &mut CameraControl, window: &mut Window, cursor_opts: &mut CursorOptions) {
     rig.look = None;
+    // The leave stops a view's pitch (`0x50f978`).
+    rig.view_blend.cancel_pitch();
     let stash = rig.cursor_stash.take();
     if !std::mem::take(&mut rig.cursor_released) {
         release_cursor(cursor_opts);
@@ -1935,6 +2042,74 @@ mod tests {
 
     use benilla_world::billboard::BillboardCard;
     use benilla_world::mesh_tag::alpha_bits;
+
+    /// Two ordered compares (`0x510f62`-`0x510f85`, `0x513265`-`0x513286`): `f32::clamp` would
+    /// panic on an inverted pair, and a NaN meets neither.
+    #[test]
+    fn the_time_bound_is_two_ordered_compares() {
+        for (duration, min, max, expected) in [
+            (1.0, 0.1, 2.0, 1.0),
+            (0.01, 0.1, 2.0, 0.1),
+            (5.0, 0.1, 2.0, 2.0),
+            (3.0, 5.0, 1.0, 1.0),
+            (0.5, 5.0, 1.0, 1.0),
+        ] {
+            assert_eq!(bound_smooth_time(duration, min, max), expected);
+        }
+        assert!(bound_smooth_time(f32::NAN, 0.1, 2.0).is_nan());
+    }
+
+    /// A return's duration reads the two CVars (`0x510f4d`): 1 rad at 180°/s is about 0.32 s, which
+    /// an inverted pair puts on its max.
+    #[test]
+    fn a_return_reads_the_time_cvars() {
+        let cfg = FollowConfig {
+            style: FollowStyle::Always,
+            tracking_style: FollowStyle::Always,
+            time_min: 5.0,
+            time_max: 1.0,
+            ..FollowConfig::default()
+        };
+        let input = |command| FollowInput {
+            cfg,
+            face_yaw: 0.0,
+            command,
+        };
+        let mut rig = FollowRig::default();
+        rig.advance(&input(0), 1.0, 0.0, false);
+        rig.advance(&input(follow_cmd::FORWARD), 1.0, 0.0, false);
+        let (_, _, dur) = rig.probe().expect("armed");
+        assert_eq!(dur, 1.0);
+    }
+
+    /// A timed view runs the yaw channel the return does: by the short way across ±π
+    /// (`0x512c97`-`0x512cc0`), for the duration it is given, with the facing re-added each frame
+    /// (`0x50f7f2`), landing on the target. Already there arms nothing (`0x512d53`).
+    #[test]
+    fn a_view_arms_the_yaw_channel_by_the_short_way() {
+        let input = FollowInput {
+            cfg: FollowConfig::default(),
+            face_yaw: 0.5,
+            command: 0,
+        };
+        let mut rig = FollowRig::default();
+        assert_eq!(rig.advance(&input, 0.0, 0.0, false), None, "nothing armed");
+        let gap = std::f32::consts::TAU - 6.0;
+        let want = gap / std::f32::consts::PI;
+        let armed = rig.arm_view(3.0, -3.0, 180.0).expect("armed");
+        assert!((armed - want).abs() < 1e-4, "{armed}");
+        assert_eq!(rig.target_offset(), Some(-3.0));
+        rig.set_duration(1.0);
+        let halfway = rig.advance(&input, 0.0, 0.5, false).expect("running");
+        assert!(
+            wrap_pi(halfway - (0.5 - 3.0 - gap * 0.5)).abs() < 1e-4,
+            "{halfway}"
+        );
+        let landed = rig.advance(&input, 0.0, 0.6, false).expect("landing");
+        assert!(wrap_pi(landed - (0.5 - 3.0)).abs() < 1e-5, "{landed}");
+        assert_eq!(rig.target_offset(), None);
+        assert_eq!(rig.arm_view(0.25, 0.25, 180.0), None);
+    }
 
     /// Step a [`PivotGlide`] at 60 Hz for `secs`, holding the target; returns each frame's height.
     fn glide_run(g: &mut PivotGlide, target: Option<f32>, secs: f32) -> Vec<f32> {

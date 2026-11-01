@@ -20,7 +20,6 @@ use super::table::{same, Registered};
 
 pub(super) const INERT: &[Registered] = &[
     // ── The camera block ─────────────────────────────────────────────────────────────────────
-    same("cameraDistanceSmoothSpeed", "8.33").checked(benilla_ui::script::check_camera_decay), // 0x50b8a2
     same("cameraDive", "1"), // 0x50be03
     same("cameraFoVSmoothSpeed", "0.5").checked(benilla_ui::script::check_camera_rate), // 0x50b87f
     same("cameraHeightIgnoreStandState", "0"), // 0x50bd83
@@ -70,8 +69,6 @@ pub(super) const INERT: &[Registered] = &[
     same("cameraSmoothSmartTrackFactor", "10.0"),                                        // 0x50bb5e
     same("cameraSmoothSmartTurnDelay", "0.0"),                                           // 0x50bb5e
     same("cameraSmoothSmartTurnFactor", "1.0"),                                          // 0x50bb5e
-    same("cameraSmoothTimeMax", "2.0").checked(benilla_ui::script::check_camera_time),   // 0x50bfa4
-    same("cameraSmoothTimeMin", "0.1").checked(benilla_ui::script::check_camera_time),   // 0x50bf81
     same("cameraSmoothViewDataAlwaysDistanceDelay", "0.0"),                              // 0x50bbfe
     same("cameraSmoothViewDataAlwaysDistanceFactor", "0.0"),                             // 0x50bbfe
     same("cameraSmoothViewDataAlwaysPitchDelay", "0.0"),                                 // 0x50bbfe
@@ -185,7 +182,6 @@ pub(super) const INERT: &[Registered] = &[
     same("cameraTerrainTiltSmartTurnAbsorb", "1.0"),                                   // 0x50bc9e
     same("cameraTerrainTiltSmartTurnDelay", "0.0"),                                    // 0x50bc9e
     same("cameraTerrainTiltSmartTurnFactor", "1.0"),                                   // 0x50bc9e
-    same("cameraViewBlendStyle", "1"),                                                 // 0x50b972
     same("cameraYawSmoothMax", "0.0").checked(benilla_ui::script::check_camera_yaw),   // 0x50bf5e
     same("cameraYawSmoothMin", "0.0").checked(benilla_ui::script::check_camera_yaw),   // 0x50bf3b
     same("camerasmooth", "1"),                                                         // 0x50ba39

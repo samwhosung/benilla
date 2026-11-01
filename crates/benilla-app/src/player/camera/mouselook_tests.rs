@@ -255,6 +255,30 @@ fn release(world: &mut World, b: MouseButton) {
     }
 }
 
+/// A mouse turn sets mode bit 6 (`0x50fee9`), which a session with no motion leaves clear.
+#[test]
+fn a_mouse_turn_marks_the_camera_moved() {
+    let mut w = world(false);
+    lua(&mut w, "MouselookStart()");
+    frame(&mut w, 0.0);
+    assert!(w.resource::<CameraControl>().is_looking());
+    assert!(!w.resource::<CameraControl>().view_moved);
+    frame(&mut w, 40.0);
+    assert!(w.resource::<CameraControl>().view_moved);
+}
+
+/// Freelook's entry and its leave stop a view's pitch (`0x50fe90`, `0x50fec2`, `0x50f978`).
+#[test]
+fn freelook_stops_a_views_pitch() {
+    let mut rig = CameraControl::default();
+    rig.view_blend.arm_pitch_for_test();
+    assert!(rig.enter_in_place(LookButton::Right));
+    assert!(!rig.view_blend.pitch_in_flight(), "the entry");
+    rig.view_blend.arm_pitch_for_test();
+    assert!(rig.leave_in_place(false));
+    assert!(!rig.view_blend.pitch_in_flight(), "the leave");
+}
+
 /// The right button's session, entered with no button: the mouse turns the camera and the body
 /// together, the cursor is locked and hidden, and `IsMouselooking` answers 1 (`0x514210`).
 #[test]

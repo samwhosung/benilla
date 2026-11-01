@@ -5,7 +5,7 @@
 
 use bevy::prelude::*;
 
-use super::camera_channel::{Arm, SmoothChannel, CHANNEL_EPS};
+use super::camera_channel::{Arm, Armed, SmoothChannel, CHANNEL_EPS};
 
 /// `cameraPivotDXMax` default (`[0xbe0f30]`): the yaw per motion event a vertical drag stays under.
 pub(crate) const PIVOT_DX_MAX_DEFAULT: f32 = 0.05;
@@ -251,6 +251,32 @@ impl SmartPivot {
     fn release(&mut self, cfg: &CameraOptions) {
         self.bias
             .arm(&Arm::at(0.0, cfg.target_smooth_speed.to_radians()));
+    }
+
+    /// A view's stop of the channel: the target takes the live value (`0x512f54`), no flight.
+    pub(super) fn stop(&mut self) {
+        let live = self.bias();
+        self.bias.snap(live);
+    }
+
+    /// A timed view's arm of the bias home, delay 0 and factor 1 (`0x5131cc` → `0x512a50`), `rate`
+    /// in degrees a second: the duration armed, `None` already home.
+    pub(super) fn arm_view(&mut self, rate: f32) -> Option<f32> {
+        self.stop();
+        match self.bias.arm(&Arm::at(0.0, rate.to_radians())) {
+            Armed::Started => self.bias.duration(),
+            Armed::Already | Armed::AtRest => None,
+        }
+    }
+
+    /// A timed view's shared duration (`0x5132ab`).
+    pub(super) fn set_duration(&mut self, duration: f32) {
+        self.bias.set_duration(duration);
+    }
+
+    /// An instant view's bias: 0, live and target (`0x51310b`, `0x513111`).
+    pub(super) fn home(&mut self) {
+        self.bias.snap(0.0);
     }
 }
 
@@ -573,6 +599,25 @@ mod tests {
             move_flags: if translating { mf::FORWARD } else { 0 },
             ..SubjectState::default()
         }
+    }
+
+    /// A timed view arms the bias home like any channel (`0x5131cc` → `0x512a50`), at rest
+    /// answering none (`0x512a50` returns 0); an instant one writes 0 (`0x51310b`).
+    #[test]
+    fn a_view_takes_the_bias_home() {
+        let mut pivot = SmartPivot::default();
+        assert_eq!(pivot.arm_view(90.0), None, "already home");
+        pivot.bias.snap(0.5);
+        let armed = pivot.arm_view(90.0).expect("armed");
+        assert!((armed - 0.5 / 90f32.to_radians()).abs() < 1e-5, "{armed}");
+        pivot.set_duration(1.0);
+        pivot.bias.advance(0.5);
+        assert!((pivot.bias() - 0.25).abs() < 1e-5, "the shared time rules");
+        pivot.bias.advance(0.6);
+        assert_eq!(pivot.bias(), 0.0);
+        pivot.bias.snap(0.5);
+        pivot.home();
+        assert_eq!(pivot.bias(), 0.0);
     }
 
     /// The gate `0x510690`: each conjunct removed alone from a case that pivots.

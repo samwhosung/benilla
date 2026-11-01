@@ -469,6 +469,7 @@ pub(super) fn control(
         zoom_max,
     );
     glide_zoom(dt, &mut rig, zoom_max, pointer.2.move_speed);
+    camera_view::step_pitch(&mut rig, &mut cam, dt);
 
     // Free fly is a dev tool on the dev chord: a bare `F` is the player's to bind.
     if crate::run_mode::dev_chord(&keys, KeyCode::KeyF) {

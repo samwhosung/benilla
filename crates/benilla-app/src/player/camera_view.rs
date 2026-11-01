@@ -15,8 +15,8 @@
 //! Deviation: `ResetView` writes the CVars back to their defaults, because the CVar store is our
 //! persistence; the reference (`0x50fae0`) touches no CVar, so its reset reverts at next launch.
 //!
-//! `SetView` glides the distance and snaps pitch and yaw: the reference arms three glide channels
-//! (`0x513189`, `0x5131a3`, `0x5131b8`), the rig has only the distance one.
+//! A view is seated by `cameraViewBlendStyle` ([`set_view`]): style 1 runs the distance, pitch, yaw
+//! and pivot bias channels over one shared time, style 2 writes the pose at once.
 
 use bevy::prelude::*;
 
@@ -25,7 +25,9 @@ use benilla_world::view::WorldCamera;
 
 use crate::creature_anim::wrap_pi;
 
-use super::camera::{CameraControl, FlyCam, CAM_PITCH_LIMIT};
+use super::camera::{bound_smooth_time, CameraControl, FlyCam, FollowConfig, CAM_PITCH_LIMIT};
+use super::camera_channel::{Arm, Armed, SmoothChannel};
+use super::camera_dynamics::CameraOptions;
 use super::camera_saved::{pitch_from_file, pitch_to_file};
 use super::camera_zoom::{CAM_DIST_MAX, CAM_DIST_MIN};
 use super::Player;
@@ -198,6 +200,154 @@ fn load_saved_views(cvars: Res<crate::cvars::Cvars>, mut views: ResMut<CameraVie
     }
 }
 
+/// `0x512e90`'s style for a timed view.
+const STYLE_TIMED: i32 = 1;
+/// `0x512e90`'s style for an instant view.
+const STYLE_INSTANT: i32 = 2;
+
+/// What [`set_view`] reads of the CVars: the style its caller passes and a timed view's rates and
+/// duration bound.
+#[derive(Clone, Copy, Debug)]
+struct ViewCvars {
+    style: i32,
+    /// `cameraDistanceSmoothSpeed`, yd/s (`0x5121be`).
+    distance_speed: f32,
+    /// `cameraPitchSmoothSpeed`, °/s (`0x512935`).
+    pitch_speed: f32,
+    /// `cameraYawSmoothSpeed`, °/s (`0x512d75`).
+    yaw_speed: f32,
+    /// `cameraTargetSmoothSpeed`, °/s (`0x512b55`).
+    bias_speed: f32,
+    /// `cameraSmoothTimeMin` and `cameraSmoothTimeMax`, seconds (`0x513255`).
+    time_min: f32,
+    time_max: f32,
+}
+
+impl ViewCvars {
+    /// Off the knobs the rows' callback writes, each at its default in a harness without it.
+    fn read(follow: Option<&FollowConfig>, options: Option<&CameraOptions>) -> Self {
+        let follow = follow.copied().unwrap_or_default();
+        Self {
+            style: follow.view_blend_style,
+            distance_speed: follow.distance_speed,
+            pitch_speed: follow.pitch_speed,
+            yaw_speed: follow.yaw_speed,
+            bias_speed: options.copied().unwrap_or_default().target_smooth_speed,
+            time_min: follow.time_min,
+            time_max: follow.time_max,
+        }
+    }
+}
+
+/// A timed view's distance and pitch channels (`0x512120`, `0x512830`), in flight from its arm to
+/// their landing. The yaw's is the follow's ([`super::camera::FollowRig`]) and the bias's is
+/// [`super::camera_dynamics::SmartPivot`]'s.
+pub(super) struct ViewBlend {
+    distance: SmoothChannel,
+    pitch: SmoothChannel,
+}
+
+impl Default for ViewBlend {
+    fn default() -> Self {
+        Self {
+            distance: SmoothChannel::default(),
+            pitch: SmoothChannel::angular(),
+        }
+    }
+}
+
+impl ViewBlend {
+    /// One channel's arm from `live`, delay 0 and factor 1: the duration armed, `None` already
+    /// there (`0x512184`).
+    fn arm(channel: &mut SmoothChannel, live: f32, target: f32, rate: f32) -> Option<f32> {
+        channel.snap(live);
+        match channel.arm(&Arm::at(target, rate)) {
+            Armed::Started => channel.duration(),
+            Armed::Already | Armed::AtRest => None,
+        }
+    }
+
+    /// The shared duration, on whichever of the two is armed (`0x51328d`, `0x513297`).
+    fn set_duration(&mut self, duration: f32) {
+        self.distance.set_duration(duration);
+        self.pitch.set_duration(duration);
+    }
+
+    /// Both flights ended where they stand (`0x512f2e`-`0x512f99`).
+    pub(super) fn stop(&mut self) {
+        let live = self.distance.live();
+        self.distance.snap(live);
+        self.cancel_pitch();
+    }
+
+    /// The pitch's flight ended where it stands: freelook's entry and leave (`0x50fe90`,
+    /// `0x50f978`).
+    pub(super) fn cancel_pitch(&mut self) {
+        let live = self.pitch.live();
+        self.pitch.snap(live);
+    }
+
+    pub(super) fn distance_in_flight(&self) -> bool {
+        self.distance.in_flight()
+    }
+
+    /// The distance channel's step toward `target`, the rig's (`0x50f2b8`): the live distance, or
+    /// `None` with no flight.
+    pub(super) fn step_distance(&mut self, target: f32, dt: f32) -> Option<f32> {
+        if !self.distance.in_flight() {
+            return None;
+        }
+        self.distance.retarget(target);
+        Some(self.distance.advance(dt))
+    }
+
+    /// A keyboard axis's step under the pitch's flight, which moves the target alone (`0x51153a`,
+    /// `0x5115d6`), held to ±89°; `false` with no flight.
+    pub(super) fn move_pitch_target(&mut self, step: f32) -> bool {
+        if !self.pitch.in_flight() {
+            return false;
+        }
+        let (_, target) = self.pitch.probe();
+        self.pitch
+            .retarget((target + step).clamp(-CAM_PITCH_LIMIT, CAM_PITCH_LIMIT));
+        true
+    }
+
+    /// The pitch `SaveView` stores, `[cam+0x1e0]`, given the live pitch: the live one with no
+    /// flight, else the flight's target moved by what else moved the live one ([`step_pitch`]).
+    fn pitch_target(&self, live: f32) -> f32 {
+        if !self.pitch.in_flight() {
+            return live;
+        }
+        let (channel, target) = self.pitch.probe();
+        (target + live - channel).clamp(-CAM_PITCH_LIMIT, CAM_PITCH_LIMIT)
+    }
+
+    /// A pitch flight, for a test of what ends it.
+    #[cfg(test)]
+    pub(super) fn arm_pitch_for_test(&mut self) {
+        Self::arm(&mut self.pitch, 0.0, 1.0, 1.0);
+    }
+
+    #[cfg(test)]
+    pub(super) fn pitch_in_flight(&self) -> bool {
+        self.pitch.in_flight()
+    }
+}
+
+/// The pitch channel's step in the camera's update (`0x50f576`): its motion, added to what the
+/// mouse and the ground lean moved the pitch by, which shift the whole tween in the reference
+/// (`0x510120`), held to ±89° (`0x50d720`).
+pub(super) fn step_pitch(rig: &mut CameraControl, cam: &mut FlyCam, dt: f32) {
+    let channel = &mut rig.view_blend.pitch;
+    if !channel.in_flight() {
+        return;
+    }
+    let before = channel.live();
+    let after = channel.advance(dt);
+    cam.pitch = (cam.pitch + after - before).clamp(-CAM_PITCH_LIMIT, CAM_PITCH_LIMIT);
+}
+
 /// The camera-view verbs inside their calls ([`benilla_ui::script::ScriptCall::CameraView`]):
 /// `SetView` (`0x50b5b0` → `0x512e90`) seats the view and writes `cameraView` with `CVar::Set`
 /// (`0x512f17`), `SaveView` (`0x50b600` → `0x50fa30` → `0x50f990`) writes the three fields
@@ -206,6 +356,9 @@ fn load_saved_views(cvars: Res<crate::cvars::Cvars>, mut views: ResMut<CameraVie
 pub(crate) struct ViewSteps<'w, 's> {
     views: Option<ResMut<'w, CameraViews>>,
     rig: Option<ResMut<'w, CameraControl>>,
+    /// A timed view's rates and time bound, and its style ([`ViewCvars`]).
+    follow: Option<Res<'w, FollowConfig>>,
+    options: Option<Res<'w, CameraOptions>>,
     /// `cameraDistanceMoveSpeed`, the zoom's rate (`[0xbe0fbc]+0x24`, `0x50fc63`).
     zoom: Option<Res<'w, super::camera_zoom::ZoomLimit>>,
     cam: Query<'w, 's, &'static mut FlyCam, With<WorldCamera>>,
@@ -242,6 +395,7 @@ impl ViewSteps<'_, '_> {
         if self.capture.is_some() {
             return writes;
         }
+        let cvars = ViewCvars::read(self.follow.as_deref(), self.options.as_deref());
         let (Some(views), Some(rig), Some(player)) = (
             self.views.as_deref_mut(),
             self.rig.as_deref_mut(),
@@ -257,17 +411,18 @@ impl ViewSteps<'_, '_> {
         let mut write_active = false;
         match request {
             CameraViewRequest::Set(n) => {
-                write_active = apply(views, rig, &mut cam, face_yaw, usize::from(n));
+                write_active = set_view(views, rig, &mut cam, face_yaw, usize::from(n), &cvars);
             }
             CameraViewRequest::Save(n) => {
                 let view = usize::from(n);
                 views.save(
                     view,
                     ViewPose {
-                        // The target zoom, not the collision-pulled arm (`cam+0x198`).
+                        // The targets (`0x50fa33`-`0x50fa40`): the zoom, not the collision-pulled
+                        // arm, and where a channel in flight is going.
                         distance: rig.target_distance,
-                        pitch: cam.pitch,
-                        yaw: wrap_pi(cam.yaw - face_yaw),
+                        pitch: rig.view_blend.pitch_target(cam.pitch),
+                        yaw: wrap_pi(rig.follow.target_offset().unwrap_or(cam.yaw - face_yaw)),
                     },
                 );
                 write_slot = Some(view);
@@ -275,14 +430,14 @@ impl ViewSteps<'_, '_> {
             CameraViewRequest::Reset(n) => {
                 let view = usize::from(n);
                 if views.reset(view) {
-                    write_active = apply(views, rig, &mut cam, face_yaw, view);
+                    write_active = set_view(views, rig, &mut cam, face_yaw, view, &cvars);
                 }
                 write_slot = Some(view);
             }
             CameraViewRequest::Next | CameraViewRequest::Prev => {
                 let forward = request == CameraViewRequest::Next;
                 if let Some(view) = views.step(forward) {
-                    write_active = apply(views, rig, &mut cam, face_yaw, view);
+                    write_active = set_view(views, rig, &mut cam, face_yaw, view, &cvars);
                 }
             }
             CameraViewRequest::FlipYaw(degrees) => {
@@ -310,18 +465,70 @@ impl ViewSteps<'_, '_> {
     }
 }
 
-/// Seat one view; the distance glides through `target_distance`. `true` when the live index moved.
-fn apply(
+/// `0x512e90`: make `view` current and seat it by `cvars.style`. A request for the current view,
+/// with nothing having moved the camera since the last, goes at once unless its style is 0
+/// (`0x512eac`-`0x512ebf`). Every channel first stops where it stands, mode bit 6 clearing with
+/// them (`0x512f22`-`0x512f99`). `true` when the live index moved, which writes `cameraView`.
+fn set_view(
     views: &mut CameraViews,
     rig: &mut CameraControl,
     cam: &mut FlyCam,
     face_yaw: f32,
     view: usize,
+    cvars: &ViewCvars,
 ) -> bool {
+    let at_once = views.current == view && !rig.view_moved && cvars.style != 0;
+    let style = if at_once { STYLE_INSTANT } else { cvars.style };
     let (pose, moved) = views.set(view);
-    rig.target_distance = pose.distance;
-    cam.pitch = pose.pitch.clamp(-CAM_PITCH_LIMIT, CAM_PITCH_LIMIT);
-    cam.yaw = wrap_pi(face_yaw + pose.yaw);
+    rig.view_moved = false;
+    rig.target_distance = rig.distance;
+    rig.view_blend.stop();
+    rig.follow.cancel();
+    rig.smart_pivot.stop();
+    let pitch = pose.pitch.clamp(-CAM_PITCH_LIMIT, CAM_PITCH_LIMIT);
+    match style {
+        STYLE_TIMED => {
+            // One arm per channel, delay 0 and factor 1 (`0x513189`-`0x5131cc`), then every armed
+            // one takes the longest duration, bounded by the time CVars (`0x5131d1`-`0x5132ab`).
+            let distance = ViewBlend::arm(
+                &mut rig.view_blend.distance,
+                rig.distance,
+                pose.distance,
+                cvars.distance_speed,
+            );
+            if distance.is_some() {
+                rig.target_distance = pose.distance;
+            }
+            let pitch = ViewBlend::arm(
+                &mut rig.view_blend.pitch,
+                cam.pitch,
+                pitch,
+                cvars.pitch_speed.to_radians(),
+            );
+            let offset = wrap_pi(cam.yaw - face_yaw);
+            let yaw = rig.follow.arm_view(offset, pose.yaw, cvars.yaw_speed);
+            let bias = rig.smart_pivot.arm_view(cvars.bias_speed);
+            let longest = [distance, pitch, yaw, bias]
+                .into_iter()
+                .flatten()
+                .fold(0.0, f32::max);
+            let shared = bound_smooth_time(longest, cvars.time_min, cvars.time_max);
+            rig.view_blend.set_duration(shared);
+            rig.follow.set_duration(shared);
+            rig.smart_pivot.set_duration(shared);
+        }
+        STYLE_INSTANT => {
+            // The pose at once, live and target (`0x5130d8`-`0x513111`), with the arm on it.
+            rig.distance = pose.distance;
+            rig.target_distance = pose.distance;
+            rig.collision_distance = pose.distance;
+            cam.pitch = pitch;
+            cam.yaw = wrap_pi(face_yaw + pose.yaw);
+            rig.smart_pivot.home();
+        }
+        // Any other style seats nothing (`0x51301e`).
+        _ => {}
+    }
     moved
 }
 
@@ -333,8 +540,10 @@ pub(super) fn plugin(app: &mut App) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::camera::{follow_cmd, seat_camera, FollowConfig, FollowInput, FollowStyle};
-    use super::super::camera_dynamics::{CameraOptions, DynamicsInput, SubjectState};
+    use super::super::camera::{follow_cmd, seat_camera, FollowInput, FollowStyle, LookConfig};
+    use super::super::camera_axes::tick;
+    use super::super::camera_dynamics::{DynamicsInput, SubjectState};
+    use super::super::camera_zoom::{glide_zoom, ZoomLimit};
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
 
@@ -568,6 +777,277 @@ mod tests {
             views.set(prev);
         }
         assert_eq!(views.step(false), None);
+    }
+
+    /// The rig and camera seated on the shipped view 1, the starting view.
+    fn on_view_one() -> (CameraViews, CameraControl, FlyCam) {
+        let views = CameraViews::default();
+        let pose = views.pose(1);
+        let rig = CameraControl {
+            distance: pose.distance,
+            target_distance: pose.distance,
+            collision_distance: pose.distance,
+            ..Default::default()
+        };
+        let cam = FlyCam {
+            yaw: 0.0,
+            pitch: pose.pitch,
+            speed: 0.0,
+        };
+        (views, rig, cam)
+    }
+
+    /// The defaults, with `style`.
+    fn style(style: i32) -> ViewCvars {
+        ViewCvars {
+            style,
+            ..ViewCvars::read(None, None)
+        }
+    }
+
+    /// `secs` of the camera update's distance and pitch channels, at 60 Hz.
+    fn run_channels(rig: &mut CameraControl, cam: &mut FlyCam, secs: f32) {
+        const DT: f32 = 1.0 / 60.0;
+        for _ in 0..(secs / DT).round() as usize {
+            glide_zoom(DT, rig, CAM_DIST_MAX, 8.33);
+            step_pitch(rig, cam, DT);
+        }
+    }
+
+    /// Style 1 arms each channel and gives them the longest duration (`0x513189`-`0x5132ab`): from
+    /// view 1 to view 3, 8.33 yd at 8.33 yd/s is 1 s against 20° at 45°/s, so the pitch shares the
+    /// second, and both pass the midpoint together on the cosine (`0x5b7bb0`).
+    #[test]
+    fn a_timed_view_moves_its_channels_over_one_shared_time() {
+        let (mut views, mut rig, mut cam) = on_view_one();
+        let (from, to) = (views.pose(1), views.pose(3));
+        let timed = style(STYLE_TIMED);
+        assert!(set_view(&mut views, &mut rig, &mut cam, 0.0, 3, &timed));
+        assert_eq!(rig.distance, from.distance, "nothing moves at the arm");
+        assert_eq!(cam.pitch, from.pitch);
+        assert_eq!(rig.target_distance, to.distance, "the target does");
+        assert_eq!(
+            rig.view_blend.distance.duration(),
+            rig.view_blend.pitch.duration(),
+            "one duration"
+        );
+        run_channels(&mut rig, &mut cam, 0.5);
+        let midpoint = |a: f32, b: f32| (a + b) * 0.5;
+        assert!(
+            (rig.distance - midpoint(from.distance, to.distance)).abs() < 0.02,
+            "{}",
+            rig.distance
+        );
+        assert!(
+            (cam.pitch - midpoint(from.pitch, to.pitch)).abs() < 1e-3,
+            "{}",
+            cam.pitch
+        );
+        run_channels(&mut rig, &mut cam, 0.6);
+        assert_eq!(rig.distance, to.distance, "it lands");
+        assert!((cam.pitch - to.pitch).abs() < 1e-4, "{}", cam.pitch);
+        assert!(!rig.view_blend.distance_in_flight());
+        assert!(!rig.view_blend.pitch_in_flight());
+    }
+
+    /// The yaw runs on the follow's channel, to the view's saved offset (`0x5131b8`).
+    #[test]
+    fn a_timed_view_arms_the_yaw_to_its_saved_offset() {
+        let (mut views, mut rig, mut cam) = on_view_one();
+        let to = views.pose(3);
+        views.save(3, ViewPose { yaw: 1.0, ..to });
+        set_view(&mut views, &mut rig, &mut cam, 0.0, 3, &style(STYLE_TIMED));
+        assert_eq!(rig.follow.target_offset(), Some(1.0));
+        assert_eq!(cam.yaw, 0.0, "nothing moves at the arm");
+    }
+
+    /// The shared time takes the time CVars' bound (`0x513255`-`0x513286`): 5.55 to 50 yd at
+    /// 8.33 yd/s is 5.3 s.
+    #[test]
+    fn the_shared_time_is_bound_by_the_time_cvars() {
+        let duration = |time_min, time_max| {
+            let (mut views, mut rig, mut cam) = on_view_one();
+            let far = ViewPose {
+                distance: CAM_DIST_MAX,
+                ..views.pose(3)
+            };
+            views.save(3, far);
+            let cvars = ViewCvars {
+                time_min,
+                time_max,
+                ..style(STYLE_TIMED)
+            };
+            set_view(&mut views, &mut rig, &mut cam, 0.0, 3, &cvars);
+            rig.view_blend.distance.duration()
+        };
+        assert_eq!(duration(0.1, 2.0), Some(2.0));
+        assert_eq!(duration(9.0, 30.0), Some(9.0));
+        assert_eq!(duration(5.0, 1.0), Some(1.0), "an inverted pair");
+    }
+
+    /// Style 2 writes the pose, live and target, at once (`0x5130d8`-`0x513111`).
+    #[test]
+    fn style_two_writes_the_pose_at_once() {
+        let (mut views, mut rig, mut cam) = on_view_one();
+        let to = views.pose(3);
+        let instant = style(STYLE_INSTANT);
+        assert!(set_view(&mut views, &mut rig, &mut cam, 0.0, 3, &instant));
+        assert_eq!(
+            (rig.distance, rig.target_distance, rig.collision_distance),
+            (to.distance, to.distance, to.distance)
+        );
+        assert_eq!(cam.pitch, to.pitch);
+        assert!(!rig.view_blend.distance_in_flight());
+        assert!(!rig.view_blend.pitch_in_flight());
+    }
+
+    /// A request for the current view goes at once while mode bit 6 is clear
+    /// (`0x512eac`-`0x512ebf`), and is timed once the mouse or an axis has set it; the request
+    /// clears the bit (`0x512f60`). The index did not move, so `cameraView` is not written
+    /// (`0x512eef`).
+    #[test]
+    fn the_current_view_goes_at_once_until_the_camera_has_moved() {
+        let (mut views, mut rig, mut cam) = on_view_one();
+        let home = views.pose(1).distance;
+        let timed = style(STYLE_TIMED);
+        rig.distance = 9.0;
+        rig.target_distance = 9.0;
+        assert!(!set_view(&mut views, &mut rig, &mut cam, 0.0, 1, &timed));
+        assert_eq!(rig.distance, home, "at once");
+        rig.distance = 9.0;
+        rig.target_distance = 9.0;
+        rig.view_moved = true;
+        assert!(!set_view(&mut views, &mut rig, &mut cam, 0.0, 1, &timed));
+        assert_eq!(rig.distance, 9.0, "timed");
+        assert!(rig.view_blend.distance_in_flight());
+        assert!(!rig.view_moved);
+    }
+
+    /// Any other style makes the view current and seats nothing, each target on its live value
+    /// (`0x512f2e`, `0x51301e`), and style 0 stays itself for the current view (`0x512ebd`).
+    #[test]
+    fn a_style_of_neither_seats_nothing() {
+        let (mut views, mut rig, mut cam) = on_view_one();
+        let (distance, pitch) = (rig.distance, cam.pitch);
+        let (zero, other) = (style(0), style(3));
+        rig.target_distance = 20.0;
+        assert!(set_view(&mut views, &mut rig, &mut cam, 0.0, 3, &other));
+        assert_eq!(views.current, 3);
+        assert_eq!((rig.distance, rig.target_distance), (distance, distance));
+        assert_eq!(cam.pitch, pitch);
+        assert!(!set_view(&mut views, &mut rig, &mut cam, 0.0, 3, &zero));
+        assert_eq!(rig.distance, distance);
+        // Style 3 for the current view is not 0, so it goes at once.
+        assert!(!set_view(&mut views, &mut rig, &mut cam, 0.0, 3, &other));
+        assert_eq!(rig.distance, views.pose(3).distance);
+    }
+
+    /// While a channel runs an axis moves its target alone (`0x51140c`, `0x51152f`, `0x5115d6`),
+    /// and the channel lands on where it was moved. A start tick runs nothing, so of three ticks
+    /// two move: 1.666 yd and 4.5°.
+    #[test]
+    fn an_axis_under_a_timed_view_moves_the_target_alone() {
+        use benilla_ui::script::ViewAxis;
+        let (mut views, mut rig, mut cam) = on_view_one();
+        let to = views.pose(3);
+        views.save(3, ViewPose { yaw: 1.0, ..to });
+        set_view(&mut views, &mut rig, &mut cam, 0.0, 3, &style(STYLE_TIMED));
+        let live = (rig.distance, cam.pitch, cam.yaw);
+        rig.view_axes.apply(&[
+            (ViewAxis::Out, true),
+            (ViewAxis::Down, true),
+            (ViewAxis::Right, true),
+        ]);
+        for _ in 0..3 {
+            tick(
+                &mut rig,
+                &mut cam,
+                0.1,
+                LookConfig::default(),
+                8.33,
+                CAM_DIST_MAX,
+            );
+        }
+        assert_eq!((rig.distance, cam.pitch, cam.yaw), live);
+        assert!((rig.target_distance - (to.distance + 1.666)).abs() < 1e-3);
+        assert!(rig.follow.target_offset().is_some_and(|t| t > 1.0));
+        run_channels(&mut rig, &mut cam, 1.1);
+        assert_eq!(rig.distance, rig.target_distance);
+        assert!(
+            (cam.pitch - (to.pitch + 4.5f32.to_radians())).abs() < 1e-3,
+            "{}",
+            cam.pitch
+        );
+    }
+
+    /// The mouse's and the ground lean's steps shift the whole tween (`0x510120`): one made under
+    /// the flight stands when it lands.
+    #[test]
+    fn a_pitch_step_under_a_timed_view_stands_when_it_lands() {
+        let (mut views, mut rig, mut cam) = on_view_one();
+        let to = views.pose(3);
+        set_view(&mut views, &mut rig, &mut cam, 0.0, 3, &style(STYLE_TIMED));
+        run_channels(&mut rig, &mut cam, 0.25);
+        cam.pitch += 0.1;
+        assert!((rig.view_blend.pitch_target(cam.pitch) - (to.pitch + 0.1)).abs() < 1e-4);
+        run_channels(&mut rig, &mut cam, 0.9);
+        assert!((cam.pitch - (to.pitch + 0.1)).abs() < 1e-4, "{}", cam.pitch);
+    }
+
+    /// `SaveView` stores the targets, not the live values (`0x50fa33`-`0x50fa40`).
+    #[test]
+    fn a_view_saved_in_flight_stores_where_it_is_going() {
+        let mut world = verb_world();
+        let pose = ViewPose {
+            distance: 13.88,
+            pitch: -0.5,
+            yaw: 1.0,
+        };
+        world.resource_mut::<CameraViews>().save(3, pose);
+        verb(&mut world, CameraViewRequest::Set(3));
+        verb(&mut world, CameraViewRequest::Save(2));
+        let saved = world.resource::<CameraViews>().pose(2);
+        assert_eq!(saved.distance, pose.distance);
+        assert!((saved.pitch - pose.pitch).abs() < 1e-5, "{}", saved.pitch);
+        assert!((saved.yaw - pose.yaw).abs() < 1e-5, "{}", saved.yaw);
+    }
+
+    /// The verbs read the style off the row: 2 seats the view inside the call.
+    #[test]
+    fn a_view_verb_reads_the_blend_style() {
+        let mut world = verb_world();
+        world.insert_resource(FollowConfig {
+            view_blend_style: STYLE_INSTANT,
+            ..FollowConfig::default()
+        });
+        verb(&mut world, CameraViewRequest::Set(3));
+        let want = world.resource::<CameraViews>().pose(3).distance;
+        assert_eq!(world.resource::<CameraControl>().distance, want);
+    }
+
+    /// A write to each row reaches the knob a view reads, through the rows' callback.
+    #[test]
+    fn the_view_cvars_reach_their_knobs() {
+        let mut world = World::new();
+        world.init_resource::<crate::cvars::Cvars>();
+        world.init_resource::<LookConfig>();
+        world.init_resource::<ZoomLimit>();
+        world.init_resource::<FollowConfig>();
+        world
+            .run_system_once(|mut steps: crate::cvars::CvarSteps| {
+                let cvars = steps.cvars().expect("the registry");
+                cvars.set("cameraViewBlendStyle", "2");
+                cvars.set("cameraSmoothTimeMin", "0.25");
+                cvars.set("cameraSmoothTimeMax", "1.5");
+                cvars.set("cameraDistanceSmoothSpeed", "4.0");
+                cvars.set("cameraPitchSmoothSpeed", "30.0");
+                steps.sync(None);
+            })
+            .expect("the sync runs");
+        let knobs = *world.resource::<FollowConfig>();
+        assert_eq!(knobs.view_blend_style, 2);
+        assert_eq!((knobs.time_min, knobs.time_max), (0.25, 1.5));
+        assert_eq!((knobs.distance_speed, knobs.pitch_speed), (4.0, 30.0));
     }
 
     /// A world with what the view verbs read: the camera, the rig and a body facing 0.

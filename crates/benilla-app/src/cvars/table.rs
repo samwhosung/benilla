@@ -515,10 +515,18 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // `cameraCustomViewSmoothing` (`0x50bad0`, read at `0x50fc33`): with it set, a customised view
     // still takes the auto-return.
     same("cameraCustomViewSmoothing", "0"),
-    // `UIOptionsFrame.lua:353` names `cameraPitchSmoothSpeed`, registered "45.0" (`0x50b90b`) with
-    // the same validator, and `SetCVar` raises on a name no CVar has (`0x488c53`). `FollowRig` has
-    // one rate, so nothing reads it.
+    // A timed view's pitch rate (`0x512935`), which `UIOptionsFrame.lua:353` also writes,
+    // registered "45.0" (`0x50b90b`) with the same validator.
     same("cameraPitchSmoothSpeed", "45.0").checked(benilla_ui::script::check_camera_rate),
+    // A timed view's distance rate (`0x5121be`), registered "8.33" (`0x50b8a2`), `0x50c040`.
+    same("cameraDistanceSmoothSpeed", "8.33").checked(benilla_ui::script::check_camera_decay),
+    // The style a view verb passes `0x512e90` (`0x50b5db`), registered "1" (`0x50b972`): 1 timed,
+    // 2 instant, and any other seats nothing.
+    same("cameraViewBlendStyle", "1"),
+    // One arm's duration bound (`0x510f4d`, `0x513255`), registered "0.1" and "2.0" (`0x50bf81`,
+    // `0x50bfa4`), `0x50bfe0`, which orders nothing between the two.
+    same("cameraSmoothTimeMin", "0.1").checked(benilla_ui::script::check_camera_time),
+    same("cameraSmoothTimeMax", "2.0").checked(benilla_ui::script::check_camera_time),
     // `cameraPivot` `[0xbe10a4]` "1" (`0x50bda3`), smart pivot: gate `0x510690`, routing
     // `0x50fee0`, release `0x5107f0`; ours is `player::camera_dynamics::SmartPivot`.
     same("cameraPivot", "1"),

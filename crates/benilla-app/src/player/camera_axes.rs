@@ -125,7 +125,8 @@ impl ViewAxes {
 /// The axes' tick (`0x5112d0`), from the camera update while any is active. Distance moves
 /// `cameraDistanceMoveSpeed` yards a second, held to `[0, max]` (`0x511402`, `0x51145e`); the yaw
 /// `cameraYawMoveSpeed` degrees a second; the pitch a quarter of `cameraPitchMoveSpeed`, held to
-/// ±89° (`0x8089d8`). The live value follows the target (`0x511422`, `0x51152f`, `0x5115d6`).
+/// ±89° (`0x8089d8`). The live value follows the target unless its channel runs (`0x511422`,
+/// `0x51152f`, `0x5115d6`). Any running axis sets mode bit 6 (`0x51131e`).
 /// Here Right raises the yaw as the reference's `+0x210` rises (`0x5114a7`), both turning left as
 /// they grow, so the camera swings to the character's right; Up raises the reference's pitch,
 /// which looks down as it grows, so ours, up-positive, falls.
@@ -140,6 +141,7 @@ pub(super) fn tick(
     if !rig.view_axes.any() {
         return;
     }
+    rig.view_moved = true;
     let secs = rig.view_axes.advance(dt);
     let at = |axis: ViewAxis| secs[axis as usize];
     let zoom = distance_speed * (at(ViewAxis::Out) - at(ViewAxis::In));
@@ -148,16 +150,20 @@ pub(super) fn tick(
         let target = (rig.target_distance + zoom)
             .max(CAM_DIST_MIN)
             .min(max_distance);
-        rig.distance = (rig.distance + (target - rig.target_distance))
-            .max(CAM_DIST_MIN)
-            .min(max_distance);
+        if !rig.view_blend.distance_in_flight() {
+            rig.distance = (rig.distance + (target - rig.target_distance))
+                .max(CAM_DIST_MIN)
+                .min(max_distance);
+        }
         rig.target_distance = target;
     }
     let yaw = look.yaw_speed.to_radians() * (at(ViewAxis::Right) - at(ViewAxis::Left));
-    cam.yaw += yaw;
+    if !rig.follow.move_target(yaw) {
+        cam.yaw += yaw;
+    }
     let pitch = (look.pitch_speed * PITCH_RATE_SCALE).to_radians()
         * (at(ViewAxis::Down) - at(ViewAxis::Up));
-    if pitch != 0.0 {
+    if pitch != 0.0 && !rig.view_blend.move_pitch_target(pitch) {
         cam.pitch = (cam.pitch + pitch).clamp(-CAM_PITCH_LIMIT, CAM_PITCH_LIMIT);
     }
 }
@@ -215,6 +221,17 @@ mod tests {
             r.distance, r.target_distance,
             "the live distance moves with it"
         );
+    }
+
+    /// Any running axis sets mode bit 6 (`0x51131e`); with none running the tick never comes
+    /// (`0x50ea48`).
+    #[test]
+    fn a_running_axis_marks_the_camera_moved() {
+        let (mut r, mut c) = (rig(10.0), cam());
+        run(&mut r, &mut c, &[], 1, 0.1);
+        assert!(!r.view_moved);
+        run(&mut r, &mut c, &[(ViewAxis::Right, true)], 1, 0.1);
+        assert!(r.view_moved);
     }
 
     /// Right raises the yaw and Left lowers it (`0x5114a7`, `0x5114f0`); Up lowers our pitch, the

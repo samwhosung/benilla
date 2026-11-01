@@ -111,8 +111,12 @@ fn load_camera_pose(
     rig.distance = CAM_DIST_DEFAULT;
     rig.target_distance = CAM_DIST_DEFAULT;
     rig.collision_distance = CAM_DIST_DEFAULT;
-    // A new camera object, whose constructor zeroes the flip (`0x50c1cc`).
+    // A new camera object, whose constructor zeroes the flip and the mode word (`0x50c1cc`,
+    // `0x50c156`).
     rig.flip_yaw = 0.0;
+    rig.view_moved = false;
+    rig.view_blend.stop();
+    rig.follow.cancel();
     player.login_pitch = None;
 
     let Some(path) = file.path.clone() else {

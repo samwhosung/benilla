@@ -117,6 +117,25 @@ impl SmoothChannel {
         self.flight.is_some()
     }
 
+    /// The duration in flight, seconds.
+    pub(super) fn duration(&self) -> Option<f32> {
+        self.flight.map(|f| f.duration)
+    }
+
+    /// Another duration for the tween in flight, as `SetView` gives every channel it armed one
+    /// (`0x513289`-`0x5132ab`).
+    pub(super) fn set_duration(&mut self, duration: f32) {
+        if let Some(f) = self.flight.as_mut() {
+            f.duration = duration;
+        }
+    }
+
+    /// A new target under the tween in flight, as the axes move a running channel's target
+    /// (`0x51140c`, `0x5115d6`).
+    pub(super) fn retarget(&mut self, target: f32) {
+        self.to = target;
+    }
+
     /// Sets the channel to `v` with nothing in flight, the reference's hard snap: the water band
     /// crossing writes the pitch's live `[cam+0xf4]` and target `[cam+0x1e0]` directly while
     /// `[cam+0x90] & 1` (`0x50ed13`), and a camera's first height arm snaps (`0x5127d4`).
