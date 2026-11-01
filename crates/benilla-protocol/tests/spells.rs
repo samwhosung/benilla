@@ -1290,10 +1290,10 @@ fn kill_outcome_dispel_enchantment_and_execute_logs_parse() {
         other => panic!("dispel failed, got {}", other.name()),
     }
 
-    // SMSG_ENCHANTMENTLOG, per vmangos `Server/Packets/Item.cpp:235-242`.
+    // SMSG_ENCHANTMENTLOG: the owner, then the caster (`0x628f23`-`0x628f29`).
     let body = hx(concat!(
-        "0000000000000000", // caster 0: the enchant faded
         "0b00000000000000", // owner 11
+        "0000000000000000", // caster 0: the enchant faded (`0x628fac`)
         "d2040000",         // itemEntry 1234
         "39050000",         // enchantment 1337
         "00",               // showAffiliation false
@@ -1302,8 +1302,8 @@ fn kill_outcome_dispel_enchantment_and_execute_logs_parse() {
         ServerPacket::EnchantmentLog(p) => assert_eq!(
             p,
             EnchantmentLog {
-                caster: 0,
                 owner: 11,
+                caster: 0,
                 item_entry: 1234,
                 enchant_id: 1337,
                 show_affiliation: false,

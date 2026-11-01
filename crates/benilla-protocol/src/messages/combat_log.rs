@@ -361,12 +361,15 @@ pub(super) fn read_dispel_failed(r: &mut impl Read) -> io::Result<DispelFailed> 
     })
 }
 
-/// `SMSG_ENCHANTMENTLOG`, an enchant landing on or fading from an item
-/// (`Server/Packets/Item.cpp:235-242`); a zero `caster` means it faded.
+/// `SMSG_ENCHANTMENTLOG`, an enchant landing on or fading from an item. `0x628ea0` hands its first
+/// guid on as the owner and its second as the caster (`0x628f23`-`0x628f29`), the other way round
+/// from vmangos's names (`Server/Packets/Item.cpp:237-238`); a zero `caster` means it faded
+/// (`0x628fac`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EnchantmentLog {
-    pub caster: u64,
+    /// The target of either line (`0x628fd2`, `0x6291f4`).
     pub owner: u64,
+    pub caster: u64,
     pub item_entry: u32,
     /// A `SpellItemEnchantment.dbc` row, though vmangos names it `spellId`: every caller passes
     /// the item's enchantment id (`Objects/Item.cpp:1040`, `:1043`, `:1079`).
@@ -378,8 +381,8 @@ pub struct EnchantmentLog {
 
 pub(super) fn read_enchantment_log(r: &mut impl Read) -> io::Result<EnchantmentLog> {
     Ok(EnchantmentLog {
-        caster: read_u64_le(r)?,
         owner: read_u64_le(r)?,
+        caster: read_u64_le(r)?,
         item_entry: read_u32_le(r)?,
         enchant_id: read_u32_le(r)?,
         show_affiliation: read_u8(r)? != 0,
