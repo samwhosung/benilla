@@ -134,11 +134,12 @@ impl AttackStopInFlight {
 
 /// The local player's auto-repeat is armed: the reference's `[+0xd58] & 0x200`, set only by the
 /// local cast-send (`0x6e593b`); with the ranged sheath drawn a standing unit idles on the Load
-/// clip (`0x5fd460`). Cleared only through `cancel_auto_repeat_local`: on the selection's death
-/// (`0x605906`) and on `SMSG_CANCEL_AUTO_REPEAT`, which vmangos sends when a volley's target dies
-/// (`SpellCaster.cpp:1829`). A remote shooter plays LoadBow once at its `SMSG_SPELL_START`
-/// (`CastHold`, `0x6e7901`), then the fire clip per GO; the reference holds HoldBow (109) from
-/// the end of the Load until the first GO.
+/// clip (`0x5fd460`). Cleared by the stop `cancel_auto_repeat_local` (`0x6ea113`), whichever of
+/// its callers runs it, `SMSG_CANCEL_AUTO_REPEAT` among them, which vmangos sends when a volley's
+/// target dies (`SpellCaster.cpp:1829`). Not built: the reference's other clear, a cast result of
+/// 0x2f or 0x30 for any spell (`0x6e1e45`). A remote shooter plays LoadBow once at its
+/// `SMSG_SPELL_START` (`CastHold`, `0x6e7901`), then the fire clip per GO; the reference holds
+/// HoldBow (109) from the end of the Load until the first GO.
 #[derive(Component)]
 pub(crate) struct AutoRepeatArmed;
 

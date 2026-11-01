@@ -1844,9 +1844,10 @@ fn spell_delayed(caster: u64, delay_ms: u32, self_guid: &SelfGuid, reports: &mut
 ///
 /// vmangos sends it on every player autorepeat interrupt (`SpellCaster.cpp:1826`), which is how
 /// the server stops a volley whose target died (`Unit::_UpdateAutoRepeatSpell` →
-/// `CheckCast(true)` fails → `InterruptSpell`); the client stops it itself when its selection
-/// dies (`0x605906`), so this one finds the key clear. Moving interrupts only Category 351, the
-/// wand, so Auto Shot stays armed across a run.
+/// `CheckCast(true)` fails → `InterruptSpell`) and a wand's when another spell starts
+/// (`SpellCaster.cpp:1677`). The client stops it itself when its selection dies (`0x605906`), so
+/// that one finds the key clear. Moving and another spell interrupt only Category 351, the wand,
+/// so Auto Shot stays armed across a run and through a cast.
 fn cancel_auto_repeat(
     auto_repeat: &mut AutoRepeatActive,
     self_guid: &SelfGuid,

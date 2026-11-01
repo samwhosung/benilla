@@ -439,8 +439,9 @@ impl ActiveChannel {
 }
 
 /// The live auto-repeat spell, the client's `0xceac30`: set at cast send (`0x6e54f0`) for
-/// `AttributesEx2 & 0x20`, cleared by `SMSG_CANCEL_AUTO_REPEAT` (`0x6ea080`) and a matching cast
-/// failure. `IsAutoRepeatAction` and the button flash read it; the sticky
+/// `AttributesEx2 & 0x20`, cleared by the stop `0x6ea080`
+/// ([`crate::creature_anim::cancel_auto_repeat_local`]), whichever of its callers runs it.
+/// `IsAutoRepeatAction` and the button flash read it; the sticky
 /// `creature_anim::AutoRepeatArmed` is the idle gate.
 #[derive(Resource, Default)]
 pub(crate) struct AutoRepeatActive(pub Option<u32>);
