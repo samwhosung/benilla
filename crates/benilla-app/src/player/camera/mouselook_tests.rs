@@ -769,6 +769,25 @@ fn mouselook_start_under_a_left_drag_is_the_both_button_run() {
     assert_eq!(w.resource::<CameraControl>().look, Some(LookButton::Right));
 }
 
+/// A new camera's mode word holds no freelook bit (`0x50c156`), so a `ToggleMouseMove` session,
+/// which no button holds, ends at a `/reload`: the leave shows the cursor (`0x490bb6`) and the
+/// frame's teardown drops the relative mouse (`0x481d4d`).
+#[test]
+fn a_reload_ends_a_toggled_session_and_gives_the_cursor_back() {
+    let mut w = world(false);
+    lua(&mut w, "ToggleMouseMove()");
+    frame(&mut w, 0.0);
+    assert!(looking(&w));
+    assert_eq!(cursor(&mut w).grab_mode, CursorGrabMode::Locked);
+    crate::player::rebuild_camera(&mut w);
+    assert!(!looking(&w));
+    assert!(!w.resource::<CameraControl>().toggled);
+    frame(&mut w, 0.0);
+    assert!(!looking(&w), "no button brings it back");
+    assert_eq!(cursor(&mut w).grab_mode, CursorGrabMode::None);
+    assert!(cursor(&mut w).visible);
+}
+
 /// `ToggleMouseMove` with no button enters mouselook (`0x50f910` → `0x50f930`): the cursor locks,
 /// and `IsMouselooking` still answers nil. With nothing held the command word is empty, and the
 /// motion handler turns nothing (`0x51440c`); a key held, W here, gives the word a bit, and the

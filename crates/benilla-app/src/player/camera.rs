@@ -726,8 +726,10 @@ impl CameraControl {
     /// What a new camera's constructor leaves of the rig (`0x50c0e0`): the mode word zero but for
     /// bit 6 (`0x50c156`, `0x50c400`), the flip, the bias and the ground lean 0
     /// (`0x50c1cc`-`0x50c1d8`) and every channel stopped. Its pose is the caller's, the file's in
-    /// the reference (`0x50c3ea`).
+    /// the reference (`0x50c3ea`). Bit 0's session ends with the old camera: the leave shows the
+    /// cursor (`0x490bb6`) and the frame's teardown drops the relative mouse (`0x481d4d`).
     pub(super) fn new_camera(&mut self) {
+        self.leave_in_place(false);
         self.view_axes = Default::default();
         self.flip_yaw = 0.0;
         self.view_moved = true;
