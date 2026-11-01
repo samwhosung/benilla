@@ -92,6 +92,20 @@ impl ChatCtx<'_> {
         )
     }
 
+    /// The two-sided gate `0x626630`: false when the target is no live object of any type
+    /// (`0x626690`-`0x6266a6`), whatever the source's range; else an OR, either endpoint within its
+    /// class's range (`0x6267c7`, `0x6267e5`).
+    fn pair_in_range(
+        &self,
+        source: (u64, UnitClass),
+        target: (u64, UnitClass),
+        poses: &impl Poses,
+    ) -> bool {
+        self.index.0.contains_key(&target.0)
+            && (self.in_range(source.0, source.1, poses)
+                || self.in_range(target.0, target.1, poses))
+    }
+
     /// A spell's display name, or `None` where the formatter writes no line
     /// ([`combat::logged_spell`]).
     fn spell_name(&self, spell_id: u32) -> Option<String> {
@@ -222,6 +236,9 @@ pub(super) fn damage_shield(
 /// `SMSG_PARTYKILLLOG`: "You have slain %s!" or "%s is slain by %s!". Only killer class 0
 /// (`SELFKILLOTHER`) and 2, a party member (`PARTYKILLOTHER`), produce a line (`0x628890`); a
 /// pet's kill gets the plain `UNITDIES*` line instead. The chat type comes off the victim.
+///
+/// The sentence's subject is the victim, but `0x626630` takes the killer as its source and the
+/// victim as its target (`0x6288e1`-`0x6288f8`), so a victim no longer held ends the line here.
 pub(super) fn party_kill_log(
     s: PartyKillLog,
     ctx: &ChatCtx,
@@ -229,6 +246,9 @@ pub(super) fn party_kill_log(
     poses: &impl Poses,
     log: &ChatLog,
 ) {
+    if !ctx.index.0.contains_key(&s.victim) {
+        return;
+    }
     let killer = ctx.classify(s.killer, stores);
     let victim = ctx.classify(s.victim, stores);
     let family = match killer {
@@ -1128,8 +1148,9 @@ fn queue_reported(
     named: combat::Named,
     word: Option<LineWord>,
 ) -> bool {
-    // An OR, not an AND (`0x626630`): either endpoint within its class's range shows the line.
-    if !ctx.in_range(subject.0, subject.1, poses) && !ctx.in_range(object.0, object.1, poses) {
+    // The object is `0x626630`'s target, the party kill's excepted (`party_kill_log`); a one-unit
+    // line's is the unit itself.
+    if !ctx.pair_in_range(subject, object, poses) {
         return false;
     }
     let Some(mut line) = combat::queue(kind, family, subject, object, fills, named) else {
@@ -1183,9 +1204,7 @@ pub(super) fn item_answered(
         combat::Replay::Ranged(line) => {
             let subject = ctx.classify(line.subject, stores);
             let object = ctx.classify(line.object, stores);
-            if ctx.in_range(line.subject, subject, poses)
-                || ctx.in_range(line.object, object, poses)
-            {
+            if ctx.pair_in_range((line.subject, subject), (line.object, object), poses) {
                 log.push_combat(*line);
             }
         }

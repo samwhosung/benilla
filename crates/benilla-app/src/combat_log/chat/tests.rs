@@ -121,6 +121,7 @@ mod emitters {
     use super::super::ChatCtx;
 
     mod dispel;
+    mod gate;
     mod lines;
     mod words;
 

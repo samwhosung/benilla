@@ -80,8 +80,8 @@ impl Poses for Query<'_, '_, &Transform> {
 
 /// One endpoint's half of the reference's display-range gate (`0x626630`, ranges from `0x626810`):
 /// the squared 3-D distance from the active player, strictly below `range` squared, so the
-/// boundary and a NaN are out. `100000.0` always passes and `0.0` always refuses; a pose not yet
-/// held counts as in range, so a despawning mob's killing blow is not lost.
+/// boundary and a NaN are out. `100000.0` always passes and `0.0` always refuses; an endpoint with
+/// no pose to measure counts as in range.
 pub(crate) fn in_range(
     guid: u64,
     range: f32,
