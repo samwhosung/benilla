@@ -249,8 +249,6 @@ pub(super) const INERT: &[Registered] = &[
     same("showsmartrects", "0"),            // 0x509439
     same("SkyCloudLOD", "0"),               // 0x6d1d33
     same("TargetAnim", "0"),                // 0x60335e
-    same("targetNearestDistance", "41.000000")
-        .checked(benilla_ui::script::check_target_nearest_distance), // 0x48fda4
     same("targetNearestDistanceRadius", "10.000000")
         .checked(benilla_ui::script::check_target_nearest_distance), // 0x48fd60
     same("textureLodDist", "777.0").checked(benilla_ui::script::check_texture_lod_dist), // 0x6887f6

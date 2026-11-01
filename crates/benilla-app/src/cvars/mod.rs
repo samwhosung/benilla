@@ -1489,6 +1489,10 @@ mod tests {
             ClickConfig::default().deselect_on_click
         );
         assert_eq!(
+            d["targetNearestDistance"],
+            crate::target::TabRange::default().0
+        );
+        assert_eq!(
             d["mouseInvertPitch"] != 0.0,
             LookConfig::default().invert_pitch
         );
@@ -1816,6 +1820,8 @@ mod tests {
         assert!(res::<SoundConfig>(&app).enabled);
         apply(&mut app, "deselectonclick", "0");
         assert!(!res::<ClickConfig>(&app).deselect_on_click);
+        apply(&mut app, "targetnearestdistance", "20");
+        assert_eq!(res::<crate::target::TabRange>(&app).0, 20.0);
         apply(&mut app, "MouseInvertPitch", "1");
         assert!(res::<LookConfig>(&app).invert_pitch);
         apply(&mut app, "mousespeed", "1.4");
@@ -2858,6 +2864,7 @@ mod tests {
             .init_resource::<crate::ui_gamma::DisplayGamma>()
             .init_resource::<ClickConfig>()
             .init_resource::<crate::target::AssistAttack>()
+            .init_resource::<crate::target::TabRange>()
             .init_resource::<LootConfig>()
             .init_resource::<NameConfig>()
             .init_resource::<ClutterConfig>()

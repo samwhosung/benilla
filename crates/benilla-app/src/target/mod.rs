@@ -272,6 +272,28 @@ impl Default for ClickConfig {
 #[derive(Resource, Default)]
 pub(crate) struct AssistAttack(pub(crate) bool);
 
+/// `targetNearestDistance`, the TAB range in yards (`[0xb4e2a8]`, registered at `0x48fda4` with
+/// default "41.000000"): the record's float the collector squares at each press (`0x494350`,
+/// `0x49435d`).
+#[derive(Resource)]
+pub(crate) struct TabRange(pub(crate) f32);
+
+impl Default for TabRange {
+    fn default() -> Self {
+        Self(41.0)
+    }
+}
+
+/// `targetNearestDistance`'s change callback, past its range check (`0x490720`).
+pub(crate) fn on_tab_range(
+    ev: &crate::cvars::CvarChanged,
+    mut range: bevy::prelude::Mut<'_, TabRange>,
+) {
+    if ev.is("targetNearestDistance") {
+        range.0 = ev.num();
+    }
+}
+
 /// The targeting rows' change callback: two flags.
 pub(crate) fn on_cvar(
     ev: &crate::cvars::CvarChanged,
@@ -317,6 +339,7 @@ impl Plugin for TargetPlugin {
             .init_resource::<CombatFlash>()
             .init_resource::<scan::TabHistory>()
             .init_resource::<scan::LastEnemy>()
+            .init_resource::<TabRange>()
             .add_message::<AttackNearestRequest>()
             .add_message::<Interact>()
             .add_systems(

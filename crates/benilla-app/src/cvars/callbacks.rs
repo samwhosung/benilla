@@ -27,6 +27,7 @@ pub(crate) struct CvarCallbacks<'w> {
     camera_options: Option<ResMut<'w, crate::player::camera_dynamics::CameraOptions>>,
     click: Option<ResMut<'w, crate::target::ClickConfig>>,
     assist: Option<ResMut<'w, crate::target::AssistAttack>>,
+    tab_range: Option<ResMut<'w, crate::target::TabRange>>,
     self_cast: Option<ResMut<'w, crate::spell::AutoSelfCast>>,
     damage_text: Option<ResMut<'w, crate::combat_text::DamageTextGates>>,
     log_ranges: Option<ResMut<'w, crate::ui_chat::combat::CombatLogRanges>>,
@@ -74,6 +75,9 @@ impl CvarCallbacks<'_> {
         }
         if let (Some(click), Some(assist)) = (self.click.as_mut(), self.assist.as_mut()) {
             crate::target::on_cvar(ev, click.reborrow(), assist.reborrow());
+        }
+        if let Some(k) = self.tab_range.as_mut() {
+            crate::target::on_tab_range(ev, k.reborrow());
         }
         if let Some(k) = self.self_cast.as_mut() {
             crate::spell::cast_target::on_cvar(ev, k.reborrow());

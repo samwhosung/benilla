@@ -468,6 +468,10 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // beside it is the next registration's, `minimapZoom`: stock `/assist` selects without
     // swinging.
     same("assistAttack", "0"),
+    // `targetNearestDistance` (`0x48fda4`, record `[0xb4e2a8]`, callback `0x490720`): the TAB range
+    // ([`crate::target::TabRange`]).
+    same("targetNearestDistance", "41.000000")
+        .checked(benilla_ui::script::check_target_nearest_distance),
     // ── Mouse-look speed, per axis ───────────────────────────────────────────────────────────────
     //
     // `cameraYawMoveSpeed` is the MOUSE_LOOK_SPEED slider (`UIOptionsFrame.lua:89`); a nil there
