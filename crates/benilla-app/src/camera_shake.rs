@@ -65,6 +65,12 @@ pub(crate) struct CameraShakes {
 }
 
 impl CameraShakes {
+    /// A new camera's list is empty (`0x50c37a`), the old camera's freed with it
+    /// (`0x50c495`-`0x50c4aa`).
+    pub(crate) fn clear(&mut self) {
+        self.live.clear();
+    }
+
     /// Enqueue a shake at a world point.
     fn add(&mut self, row: CameraShake, pos: Vec3, now: f32) {
         self.live.push(LiveShake {
@@ -393,6 +399,15 @@ mod tests {
         let mut s = CameraShakes::default();
         s.add(row, pos, 0.0);
         s
+    }
+
+    /// A new camera's list is empty, so a shake in flight ends with the old camera.
+    #[test]
+    fn a_new_camera_drops_the_live_shakes() {
+        let mut world = World::new();
+        world.insert_resource(at(FOOTSTEP_1, Vec3::ZERO));
+        crate::player::camera_at_interface_load(&mut world);
+        assert!(world.resource::<CameraShakes>().live.is_empty());
     }
 
     /// The signed vertical offset a shake produces, with the eye at `d` yards from it.

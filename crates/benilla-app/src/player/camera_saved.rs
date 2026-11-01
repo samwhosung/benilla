@@ -141,13 +141,17 @@ fn load_camera_pose(
 }
 
 /// What a new camera reads at the interface load that builds it, a login's as a `/reload`'s
-/// (`0x481b4e` → `0x50c0e0`): the views, off the registry the dying VM has folded into.
+/// (`0x481b4e` → `0x50c0e0`): the views, off the registry the dying VM has folded into, and no
+/// shake.
 pub(crate) fn camera_at_interface_load(world: &mut World) {
     world.try_resource_scope(|world, mut views: Mut<CameraViews>| {
         if let Some(cvars) = world.get_resource::<crate::cvars::Cvars>() {
             views.reseed(cvars);
         }
     });
+    if let Some(mut shakes) = world.get_resource_mut::<crate::camera_shake::CameraShakes>() {
+        shakes.clear();
+    }
 }
 
 /// A `/reload`'s new camera: the teardown saves the pose's targets (`0x50c48a`, `0x50c4ff`,
