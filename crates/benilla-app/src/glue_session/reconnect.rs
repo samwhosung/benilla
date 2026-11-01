@@ -12,7 +12,7 @@ use bevy::prelude::*;
 use super::roster::Roster;
 use crate::net::{
     CharPick, CharRequest, LoginAbandon, RealmChoice, RealmListMessage, RealmRequest,
-    WorldAuthMessage,
+    RosterFailedMessage, WorldAuthMessage,
 };
 
 /// Answer the realm list and the character park of a reconnect while a pick is kept: the realm the
@@ -21,6 +21,8 @@ pub(super) fn answer_reconnect(
     roster: Res<Roster>,
     mut lists: MessageReader<RealmListMessage>,
     mut auths: MessageReader<WorldAuthMessage>,
+    mut failures: MessageReader<RosterFailedMessage>,
+    mut exit: MessageWriter<AppExit>,
     choice: Res<RealmChoice>,
     pick: Res<CharPick>,
     abandon: Option<Res<LoginAbandon>>,
@@ -46,6 +48,14 @@ pub(super) fn answer_reconnect(
     }
     if auths.read().last().is_some() && kept {
         let _ = pick.0.send(CharRequest::Enumerate);
+    }
+    // No roster comes to re-make the pick and no screen stands to ask again: a driverless run fails
+    // rather than idles.
+    if kept
+        && failures.read().any(|f| f.emptied)
+        && crate::run_mode::fatal_when_driverless("the character list failed with a pick kept")
+    {
+        exit.write(AppExit::error());
     }
 }
 
@@ -85,6 +95,7 @@ mod tests {
             .insert_resource(CharPick(pick_tx.into()))
             .add_message::<RealmListMessage>()
             .add_message::<WorldAuthMessage>()
+            .add_message::<RosterFailedMessage>()
             .add_systems(Update, answer_reconnect);
         (app, realm_rx, pick_rx)
     }
@@ -119,6 +130,19 @@ mod tests {
 
         let (mut app, realms, picks) = reconnect_app(false);
         reconnect(&mut app);
+        assert!(realms.try_recv().is_err());
+        assert!(picks.try_recv().is_err());
+    }
+
+    /// A failed character list asks nothing again for a kept pick, which would ask without end.
+    #[test]
+    fn a_failed_list_asks_nothing_for_a_kept_pick() {
+        let (mut app, realms, picks) = reconnect_app(true);
+        app.world_mut().write_message(RosterFailedMessage {
+            epoch: 2,
+            emptied: true,
+        });
+        app.update();
         assert!(realms.try_recv().is_err());
         assert!(picks.try_recv().is_err());
     }
