@@ -271,7 +271,7 @@ fn a_set_sequence_arm_cuts_over_a_fade_in_flight() {
     );
 }
 
-// ── A select model's Stand chain ──────────────────────────────────────────────────────────
+// ── A glue model's Stand chain ────────────────────────────────────────────────────────────
 
 /// Two Stands of 0.5 s, weighted so `AnimRng::default()`'s rolls, one in two of its draws (41,
 /// 6334, 19169), land on the head, then on the other, then on the other again.

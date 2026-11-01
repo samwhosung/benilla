@@ -1906,9 +1906,9 @@ pub(super) fn sync_glue_booth(
                     &booth_effects,
                     instance,
                 );
-                // A select record's model chains its Stand (`0x472b87`); the create body's arms
-                // stay its spawn's.
-                if let (Some(GlueLook::Select(_)), Some(anims)) = (bake.look, rig.animations) {
+                // Every glue body chains its Stand: a select record's model (`0x472b87`) and the
+                // create body (`0x470bfa`), which a re-dress leaves running.
+                if let (Some(_), Some(anims)) = (bake.look, rig.animations) {
                     commands
                         .entity(booth.root)
                         .insert(StandChain::armed(anims, anim_data.as_deref().map(|a| &a.0)));
@@ -3284,10 +3284,11 @@ mod tests {
         assert_eq!(after[0].2, handle::<WowModelMaterial>(20).id());
     }
 
-    /// A select record's model registers the Stand chain (`0x472b87` → `0x473090`), and the bake
-    /// that replaces it with a create body takes it away, whose arms stay its spawn's.
+    /// Each glue body registers the Stand chain, a select record's model (`0x472b87` → `0x473090`)
+    /// and the create body (`0x470bfa` → `0x470c90`, the same body), and a re-dress of the create
+    /// body leaves it on.
     #[test]
-    fn a_select_model_carries_the_stand_chain_and_a_create_body_does_not() {
+    fn a_create_body_and_a_select_model_each_carry_the_stand_chain() {
         let (mut app, root) = booth_app();
         let chained = |app: &App| app.world().get::<StandChain>(root).is_some();
         bake(
@@ -3298,7 +3299,16 @@ mod tests {
             Vec::new(),
             [false, false],
         );
-        assert!(!chained(&app));
+        assert!(chained(&app), "the create body's");
+        bake(
+            &mut app,
+            create(0, 1, 3, 0),
+            HUMAN_MALE,
+            vec![part(1, 20)],
+            Vec::new(),
+            [false, false],
+        );
+        assert!(chained(&app), "a skin change keeps it");
         let record = GlueLook::Select(SelectLook::from(
             &crate::glue_session::roster::test_character(1, "Rec"),
         ));
@@ -3306,20 +3316,11 @@ mod tests {
             &mut app,
             record,
             HUMAN_MALE,
-            vec![part(1, 20)],
-            Vec::new(),
-            [false, false],
-        );
-        assert!(chained(&app));
-        bake(
-            &mut app,
-            create(0, 1, 0, 0),
-            HUMAN_MALE,
             vec![part(1, 30)],
             Vec::new(),
             [false, false],
         );
-        assert!(!chained(&app));
+        assert!(chained(&app), "a select record's");
     }
 
     // ── The stage's clock ────────────────────────────────────────────────

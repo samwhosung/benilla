@@ -348,8 +348,9 @@ fn step_copy(
     })
 }
 
-/// A select model's Stand chain, on its root: the completion callback `0x473090` the build
-/// registers through `0x711bb0`, the character's at `0x472b87` and the pet's at `0x472e99`.
+/// A glue model's Stand chain, on its root: the completion callback its build registers through
+/// `0x711bb0`, `0x473090` on a select character (`0x472b87`) and pet (`0x472e99`), and `0x470c90`,
+/// the same body, on the create character (`0x470bfa`).
 #[derive(Component, Default)]
 pub(super) struct StandChain {
     turn: Turn,
@@ -359,7 +360,7 @@ pub(super) struct StandChain {
 
 impl StandChain {
     /// The chain of a model as its spawn leaves it, on the idle its load arms, Stand variation 0
-    /// (`0x70ebd0`), which the build's first arm blends from (`0x472bda`, `0x472eea`).
+    /// (`0x70ebd0`), which the build's first arm blends from (`0x472bda`, `0x472eea`, `0x470c22`).
     pub(super) fn armed(
         anims: &benilla_assets::ModelAnimations,
         catalog: Option<&benilla_formats::AnimDataCatalog>,
@@ -385,7 +386,7 @@ impl StandChain {
     }
 }
 
-/// One frame of a select model's chain, at its stage's clock `now`.
+/// One frame of a glue model's chain, at its stage's clock `now`.
 fn step_stand_chain(
     player: &mut AnimationPlayer,
     anims: &benilla_assets::ModelAnimations,
@@ -403,7 +404,7 @@ fn step_stand_chain(
     let arm = chain.arm();
     if step_copy(player, anims, catalog, rng, &mut chain.turn, arm, now).is_some() {
         // The window's end calls back with reason 0 (`0x7194fd`), drained in its frame
-        // (`0x7074b0`), and `0x473090` replays Stand with a fresh pick (`0x47309a`, `0x47309f`).
+        // (`0x7074b0`), and the callback replays Stand with a fresh pick (`0x47309a`, `0x470c9a`).
         chain.serial += 1;
         let arm = chain.arm();
         step_copy(player, anims, catalog, rng, &mut chain.turn, arm, now);
@@ -465,7 +466,7 @@ pub(super) fn sync_panes(
         &benilla_world::rig_anim::SceneClock,
     )>,
 ) {
-    // The select models' Stand chains, each on its stage's clock.
+    // The glue models' Stand chains, each on its stage's clock.
     if let Some(anim_data) = render.anim_data.as_deref() {
         for (root, mut chain, clock) in &mut stands {
             if let Ok((mut player, anims)) = rigs.get_mut(root) {
