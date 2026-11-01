@@ -915,8 +915,9 @@ fn spell_cast_line(
     }
 }
 
-/// `SMSG_ENVIRONMENTALDAMAGELOG`'s handler `0x624f30`, which writes and signals nothing for a hit
-/// of all zeros (`0x624f4c`-`0x624f60`). The line, "You fall and lose %d health." and its five
+/// `SMSG_ENVIRONMENTALDAMAGELOG`: the packet's handler looks the victim up with type mask 8 and
+/// calls `0x624f30` only for a unit it finds (`0x62565c`), which writes and signals nothing for a
+/// hit of all zeros (`0x624f4c`-`0x624f60`). The line, "You fall and lose %d health." and its five
 /// siblings: `0x62aac0` builds the key from a six-entry damage-type table and SELF/OTHER, and calls
 /// the melee HITS selector with the victim's class in both positions, so a party member's fall
 /// types as `HOSTILEPLAYER_HITS` through the selector's tgt<=3 override, as in the reference. It
@@ -924,9 +925,8 @@ fn spell_cast_line(
 /// for the active player (`0x624f83`), `UNIT_COMBAT` `WOUND` in the type's school, marked `0x20`
 /// for an absorb and `0x40` for a resist (`0x624f8c`-`0x624fc4`).
 ///
-/// A victim the client holds as a unit, within its class's range (the one-sided test, strictly
-/// inside), of a type below 6 (`0x62aae7`) flashes its nameplate (`0x62abac`) ahead of the line;
-/// the answer is that victim.
+/// A victim within its class's range (the one-sided test, strictly inside), of a type below 6
+/// (`0x62aae7`), flashes its nameplate (`0x62abac`) ahead of the line; the answer is that victim.
 pub(super) fn environmental_damage_log(
     e: EnvironmentalDamageLog,
     ctx: &ChatCtx,
@@ -934,13 +934,11 @@ pub(super) fn environmental_damage_log(
     poses: &impl Poses,
     log: &ChatLog,
 ) -> Option<u64> {
-    if e.damage == 0 && e.absorb == 0 && e.resist == 0 {
+    if !ctx.holds_unit(e.victim, stores) || (e.damage == 0 && e.absorb == 0 && e.resist == 0) {
         return None;
     }
     let victim = ctx.classify(e.victim, stores);
-    let flash = (e.victim != 0
-        && usize::from(e.damage_type) < ENV_DAMAGE_SCHOOLS.len()
-        && ctx.holds_unit(e.victim, stores)
+    let flash = (usize::from(e.damage_type) < ENV_DAMAGE_SCHOOLS.len()
         && ctx.in_range(e.victim, victim, poses))
     .then_some(e.victim);
     let kind = combat::combat_kind(victim, victim, false);

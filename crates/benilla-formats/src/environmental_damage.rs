@@ -16,6 +16,11 @@ pub struct EnvironmentalDamageTable {
 }
 
 impl EnvironmentalDamageTable {
+    /// A table of `kits` by damage type, for tests and fixtures.
+    pub fn from_kits(kits: [u32; 6]) -> Self {
+        Self { kits }
+    }
+
     /// The kit for a wire `damage_type`; `None` past type 5 or for an empty slot.
     pub fn kit_id(&self, damage_type: u8) -> Option<u32> {
         self.kits

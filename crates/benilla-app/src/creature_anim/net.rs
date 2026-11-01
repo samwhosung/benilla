@@ -207,12 +207,20 @@ fn on_attacker_state(
 fn on_environmental_damage_log(
     In(ev): In<SessionEvent>,
     index: Res<GuidIndex>,
+    stores: Query<&crate::net::ObjectStore>,
     table: Option<Res<EnvDamageTable>>,
     mut play_seq: ResMut<PlaySeq>,
     mut out: MessageWriter<KitPush>,
 ) {
     if let SessionEvent::EnvironmentalDamageLog(e) = ev {
-        environmental_damage_log(e, &index, table.as_deref(), &mut play_seq, &mut out);
+        environmental_damage_log(
+            e,
+            &index,
+            &stores,
+            table.as_deref(),
+            &mut play_seq,
+            &mut out,
+        );
     }
 }
 
@@ -495,16 +503,22 @@ fn play_spell_visual(
 }
 
 /// `SMSG_ENVIRONMENTALDAMAGELOG`'s visual (`0x624fcc` in `0x624f30`): the damage type's kit plays
-/// on the victim like any kit push (`0x60edf0`). The packet plays no sound: a fall's pain grunt
-/// is the client's own landing predictor (`0x602d00`, `creature_anim::env_damage`).
+/// on the victim like any kit push (`0x60edf0`), but only on a victim the packet's handler finds
+/// as a unit (`0x62565c`, type mask 8). The packet plays no sound: a fall's pain grunt is the
+/// client's own landing predictor (`0x602d00`, `creature_anim::env_damage`).
 fn environmental_damage_log(
     e: EnvironmentalDamageLog,
     index: &GuidIndex,
+    stores: &Query<&crate::net::ObjectStore>,
     table: Option<&EnvDamageTable>,
     play_seq: &mut PlaySeq,
     out: &mut MessageWriter<KitPush>,
 ) {
-    if let Some(&ent) = index.0.get(&e.victim) {
+    let unit = index
+        .0
+        .get(&e.victim)
+        .filter(|_| crate::ui_chat::combat::holds_unit(e.victim, index, stores));
+    if let Some(&ent) = unit {
         if let Some(kit_id) = table.and_then(|t| t.0.kit_id(e.damage_type)) {
             debug!(
                 "net: environmental damage on {:#x} (type {}, {} dmg) → kit {kit_id}",
@@ -540,6 +554,50 @@ fn mount_special(
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
+
+    /// `0x62565c` looks the victim up with type mask 8 and calls `0x624f30`, whose tail plays the
+    /// type's kit (`0x624fcc`), only for a unit it finds: a held game object or a guid not held
+    /// plays none, and a hit of all zeros on a unit still plays its kit.
+    #[test]
+    fn an_environmental_kit_needs_a_held_unit() {
+        const UNIT: u64 = 1;
+        const TRAP: u64 = 2;
+        const FALL_KIT: u32 = 1066;
+        let kits = |victim: u64, damage: u32| {
+            let mut world = World::new();
+            world.init_resource::<PlaySeq>();
+            world.init_resource::<Messages<KitPush>>();
+            world.insert_resource(EnvDamageTable(
+                benilla_formats::EnvironmentalDamageTable::from_kits([0, 0, FALL_KIT, 0, 0, 0]),
+            ));
+            let mut index = GuidIndex::default();
+            for (guid, mask) in [(UNIT, 0x9), (TRAP, 0x21)] {
+                let e = world
+                    .spawn(crate::net::ObjectStore(
+                        benilla_protocol::ObjectFields::from_pairs(&[(2, mask)]),
+                    ))
+                    .id();
+                index.0.insert(guid, e);
+            }
+            world.insert_resource(index);
+            let packet = SessionEvent::EnvironmentalDamageLog(EnvironmentalDamageLog {
+                victim,
+                damage_type: 2,
+                damage,
+                absorb: 0,
+                resist: 0,
+            });
+            world
+                .run_system_once_with(on_environmental_damage_log, packet)
+                .unwrap();
+            let mut pushed = world.resource_mut::<Messages<KitPush>>();
+            pushed.drain().map(|k| k.kit_id).collect::<Vec<_>>()
+        };
+        assert_eq!(kits(UNIT, 245), [FALL_KIT]);
+        assert_eq!(kits(UNIT, 0), [FALL_KIT], "a hit of all zeros");
+        assert!(kits(TRAP, 245).is_empty(), "a game object");
+        assert!(kits(3, 245).is_empty(), "not held");
+    }
 
     /// `SMSG_ATTACKSTART` engages the attacker and leaves its precast: of the precast's clears,
     /// only the local StartAttack's reaches the bit (`0x5ecd87`), none the packet's handler.

@@ -200,6 +200,35 @@ fn environmental_damage_flashes_the_victims_plate_inside_its_range() {
     );
 }
 
+/// The packet's handler looks the victim up with type mask 8 (`0x62565c`) and calls `0x624f30` only
+/// for a unit: your own trap, a game object that classifies as yours, gets neither line nor flash.
+#[test]
+fn environmental_damage_needs_a_held_unit() {
+    const TRAP: u64 = 7;
+    let mut bench = Bench::new();
+    let e = bench.world.spawn_empty().id();
+    bench.index.0.insert(TRAP, e);
+    bench.stores.insert(
+        e,
+        crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+            (2, 0x21),
+            (6, ME as u32),
+            (7, (ME >> 32) as u32),
+        ])),
+    );
+    let mut flash = None;
+    let log = bench.run(|ctx, st, po, log| {
+        let hit = environment(TRAP, 3, 50, 0, 0);
+        flash = super::super::super::environmental_damage_log(hit, ctx, st, po, log);
+    });
+    assert_eq!(flash, None);
+    assert!(log.pending_combat_order().is_empty());
+    assert_eq!(
+        stems(&env_lines(environment(MOB, 3, 50, 0, 0))),
+        ["VSENVIRONMENTALDAMAGE_LAVA_"]
+    );
+}
+
 /// `0x62aac0` raises its word when the victim is you (`0x62ac74`): `RESIST` with the damage and a
 /// resisted amount above 0 (`0x62ac7e`), else `ABSORB` with an absorbed one (`0x62ac99`), else
 /// `DAMAGE` (`0x62acad`).
