@@ -177,7 +177,8 @@ fn on_login_edge(In(ev): In<SessionEvent>, mut e: Edges) {
             });
         }
         SessionEvent::RosterFailed { epoch, emptied } => {
-            e.roster_failed.write(RosterFailedMessage { epoch, emptied });
+            e.roster_failed
+                .write(RosterFailedMessage { epoch, emptied });
         }
         SessionEvent::AddonInfo { records } => {
             // Held for the screens built after it, and for the world entry's load.

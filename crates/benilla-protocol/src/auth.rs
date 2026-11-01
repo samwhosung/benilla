@@ -8,7 +8,9 @@ use std::net::Ipv4Addr;
 use anyhow::{bail, Result};
 use sha1::{Digest, Sha1};
 
-use crate::wire::{read_array, read_cstring_capped, read_f32_le, read_u16_le, read_u32_le, read_u8};
+use crate::wire::{
+    read_array, read_cstring_capped, read_f32_le, read_u16_le, read_u32_le, read_u8,
+};
 use crate::RealmInfo;
 
 pub mod pin;

@@ -31,8 +31,8 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Result};
 use benilla_assets::LockRecover;
 use benilla_protocol::{
-    messages::SurveyAnswer, AuthReject, CharAction, LoginStage, Poll, RealmListEmptied, RosterCause,
-    SessionEnd, SessionEvent, WorldReader, WorldSession, WorldWriter,
+    messages::SurveyAnswer, AuthReject, CharAction, LoginStage, Poll, RealmListEmptied,
+    RosterCause, SessionEnd, SessionEvent, WorldReader, WorldSession, WorldWriter,
 };
 use crossbeam_channel::{Receiver, Sender};
 
