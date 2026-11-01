@@ -271,6 +271,116 @@ fn a_set_sequence_arm_cuts_over_a_fade_in_flight() {
     );
 }
 
+// ── A select model's Stand chain ──────────────────────────────────────────────────────────
+
+/// Two Stands of 0.5 s, weighted so `AnimRng::default()`'s rolls, one in two of its draws (41,
+/// 6334, 19169), land on the head, then on the other, then on the other again.
+fn fidgeting_model() -> benilla_assets::ModelAnimations {
+    let mut anims = turning_model();
+    anims.clips[0].frequency = 5000;
+    anims.clips[1].frequency = 27767;
+    anims
+}
+
+fn step_chain(c: &mut Copy, chain: &mut StandChain, now: f64) {
+    step_stand_chain(&mut c.player, &c.anims, &c.catalog, &mut c.rng, chain, now);
+}
+
+/// The select build arms Stand with a roll (`0x472bb6`-`0x472bda`), blending from the load's idle,
+/// and each window's end replays it with a fresh pick (`0x473090`): a new variation blends from
+/// the one that ended, and the same one is written again as the primary alone (`0x712553`).
+#[test]
+fn a_select_model_replays_stand_with_a_fresh_pick_at_each_windows_end() {
+    let mut c = Copy::spawned(fidgeting_model());
+    let mut chain = StandChain::armed(&c.anims, Some(&c.catalog));
+    assert_eq!(chain.turn.playing, Some(node(1)), "the load's idle");
+
+    // The roll lands on the head, the idle's own sequence, so it runs on the head's other track.
+    step_chain(&mut c, &mut chain, 0.0);
+    assert_eq!(chain.turn.playing, Some(node(5)));
+    assert_eq!(
+        chain.turn.fade.map(|f| (f.node, f.until)),
+        Some((node(1), 0.5)),
+        "fading out of the idle over Stand's own 0.5 s"
+    );
+
+    // The window has not closed.
+    step_chain(&mut c, &mut chain, 0.49);
+    assert_eq!(chain.turn.playing, Some(node(5)), "inside the window");
+
+    // It closes: the next roll lands on the other variation, which blends from the one that ended.
+    step_chain(&mut c, &mut chain, 0.5);
+    assert_eq!(chain.turn.playing, Some(node(2)), "a fresh pick, at once");
+    assert_eq!(
+        chain.turn.fade.map(|f| (f.node, f.until)),
+        Some((node(5), 1.0))
+    );
+    assert_eq!(weight(&c.player, 2), Some(0.0), "the pose does not jump");
+    assert_eq!(weight(&c.player, 5), Some(1.0));
+
+    // The same variation again: the sequence that ran to its end is written as the primary alone.
+    c.player.animation_mut(node(2)).unwrap().seek_to(0.25);
+    step_chain(&mut c, &mut chain, 1.0);
+    assert_eq!(chain.turn.playing, Some(node(2)));
+    assert!(chain.turn.fade.is_none(), "nothing to blend from");
+    assert_eq!(weight(&c.player, 2), Some(1.0));
+    assert_eq!(
+        c.player.animation(node(2)).unwrap().seek_time(),
+        0.0,
+        "from the top"
+    );
+}
+
+/// An arm's track takes the stage clock's rate off the track it replaces, as `pace_glue_clock` ran
+/// ahead of it this frame; a stage that stands still arms nothing.
+#[test]
+fn a_chains_arm_keeps_the_stage_clocks_rate() {
+    let mut c = Copy::spawned(fidgeting_model());
+    let mut chain = StandChain::armed(&c.anims, None);
+    c.player.animation_mut(node(1)).unwrap().set_speed(0.75);
+    step_chain(&mut c, &mut chain, 0.0);
+    assert_eq!(c.player.animation(node(5)).unwrap().speed(), 0.75);
+
+    // Hidden, the pane's clock stops (`0x76d7f0`), and the window never closes.
+    for _ in 0..3 {
+        step_chain(&mut c, &mut chain, 0.25);
+    }
+    assert_eq!(chain.serial, 0, "the chain is on its first arm");
+}
+
+/// The pane pass runs a chain on its root's scene clock, whatever panes stand.
+#[test]
+fn the_pane_pass_runs_a_select_models_chain_on_its_stage_clock() {
+    use benilla_world::rig_anim::SceneClock;
+
+    let mut h = Harness::new("");
+    let catalog = benilla_formats::AnimDataCatalog::from_rows([]);
+    let data = crate::creature_anim::AnimData(catalog);
+    h.app.insert_resource(data);
+    let anims = fidgeting_model();
+    let chain = StandChain::armed(&anims, None);
+    let mut player = AnimationPlayer::default();
+    player.play(node(1)).repeat();
+    let root = h
+        .app
+        .world_mut()
+        .spawn((player, anims, chain, SceneClock(0.0)))
+        .id();
+    let playing = |h: &Harness| {
+        h.app
+            .world()
+            .get::<StandChain>(root)
+            .and_then(|c| c.turn.playing)
+    };
+    h.pass();
+    assert_eq!(playing(&h), Some(node(5)), "the first arm");
+    h.pass();
+    assert_eq!(playing(&h), Some(node(5)), "its clock stands");
+    h.app.world_mut().entity_mut(root).insert(SceneClock(0.5));
+    h.pass();
+    assert_eq!(playing(&h), Some(node(2)), "its window closed");
+}
+
 /// The completion callback runs at the play window's end, `start + span·R` (`0x712692`), loops
 /// included, once per arm; `SetSequenceTime`'s offset starts the window that far in.
 #[test]

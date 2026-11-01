@@ -348,6 +348,74 @@ fn step_copy(
     })
 }
 
+/// A select model's Stand chain, on its root: the completion callback `0x473090` the build
+/// registers through `0x711bb0`, the character's at `0x472b87` and the pet's at `0x472e99`.
+#[derive(Component, Default)]
+pub(super) struct StandChain {
+    turn: Turn,
+    /// The arm it runs, one more at each completion.
+    serial: u64,
+}
+
+impl StandChain {
+    /// The chain of a model as its spawn leaves it, on the idle its load arms, Stand variation 0
+    /// (`0x70ebd0`), which the build's first arm blends from (`0x472bda`, `0x472eea`).
+    pub(super) fn armed(
+        anims: &benilla_assets::ModelAnimations,
+        catalog: Option<&benilla_formats::AnimDataCatalog>,
+    ) -> Self {
+        let stand = catalog.map_or(ANIM_STAND, |c| anims.resolve(ANIM_STAND, c).id);
+        StandChain {
+            turn: Turn {
+                playing: anims.find(stand).map(|c| c.node),
+                ..Turn::default()
+            },
+            serial: 0,
+        }
+    }
+
+    /// Its current arm: `0x7121a0(-1, 0, -1, 0, 1.0, 1, 1)`, a rolled Stand, blended.
+    fn arm(&self) -> PaneArm {
+        PaneArm {
+            anim_id: ANIM_STAND,
+            serial: self.serial,
+            blend: true,
+            offset_ms: 0,
+        }
+    }
+}
+
+/// One frame of a select model's chain, at its stage's clock `now`.
+fn step_stand_chain(
+    player: &mut AnimationPlayer,
+    anims: &benilla_assets::ModelAnimations,
+    catalog: &benilla_formats::AnimDataCatalog,
+    rng: &mut benilla_assets::AnimRng,
+    chain: &mut StandChain,
+    now: f64,
+) {
+    // A track's rate is the stage clock's, which `pace_glue_clock` wrote before this pass.
+    let speed = chain
+        .turn
+        .playing
+        .and_then(|n| player.animation(n))
+        .map(|a| a.speed());
+    let arm = chain.arm();
+    if step_copy(player, anims, catalog, rng, &mut chain.turn, arm, now).is_some() {
+        // The window's end calls back with reason 0 (`0x7194fd`), drained in its frame
+        // (`0x7074b0`), and `0x473090` replays Stand with a fresh pick (`0x47309a`, `0x47309f`).
+        chain.serial += 1;
+        let arm = chain.arm();
+        step_copy(player, anims, catalog, rng, &mut chain.turn, arm, now);
+    }
+    if let (Some(speed), Some(cur)) = (
+        speed,
+        chain.turn.playing.and_then(|n| player.animation_mut(n)),
+    ) {
+        cur.set_speed(speed);
+    }
+}
+
 /// The subjects' world: who a GUID is, what a unit wears, the dressing room's assembly.
 #[derive(SystemParam)]
 pub(super) struct PaneWorld<'w, 's> {
@@ -391,7 +459,27 @@ pub(super) fn sync_panes(
         &mut benilla_world::particles::ParticleEmitter,
         &RenderLayers,
     )>,
+    mut stands: Query<(
+        Entity,
+        &mut StandChain,
+        &benilla_world::rig_anim::SceneClock,
+    )>,
 ) {
+    // The select models' Stand chains, each on its stage's clock.
+    if let Some(anim_data) = render.anim_data.as_deref() {
+        for (root, mut chain, clock) in &mut stands {
+            if let Ok((mut player, anims)) = rigs.get_mut(root) {
+                step_stand_chain(
+                    &mut player,
+                    anims,
+                    &anim_data.0,
+                    &mut render.rng,
+                    &mut chain,
+                    clock.0,
+                );
+            }
+        }
+    }
     let state = &mut *state;
     state.drawn.clear();
     let (session, panes) = (feed.session, &feed.rows);

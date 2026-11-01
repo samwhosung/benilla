@@ -17,6 +17,7 @@ use benilla_assets::materials::WowModelMaterial;
 
 use super::booth::{redress_booth_batches, set_grip, BoothBatch, BoothRig};
 use super::framing::{attachment_point, diag_to_vert, stock_pane_view, PORTRAIT_ASPECT};
+use super::panes::StandChain;
 use super::{
     aim, body_frame, new_target_image, spawn_booth_effects, spawn_booth_model, Booth,
     BoothBillboardSpec, BoothCam, BoothEffects, BoothInstance, BoothLight, BoothMotion, BoothPart,
@@ -1221,6 +1222,8 @@ pub(super) fn sync_glue_scene(
             &booth.layer,
             Some(&light),
             &model.emitters,
+            // A scene loops its one authored clip forever, as a doodad does.
+            benilla_world::particles::EmitClock::Pinned,
         );
         if emitters > 0 {
             info!(
@@ -1891,6 +1894,13 @@ pub(super) fn sync_glue_booth(
                     &booth_effects,
                     instance,
                 );
+                // A select record's model chains its Stand (`0x472b87`); the create body's arms
+                // stay its spawn's.
+                if let (Some(GlueLook::Select(_)), Some(anims)) = (bake.look, rig.animations) {
+                    commands
+                        .entity(booth.root)
+                        .insert(StandChain::armed(anims, anim_data.as_deref().map(|a| &a.0)));
+                }
                 // A fresh bake is animated by construction; the park state is the new rig's.
                 booth.rigged = booth_rig.rigged();
                 let slot = booth_rig.slot();
@@ -2153,12 +2163,19 @@ pub(super) fn sync_glue_pet(
             .as_ref()
             .map(|ibp| (rig.skeleton, ibp, rig.animations)),
         anim_data.as_deref().map(|a| &a.0),
-        BoothMotion::Loop, // Stand, looping, like the character
+        BoothMotion::Loop, // Stand, like the character
         [false, false],    // …and no hands to grip with
         &booth_billboards,
         BoothInstance::default(),
     );
-    // The pet's own emitters, on its own bones, scaled with `pet_root` (`sizeByInstanceScale`).
+    // The pet chains its Stand as the character does (`0x472e99`).
+    if let Some(anims) = rig.animations {
+        commands
+            .entity(scene.pet_root)
+            .insert(StandChain::armed(anims, anim_data.as_deref().map(|a| &a.0)));
+    }
+    // The pet's own emitters, on its own bones, scaled with `pet_root` (`sizeByInstanceScale`),
+    // their tracks on the variation it plays.
     let (emitters, fx_frames) = super::spawn_booth_own_emitters(
         &mut commands,
         &mut pet_rig,
@@ -2166,6 +2183,7 @@ pub(super) fn sync_glue_pet(
         &booth.layer,
         Some(&light),
         &pet.emitters,
+        benilla_world::particles::EmitClock::Host(scene.pet_root),
     );
     // `anchor` writes the pose buffer, `finish` commits it.
     pet_rig.finish(&mut commands);
@@ -3209,6 +3227,44 @@ mod tests {
             [false, false],
         );
         assert_eq!(stand_at(&app, root), 0.0);
+    }
+
+    /// A select record's model registers the Stand chain (`0x472b87` → `0x473090`), and the bake
+    /// that replaces it with a create body takes it away, whose arms stay its spawn's.
+    #[test]
+    fn a_select_model_carries_the_stand_chain_and_a_create_body_does_not() {
+        let (mut app, root) = booth_app();
+        let chained = |app: &App| app.world().get::<StandChain>(root).is_some();
+        bake(
+            &mut app,
+            create(0, 1, 0, 0),
+            HUMAN_MALE,
+            vec![part(1, 10)],
+            Vec::new(),
+            [false, false],
+        );
+        assert!(!chained(&app));
+        let record = GlueLook::Select(SelectLook::from(
+            &crate::glue_session::roster::test_character(1, "Rec"),
+        ));
+        bake(
+            &mut app,
+            record,
+            HUMAN_MALE,
+            vec![part(1, 20)],
+            Vec::new(),
+            [false, false],
+        );
+        assert!(chained(&app));
+        bake(
+            &mut app,
+            create(0, 1, 0, 0),
+            HUMAN_MALE,
+            vec![part(1, 30)],
+            Vec::new(),
+            [false, false],
+        );
+        assert!(!chained(&app));
     }
 
     // ── The stage's clock ────────────────────────────────────────────────
