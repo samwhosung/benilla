@@ -144,6 +144,9 @@ fn load_camera_pose(
 /// target (`0x481b4e` → `0x50c0e0`, `0x50c3ea`), with the yaw offset 0 (`0x50c1a7`).
 pub(crate) fn rebuild_camera(world: &mut World) {
     let facing = world.get_resource::<Player>().map_or(0.0, Player::facing);
+    if let Some(mut scoped) = world.get_resource_mut::<super::scoped_view::ScopedView>() {
+        scoped.new_camera();
+    }
     world.try_resource_scope(|world, mut rig: Mut<CameraControl>| {
         let mut cams = world.query_filtered::<&mut FlyCam, With<WorldCamera>>();
         if let Ok(mut cam) = cams.single_mut(world) {

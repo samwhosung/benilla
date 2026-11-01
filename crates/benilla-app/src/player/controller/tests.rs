@@ -1152,3 +1152,16 @@ fn the_spyglass_selects_its_views_at_its_start_and_end() {
     assert!(!rig.scoped);
     assert_eq!((rig.distance, rig.target_distance), (5.55, 5.55));
 }
+
+/// Our arrival ends the scope its create's `PostInit` started under a standing aura, which selects
+/// view 1 at once (`0x5fbb3c`, `0x5deb44`).
+#[test]
+fn an_arrival_under_the_aura_selects_view_one() {
+    let mut client = Client::new(Body::Own, |_| {});
+    let world = client.app.world_mut();
+    world.resource_mut::<scoped_view::ScopedView>().arrival_end = true;
+    client.frame(vec![], vec![]);
+    let rig = client.app.world().resource::<CameraControl>();
+    assert!(!rig.scoped);
+    assert_eq!((rig.distance, rig.target_distance), (5.55, 5.55));
+}

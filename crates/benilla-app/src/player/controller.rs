@@ -362,8 +362,9 @@ pub(super) fn control(
     let view_subject = &speed_capsule.5;
     let self_guid = speed_capsule.6 .0;
     let scoped = &speed_capsule.7;
-    // The aura's start and end, each a selected view (`0x5ff462`, `0x61236e` → `0x50d320`).
-    if scoped.active() != rig.scoped {
+    // The aura's start and end, each a selected view (`0x5ff462`, `0x61236e` → `0x50d320`), and
+    // the arrival's end, whose own create's `PostInit` may have made the start (`0x5deb44`).
+    if scoped.active() != rig.scoped || scoped.arrival_end {
         if let Some(views) = pointer.6.as_deref_mut() {
             camera_view::scope_edge(views, &mut rig, &mut cam, player.facing(), scoped.active());
         }
