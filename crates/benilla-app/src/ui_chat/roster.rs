@@ -5,7 +5,7 @@
 
 use bevy::prelude::*;
 
-use super::{ChatEvent, ChatEventKind, ChatLog};
+use super::{Answer, ChatEvent, ChatEventKind, ChatLog};
 use crate::names::NameCache;
 use crate::net::NetCommands;
 use crate::query_cache::Ask;
@@ -13,17 +13,31 @@ use crate::query_cache::Ask;
 /// The members each channel slot holds for its list, by slot number: the slot's list
 /// (`+0x88`) and the packet's flag byte (`+0x90`).
 #[derive(Resource, Default)]
-pub(crate) struct ChannelRosters(std::collections::BTreeMap<u32, Roster>);
+pub(crate) struct ChannelRosters {
+    lists: std::collections::BTreeMap<u32, Roster>,
+    /// The members whose name lookup missed and left the callback `0x49ccc0` (`0x49c7a2`).
+    waits: Vec<u64>,
+}
 
 impl ChannelRosters {
-    /// The teardown's free of the printer's name callback (`0x55f990`), with the lists it held.
+    /// The teardown's free of the lookups' callbacks, running none (`0x55f990`). It frees nodes
+    /// alone: a list stands until the printer, which a later `0x49ccc0` walk runs (`0x49d09a`), and
+    /// the next `SMSG_CHANNEL_LIST` appends to it.
     pub(crate) fn free_store_callbacks(&mut self) {
-        self.0.clear();
+        self.waits.clear();
     }
 
     /// Every list dropped with the slots that held them: the session's end.
     pub(super) fn clear(&mut self) {
-        self.0.clear();
+        self.lists.clear();
+        self.waits.clear();
+    }
+
+    /// `guid`'s answer spends the callbacks the lists left on it; whether any was left.
+    fn take_waits(&mut self, guid: u64) -> bool {
+        let before = self.waits.len();
+        self.waits.retain(|&g| g != guid);
+        self.waits.len() != before
     }
 }
 
@@ -53,7 +67,7 @@ pub(super) fn receive(
         debug!("chat: channel list for a channel no slot holds; dropped");
         return;
     };
-    let roster = rosters.0.entry(number).or_default();
+    let roster = rosters.lists.entry(number).or_default();
     roster.flags = flags;
     let mut missing = 0;
     for &member in members {
@@ -62,6 +76,7 @@ pub(super) fn receive(
             .resolve_player(member.0, Ask::Event(commands))
             .is_none()
         {
+            rosters.waits.push(member.0);
             missing += 1;
         }
     }
@@ -78,21 +93,21 @@ pub(super) fn print_answered(
     names: &NameCache,
     chat_log: &ChatLog,
 ) {
-    let numbers: Vec<u32> = rosters.0.keys().copied().collect();
+    let numbers: Vec<u32> = rosters.lists.keys().copied().collect();
     for number in numbers {
-        if let Some(roster) = rosters.0.get_mut(&number) {
+        if let Some(roster) = rosters.lists.get_mut(&number) {
             roster
                 .members
                 .retain(|&(guid, _)| !names.player_answered_unknown(guid));
             if roster.members.is_empty() {
-                rosters.0.remove(&number);
+                rosters.lists.remove(&number);
                 continue;
             }
         }
         match slot_name(number) {
             Some(name) => print(rosters, number, names, chat_log, &name),
             None => {
-                rosters.0.remove(&number);
+                rosters.lists.remove(&number);
             }
         }
     }
@@ -108,7 +123,7 @@ fn print(
     chat_log: &ChatLog,
     slot_name: &str,
 ) {
-    let Some(roster) = rosters.0.get(&number) else {
+    let Some(roster) = rosters.lists.get(&number) else {
         return;
     };
     let mut named = Vec::with_capacity(roster.members.len());
@@ -123,7 +138,7 @@ fn print(
         event.channel = slot_name.to_string();
         chat_log.push_event(event);
     }
-    rosters.0.remove(&number);
+    rosters.lists.remove(&number);
 }
 
 /// The printer's text (`0x49c85c`-`0x49ca7b`): one `"%s%s%s"` entry per member (`0x8362d8`, cut at
@@ -223,7 +238,8 @@ fn on_channel_list(
 }
 
 /// The name callback's walk at a player-name answer, a refusal included, after the cache has
-/// filed it (`0x55f426`-`0x55f452`), so the lines take the answer's place among the packets.
+/// filed it (`0x55f426`-`0x55f452`), so the lines take the answer's place among the packets. The
+/// walk is `0x49ccc0`'s, so it runs where a lookup left that callback, a list's or a chat line's.
 fn on_player_name(
     In(ev): In<benilla_protocol::SessionEvent>,
     mut rosters: ResMut<ChannelRosters>,
@@ -231,7 +247,11 @@ fn on_player_name(
     names: Res<NameCache>,
     chat_log: Res<ChatLog>,
 ) {
-    if !matches!(ev, benilla_protocol::SessionEvent::PlayerName { .. }) || rosters.0.is_empty() {
+    let benilla_protocol::SessionEvent::PlayerName { guid, .. } = ev else {
+        return;
+    };
+    let listed = rosters.take_waits(guid);
+    if rosters.lists.is_empty() || !(listed || chat_log.a_line_waits_on(Answer::Player(guid))) {
         return;
     }
     let channels = channels.as_deref();
@@ -258,6 +278,68 @@ mod tests {
 
     fn named(members: &[(&str, u8)]) -> Vec<(String, u8)> {
         members.iter().map(|&(n, f)| (n.to_string(), f)).collect()
+    }
+
+    /// The teardown frees the lookups' callbacks and leaves the list: its members' answers walk
+    /// nothing, a later list's lookup does and prints both (`0x49d09a`), and the next packet for
+    /// the channel appends to what stands.
+    #[test]
+    fn a_freed_wait_leaves_the_list_for_a_later_walk() {
+        const AL: u64 = 0x61;
+        const BO: u64 = 0x62;
+        const CY: u64 = 0x63;
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let commands = NetCommands(tx);
+        let chat_log = ChatLog::default();
+        let mut names = NameCache::default();
+        let mut rosters = ChannelRosters::default();
+        receive(
+            &mut rosters,
+            Some(1),
+            &names,
+            &commands,
+            &chat_log,
+            "General",
+            0,
+            &[(AL, 0)],
+        );
+        rosters.free_store_callbacks();
+        names.insert_player(AL, "Al".into(), None);
+        assert!(!rosters.take_waits(AL), "its callback went");
+        assert!(rosters.lists.contains_key(&1), "the list stands");
+
+        receive(
+            &mut rosters,
+            Some(1),
+            &names,
+            &commands,
+            &chat_log,
+            "General",
+            0,
+            &[(BO, 0)],
+        );
+        assert_eq!(rosters.lists[&1].members, [(AL, 0), (BO, 0)], "it appends");
+
+        receive(
+            &mut rosters,
+            Some(2),
+            &names,
+            &commands,
+            &chat_log,
+            "Trade",
+            0,
+            &[(CY, 0)],
+        );
+        names.insert_player(BO, "Bo".into(), None);
+        names.insert_player(CY, "Cy".into(), None);
+        assert!(rosters.take_waits(CY), "a later list's");
+        print_answered(
+            &mut rosters,
+            |_| Some("General".to_string()),
+            &names,
+            &chat_log,
+        );
+        assert!(rosters.lists.is_empty(), "the walk printed both");
     }
 
     /// `0x49c7e0`'s entries: `*` owner (`0x01`), `@` moderator (`0x02`), `#` for a member

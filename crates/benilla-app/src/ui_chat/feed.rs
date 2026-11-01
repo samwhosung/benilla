@@ -470,6 +470,17 @@ impl ChatLog {
         }
     }
 
+    /// Whether a held or queued line waits on `answer`: its lookup left `0x49ccc0` there.
+    pub(super) fn a_line_waits_on(&self, answer: Answer) -> bool {
+        let q = self.q();
+        q.held
+            .iter()
+            .any(|(_, item)| item.waits_on().contains(&Some(answer)))
+            || q.pending
+                .iter()
+                .any(|i| i.item.waits_on().contains(&Some(answer)))
+    }
+
     /// The frame's age pass ahead of the drain: the lines held now are retried after every item
     /// the frame's packets and feeds queued, each a frame older, and one that waited
     /// `NAME_MAX_TRIES` frames shows with its names unknown.
