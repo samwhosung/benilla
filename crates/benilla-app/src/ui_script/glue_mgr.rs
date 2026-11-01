@@ -168,7 +168,9 @@ use bevy::prelude::*;
 use std::cell::{Ref, RefCell, RefMut};
 use std::rc::Rc;
 
-use benilla_protocol::{Character, LoginRefusal, LoginStage, RealmInfo, RosterCause};
+use benilla_protocol::{
+    Character, LoginRefusal, LoginStage, RealmInfo, RealmListEmptied, RosterCause,
+};
 use benilla_ui::script::origin::{within, Origin};
 use benilla_ui::script::{
     GlueCall, GlueCharacter, GlueHost, GlueNotice, GlueRealm, GlueRealmCells, GlueRequest,
@@ -296,6 +298,7 @@ const STATUS_CONNECTING: u8 = 0x07;
 const STATUS_AUTHENTICATING: u8 = 0x0b;
 const STATUS_AUTH_OK: u8 = 0x0c;
 const STATUS_AUTH_FAILED: u8 = 0x0d;
+const STATUS_SESSION_EXPIRED: u8 = 0x17;
 const STATUS_WAIT_QUEUE: u8 = 0x1b;
 const STATUS_REALM_LIST_IN_PROGRESS: u8 = 0x22;
 const STATUS_REALM_LIST_SUCCESS: u8 = 0x23;
@@ -1281,18 +1284,27 @@ impl GlueMgr {
         self.outbox.push(Outgoing::Begin(Step::Connect));
     }
 
-    /// A reply the record fill refused empties the holder (`0x5b23ff`), its failure following; the
-    /// categories keep their indices, which answer null from then on (`0x5ab930`).
-    fn empty_holder(&mut self) {
+    /// A query that empties the holder (`0x5b23ff`, `0x5b2893`, `0x5b2560`, `0x5b2c9e`), the
+    /// categories keeping their indices, which answer null from then on (`0x5ab930`). The pending
+    /// operation fails with the status `0x5abb90` maps its argument to.
+    fn on_realm_list_emptied(&mut self, end: RealmListEmptied) {
         self.holder.clear();
         self.holder_moved = true;
+        if !self.op.awaiting_list || self.op.done {
+            return;
+        }
+        self.op.awaiting_list = false;
+        let status = match end {
+            RealmListEmptied::ListFailed => STATUS_REALM_LIST_FAILED,
+            RealmListEmptied::SessionExpired => STATUS_SESSION_EXPIRED,
+        };
+        self.op.complete(false, status);
     }
 
     /// A realm list reply: the holder filled (`0x5b2230`), then the pending operation's arm of
     /// `0x5abb90`. A query's success is `REALM_LIST_SUCCESS`; a connect's dials the selected realm,
     /// or the one [`Self::connect_realm`] finds, and completes only through the dial (`0x5ab823`
-    /// calls no `SetStatus`); no answer, or a reply the fill refused, fails either
-    /// `REALM_LIST_FAILED`.
+    /// calls no `SetStatus`); no answer fails either `REALM_LIST_FAILED`.
     fn on_realm_list(
         &mut self,
         realms: Vec<RealmInfo>,
@@ -2168,7 +2180,7 @@ pub(crate) fn drive_glue_mgr(
                 mgr.on_stage(msg.stage, glue_up);
             }
             // The logon's list ends the logon, then answers the connect its latch begins.
-            let lists: Vec<(Vec<RealmInfo>, bool, bool)> = news
+            let lists: Vec<(Vec<RealmInfo>, bool, Option<RealmListEmptied>)> = news
                 .realm_lists
                 .read()
                 .map(|m| (m.realms.clone(), m.failed, m.emptied))
@@ -2194,10 +2206,10 @@ pub(crate) fn drive_glue_mgr(
             let player = RunModeRealm::default();
             let run = run.as_deref().unwrap_or(&player);
             for (realms, failed, emptied) in lists {
-                if emptied {
-                    mgr.empty_holder();
+                match emptied {
+                    Some(end) => mgr.on_realm_list_emptied(end),
+                    None => mgr.on_realm_list(realms, failed, &realm_name, run),
                 }
-                mgr.on_realm_list(realms, failed, &realm_name, run);
             }
             for msg in news.failures.read() {
                 mgr.on_failed(msg);

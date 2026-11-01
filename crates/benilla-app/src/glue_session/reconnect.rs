@@ -104,7 +104,7 @@ mod tests {
         app.world_mut().write_message(RealmListMessage {
             realms: vec![realm("Alpha"), realm("Beta")],
             failed: false,
-            emptied: false,
+            emptied: None,
         });
         app.update();
         app.world_mut().write_message(WorldAuthMessage {

@@ -7,7 +7,9 @@ use std::sync::Mutex;
 use std::thread;
 
 use benilla_protocol::messages::opcode;
-use benilla_protocol::{RealmInfo, RosterCause, SessionEvent};
+use benilla_protocol::{
+    AuthReject, LogonReply, RealmInfo, RealmListEmptied, RosterCause, SessionEvent,
+};
 
 use super::fake::{self, FakeRealm, WAIT};
 use super::{run, Cycle, LoginRequest, Parks, PingClock, WriterSwap};
@@ -317,7 +319,10 @@ fn a_realm_address_past_its_cap_fails_the_list_on_a_link_that_stays() {
                 realms,
                 failed,
                 emptied,
-            } => assert!(realms.is_empty() && failed && emptied),
+            } => {
+                assert!(realms.is_empty() && failed);
+                assert_eq!(emptied, Some(RealmListEmptied::ListFailed));
+            }
             other => panic!("expected the refused list, got {other:?}"),
         }
         assert_eq!(realmd.lists(), lists);
@@ -1099,6 +1104,50 @@ fn a_redial_derives_a_totp_code_per_prompt() {
         Some(kept.to_vec())
     );
     assert_eq!(super::redial_digits(None, &none), None);
+}
+
+/// A failed re-dial ends the query as a failed reconnect does: the held list is emptied
+/// (`0x5b2893`, `0x5b2560`, `0x5b2c9e`), here on a refused proof, the arm for 1 (`0x5b28dd`).
+#[test]
+fn a_failed_redial_empties_the_held_list() {
+    let (realmd, _) = fake::servers_with_pin(|world| vec![FakeRealm::new(REALM, world)]);
+    let cycles = fake::spawn_cycles();
+    fake::login(&cycles, &realmd.addr);
+    let (grid, prompt) = next_pin(&cycles.events);
+    cycles.realm.send(keys(&grid, prompt)).unwrap();
+    assert_eq!(next_list(&cycles.events).0.len(), 1);
+    realmd.set_pin(1357);
+    realmd.drop_links();
+    cycles.realm.send(RealmRequest::Refresh).unwrap();
+    match next_event(&cycles.events) {
+        SessionEvent::RealmList {
+            realms,
+            failed,
+            emptied,
+        } => {
+            assert!(realms.is_empty() && failed);
+            assert_eq!(emptied, Some(RealmListEmptied::SessionExpired));
+        }
+        other => panic!("expected the emptied list, got {other:?}"),
+    }
+}
+
+/// `0x5b2860`'s table (`0x5b2910`) sends a reconnect proof's 9 and 10 to the arms that pass 2 and
+/// 3, and the rest to the one that passes 1; a refused challenge (`0x5bae37`) or a dead link
+/// reaches the same 1 through `0x5b2c9e`.
+#[test]
+fn a_failed_redial_maps_its_status_by_the_reconnect_arms() {
+    use RealmListEmptied::{ListFailed, SessionExpired};
+    let reject = |reply, code| {
+        let e = anyhow::Error::new(AuthReject { code, reply });
+        super::redial_failure(&e)
+    };
+    assert_eq!(reject(LogonReply::Proof, 9), ListFailed);
+    assert_eq!(reject(LogonReply::Proof, 10), ListFailed);
+    assert_eq!(reject(LogonReply::Proof, 4), SessionExpired);
+    assert_eq!(reject(LogonReply::Challenge, 9), SessionExpired);
+    let dead = anyhow::anyhow!("no route to realmd");
+    assert_eq!(super::redial_failure(&dead), SessionExpired);
 }
 
 /// A re-dial whose kept PIN is refused (a TOTP code that has expired, vmangos

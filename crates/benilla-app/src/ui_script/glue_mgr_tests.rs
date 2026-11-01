@@ -2842,10 +2842,11 @@ fn the_stock_select_with_no_link_shows_the_selected_realms_pvp() {
     );
 }
 
-/// A reply the record fill refused empties the holder and fails the query `REALM_LIST_FAILED`
-/// (`0x5b23ff`, `0x5abbd8`); a query with no answer fails it and keeps the holder.
+/// A query that empties the holder fails with the status `0x5abb90` maps its argument to,
+/// `REALM_LIST_FAILED` (`0x5abbd8`) or `AUTH_SESSION_EXPIRED` (`0x5abba2`); a query with no answer
+/// fails `REALM_LIST_FAILED` and keeps the holder.
 #[test]
-fn a_refused_realm_list_empties_the_holder_and_fails_the_query() {
+fn an_emptied_realm_list_empties_the_holder_and_fails_by_its_status() {
     let _ = benilla_formats::wow_data_or_skip!();
     let (mut app, _rx, _) = stock_app();
     let query = |app: &mut App, failed, emptied| {
@@ -2862,12 +2863,17 @@ fn a_refused_realm_list_empties_the_holder_and_fails_the_query() {
         });
         app.update();
     };
-    query(&mut app, true, false);
+    query(&mut app, true, None);
     assert_eq!(mgr(&app).holder.len(), 1, "no answer keeps the holder");
-    query(&mut app, true, true);
-    assert!(mgr(&app).holder.is_empty());
-    let failed = vm(&app).global_text("REALM_LIST_FAILED");
-    assert_eq!(dialog(&app), Some(("OKAY".into(), failed)));
+    for (end, key) in [
+        (RealmListEmptied::ListFailed, "REALM_LIST_FAILED"),
+        (RealmListEmptied::SessionExpired, "AUTH_SESSION_EXPIRED"),
+    ] {
+        query(&mut app, true, Some(end));
+        assert!(mgr(&app).holder.is_empty(), "{key}");
+        let text = vm(&app).global_text(key);
+        assert_eq!(dialog(&app), Some(("OKAY".into(), text)));
+    }
 }
 
 /// The stock dialog over a world failure with no realm held: the failure's `OKAY` presses itself
@@ -2889,7 +2895,7 @@ fn the_stock_realm_list_dialog_after_a_world_failure_closes_on_its_reply() {
     app.world_mut().write_message(RealmListMessage {
         realms: vec![realm("Fake")],
         failed: false,
-        emptied: false,
+        emptied: None,
     });
     app.update();
     assert_eq!(dialog(&app), None, "the query's success closes it");

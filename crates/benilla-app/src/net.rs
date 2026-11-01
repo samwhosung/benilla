@@ -2333,12 +2333,12 @@ pub(crate) enum ClientCommand {
 
 /// The realm list (`CMD_REALM_LIST`); the IO thread waits for a [`RealmRequest`]. `failed` is a
 /// query that got no answer (`REALM_LIST_FAILED`), `realms` then the list last held, and `emptied`
-/// a reply the record fill refused, which empties the holder (`0x5b23ff`).
+/// a query that empties the holder ([`benilla_protocol::SessionEvent::RealmList`]).
 #[derive(Message)]
 pub(crate) struct RealmListMessage {
     pub(crate) realms: Vec<benilla_protocol::RealmInfo>,
     pub(crate) failed: bool,
-    pub(crate) emptied: bool,
+    pub(crate) emptied: Option<benilla_protocol::RealmListEmptied>,
 }
 
 /// The character roster (`SMSG_CHAR_ENUM`); the IO thread waits for the select screen to pick. `realm` is the realm this session connected to.

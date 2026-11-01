@@ -31,8 +31,8 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Result};
 use benilla_assets::LockRecover;
 use benilla_protocol::{
-    messages::SurveyAnswer, AuthReject, CharAction, LoginStage, Poll, RosterCause, SessionEnd,
-    SessionEvent, WorldReader, WorldSession, WorldWriter,
+    messages::SurveyAnswer, AuthReject, CharAction, LoginStage, Poll, RealmListEmptied, RosterCause,
+    SessionEnd, SessionEvent, WorldReader, WorldSession, WorldWriter,
 };
 use crossbeam_channel::{Receiver, Sender};
 
@@ -385,13 +385,13 @@ enum WorldEnd {
 }
 
 /// Publish a realm list: a fresh one, or with `failed` the last one held, after a query that got
-/// no answer (`REALM_LIST_FAILED`), and with `emptied` too none, after a reply the record fill
-/// refused. False once the app is gone.
+/// no answer (`REALM_LIST_FAILED`), and with `emptied` too none, after a query that empties the
+/// holder. False once the app is gone.
 fn publish(
     events_tx: &Sender<SessionEvent>,
     realms: &[benilla_protocol::RealmInfo],
     failed: bool,
-    emptied: bool,
+    emptied: Option<RealmListEmptied>,
 ) -> bool {
     events_tx
         .send(SessionEvent::RealmList {
@@ -406,7 +406,8 @@ fn publish(
 /// own (`0x5aab6d`), then the answer published. A request that fails the link (the link realmd
 /// closed, the 5 s timeout, a reply the link's walk calls malformed) dials realmd again and asks
 /// once more; vmangos closes every link after `MaxSessionDuration`, 300 s by default, while a list
-/// may stand longer. A reply only the record fill refuses fails the query with the link up
+/// may stand longer. A failed re-dial empties the list, as a failed reconnect empties the holder
+/// ([`redial_failure`]). A reply only the record fill refuses fails the query with the link up
 /// (`0x5b23ff`). False once the app is gone.
 ///
 /// Deviation: the reference re-dials only from `RequestRealmList`, and only when the link is down
@@ -426,6 +427,7 @@ fn query(
     events_tx: &Sender<SessionEvent>,
 ) -> bool {
     let mut ok = logon.refresh_realms(REALM_REFRESH_TIMEOUT);
+    let mut emptied = None;
     if !ok && !logon.realmd_live() && logon.can_redial() {
         let kept = logon.pin().map(<[u8]>::to_vec);
         let mut press = |grid: &[u8; 10]| {
@@ -451,10 +453,27 @@ fn query(
                 if logon.pin().is_some() && e.downcast_ref::<AuthReject>().is_some() {
                     logon.forget_pin();
                 }
+                logon.realms.clear();
+                emptied = Some(redial_failure(&e));
             }
         }
     }
-    publish(events_tx, &logon.realms, !ok, logon.realms_refused)
+    let refused = logon.realms_refused.then_some(RealmListEmptied::ListFailed);
+    publish(events_tx, &logon.realms, !ok, emptied.or(refused))
+}
+
+/// What a failed re-dial ends a query with, read as the reconnect it stands in for: a proof's
+/// result of 9 or 10 is `0x5b2860`'s arm for 2 or 3 (`0x5b28be`, `0x5b2893`, by the table at
+/// `0x5b2910`); any other is its arm for 1 (`0x5b28dd`), as a refused challenge (`0x5bae37`), a
+/// failed dial and a dropped link are through `0x5b2c9e`.
+fn redial_failure(e: &anyhow::Error) -> RealmListEmptied {
+    match e.downcast_ref::<AuthReject>() {
+        Some(AuthReject {
+            code: 9 | 10,
+            reply: benilla_protocol::LogonReply::Proof,
+        }) => RealmListEmptied::ListFailed,
+        _ => RealmListEmptied::SessionExpired,
+    }
 }
 
 /// The PIN digits a re-dial's prompt is answered with: the environment's, derived from the clock
@@ -482,7 +501,7 @@ fn login_park(parks: &Parks, events_tx: &Sender<SessionEvent>) -> Option<LoginRe
             recv(park_rx) -> msg => match msg {
                 Err(_) => Some(None),
                 Ok(ParkRequest::Realm(RealmRequest::Refresh)) => {
-                    (!publish(events_tx, &[], true, false)).then_some(None)
+                    (!publish(events_tx, &[], true, None)).then_some(None)
                 }
                 Ok(_) => None,
             },
@@ -676,7 +695,8 @@ fn run(
         // An answer queued during a dead cycle must not answer this list.
         while parks.park_rx.try_recv().is_ok() {}
         let refused = logon.realms_refused;
-        if !publish(events_tx, &logon.realms, refused, refused) {
+        let emptied = refused.then_some(RealmListEmptied::ListFailed);
+        if !publish(events_tx, &logon.realms, refused, emptied) {
             return Ok(Cycle::Exit);
         }
         let mut pick = match logon_park(&mut logon, &req, parks, events_tx) {

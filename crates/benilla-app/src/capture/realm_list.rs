@@ -55,7 +55,7 @@ pub(super) fn seed_realm_list(
         lists.write(crate::net::RealmListMessage {
             realms: fixture(),
             failed: false,
-            emptied: false,
+            emptied: None,
         });
     };
     match *step {
