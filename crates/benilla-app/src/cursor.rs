@@ -433,8 +433,9 @@ impl Plugin for CursorPlugin {
                 Update,
                 (
                     drive_displayed_cursor,
-                    track_pointer_device,
-                    other::drive,
+                    // After every call, which may move the camera's rig whose look it shows.
+                    track_pointer_device.after(crate::vm_pass::VmPass::End),
+                    other::drive.after(crate::vm_pass::VmPass::End),
                     other::drive_pointer,
                 )
                     .chain()
