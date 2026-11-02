@@ -574,12 +574,23 @@ pub(crate) fn sync_dispatch(
     })
 }
 
-/// A wheel delta in lines (notches), whatever unit the OS reported: a trackpad's `Pixel` deltas
-/// go through Bevy's own conversion factor. Every wheel reader shares it.
-pub(crate) fn wheel_lines(unit: MouseScrollUnit, dy: f32) -> f32 {
+/// The physical pixels of a trackpad's travel that make one notch. On Linux it is Wayland's 10 axis
+/// units, 10 logical pixels, as SDL, GLFW and Xwayland take one step; elsewhere Bevy's conversion
+/// factor.
+pub(crate) fn pixels_per_notch(scale_factor: f32) -> f32 {
+    if cfg!(target_os = "linux") {
+        10.0 * scale_factor
+    } else {
+        MouseScrollUnit::SCROLL_UNIT_CONVERSION_FACTOR
+    }
+}
+
+/// A wheel delta in lines (notches), whatever unit the OS reported: a trackpad's `Pixel` deltas at
+/// the window's scale ([`pixels_per_notch`]). Every wheel reader shares it.
+pub(crate) fn wheel_lines(unit: MouseScrollUnit, dy: f32, scale_factor: f32) -> f32 {
     match unit {
         MouseScrollUnit::Line => dy,
-        MouseScrollUnit::Pixel => dy / MouseScrollUnit::SCROLL_UNIT_CONVERSION_FACTOR,
+        MouseScrollUnit::Pixel => dy / pixels_per_notch(scale_factor),
     }
 }
 
@@ -634,10 +645,10 @@ pub(crate) fn world_takes_wheel(dispatch: Option<&BindingDispatch>, mods: Mods, 
 
 /// Whole notches out of a stream of line deltas, carrying the fraction between frames.
 ///
-/// Deviation: a trackpad's `Pixel` deltas are carried until they make a line, and step at most
-/// once per event ([`crate::ui_script::Record::Wheel`]). The reference steps on every
-/// `WM_MOUSEWHEEL`, whatever its delta (`0x76c1a9`); the carry is kept because a carried trackpad
-/// does not zoom or scroll at its event rate.
+/// Deviation: a trackpad's `Pixel` deltas are carried until they make a line, and an event steps
+/// once per whole line it completes ([`crate::ui_script::Record::Wheel`]). The reference steps on
+/// every `WM_MOUSEWHEEL`, whatever its delta (`0x76c1a9`); the carry is kept because a carried
+/// trackpad does not zoom or scroll at its event rate.
 ///
 /// For consumers that act per notch off the sign alone: the UI's `OnMouseWheel` (stock
 /// `ScrollFrameTemplate_OnMouseWheel` moves half a pane per call, `UIPanelTemplates.lua:150`) and
