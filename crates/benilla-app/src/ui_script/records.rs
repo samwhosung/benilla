@@ -32,8 +32,9 @@ pub(crate) enum Record {
     /// A wheel turn, one step up (`true`) or down. The reference queues each `WM_MOUSEWHEEL`'s raw
     /// delta (`0x42d58c`, `0x424159`) and steps once per message on its sign alone (`setge` at
     /// `0x76c1a9`), so a line event is one step whatever its travel; a trackpad's `Pixel` events
-    /// step once for each line their carry completes ([`crate::bindings::WheelNotches`]). A turn with no vertical travel is no record: `WM_MOUSEHWHEEL` takes the window
-    /// procedure's default arm and never reaches the client.
+    /// step as their carry completes lines ([`crate::bindings::WheelNotches::feed_pixels`]). A
+    /// turn with no vertical travel is no record: `WM_MOUSEHWHEEL` takes the window procedure's
+    /// default arm and never reaches the client.
     Wheel {
         up: bool,
     },
@@ -103,7 +104,9 @@ pub(crate) fn collect_input_records(
 ) {
     let events: Vec<&WindowEvent> = events.read().collect();
     let now = window.single().ok().and_then(Window::cursor_position);
-    let scale_factor = window.single().map_or(1.0, Window::scale_factor);
+    let base_scale = window
+        .single()
+        .map_or(1.0, |w| w.resolution.base_scale_factor());
     let moved = events
         .iter()
         .any(|e| matches!(e, WindowEvent::CursorMoved(_) | WindowEvent::CursorLeft(_)));
@@ -142,13 +145,14 @@ pub(crate) fn collect_input_records(
             WindowEvent::MouseWheel(w) => {
                 let mods = mods_of(&held);
                 let travel = crate::bindings::notch_travel(w.x, w.y, mods.shift);
-                let step =
-                    match w.unit {
-                        MouseScrollUnit::Line => i32::from(travel > 0.0) - i32::from(travel < 0.0),
-                        MouseScrollUnit::Pixel => records
-                            .notches
-                            .feed(crate::bindings::wheel_lines(w.unit, travel, scale_factor)),
-                    };
+                let step = match w.unit {
+                    MouseScrollUnit::Line => i32::from(travel > 0.0) - i32::from(travel < 0.0),
+                    MouseScrollUnit::Pixel => records.notches.feed_pixels(
+                        travel,
+                        base_scale,
+                        crate::bindings::WAYLAND_PIXEL_SCROLL,
+                    ),
+                };
                 for _ in 0..step.unsigned_abs() {
                     out.push(InputRecord {
                         record: Record::Wheel { up: step > 0 },
@@ -427,7 +431,9 @@ mod tests {
             ],
         );
         assert_eq!(shape(&got), ["WheelUp@Some(10.0)", "WheelUp@Some(10.0)"]);
-        let quarter = crate::bindings::pixels_per_notch(1.0) / 4.0;
+        let wayland = crate::bindings::WAYLAND_PIXEL_SCROLL;
+        let notch = crate::bindings::pixels_per_notch(1.0, wayland);
+        let quarter = notch / 4.0;
         let got = collect(&mut w, vec![wheel(MouseScrollUnit::Pixel, quarter); 3]);
         assert!(
             got.is_empty(),
@@ -440,13 +446,10 @@ mod tests {
             ["WheelUp@Some(10.0)"],
             "the fourth completes it"
         );
-        // A pixel event carrying more than a line steps for each line it completes.
-        let lines = crate::bindings::pixels_per_notch(1.0) * 2.5;
-        let got = collect(&mut w, vec![wheel(MouseScrollUnit::Pixel, -lines)]);
-        assert_eq!(
-            shape(&got),
-            ["WheelDown@Some(10.0)", "WheelDown@Some(10.0)"]
-        );
+        // A pixel event carrying more than a line: a record per step, two on Wayland, one elsewhere.
+        let got = collect(&mut w, vec![wheel(MouseScrollUnit::Pixel, -notch * 2.5)]);
+        let steps = if wayland { 2 } else { 1 };
+        assert_eq!(shape(&got), vec!["WheelDown@Some(10.0)"; steps]);
         // The horizontal wheel is no notch: `WM_MOUSEHWHEEL` never reaches the client's wheel
         // walk.
         let sideways = WindowEvent::MouseWheel(MouseWheel {
@@ -456,5 +459,18 @@ mod tests {
             window: Entity::PLACEHOLDER,
         });
         assert!(collect(&mut w, vec![sideways]).is_empty());
+    }
+
+    /// `Pixel` travel is physical at the OS's scale, which `WOW_DPI`'s override leaves alone.
+    #[test]
+    fn a_pixel_notch_reads_the_base_scale() {
+        let mut w = world();
+        let mut windows = w.0.query_filtered::<&mut Window, With<PrimaryWindow>>();
+        let mut window = windows.single_mut(&mut w.0).unwrap();
+        window.resolution.set_scale_factor(2.0);
+        window.resolution.set_scale_factor_override(Some(1.0));
+        let notch = crate::bindings::pixels_per_notch(2.0, crate::bindings::WAYLAND_PIXEL_SCROLL);
+        let got = collect(&mut w, vec![wheel(MouseScrollUnit::Pixel, notch)]);
+        assert_eq!(got.len(), 1, "one notch at the base scale");
     }
 }
