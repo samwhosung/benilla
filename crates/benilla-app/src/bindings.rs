@@ -574,12 +574,17 @@ pub(crate) fn sync_dispatch(
     })
 }
 
-/// A wheel delta in lines (notches), whatever unit the OS reported: a trackpad's `Pixel` deltas
-/// go through Bevy's own conversion factor. Every wheel reader shares it.
-pub(crate) fn wheel_lines(unit: MouseScrollUnit, dy: f32) -> f32 {
-    match unit {
-        MouseScrollUnit::Line => dy,
-        MouseScrollUnit::Pixel => dy / MouseScrollUnit::SCROLL_UNIT_CONVERSION_FACTOR,
+/// Whether `Pixel` scroll is Wayland's axis units, Linux's one pixel path: winit reports lines on
+/// X11 and on Windows.
+pub(crate) const WAYLAND_PIXEL_SCROLL: bool = cfg!(target_os = "linux");
+
+/// The physical pixels of a trackpad's travel that make one notch. On Wayland it is 10 axis units,
+/// 10 logical pixels, as SDL, GLFW and Xwayland take one step; elsewhere Bevy's conversion factor.
+pub(crate) fn pixels_per_notch(scale_factor: f32, wayland: bool) -> f32 {
+    if wayland {
+        10.0 * scale_factor
+    } else {
+        MouseScrollUnit::SCROLL_UNIT_CONVERSION_FACTOR
     }
 }
 
@@ -634,10 +639,11 @@ pub(crate) fn world_takes_wheel(dispatch: Option<&BindingDispatch>, mods: Mods, 
 
 /// Whole notches out of a stream of line deltas, carrying the fraction between frames.
 ///
-/// Deviation: a trackpad's `Pixel` deltas are carried until they make a line, and step at most
-/// once per event ([`crate::ui_script::Record::Wheel`]). The reference steps on every
-/// `WM_MOUSEWHEEL`, whatever its delta (`0x76c1a9`); the carry is kept because a carried trackpad
-/// does not zoom or scroll at its event rate.
+/// Deviation: a trackpad's `Pixel` deltas are carried until they make a line, and an event steps
+/// once per whole line on Wayland and at most once elsewhere ([`Self::feed_pixels`]). The reference
+/// steps on every `WM_MOUSEWHEEL`, whatever its delta (`0x76c1a9`); the carry is kept because a
+/// carried trackpad does not zoom or scroll at its event rate, and Wayland takes every whole line
+/// because a 10-pixel notch capped per event would lose a fast swipe's travel.
 ///
 /// For consumers that act per notch off the sign alone: the UI's `OnMouseWheel` (stock
 /// `ScrollFrameTemplate_OnMouseWheel` moves half a pane per call, `UIPanelTemplates.lua:150`) and
@@ -661,6 +667,17 @@ impl WheelNotches {
         let whole = self.carry.trunc();
         self.carry -= whole;
         whole as i32
+    }
+
+    /// The steps a `Pixel` event of `travel` physical pixels makes. `scale_factor` is the window's
+    /// base scale, the one winit made the pixels physical with; `WOW_DPI`'s override is not.
+    pub(crate) fn feed_pixels(&mut self, travel: f32, scale_factor: f32, wayland: bool) -> i32 {
+        let whole = self.feed(travel / pixels_per_notch(scale_factor, wayland));
+        if wayland {
+            whole
+        } else {
+            whole.signum()
+        }
     }
 }
 
@@ -2510,6 +2527,33 @@ mod tests {
             notches.feed(-1.0),
             -1,
             "a reversal drops the carried fraction"
+        );
+    }
+
+    /// Wayland's notch is 10 logical pixels and an event steps for each whole one; elsewhere it is
+    /// Bevy's factor, whatever the scale, and an event steps at most once.
+    #[test]
+    fn pixel_travel_steps_by_the_platforms_notch() {
+        let mut wayland = WheelNotches::default();
+        assert_eq!(wayland.feed_pixels(13.0, 1.33, true), 0, "under 10 logical");
+        assert_eq!(wayland.feed_pixels(0.5, 1.33, true), 1, "the carry adds up");
+        assert_eq!(
+            wayland.feed_pixels(-70.0, 1.33, true),
+            -5,
+            "each whole notch"
+        );
+
+        let mut elsewhere = WheelNotches::default();
+        assert_eq!(elsewhere.feed_pixels(250.0, 2.0, false), 1, "at most one");
+        assert_eq!(
+            elsewhere.feed_pixels(50.0, 2.0, false),
+            1,
+            "the fraction carries"
+        );
+        assert_eq!(
+            elsewhere.feed_pixels(99.0, 2.0, false),
+            0,
+            "under the factor"
         );
     }
 
