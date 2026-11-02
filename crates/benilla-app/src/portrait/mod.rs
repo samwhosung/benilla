@@ -813,6 +813,10 @@ impl Plugin for PortraitPlugin {
                     glue_booth::pillarbox_glue_scene,
                     // After the scene: the pet's seat and its light are the scene's to publish.
                     glue_booth::sync_glue_pet,
+                    // After every seat's build: the scene rig's pose carries them from here.
+                    glue_booth::seat_on_stage_bones
+                        .after(glue_booth::drive_create_test)
+                        .after(test_bake::dump_booth_target),
                     // After every glue spawn: the stage's clock reaches the players it made.
                     glue_booth::pace_glue_clock
                         .after(glue_booth::drive_create_test)
