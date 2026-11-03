@@ -2158,8 +2158,9 @@ fn clear_pet(commands: &mut Commands, scene: &mut CreateScene) {
     scene.pet_baked = None;
 }
 
-/// Seat the model root on the stage `spot` in the stage's frame, facing `yaw` (the reference's
-/// `Model:SetRotation`, about the root's own origin).
+/// Seat the model root on the stage `spot` at bind pose, facing `yaw` (the reference's
+/// `Model:SetRotation`, about the root's own origin); [`seat_on_stage_bones`] then puts it in the
+/// bone's frame.
 fn apply_yaw(commands: &mut Commands, root: Entity, spot: Vec3, yaw: f32) {
     commands
         .entity(root)
@@ -2179,7 +2180,7 @@ fn stage_seat(bone: bevy::math::Affine3A, offset: Vec3, own: Transform) -> Trans
 /// scene rig's pose: a seat's keys, a parent's and keys that move all reach them. A scene with no
 /// posed rig keeps the bind-pose seats its build wrote.
 pub(super) fn seat_on_stage_bones(
-    mut commands: Commands,
+    mut seats: Query<&mut Transform>,
     scene: Option<Res<CreateScene>>,
     booths: Res<Booths>,
     preview: Res<GluePreview>,
@@ -2207,9 +2208,10 @@ pub(super) fn seat_on_stage_bones(
         let Some(bone) = pose.model.get(usize::from(a.bone)) else {
             continue;
         };
-        commands
-            .entity(root)
-            .insert(stage_seat(*bone, a.offset, own));
+        if let Ok(mut t) = seats.get_mut(root) {
+            // A still seat leaves the booth's transform unchanged.
+            t.set_if_neq(stage_seat(*bone, a.offset, own));
+        }
     }
 }
 

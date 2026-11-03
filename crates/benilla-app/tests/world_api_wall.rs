@@ -152,6 +152,7 @@ const PUBLISHED: &[(&str, &str)] = &[
     ("rig_anim::PosePost", "wall"),
     ("rig_anim::RigAnchor", "wall"),
     ("rig_anim::RigFrame", "wall"),
+    ("rig_anim::RigModelPass", "wall"),
     ("rig_anim::RigPose", "wall"),
     ("rig_anim::SceneClock", "record"),
     ("rig_palette::RigPalettes", "record"),

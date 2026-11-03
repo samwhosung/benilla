@@ -18,6 +18,11 @@ use super::{AnimParked, RigFrame, RigPose};
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PosePost;
 
+/// The model pass ([`compose_rig_models`]): a reader ordered after it and before propagation sees
+/// this frame's model-space bones.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RigModelPass;
+
 /// Fold each pose-dirty rig into model space and re-seat its anchors, leaving `pose_dirty` for
 /// the world pass. A parked rig is skipped; its wake unparks it before this runs.
 fn compose_rig_models(
@@ -270,12 +275,13 @@ pub fn plugin(app: &mut App) {
             .after(bevy::app::AnimationSystems)
             .before(bevy::transform::TransformSystems::Propagate),
     )
-    .add_systems(
+    .configure_sets(
         PostUpdate,
-        compose_rig_models
+        RigModelPass
             .after(PosePost)
             .before(bevy::transform::TransformSystems::Propagate),
-    );
+    )
+    .add_systems(PostUpdate, compose_rig_models.in_set(RigModelPass));
 }
 
 #[cfg(test)]

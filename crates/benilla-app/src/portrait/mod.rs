@@ -813,10 +813,6 @@ impl Plugin for PortraitPlugin {
                     glue_booth::pillarbox_glue_scene,
                     // After the scene: the pet's seat and its light are the scene's to publish.
                     glue_booth::sync_glue_pet,
-                    // After every seat's build: the scene rig's pose carries them from here.
-                    glue_booth::seat_on_stage_bones
-                        .after(glue_booth::drive_create_test)
-                        .after(test_bake::dump_booth_target),
                     // After every glue spawn: the stage's clock reaches the players it made.
                     glue_booth::pace_glue_clock
                         .after(glue_booth::drive_create_test)
@@ -831,6 +827,14 @@ impl Plugin for PortraitPlugin {
                     // After the VM pass, whose script calls may change the unit a portrait shows;
                     // the booths' transforms and cameras are none a call reads.
                     .after(crate::vm_pass::VmPass::End),
+            )
+            // The seats ride this frame's scene pose, as the reference animates the scene before
+            // the children on it (`0x714000`); the seats' builds above wrote the bind pose.
+            .add_systems(
+                PostUpdate,
+                glue_booth::seat_on_stage_bones
+                    .after(benilla_world::rig_anim::RigModelPass)
+                    .before(bevy::transform::TransformSystems::Propagate),
             )
             // The character panes: the VM's paint list, after its paint pass armed the turns and
             // the extract published the panes' geometry; before the camera gate reads the marks.
