@@ -307,18 +307,12 @@ pub(crate) struct CreateScene {
     /// The character's stage spot, scene attachment 0 in Bevy model space (`ZERO` with no scene);
     /// the body seats on attachment 0 at select too (`0x473039`).
     char_spot: Vec3,
-    /// The stage's authored frame, attachment 0's bone rotation and uniform scale
-    /// ([`stage_frame`]); identity and 1.0 with no scene.
-    char_facing: Quat,
-    char_scale: f32,
     /// The pet's spot, scene attachment 1 (`0x47306b` seats the secondary model there). Every
     /// `UI_*` scene authors exactly attachments 0 and 1, both on parentless root bones.
     pet_root: Entity,
     pet_spot: Vec3,
-    /// Attachment 1's bone frame, read like [`Self::char_facing`]. UI_Human's holds the same
-    /// −16.5° yaw and 0.97 scale as attachment 0; UI_Tauren's holds 0.7324 on the pet's bone alone.
-    pet_facing: Quat,
-    pet_stage_scale: f32,
+    /// The family ramp scale of the pet standing at the seat.
+    pet_scale: f32,
     /// The revision of the pet bake standing at [`Self::pet_spot`], so a re-bake happens once.
     pet_baked: Option<u64>,
     /// The fog the spawn wrote; the scene rebuilds when it changes.
@@ -364,11 +358,7 @@ struct ParkedScene {
     file: GlueSceneFile,
     handle: Handle<M2Model>,
     char_spot: Vec3,
-    char_facing: Quat,
-    char_scale: f32,
     pet_spot: Vec3,
-    pet_facing: Quat,
-    pet_stage_scale: f32,
     stage: u64,
     clock_ms: u64,
 }
@@ -382,12 +372,9 @@ impl CreateScene {
             handle: None,
             spawned: false,
             char_spot: Vec3::ZERO,
-            char_facing: Quat::IDENTITY,
-            char_scale: 1.0,
             pet_root,
             pet_spot: Vec3::ZERO,
-            pet_facing: Quat::IDENTITY,
-            pet_stage_scale: 1.0,
+            pet_scale: 1.0,
             pet_baked: None,
             fog: None,
             stage: 0,
@@ -431,11 +418,7 @@ impl CreateScene {
                     file,
                     handle,
                     char_spot: self.char_spot,
-                    char_facing: self.char_facing,
-                    char_scale: self.char_scale,
                     pet_spot: self.pet_spot,
-                    pet_facing: self.pet_facing,
-                    pet_stage_scale: self.pet_stage_scale,
                     stage: self.stage,
                     clock_ms: self.clock_ms,
                 });
@@ -465,11 +448,7 @@ impl CreateScene {
         self.file = Some(p.file);
         self.handle = Some(p.handle);
         self.char_spot = p.char_spot;
-        self.char_facing = p.char_facing;
-        self.char_scale = p.char_scale;
         self.pet_spot = p.pet_spot;
-        self.pet_facing = p.pet_facing;
-        self.pet_stage_scale = p.pet_stage_scale;
         self.stage = p.stage;
         self.clock_ms = p.clock_ms;
         self.spawned = true;
@@ -493,8 +472,6 @@ impl CreateScene {
         self.handle = None;
         self.spawned = false;
         self.char_spot = Vec3::ZERO;
-        self.char_facing = Quat::IDENTITY;
-        self.char_scale = 1.0;
         clear_pet(commands, self);
         true
     }
@@ -1072,14 +1049,7 @@ pub(super) fn sync_glue_scene(
             "glue scene: {name} resumed at {} ms on its own clock",
             scene.clock_ms
         );
-        apply_yaw(
-            &mut commands,
-            booth.root,
-            scene.char_spot,
-            scene.char_facing,
-            scene.char_scale,
-            preview.yaw,
-        );
+        apply_yaw(&mut commands, booth.root, scene.char_spot, preview.yaw);
     }
     if !scene.spawned {
         let Some(model) = scene.handle.as_ref().and_then(|h| m2s.get(h)) else {
@@ -1090,12 +1060,6 @@ pub(super) fn sync_glue_scene(
         }
         // The scene's light, in its own buffer so the portraits' studio light is untouched.
         let stage = attachment_point(&model.skeleton, &model.attachments, 0).unwrap_or(Vec3::ZERO);
-        // The stage's frame, not just its point ([`stage_frame`]).
-        let (stage_facing, stage_scale) = model
-            .attachments
-            .iter()
-            .find(|a| a.id == 0)
-            .map_or((Quat::IDENTITY, 1.0), |a| stage_frame(model, a.bone));
         let rig = if ghost {
             ghost_rig()
         } else {
@@ -1239,39 +1203,20 @@ pub(super) fn sync_glue_scene(
         scene_rig.finish(&mut commands);
         scene.spawned = true;
         scene.char_spot = stage;
-        scene.char_facing = stage_facing;
-        scene.char_scale = stage_scale;
-        // The pet's seat: attachment 1, frame and all.
+        // The pet's seat: attachment 1 ([`seat_on_stage_bones`] follows its bone from here).
         scene.pet_spot =
             attachment_point(&model.skeleton, &model.attachments, 1).unwrap_or(Vec3::ZERO);
-        let (pet_facing, pet_stage_scale) = model
-            .attachments
-            .iter()
-            .find(|a| a.id == 1)
-            .map_or((Quat::IDENTITY, 1.0), |a| stage_frame(model, a.bone));
-        scene.pet_facing = pet_facing;
-        scene.pet_stage_scale = pet_stage_scale;
         // A rebuilt scene moved the seat, so the standing pet re-seats.
         scene.pet_baked = None;
         scene.rev += 1; // the character re-lights onto the scene rig (sync_glue_booth's key)
         info!(
-            "create scene: {name} up — {} submeshes, {} camera(s), stage {:?} facing {:.2}° \
-             scale {:.3}",
+            "create scene: {name} up — {} submeshes, {} camera(s), stage {:?}",
             model.submeshes.len(),
             model.cameras.len(),
             scene.char_spot,
-            scene.char_facing.to_euler(EulerRot::YXZ).0.to_degrees(),
-            scene.char_scale,
         );
         // Seat the character at the current facing (the yaw path below runs only on a change).
-        apply_yaw(
-            &mut commands,
-            booth.root,
-            scene.char_spot,
-            scene.char_facing,
-            scene.char_scale,
-            preview.yaw,
-        );
+        apply_yaw(&mut commands, booth.root, scene.char_spot, preview.yaw);
     }
     // The installed camera owns the booth camera while the scene shows, every frame: the pane's
     // camera of the file's table, or with none the orthographic leg (`0x76ceeb` installs no
@@ -1595,16 +1540,9 @@ pub(super) fn sync_glue_booth(
     let Some(booth) = booths.0.get_mut(GLUE_SLOT) else {
         return;
     };
-    let (spot, stage, stage_scale, scene_rev) =
-        scene
-            .as_deref()
-            .map_or((Vec3::ZERO, Quat::IDENTITY, 1.0, 0), |s| {
-                if s.spawned {
-                    (s.char_spot, s.char_facing, s.char_scale, s.rev)
-                } else {
-                    (Vec3::ZERO, Quat::IDENTITY, 1.0, s.rev)
-                }
-            });
+    let (spot, scene_rev) = scene.as_deref().map_or((Vec3::ZERO, 0), |s| {
+        (if s.spawned { s.char_spot } else { Vec3::ZERO }, s.rev)
+    });
     let (last_rev, last_yaw, last_scene) = state.last.unwrap_or((u64::MAX, f32::NAN, u64::MAX));
     // `sync_glue_scene` runs first and commits a stage only beside its character, so a standing
     // stage matching the request means this bake may show ([`PendingSwap`]).
@@ -1627,14 +1565,7 @@ pub(super) fn sync_glue_booth(
             booth.parked = false;
             state.last = Some((bake.revision, preview.yaw, scene_rev));
             state.body = None;
-            apply_yaw(
-                &mut commands,
-                booth.root,
-                spot,
-                stage,
-                stage_scale,
-                preview.yaw,
-            );
+            apply_yaw(&mut commands, booth.root, spot, preview.yaw);
             return;
         }
         // The rig comes from the display cache the builder gated on; if not ready, retry.
@@ -1962,14 +1893,7 @@ pub(super) fn sync_glue_booth(
             );
         }
     }
-    apply_yaw(
-        &mut commands,
-        booth.root,
-        spot,
-        stage,
-        stage_scale,
-        preview.yaw,
-    );
+    apply_yaw(&mut commands, booth.root, spot, preview.yaw);
     // A yaw-only pass must not record revisions it did not commit, or a held pair never retries.
     state.last = Some((
         if rebake { bake.revision } else { last_rev },
@@ -2204,11 +2128,11 @@ pub(super) fn sync_glue_pet(
     );
     // `anchor` writes the pose buffer, `finish` commits it.
     pet_rig.finish(&mut commands);
-    // The seat: attachment 1's whole frame, times the family ramp scale.
+    // The seat at bind pose, times the family ramp scale; the bone's frame comes next
+    // ([`seat_on_stage_bones`]).
+    scene.pet_scale = pet.scale.max(0.01);
     commands.entity(scene.pet_root).insert(
-        Transform::from_translation(scene.pet_spot)
-            .with_rotation(scene.pet_facing)
-            .with_scale(Vec3::splat(pet.scale.max(0.01) * scene.pet_stage_scale)),
+        Transform::from_translation(scene.pet_spot).with_scale(Vec3::splat(scene.pet_scale)),
     );
     scene.pet_baked = Some(pet.revision);
     info!(
@@ -2234,55 +2158,61 @@ fn clear_pet(commands: &mut Commands, scene: &mut CreateScene) {
     scene.pet_baked = None;
 }
 
-/// Seat the model root on the stage `spot` in the stage's frame, facing `yaw` (the reference's
-/// `Model:SetRotation`, about the root's own origin).
-fn apply_yaw(
-    commands: &mut Commands,
-    root: Entity,
-    spot: Vec3,
-    stage: Quat,
-    stage_scale: f32,
-    yaw: f32,
-) {
-    commands.entity(root).insert(
-        Transform::from_translation(spot)
-            .with_rotation(stage * Quat::from_rotation_y(yaw))
-            .with_scale(Vec3::splat(stage_scale)),
-    );
+/// Seat the model root on the stage `spot` at bind pose, facing `yaw` (the reference's
+/// `Model:SetRotation`, about the root's own origin); [`seat_on_stage_bones`] then puts it in the
+/// bone's frame.
+fn apply_yaw(commands: &mut Commands, root: Entity, spot: Vec3, yaw: f32) {
+    commands
+        .entity(root)
+        .insert(Transform::from_translation(spot).with_rotation(Quat::from_rotation_y(yaw)));
 }
 
-/// The stage's authored frame: the constant rotation and uniform scale parked on attachment
-/// `bone`'s chain. The reference composes an attachment's whole frame, not only its point
-/// (`0x71439b` in `0x714260`). `UI_Human` keys its stage bones with a constant −16.5° yaw to face
-/// its off-axis camera; the other race scenes leave them unrotated. The scale is uniform on every
-/// shipped scene, so `x` stands for it.
-fn stage_frame(model: &M2Model, bone: u16) -> (Quat, f32) {
-    let Some(anims) = model.animations.as_ref() else {
-        return (Quat::IDENTITY, 1.0);
+/// A child's seat under a scene bone: the bone's whole animated matrix, moved to the attachment's
+/// position, the composed result of `0x7140d8`-`0x714149`. The child's own turn and scale go in
+/// its frame, under the bone's.
+fn stage_seat(bone: bevy::math::Affine3A, offset: Vec3, own: Transform) -> Transform {
+    let mut seat = bone;
+    seat.translation = bone.transform_point3(offset).into();
+    Transform::from_matrix(Mat4::from(seat) * own.to_matrix())
+}
+
+/// Seats the body and the pet on attachments 0 and 1 of the standing scene every frame, from the
+/// scene rig's pose: a seat's keys, a parent's and keys that move all reach them. A scene with no
+/// posed rig keeps the bind-pose seats its build wrote.
+pub(super) fn seat_on_stage_bones(
+    mut seats: Query<&mut Transform>,
+    scene: Option<Res<CreateScene>>,
+    booths: Res<Booths>,
+    preview: Res<GluePreview>,
+    m2s: Res<Assets<M2Model>>,
+    rigs: Query<&benilla_world::rig_anim::RigPose>,
+) {
+    let (Some(scene), Some(booth)) = (scene, booths.0.get(GLUE_SLOT)) else {
+        return;
     };
-    let mut rot = Quat::IDENTITY;
-    let mut scale = 1.0;
-    let mut idx = bone;
-    // Cycle-guarded by the joint count, as the pivot walk is.
-    for _ in 0..=model.skeleton.joints.len() {
-        if let Some(g) = anims.global_bones.iter().find(|g| g.bone == idx) {
-            // `t = 0`: these are parked keys, and no stage bone animates.
-            if let Some(c) = g.rotation.as_ref() {
-                rot = c.sample(0.0) * rot;
-            }
-            if let Some(c) = g.scale.as_ref() {
-                scale *= c.sample(0.0).x;
-            }
-        }
-        let Some(joint) = model.skeleton.joints.get(usize::from(idx)) else {
-            break;
+    if !scene.spawned {
+        return;
+    }
+    let Some(model) = scene.handle.as_ref().and_then(|h| m2s.get(h)) else {
+        return;
+    };
+    let Ok(pose) = rigs.get(scene.root) else {
+        return;
+    };
+    let body = Transform::from_rotation(Quat::from_rotation_y(preview.yaw));
+    let pet = Transform::from_scale(Vec3::splat(scene.pet_scale));
+    for (id, root, own) in [(0, booth.root, body), (1, scene.pet_root, pet)] {
+        let Some(a) = model.attachments.iter().find(|a| a.id == id) else {
+            continue;
         };
-        match u16::try_from(joint.parent) {
-            Ok(parent) => idx = parent,
-            Err(_) => break, // -1 = root reached
+        let Some(bone) = pose.model.get(usize::from(a.bone)) else {
+            continue;
+        };
+        if let Ok(mut t) = seats.get_mut(root) {
+            // A still seat leaves the booth's transform unchanged.
+            t.set_if_neq(stage_seat(*bone, a.offset, own));
         }
     }
-    (rot, scale)
 }
 
 /// The create preview instrument:
@@ -2974,6 +2904,22 @@ mod tests {
             first_seq: None,
             pose: Default::default(),
         }
+    }
+
+    #[test]
+    fn a_seat_takes_the_bones_whole_matrix_at_the_attachment() {
+        // UI_CharacterSelect's seat: a half turn and 0.673 keyed on the bone, which also moves.
+        let half_turn = Quat::from_rotation_y(std::f32::consts::PI);
+        let bone = bevy::math::Affine3A::from_scale_rotation_translation(
+            Vec3::splat(0.5),
+            half_turn,
+            Vec3::new(1.0, 2.0, 3.0),
+        );
+        let quarter = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+        let seat = stage_seat(bone, Vec3::X, Transform::from_rotation(quarter));
+        assert!(seat.translation.abs_diff_eq(Vec3::new(0.5, 2.0, 3.0), 1e-5));
+        assert!(seat.scale.abs_diff_eq(Vec3::splat(0.5), 1e-5));
+        assert!(seat.rotation.dot(half_turn * quarter).abs() > 0.9999);
     }
 
     fn create(sex: u8, class: u8, skin: u8, hair_style: u8) -> GlueLook {
@@ -3715,11 +3661,7 @@ mod tests {
             file: GlueSceneFile::new("UI_MainMenu.mdx"),
             handle: Handle::default(),
             char_spot: Vec3::ZERO,
-            char_facing: Quat::IDENTITY,
-            char_scale: 1.0,
             pet_spot: Vec3::ZERO,
-            pet_facing: Quat::IDENTITY,
-            pet_stage_scale: 1.0,
             stage: 1,
             clock_ms: 0,
         });
