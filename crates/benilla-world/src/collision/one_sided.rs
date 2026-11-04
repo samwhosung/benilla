@@ -45,7 +45,7 @@ const FACING_EPS: f32 = f32::from_bits(0xb727_c5ac);
 /// avian's `pull_back` floor for a near-zero `n·dir` (its `move_and_slide.rs`).
 const DOT_EPSILON: f32 = 0.005;
 
-/// The backface band (`[0x7ff9c8]`, 1/36 yd): `0x632830` drops a facet whose part inside the
+/// The backface band, 1/36 yd (`[0x7ff9c8]` holds −1/36): `0x632830` drops a facet whose part inside the
 /// volume lies wholly more than this behind a leading face along the motion ([`Band`]).
 const BACKFACE_BAND: f32 = 1.0 / 36.0;
 
@@ -617,8 +617,8 @@ struct Band {
 }
 
 impl Band {
-    /// The band of `shape` at `center` sweeping `len` along `dir`, floored at 1/36 yd as
-    /// `0x632ba0` floors its sweep.
+    /// The band of `shape` at `center` sweeping `len` along `dir`, floored at 1/36 yd
+    /// (`[0x7ff9d0]`) as `0x632ba0` floors its sweep.
     fn new(shape: &Collider, center: Vec3, dir: Dir3, len: f32) -> Self {
         let aabb = shape.aabb(center, Quat::IDENTITY);
         let r = 0.5 * (aabb.max.x - aabb.min.x).max(aabb.max.z - aabb.min.z);
@@ -691,9 +691,14 @@ impl Band {
     /// Whether a facet the body overlaps, its vertices relative to [`Self::feet`], is a contact:
     /// some leading face keeps it (`0x632700`, `0x632830`). The facet is clipped to the face's
     /// prism; a clipped vertex ahead of the face keeps it; else it is clipped by the volume's other
-    /// planes, and a vertex left within [`BACKFACE_BAND`] behind the face keeps it. A facet ahead
-    /// is kept past the sweep's length too: the capsule already overlaps it, and that contact is
-    /// the controller's.
+    /// planes, and a vertex left within [`BACKFACE_BAND`] behind the face keeps it.
+    ///
+    /// Deviation: a facet ahead of the face is kept at any distance, where `0x632700` keeps it only
+    /// when its distance is at most the sweep length (`0x6327e2`), reset for each face (`0x632324`,
+    /// `0x632e15`), the distance being the least of the clipped vertices' `max(t, 0)`
+    /// (`0x632888`-`0x63289a`), because the capsule bulges past the volume's bevels (0.2 yd up, a
+    /// half-width of 0.305 against 0.108), so a facet the capsule already overlaps is held as a
+    /// contact rather than passed through, as before the clip.
     fn keeps(&self, tri: [Vec3; 3]) -> bool {
         self.leading[..self.count].iter().any(|&(k, prism, m)| {
             let mut poly = Poly::triangle(tri);
@@ -911,7 +916,7 @@ mod tests {
         assert_eq!(
             sweep(&mut seat, centre, Vec3::X * 0.2),
             None,
-            "a seat top the body straddles is behind its leading edge: the walk out is free"
+            "a seat top is square to the walk (n·dir = 0, above −1e-5): the facing gate drops it"
         );
 
         // A 10-yd slope rising 1 yd (about 6°), the feet 5 cm under it, one vertex well below.
