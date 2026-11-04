@@ -126,8 +126,8 @@ pub fn spawn_model_entities(
     let mat_frozen = crate::dev_state::deterministic_run();
     let animated = host.is_some();
     let rig_root = host.as_ref().map(|h| h.root);
-    // The instance every batch names for the transparent order.
-    let mut sort_rep = rig_root;
+    // Every M2 batch, with whether it is a card, for the transparent order's instance.
+    let mut sorted: Vec<(Entity, bool)> = Vec::new();
     if let Some(h) = &host {
         out.push(h.root);
     }
@@ -564,13 +564,8 @@ pub fn spawn_model_entities(
                 .entity(entity)
                 .insert(crate::mesh_tag::InteriorProbePayload);
         }
-        // One instance for the transparent order: a placement's batches are separate world roots,
-        // so they name it, its anim host or else its first batch (`0x70af56`).
         if !is_wmo {
-            let rep = *sort_rep.get_or_insert(entity);
-            commands
-                .entity(entity)
-                .insert(crate::model_render::order::SortInstance(rep));
+            sorted.push((entity, sub.billboard.is_some()));
         }
         // On the entity-hosted lane the batch is lit by its own doodad def, not its host; set
         // here as only this site reaches every batch, cards included.
@@ -611,6 +606,18 @@ pub fn spawn_model_entities(
         // A following card despawns with its owner and must stay a world root: keep it out.
         if sub.billboard.is_none() || card_owner.is_none() {
             out.push(entity);
+        }
+    }
+    // One instance for the transparent order, keyed at the placement's origin: a placement's
+    // batches are separate world roots, so each names it.
+    if let Some(key) = crate::model_render::order::placement_instance(
+        rig_root,
+        &sorted,
+        card_owner,
+        transform.translation,
+    ) {
+        for &(entity, _) in &sorted {
+            commands.entity(entity).insert(key);
         }
     }
     // Animation runs while a submesh is drawn or, for a meshless host, while its gate admits it.

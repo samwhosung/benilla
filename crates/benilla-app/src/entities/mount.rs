@@ -62,7 +62,7 @@ pub(super) fn spawn_mount_child(
     // Its own instance in the transparent order, at its unit's origin.
     commands
         .entity(child)
-        .insert(benilla_world::model_render::order::SortInstance(child));
+        .insert(benilla_world::model_render::order::SortInstance::of(child));
     if let Some(arrival) = arrival {
         commands.entity(child).insert(arrival);
     }

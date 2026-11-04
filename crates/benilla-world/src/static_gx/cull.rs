@@ -127,12 +127,13 @@ fn spawn_exile(commands: &mut Commands, f: &GxFader, alpha: f32, admitted: bool)
         }
         ents.push(e.id());
     }
-    // One instance for the transparent order, as the entity lane names it.
+    // One instance for the transparent order, as the entity lane names it: every exile is a part
+    // at the placement's transform, so the first one's origin is the placement's.
     if let Some(&rep) = ents.first() {
         for &e in &ents {
             commands
                 .entity(e)
-                .insert(crate::model_render::order::SortInstance(rep));
+                .insert(crate::model_render::order::SortInstance::of(rep));
         }
     }
     if fade_trace() {
