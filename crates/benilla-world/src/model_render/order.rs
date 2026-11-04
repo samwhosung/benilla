@@ -383,14 +383,17 @@ fn order_m2_transparents(
     }
 }
 
-/// Register the links, their extraction and the re-sort.
+/// Register the links, their extraction and the re-sort. Only extraction reads a link, so the
+/// links are taken after `CheckVisibility`, once every pass that places a transform before it
+/// (cards, nameplates, raid marks) has run.
 pub(crate) fn plugin(app: &mut App) {
     app.add_plugins(ExtractComponentPlugin::<M2SortLink>::default())
         .add_systems(
             PostUpdate,
             (link_m2_batches, refresh_m2_links)
                 .chain()
-                .after(crate::billboard::BillboardPlace),
+                .after(crate::billboard::BillboardPlace)
+                .after(bevy::camera::visibility::VisibilitySystems::CheckVisibility),
         );
     if let Some(render) = app.get_sub_app_mut(RenderApp) {
         render

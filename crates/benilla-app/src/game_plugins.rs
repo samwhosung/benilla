@@ -917,7 +917,7 @@ pub(crate) mod schedule_tests {
 
     /// `PostUpdate`'s undeclared-order pairs on the declared graph; `GlobalTransform` and the
     /// particle `EffectQuads` are most of it.
-    const POST_UPDATE_CEILING: usize = 371;
+    const POST_UPDATE_CEILING: usize = 370;
     const POST_UPDATE_SLACK: usize = 20;
     /// The actionable pairs in `Update`: conflicting access, no declared order, and nothing
     /// [`Classes`] explains, so the executor orders them however the graph falls. The count may
