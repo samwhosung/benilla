@@ -126,6 +126,8 @@ pub fn spawn_model_entities(
     let mat_frozen = crate::dev_state::deterministic_run();
     let animated = host.is_some();
     let rig_root = host.as_ref().map(|h| h.root);
+    // The instance every batch names for the transparent order.
+    let mut sort_rep = rig_root;
     if let Some(h) = &host {
         out.push(h.root);
     }
@@ -149,9 +151,9 @@ pub fn spawn_model_entities(
         let Some((stat_mesh, stat_aabb)) = forms.stat.get(batch_idx) else {
             continue;
         };
-        // The authored order biases the transparent sort, so coplanar layers draw in file order;
-        // a WMO batch also takes it into the clip-z nudge, as the reference draws MOBA batches in
-        // strict file order (`0x6b4f10`/`0x6b5190`).
+        // The authored order keys the batch's material; a WMO batch also takes it into its sort
+        // bias and the clip-z nudge, as the reference draws MOBA batches in strict file order
+        // (`0x6b4f10`/`0x6b5190`). An M2 batch sorts by the transparent order's keys.
         let batch_order = u16::try_from(batch_idx + 1).unwrap_or(u16::MAX);
         let interior = sub.interior || interior_slot.is_some();
         // A billboard card culls by its `0x04` flag like any batch: the bone turns +X to the
@@ -193,6 +195,7 @@ pub fn spawn_model_entities(
             sub.combine,
             shade,
             batch_order,
+            sub.geometry.order,
             sub.uv_anim.as_ref(),
             sub.rgb_anim.as_ref(),
             sub.wmo_batch,
@@ -232,6 +235,7 @@ pub fn spawn_model_entities(
                 sub.combine,
                 shade,
                 batch_order,
+                sub.geometry.order,
                 sub.uv_anim.as_ref(),
                 sub.rgb_anim.as_ref(),
                 sub.wmo_batch,
@@ -559,6 +563,14 @@ pub fn spawn_model_entities(
             commands
                 .entity(entity)
                 .insert(crate::mesh_tag::InteriorProbePayload);
+        }
+        // One instance for the transparent order: a placement's batches are separate world roots,
+        // so they name it, its anim host or else its first batch (`0x70af56`).
+        if !is_wmo {
+            let rep = *sort_rep.get_or_insert(entity);
+            commands
+                .entity(entity)
+                .insert(crate::model_render::order::SortInstance(rep));
         }
         // On the entity-hosted lane the batch is lit by its own doodad def, not its host; set
         // here as only this site reaches every batch, cards included.

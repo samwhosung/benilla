@@ -1902,6 +1902,11 @@ fn build_tile(
         }
     }
 
+    // A model frame creates its model with flags 5 (`0x76ccf5`): no depth fill (`0x707a48`), so
+    // each batch sorts by its own centre.
+    commands
+        .entity(root)
+        .insert(benilla_world::model_render::order::NoDepthFill);
     // The rig, when the file has bones: the collapsed pose and a palette slot. Bone billboards
     // are not applied, since the tile camera is not the world's; no shipped UI file has one.
     let mut pose: Option<RigPose> = None;

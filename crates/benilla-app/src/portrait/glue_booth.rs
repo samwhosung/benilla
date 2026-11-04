@@ -432,7 +432,7 @@ impl CreateScene {
         // A fresh root for the incoming spawn, whose materials are its own; a resumed scene
         // brings its root back.
         if returning.is_none() {
-            self.root = commands.spawn(stage_root(layer)).id();
+            self.root = commands.spawn(scene_root_bundle(layer)).id();
         }
         self.spawned = false;
         self.char_spot = Vec3::ZERO;
@@ -788,7 +788,7 @@ pub(super) fn spawn_glue_booth(
         Booth::new(layer.clone(), root, image),
     );
     // The background scene's own root; the character root yaws, this one never does.
-    let scene_root = commands.spawn(stage_root(&layer)).id();
+    let scene_root = commands.spawn(scene_root_bundle(&layer)).id();
     // The pet's root never yaws: the reference's facing call turns only the character (`0x4730e0`).
     let pet_root = commands.spawn(stage_root(&layer)).id();
     commands.insert_resource(CreateScene::empty(scene_root, pet_root));
@@ -803,6 +803,16 @@ fn stage_root(layer: &RenderLayers) -> impl Bundle {
         Visibility::Visible,
         layer.clone(),
         benilla_world::rig_anim::SceneClock(0.0),
+    )
+}
+
+/// The background scene's root: a model frame creates its model with flags 5 (`0x76ccf5`), which
+/// turns depth fill off (`0x707a48`), so its batches sort each by its own centre; the character
+/// beside it is created with flags 0 (`0x470bd5`) and keeps it.
+fn scene_root_bundle(layer: &RenderLayers) -> impl Bundle {
+    (
+        stage_root(layer),
+        benilla_world::model_render::order::NoDepthFill,
     )
 }
 
@@ -1104,8 +1114,8 @@ pub(super) fn sync_glue_scene(
             .iter()
             .enumerate()
             .map(|(pi, s)| {
-                // The authored batch order (index + 1) is all that separates batches sharing the
-                // scene root's sort distance.
+                // The authored batch order (index + 1) keys the batch's own material; the
+                // transparent order sorts it (`benilla_world::model_render::order`).
                 let order = u16::try_from(pi + 1).unwrap_or(u16::MAX);
                 // The scene's own material, never another scene's of the same file: its UV and
                 // tint rows run on this scene's clock and go with it.

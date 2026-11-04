@@ -794,12 +794,13 @@ pub fn m2batch(chain: &mut Chain, internal_path: &str) -> Result<()> {
                     .unwrap_or_else(|| "-".into());
                 println!(
                     "  skin {i:>3}: mat {:>3}  color {:>5}  weight {:>3} -> track {w:>3}  \
-                     flags 0x{:02x}/shader 0x{:02x}/texCount {}",
+                     flags 0x{:02x}/plane {}/layer {}/texCount {}",
                     b.material_index,
                     b.color_index,
                     b.weight_combo_index,
                     b.flags,
-                    b.shader_id,
+                    b.priority_plane,
+                    b.layer,
                     b.texture_count
                 );
             }

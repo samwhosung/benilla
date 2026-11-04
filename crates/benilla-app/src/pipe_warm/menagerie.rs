@@ -117,6 +117,7 @@ pub(super) fn spawn_menagerie(
                         None, // …nor the stage-0 combine
                         ShadeSel::Lit,
                         0,
+                        None, // no transparent-order keys: the order is no pipeline key
                         None,
                         None,
                         None,
@@ -156,6 +157,7 @@ pub(super) fn spawn_menagerie(
                         None, // …nor the stage-0 combine
                         ShadeSel::Lit,
                         0,
+                        None, // no transparent-order keys: the order is no pipeline key
                         None,
                         None,
                         None,
@@ -204,6 +206,7 @@ pub(super) fn spawn_menagerie(
                     None, // …nor the stage-0 combine
                     ShadeSel::Lit,
                     0,
+                    None, // no transparent-order keys: the order is no pipeline key
                     None,
                     None,
                     None,
@@ -241,6 +244,7 @@ pub(super) fn spawn_menagerie(
                 None, // …nor the stage-0 combine
                 ShadeSel::Lit,
                 0,
+                None, // no transparent-order keys: the order is no pipeline key
                 None,
                 None,
                 None,
@@ -290,6 +294,7 @@ pub(super) fn spawn_menagerie(
                         None, // …nor the stage-0 combine
                         ShadeSel::Lit,
                         0,
+                        None, // no transparent-order keys: the order is no pipeline key
                         None,
                         None,
                         None,
@@ -807,6 +812,7 @@ fn warm_quad(colors: bool, skinned: bool, uv1: bool) -> RenderSubmesh {
         rgb_seq: None,
         wmo_batch: None,
         section: None,
+        order: None,
     }
 }
 

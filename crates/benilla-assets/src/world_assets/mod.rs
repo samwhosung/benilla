@@ -1032,6 +1032,7 @@ impl WorldAssets {
                 stage1_uv: Vec4::ZERO,
                 stage1_texture: None,
                 light_buf: self.shared_light.clone(),
+                order: None, // clutter sorts by its own centre
             },
         });
         self.model_materials.insert(key, handle.clone());

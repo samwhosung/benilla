@@ -127,6 +127,14 @@ fn spawn_exile(commands: &mut Commands, f: &GxFader, alpha: f32, admitted: bool)
         }
         ents.push(e.id());
     }
+    // One instance for the transparent order, as the entity lane names it.
+    if let Some(&rep) = ents.first() {
+        for &e in &ents {
+            commands
+                .entity(e)
+                .insert(crate::model_render::order::SortInstance(rep));
+        }
+    }
     if fade_trace() {
         println!("GX_FADE_SPAWN uid={} ents={ents:?}", f.uid);
     }

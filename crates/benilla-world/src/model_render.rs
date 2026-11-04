@@ -12,14 +12,16 @@ use benilla_assets::materials::{WowModelExt, WowModelMaterial, VANILLA_ALPHA_KEY
 
 mod batch;
 pub mod lazy;
+pub mod order;
 pub mod park;
 mod visibility;
 
 pub use batch::{BatchVariants, EntityUvLane, M2BatchMaterials, ModelMaterials, SkyboxBatch};
 
-/// Yards of transparent sort bias per authored batch step: a model's coplanar batches tie on one
-/// mesh centre, and the reference keeps their authored order inside the instance's sort key
-/// (`0x707db1`). Under [`benilla_formats::owner_last_rung`]'s 1-yd floor, over f32 noise at 500 yd.
+/// Yards of transparent sort bias per authored batch step of a batch the transparent order does
+/// not place ([`order`]): a WMO's coplanar batches draw in strict file order
+/// (`0x6b4f10`/`0x6b5190`). Under [`benilla_formats::owner_last_rung`]'s 1-yd floor, over f32 noise
+/// at 500 yd.
 pub(crate) const BATCH_ORDER_SORT_EPS: f32 = 1e-3;
 
 /// The eps product's ceiling, since `depth_bias as i32` is a pipeline-key axis: under 1.0, and
@@ -64,9 +66,13 @@ pub struct MatKey {
     combine: Option<u8>,
     /// The static terrain-shade selector, fixed per placement.
     shade: ShadeSel,
-    /// Authored batch index + 1 (0 = unordered): the transparent sort bias of every batch, and for
-    /// WMO the clip-z nudge too (MOBA batches draw in strict file order, `0x6b4f10`/`0x6b5190`).
+    /// Authored batch index + 1 (0 = unordered): the batch's own material, and for WMO the
+    /// transparent sort bias and the clip-z nudge (MOBA batches draw in strict file order,
+    /// `0x6b4f10`/`0x6b5190`).
     batch_order: u16,
+    /// An M2 batch's keys in the transparent order ([`order`]), which sorts it in place of the
+    /// bias.
+    order: Option<benilla_formats::BatchOrder>,
     /// The `Arc<UvAnim>` pointer, stable while its model is loaded: one material per UV loop.
     uv_anim: Option<usize>,
     /// The `Arc<RgbAnim>` pointer, keyed like [`Self::uv_anim`]; `None` is a static vertex tint.
@@ -150,6 +156,7 @@ pub fn model_material(
     combine: Option<u8>,
     shade: ShadeSel,
     batch_order: u16,
+    order: Option<benilla_formats::BatchOrder>,
     uv_anim: Option<&std::sync::Arc<benilla_formats::UvAnim>>,
     rgb_anim: Option<&std::sync::Arc<benilla_formats::RgbAnim>>,
     wmo_class: Option<WmoBatchClass>,
@@ -177,6 +184,7 @@ pub fn model_material(
         combine,
         shade,
         batch_order,
+        order,
         uv_anim: uv_anim.map(|a| std::sync::Arc::as_ptr(a) as usize),
         rgb_anim: rgb_anim.map(|a| std::sync::Arc::as_ptr(a) as usize),
         wmo_class,
@@ -208,13 +216,15 @@ pub fn model_material(
     // Single-sided unless the M2's 0x04 flag is set.
     let cull_mode = if two_sided { None } else { Some(Face::Back) };
     // Transparent batches only: opaque passes never sort by it. Tying past index 899 is safe:
-    // the eps matters only for same-centre stacks (M2 item overlays), and WMO batches sort by
-    // their own centres. Skybox transparents take their own rung under the world's; its painted
-    // cube faces draw opaque, as in the reference.
+    // WMO batches sort by their own centres. An M2 batch takes no bias: the transparent order
+    // places it ([`order`]). Skybox transparents take their own rung under the world's; its
+    // painted cube faces draw opaque, as in the reference.
     let depth_bias = if !matches!(alpha_mode, AlphaMode::Blend) {
         0.0
     } else if sky_depth {
         skybox_sort_bias(batch_order)
+    } else if order.is_some() {
+        0.0
     } else {
         (f32::from(batch_order) * BATCH_ORDER_SORT_EPS).min(BATCH_ORDER_SORT_CAP)
     };
@@ -340,6 +350,8 @@ pub fn model_material(
                 },
                 stage1_texture: stage1.map(|s| s.texture.clone()),
                 light_buf: light.clone(),
+                // The sky keeps its own band.
+                order: order.filter(|_| !sky_depth),
             },
         },
     );
@@ -376,12 +388,9 @@ fn skybox_sort_bias(batch_order: u16) -> f32 {
         + (f32::from(batch_order) * SKYBOX_ORDER_EPS).min(SKYBOX_ORDER_CAP)
 }
 
-/// The depth-prime twin's sort bias in yards (negative draws earlier), past the spread of one
-/// model's part centres so all its twins draw before any colour part, as the reference's one sort
-/// key per instance with twins first does (`cmd+0x14 = model+0x84`, `0x707db1`, `0x70ae10`). 8 yd
-/// covers humanoids and mounts; a taller model can keep some self-overlap, and a transparent
-/// sorting within 8 yd behind a fading body draws after its prime and clips where the body covers
-/// it. As a raster depth bias it is ~2⁻²⁰ relative, away from the eye.
+/// The depth-prime twin's `depth_bias`, a raster depth bias of ~2⁻²⁰ relative, away from the eye,
+/// and its own pipeline key. Its place in the list is the transparent order's `+0x8` key
+/// ([`order`]), which takes this back out.
 pub(crate) const ZFILL_SORT_BIAS: f32 = -8.0;
 
 /// Build or fetch the depth-prime twin for one fadeable entity batch, the reference's
@@ -426,6 +435,7 @@ pub fn zfill_material(
         combine: None,
         shade: ShadeSel::Lit,
         batch_order: 0,
+        order: Some(benilla_formats::BatchOrder::default()),
         uv_anim: None,
         rgb_anim: None,
         wmo_class: None,
@@ -475,6 +485,9 @@ pub fn zfill_material(
                 stage1_uv: Vec4::ZERO,
                 stage1_texture: stage1.map(|s| s.texture.clone()),
                 light_buf: light.clone(),
+                // A depth-fill copy, which its entity's link marks: it leads its instance by the
+                // `+0x8` key, whatever its own.
+                order: Some(benilla_formats::BatchOrder::default()),
             },
         },
     );
@@ -886,6 +899,8 @@ pub fn replace_fog_policy(z: f32, policy: benilla_formats::FogPolicy) -> f32 {
 
 /// The model-render lane's registrations.
 pub fn plugin(app: &mut App) {
+    // The scene's transparent order over the M2 batches.
+    order::plugin(app);
     // Before `ModelVisSet`, so the authority's pick sees this frame's side, and after the fade
     // resolve. The self feather is unordered: it composes the same marker and can lag one frame
     // as the eye crosses the surface.

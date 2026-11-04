@@ -5,21 +5,29 @@ use benilla_bytes::{capped, ByteExt};
 use crate::error::{Error, Result};
 use crate::model::M2Model;
 
-/// One skin submesh: its triangle range and geoset id.
+/// One skin submesh: its triangle range, geoset id, bone palette and depth-key centre.
 pub struct SkinSection {
     /// `skinSectionId`, the geoset id `group*100 + variant` that character geoset selection
     /// toggles; 0 on a single-geoset model.
     pub id: u16,
     pub triangle_start: u16,
     pub triangle_count: u16,
+    /// The first bone lookup (`+0x0e`), a key of the opaque order (`0x70ab21`).
+    pub bone_lookup: u16,
+    /// The vertex bone-weight count (`+0x10`), digit `B` of the vertex shader id (`0x71de50`).
+    pub bone_influences: u16,
+    /// The bone the depth-key centre rides (`+0x12`, `0x707d6a`).
+    pub center_bone: u16,
+    /// The depth-key centre (`+0x14`), model space, raw WoW axes (`0x707d7a`).
+    pub center: [f32; 3],
 }
 
 /// One skin draw batch (section + material + texture-combo references).
 pub struct SkinBatch {
     /// Batch flags (texUnit `+0x00`), raw; the renderer ignores them.
     pub flags: u16,
-    /// Shader or render-order selector (texUnit `+0x02`), raw; the renderer ignores it.
-    pub shader_id: u16,
+    /// The priority plane (texUnit `+0x02`), read signed (`movsx` at `0x707c76`).
+    pub priority_plane: i16,
     pub skin_section_index: u16,
     pub texture_combo_index: u16,
     /// Index into [`crate::M2Model::texture_unit_lookup`], the stage's coordinate source (texUnit
@@ -34,6 +42,9 @@ pub struct SkinBatch {
     pub texture_count: u16,
     /// Index into [`crate::M2Model::texture_transform_lookup`] (texUnit `+0x16`, `0x70b897`).
     pub texture_transform_combo_index: u16,
+    /// The unit's layer on its submesh (texUnit `+0x0c`), 0 to n−1: the transparent order's last
+    /// key before the opaque order (`0x70afa3`).
+    pub layer: u16,
 }
 
 /// A decoded embedded skin profile.
@@ -100,10 +111,15 @@ impl M2Model {
             let s = bytes
                 .bytes_at(o_sub + i * sec, sec)
                 .ok_or(Error::Truncated)?;
+            let f = |o: usize| s.f32_at(o).ok_or(Error::Truncated);
             submeshes.push(SkinSection {
                 id: s.u16_at(0).ok_or(Error::Truncated)?, // skinSectionId @ +0x00
                 triangle_start: s.u16_at(8).ok_or(Error::Truncated)?,
                 triangle_count: s.u16_at(10).ok_or(Error::Truncated)?,
+                bone_lookup: s.u16_at(0x0e).ok_or(Error::Truncated)?,
+                bone_influences: s.u16_at(0x10).ok_or(Error::Truncated)?,
+                center_bone: s.u16_at(0x12).ok_or(Error::Truncated)?,
+                center: [f(0x14)?, f(0x18)?, f(0x1c)?],
             });
         }
         // M2TextureUnit, a batch: 24 bytes.
@@ -113,7 +129,7 @@ impl M2Model {
             let u = bytes.bytes_at(o_bat + i * 24, 24).ok_or(Error::Truncated)?;
             batches.push(SkinBatch {
                 flags: u.u16_at(0).ok_or(Error::Truncated)?,
-                shader_id: u.u16_at(2).ok_or(Error::Truncated)?,
+                priority_plane: u.u16_at(2).ok_or(Error::Truncated)? as i16,
                 skin_section_index: u.u16_at(4).ok_or(Error::Truncated)?,
                 material_index: u.u16_at(0x0a).ok_or(Error::Truncated)?,
                 texture_combo_index: u.u16_at(0x10).ok_or(Error::Truncated)?,
@@ -122,6 +138,7 @@ impl M2Model {
                 weight_combo_index: u.u16_at(0x14).ok_or(Error::Truncated)?,
                 texture_count: u.u16_at(0x0e).ok_or(Error::Truncated)?,
                 texture_transform_combo_index: u.u16_at(0x16).ok_or(Error::Truncated)?,
+                layer: u.u16_at(0x0c).ok_or(Error::Truncated)?,
             });
         }
         Ok(Skin {

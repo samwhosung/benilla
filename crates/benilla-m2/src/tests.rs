@@ -275,7 +275,7 @@ fn a_stage_past_the_transform_table_reads_on_into_the_file() {
 fn combine_batch() -> SkinBatch {
     SkinBatch {
         flags: 0,
-        shader_id: 0,
+        priority_plane: 0,
         skin_section_index: 0,
         texture_combo_index: 0,
         texture_coord_combo_index: 0,
@@ -284,6 +284,7 @@ fn combine_batch() -> SkinBatch {
         weight_combo_index: 0,
         texture_count: 2,
         texture_transform_combo_index: 0,
+        layer: 0,
     }
 }
 
@@ -532,11 +533,19 @@ fn model_with_one_skin() -> Vec<u8> {
     section[0..2].copy_from_slice(&7u16.to_le_bytes()); // skinSectionId
     section[8..10].copy_from_slice(&0u16.to_le_bytes()); // triangle_start
     section[10..12].copy_from_slice(&3u16.to_le_bytes()); // triangle_count
+    section[0x0e..0x10].copy_from_slice(&4u16.to_le_bytes()); // first bone lookup
+    section[0x10..0x12].copy_from_slice(&1u16.to_le_bytes()); // bone influences
+    section[0x12..0x14].copy_from_slice(&3u16.to_le_bytes()); // centre bone
+    for (k, c) in [0.5f32, -1.25, 2.0].iter().enumerate() {
+        section[0x14 + 4 * k..0x18 + 4 * k].copy_from_slice(&c.to_le_bytes()); // centre
+    }
     b.extend(section);
     let bat_ofs = b.len() as u32;
     let mut batch = vec![0u8; 24];
+    batch[2..4].copy_from_slice(&(-1i16).to_le_bytes()); // priority plane
     batch[4..6].copy_from_slice(&0u16.to_le_bytes()); // skin_section_index
     batch[8..10].copy_from_slice(&11u16.to_le_bytes()); // color_index
+    batch[0x0c..0x0e].copy_from_slice(&1u16.to_le_bytes()); // layer
     batch[0x0a..0x0c].copy_from_slice(&2u16.to_le_bytes()); // material_index
     batch[0x0e..0x10].copy_from_slice(&1u16.to_le_bytes()); // texture_count
     batch[0x10..0x12].copy_from_slice(&5u16.to_le_bytes()); // texture_combo_index
@@ -568,6 +577,12 @@ fn embedded_skin_decodes_geometry_and_batches() {
     assert_eq!(skin.batches()[0].color_index, 11);
     assert_eq!(skin.batches()[0].texture_combo_index, 5);
     assert_eq!(skin.batches()[0].weight_combo_index, 9);
+    // The plane is signed (`movsx`, `0x707c76`), the layer the word `0x70afa3` compares.
+    assert_eq!(skin.batches()[0].priority_plane, -1);
+    assert_eq!(skin.batches()[0].layer, 1);
+    let s = &skin.submeshes()[0];
+    assert_eq!((s.bone_lookup, s.bone_influences, s.center_bone), (4, 1, 3));
+    assert_eq!(s.center, [0.5, -1.25, 2.0]);
 }
 
 #[test]
