@@ -622,7 +622,8 @@ fn a_shown_ping_pane_asks_for_a_tile_and_draws_its_cell() {
 /// rim arrows disc-sized frames the arrow push shows and aims. Each is a child, a level above the
 /// minimap, so its pane paints after the minimap's own draw, the tiles and dots included: the
 /// draw pass submits levels in ascending order (`0x7657d0`), and the minimap's render is a
-/// callback on its own level's first layer (`0x4ebe70`).
+/// callback on its own level's first layer (`0x4ebe70`). A rim arrow is a copy of one model and
+/// keeps its depth fill; the player arrow's `SetModel` create turns it off.
 #[test]
 fn the_stock_minimaps_arrows_are_its_children_s_panes_above_its_own_draw() {
     use benilla_ui::script::{MinimapRimArrow, QuadContent};
@@ -701,18 +702,19 @@ fn the_stock_minimaps_arrows_are_its_children_s_panes_above_its_own_draw() {
                 model: Some(m),
                 facing,
                 position,
+                depth_fill,
                 ..
-            } => Some((q, m.clone(), *facing, *position)),
+            } => Some((q, m.clone(), *facing, *position, *depth_fill)),
             _ => None,
         })
-        .filter(|(_, m, _, _)| m.contains("MinimapArrow"))
+        .filter(|(_, m, _, _, _)| m.contains("MinimapArrow"))
         .collect();
     assert_eq!(
         panes.len(),
         2,
         "the player arrow and one rim arrow: {panes:?}"
     );
-    for (q, m, facing, position) in &panes {
+    for (q, m, facing, position, depth_fill) in &panes {
         assert!(q.z > minimap.z, "{m} paints above the minimap's own draw");
         let r = q.rect.expect("a resolved rect");
         let c = ((r.left + r.right) / 2.0, (r.top + r.bottom) / 2.0);
@@ -722,6 +724,8 @@ fn the_stock_minimaps_arrows_are_its_children_s_panes_above_its_own_draw() {
                 "0.001 layout units up and right: {c:?} vs {centre:?}"
             );
             assert!((facing - 0.5).abs() < 1e-6);
+            // Its file is set through `SetModel`'s create, flags 5 (`0x4ee269` → `0x76ccf5`).
+            assert!(!depth_fill, "the player arrow has no depth fill");
             // Centred on its own box, half the extent each way (`0x4ee100`).
             assert!(
                 (position.0 - 0.0131).abs() < 1e-4 && (position.1 - 0.01315).abs() < 1e-4,
@@ -729,6 +733,8 @@ fn the_stock_minimaps_arrows_are_its_children_s_panes_above_its_own_draw() {
             );
         } else {
             assert!((r.right - r.left - 140.8).abs() < 0.01, "disc-sized: {r:?}");
+            // A copy of the one arrow model, flags 0 (`0x4ee206`).
+            assert!(depth_fill, "a rim arrow keeps its depth fill");
             assert!((c.0 - centre.0).abs() < 0.01 && (c.1 - centre.1).abs() < 0.01);
             // Due north: the top of the disc, 0.8 of the half disc out.
             assert!((position.0 - 0.055).abs() < 1e-6 && (position.1 - 0.099).abs() < 1e-6);

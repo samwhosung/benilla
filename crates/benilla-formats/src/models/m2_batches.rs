@@ -17,8 +17,8 @@ use super::mat_anim;
 use super::tex_anim;
 use super::{le_u16, le_u32, model_path, remap_submesh};
 use super::{
-    AlphaAnim, Billboard, BillboardKind, BoneScaleAnim, CharSkinSlot, FogPolicy, ModelBlend,
-    RenderSubmesh, TextureStage,
+    vertex_shader_id, AlphaAnim, BatchOrder, Billboard, BillboardKind, BoneScaleAnim, CharSkinSlot,
+    FogPolicy, ModelBlend, RenderSubmesh, TextureStage,
 };
 
 fn parent_dir(path: &str) -> &str {
@@ -361,7 +361,7 @@ pub fn parse_m2_render_submeshes(
 
     let sections = skin.submeshes();
     let mut out = Vec::new();
-    for batch in skin.batches() {
+    for (unit, batch) in skin.batches().iter().enumerate() {
         let Some(section) = sections.get(batch.skin_section_index as usize) else {
             continue;
         };
@@ -381,6 +381,7 @@ pub fn parse_m2_render_submeshes(
             .map(|t| resolve_texture(t, dir, skins))
             .unwrap_or((None, None, None, false));
         let material = model.materials.get(batch.material_index as usize);
+        let order = batch_order(model, bytes, batch, section, unit);
         let blend = match material.map(|m| m.blend_mode.bits()) {
             Some(0) | None => ModelBlend::Opaque,
             Some(1) => ModelBlend::AlphaTest,
@@ -606,6 +607,7 @@ pub fn parse_m2_render_submeshes(
                     .collect();
             }
             sub.combine = combine;
+            sub.order = Some(order);
             sub.additive = additive;
             sub.no_depth_write = no_depth_write;
             sub.no_depth_test = no_depth_test;
@@ -659,6 +661,95 @@ pub fn parse_m2_render_submeshes(
         out.clear();
     }
     Ok(out)
+}
+
+/// `batch`'s keys in the transparent order (`0x70ae10`), `unit` its index in the view. The stage
+/// digits of its vertex shader id follow `0x71de50`: 0 past the texture count (`0x71dea5`), 2 for a
+/// generated coordinate (`0x71deaa`), 1 for a texture transform in range (`0x71debe`), else 0.
+/// The stand-in for texture `i`'s handle in the transparent order: one plus the first entry that
+/// loads the same texture, the same file for a named one (the path as the archives match it), the
+/// same type for a replaceable one.
+fn texture_handle_key(textures: &[benilla_m2::M2Texture], i: usize) -> u16 {
+    let name = |t: &benilla_m2::M2Texture| {
+        t.filename
+            .string
+            .to_string_lossy()
+            .replace('/', "\\")
+            .to_ascii_lowercase()
+    };
+    let same = |a: &benilla_m2::M2Texture, b: &benilla_m2::M2Texture| match a.texture_type {
+        benilla_m2::M2TextureType::Hardcoded => {
+            b.texture_type == benilla_m2::M2TextureType::Hardcoded && name(a) == name(b)
+        }
+        ty => b.texture_type == ty,
+    };
+    let first = textures[..i]
+        .iter()
+        .position(|t| same(t, &textures[i]))
+        .unwrap_or(i);
+    u16::try_from(first + 1).unwrap_or(u16::MAX)
+}
+
+fn batch_order(
+    model: &benilla_m2::M2Model,
+    bytes: &[u8],
+    batch: &benilla_m2::SkinBatch,
+    section: &benilla_m2::SkinSection,
+    unit: usize,
+) -> BatchOrder {
+    let material = model.materials.get(batch.material_index as usize);
+    let material_flags = material.map_or(0, |m| m.flags.bits());
+    let stage = |k: u16| -> u32 {
+        if k >= batch.texture_count {
+            0
+        } else if model.stage_is_env_mapped(bytes, batch, k) {
+            2
+        } else if model.stage_transform(bytes, batch, k).is_some() {
+            1
+        } else {
+            0
+        }
+    };
+    let lookup = |table: &[u16], first: u16, k: u16| {
+        table
+            .get(usize::from(first) + usize::from(k))
+            .copied()
+            .unwrap_or(0)
+    };
+    // A texture past the table is the null handle (`0x70ac40`); entries naming one file, or one
+    // replaceable type, load one handle, so they key alike.
+    let texture = |k: u16| {
+        let i = lookup(
+            &model.raw_data.texture_lookup_table,
+            batch.texture_combo_index,
+            k,
+        );
+        if usize::from(i) < model.textures.len() {
+            texture_handle_key(&model.textures, usize::from(i))
+        } else {
+            0
+        }
+    };
+    let coord = |k: u16| model.stage_coord(bytes, batch, k).unwrap_or(0);
+    BatchOrder {
+        plane: batch.priority_plane,
+        vertex_shader: vertex_shader_id(
+            material_flags,
+            section.bone_influences,
+            [stage(0), stage(1)],
+        ),
+        layer: batch.layer,
+        depth_write: material_flags & 0x10 == 0,
+        bone_lookup: section.bone_lookup,
+        material_flags,
+        blend: material.map_or(0, |m| m.blend_mode.bits()),
+        textures: [texture(0), texture(1)],
+        texture_count: batch.texture_count,
+        coords: [coord(0), coord(1)],
+        unit: u16::try_from(unit).unwrap_or(u16::MAX),
+        center: section.center.map(f32::to_bits),
+        center_bone: section.center_bone,
+    }
 }
 
 /// A flat render box whose every batch is opaque `WHITE1.BLP`: no GameObject model but the
@@ -791,6 +882,32 @@ pub fn m2_sequence_visible_textures(bytes: &[u8], anim_id: u16) -> Option<Vec<St
 
 #[cfg(test)]
 mod tests {
+
+    /// Two entries naming one file (case and separators aside), or one replaceable type, load
+    /// one texture and key alike; a different file or type does not.
+    #[test]
+    fn texture_entries_sharing_a_handle_key_alike() {
+        let tex = |ty, name: &str| benilla_m2::M2Texture {
+            texture_type: ty,
+            wrap_x: false,
+            wrap_y: false,
+            filename: benilla_m2::M2ArrayString {
+                string: std::ffi::CString::new(name).unwrap(),
+            },
+        };
+        use benilla_m2::M2TextureType::{Hardcoded, Monster1};
+        let textures = [
+            tex(Hardcoded, r"Item\Glow.blp"),
+            tex(Monster1, ""),
+            tex(Hardcoded, "item/glow.BLP"),
+            tex(Monster1, ""),
+            tex(Hardcoded, r"Item\Other.blp"),
+        ];
+        let keys: Vec<u16> = (0..textures.len())
+            .map(|i| super::texture_handle_key(&textures, i))
+            .collect();
+        assert_eq!(keys, vec![1, 2, 1, 2, 5]);
+    }
     use super::*;
 
     /// A bucket never sorts under the exact rung, which its sibling quad cloud keeps.

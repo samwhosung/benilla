@@ -405,8 +405,8 @@ pub(super) fn build_parts(
                         dm.object_texture.as_deref(),
                         asset_server,
                     );
-                    // The authored batch order (index + 1) biases the transparent sort, so coplanar
-                    // transparent batches draw in file order instead of flipping a tie each frame.
+                    // The authored batch order (index + 1) keys the batch's own material; the
+                    // transparent order sorts it (`benilla_world::model_render::order`).
                     let order = u16::try_from(pi + 1).unwrap_or(u16::MAX);
                     let v = mats.entity_variants(sub, texture, order, uv);
                     let v = v.expect("light buffer checked at entry");

@@ -75,8 +75,8 @@ impl M2BatchMaterials<'_> {
     }
 
     /// One steady, sky-lit material for a batch drawn in the world. `order` is the authored batch
-    /// index + 1 (`0` = unordered), the sort bias that keeps a model's coplanar layers in file
-    /// order ([`super::BATCH_ORDER_SORT_EPS`]).
+    /// index + 1 (`0` = unordered), which keys the batch's own material; the transparent order
+    /// sorts it ([`super::order`]).
     pub fn steady(
         &mut self,
         sub: &ModelSubmesh,
@@ -131,6 +131,7 @@ impl M2BatchMaterials<'_> {
                 Some(sub.combine),
                 ShadeSel::Lit, // unread: every shipped skybox batch is UNLIT (0x01)
                 order,
+                None, // the sky keeps its own band
                 // No texture-transform or colour loop: neither shipped skybox authors one. Wiring
                 // one needs the `M2Model` lane's `Arc`, which the material key identifies it by.
                 None,
@@ -157,8 +158,8 @@ impl M2BatchMaterials<'_> {
 
     /// One steady material lit by a render target's own light buffer (a portrait booth, the model
     /// pane, char-select), which [`super::MatKey::light`] keys apart from the world. `rig` lights
-    /// by the scene's authored M2 rig ([`ShadeSel::Rig`]) and plays the UV animation. `order` must
-    /// be the batch index + 1: a glue scene's batches share one root, so equal biases flicker.
+    /// by the scene's authored M2 rig ([`ShadeSel::Rig`]) and plays the UV animation. `order` is the
+    /// batch index + 1, which keys the batch's own material.
     pub fn off_world(
         &mut self,
         sub: &ModelSubmesh,
@@ -338,6 +339,7 @@ impl M2BatchMaterials<'_> {
                 Some(u8::from(blend != ModelBlend::Opaque)), // …the preset its blend names (`0x811f8c`)
                 shade,
                 0,     // a composite is one sheet, not a batch in an authored order
+                None,  // …whose batches' keys ride their pick geometry
                 None,  // …with no texture transform
                 None,  // …and no animated M2Color tint
                 None,  // worn/held part: light selection anchors at the instance origin
@@ -456,6 +458,7 @@ impl M2BatchMaterials<'_> {
             sub.combine,
             shade,
             order,
+            sub.geometry.order,
             play_uv.then_some(sub.uv_anim.as_ref()).flatten(),
             sub.rgb_anim.as_ref(),
             sub.wmo_batch,

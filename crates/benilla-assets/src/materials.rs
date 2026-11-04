@@ -134,6 +134,9 @@ pub struct WowModelExt {
     /// vertex stage reads its point-light table, since Bevy's clusterable lights are fragment-only.
     #[storage(90, read_only, buffer, visibility(vertex, fragment))]
     pub light_buf: Buffer,
+    /// An M2 batch's keys in the scene's transparent order (`0x70ae10`), which the render world
+    /// sorts it by; `None` for WMO and clutter. Not a binding.
+    pub order: Option<benilla_formats::BatchOrder>,
 }
 
 impl MaterialExtension for WowModelExt {

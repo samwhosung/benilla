@@ -120,6 +120,7 @@ fn the_shape_ignores_edge_on_correct_and_degenerate_batches() {
         stage1: None,
         combine: 1,
         section: None,
+        order: None,
     };
 
     assert!(

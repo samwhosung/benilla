@@ -432,6 +432,11 @@ pub struct ModelState {
     /// call (`0x76ccf5`-`0x76cd0d`), its scene starting over, even for the file it held. 0 for
     /// none.
     pub instance: u64,
+    /// The instance keeps its depth fill: a copy handed to the frame through slot `0x90`, made by
+    /// `0x707400` with flags 0, as the minimap's group and rim arrows are (`0x4ee1b9`,
+    /// `0x4ee206`). `SetModel`'s own create pushes flags 5 (`0x76ccf5`), whose bit 0 turns depth
+    /// fill off (`0x707a48`).
+    pub depth_fill: bool,
 }
 
 /// A model pane's armed fog, all the renderer needs ([`ModelState::armed_fog`]).
@@ -527,6 +532,7 @@ impl Default for ModelState {
             ffx: false,
             select_fill: false,
             instance: 0,
+            depth_fill: false,
         }
     }
 }
@@ -656,6 +662,7 @@ impl ModelState {
         self.armed = None;
         self.pending_seed = true;
         self.select_fill = false;
+        self.depth_fill = false;
         if let Some(facts) = facts {
             self.seed_from_facts(facts);
         }
@@ -672,6 +679,7 @@ impl ModelState {
         self.armed = None;
         self.pending_seed = false;
         self.select_fill = false;
+        self.depth_fill = false;
     }
 
     /// `SetSequence`/`SetSequenceTime` (`0x7121a0`): interrupts what plays, with no

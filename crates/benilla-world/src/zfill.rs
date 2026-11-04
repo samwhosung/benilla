@@ -10,10 +10,8 @@
 //! twins exist only during an instance alpha episode, because that way every steady-state look is
 //! untouched.
 //!
-//! Deviation: twins lead by a fixed −8 yd sort bias ([`crate::model_render::ZFILL_SORT_BIAS`])
-//! instead of by the instance's sort-key tie because Bevy sorts per entity;
-//! transparent content within that window behind a fading body is depth-clipped where the body
-//! covers it, for the episode.
+//! A twin leads its instance by the transparent order's copy key
+//! ([`crate::model_render::order`]).
 
 use bevy::camera::visibility::RenderLayers;
 use bevy::mesh::MeshTag;
@@ -28,6 +26,13 @@ pub(crate) struct ZfillTwin(Entity);
 /// On a twin: the part it primes, and the marker that keeps twins out of part queries.
 #[derive(Component)]
 pub(crate) struct ZfillTwinOf(Entity);
+
+impl ZfillTwinOf {
+    /// The part this twin primes.
+    pub(crate) fn part(&self) -> Entity {
+        self.0
+    }
+}
 
 /// One fadeable part as [`sync_zfill_twins`] sees it: twin material, live tag, mesh, and its twin
 /// if it has one.

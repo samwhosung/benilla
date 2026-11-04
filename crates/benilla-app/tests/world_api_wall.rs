@@ -141,6 +141,8 @@ const PUBLISHED: &[(&str, &str)] = &[
     ("model_render::ModelKind", "record"),
     ("model_render::ModelPart", "record"),
     ("model_render::lazy::realize", "record"),
+    ("model_render::order::NoDepthFill", "wall"),
+    ("model_render::order::SortInstance", "wall"),
     ("modkeys::SyntheticHold", "wall"),
     ("particles::ParticleTuning", "record"),
     ("particles::ViewThrottled", "record"),

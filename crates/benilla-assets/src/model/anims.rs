@@ -139,14 +139,29 @@ impl ModelAnimations {
 
     /// The loader-idle seed's clip, which a spawn site arms to start the instance's sequence clock.
     pub fn idle_clip(&self) -> Option<&AnimClip> {
-        let idle_id = self
-            .playable_animation_lookup
-            .first()
-            .map_or(0, |p| p.resolved_id);
+        let idle_id = self.idle_id();
         self.clips
             .iter()
             .find(|c| c.anim_id == idle_id)
             .or_else(|| self.clips.first())
+    }
+
+    /// The loader-idle seed's clip when it poses a bone: [`Self::first_seq`], or, when no sequence
+    /// carries the id 0 resolves to, the first record, whose id the seed arms instead
+    /// (`0x710179`-`0x710187`) and which `first_seq`'s selection does not reach.
+    pub fn posing_idle(&self) -> Option<&AnimClip> {
+        self.first_seq.and_then(|i| self.clips.get(i)).or_else(|| {
+            let idle_id = self.idle_id();
+            let first = self.clips.first()?;
+            (first.poses_bones && self.clips.iter().all(|c| c.anim_id != idle_id)).then_some(first)
+        })
+    }
+
+    /// The id the loader-idle seed resolves animation 0 to, through the playable lookup.
+    fn idle_id(&self) -> u16 {
+        self.playable_animation_lookup
+            .first()
+            .map_or(0, |p| p.resolved_id)
     }
 
     /// The clip a graph node plays as its full-body pose, on either of its two tracks.
@@ -441,6 +456,20 @@ mod tests {
             c.seq_index = i;
         }
         a
+    }
+
+    /// With no sequence of the idle's id the seed arms the first record (`0x710181`), which
+    /// poses the instance; with one, only `first_seq` does.
+    #[test]
+    fn the_posing_idle_falls_back_to_the_first_record() {
+        let without_stand = slotted(&[145, 157], Vec::new());
+        assert_eq!(without_stand.first_seq, None);
+        assert_eq!(without_stand.posing_idle().map(|c| c.anim_id), Some(145));
+        let with_stand = slotted(&[145, 0, 157], Vec::new());
+        assert!(
+            with_stand.posing_idle().is_none(),
+            "a Stand the loader judged at rest poses nothing"
+        );
     }
 
     /// The Spawn/Stand/Despawn GameObject shape (`DuelingFlag`, `ArenaFlag`, battlefield banners).

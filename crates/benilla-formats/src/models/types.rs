@@ -360,6 +360,8 @@ pub struct RenderSubmesh {
     /// Stage 0's combine preset, 0 to 5 (`benilla_m2::M2Model::stage_combine`): preset 0, the
     /// stock opaque batch's, takes its alpha from the diffuse alone, 1 modulates it by the texel.
     pub combine: u8,
+    /// An M2 batch's keys in the scene's transparent order (`0x70ae10`); `None` for WMO.
+    pub order: Option<super::BatchOrder>,
 }
 
 /// A texture stage after the first: the reference binds one per texture of the unit
@@ -458,6 +460,7 @@ impl Default for RenderSubmesh {
             stage1: None,
             combine: 1,
             section: None,
+            order: None,
         }
     }
 }

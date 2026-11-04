@@ -29,6 +29,7 @@ use benilla_world::doodad_anim::spawn_anim_host;
 use benilla_world::lighting::LightBlob;
 use benilla_world::mat_anim_table::{affine_row, MatAnimMirrors, MatAnimTable};
 use benilla_world::model_forms::ModelForms;
+use benilla_world::model_render::order::NoDepthFill;
 use benilla_world::model_render::M2BatchMaterials;
 use benilla_world::particles::buffer::EffectLightOverride;
 use benilla_world::particles::{
@@ -61,6 +62,9 @@ pub(crate) fn trace_on() -> bool {
 pub(crate) struct TileRequest {
     /// The `SetModel` path, as written.
     pub path: String,
+    /// The instance keeps its depth fill (`benilla_ui::widget::ModelState::depth_fill`); a
+    /// `SetModel` pane's has none.
+    pub depth_fill: bool,
     /// The pane's rect in whole device pixels: the tile's cell size.
     pub size_px: UVec2,
     /// Device px per model unit: `1280 · modelScale · layoutScale` FrameXML units × seam × DPI.
@@ -466,6 +470,8 @@ impl UvPart {
 struct Tile {
     root: Entity,
     key: String,
+    /// The request's depth fill, which the root's [`NoDepthFill`] answers for its whole tree.
+    depth_fill: bool,
     icon: Option<String>,
     m2: Handle<M2Model>,
     /// The tree (parts, rig, emitters) is spawned; until then the root is bare.
@@ -980,6 +986,7 @@ fn sync_tiles(
             let (light_slot, cam_slot) = (light_slots[i], cam_slots[i]);
             let stale = state.tiles.get(handle).is_some_and(|t| {
                 t.key != key
+                    || t.depth_fill != req.depth_fill
                     || t.icon != req.icon
                     || t.light_slot != light_slot
                     || t.cam_slot != cam_slot
@@ -990,29 +997,38 @@ fn sync_tiles(
                 }
             }
             let layer = tile_layer(&render.rig, cam_slot);
-            let tile = state.tiles.entry(*handle).or_insert_with(|| Tile {
-                root: commands
+            let tile = state.tiles.entry(*handle).or_insert_with(|| {
+                let root = commands
                     .spawn((
                         Transform::IDENTITY,
                         Visibility::Hidden,
                         layer.clone(),
                         TileRoot,
                     ))
-                    .id(),
-                key: key.clone(),
-                icon: req.icon.clone(),
-                m2: m2.clone(),
-                built: false,
-                light_slot,
-                cam_slot,
-                clips: HashMap::new(),
-                armed: None,
-                clip_slot: None,
-                alpha_parts: Vec::new(),
-                uv_parts: Vec::new(),
-                emitters: Vec::new(),
-                last_seen: frame,
-                parked: false,
+                    .id();
+                // A `SetModel` pane's model is created with flags 5 (`0x76ccf5`): no depth fill
+                // (`0x707a48`), so each batch sorts by its own centre.
+                if !req.depth_fill {
+                    commands.entity(root).insert(NoDepthFill);
+                }
+                Tile {
+                    root,
+                    key: key.clone(),
+                    depth_fill: req.depth_fill,
+                    icon: req.icon.clone(),
+                    m2: m2.clone(),
+                    built: false,
+                    light_slot,
+                    cam_slot,
+                    clips: HashMap::new(),
+                    armed: None,
+                    clip_slot: None,
+                    alpha_parts: Vec::new(),
+                    uv_parts: Vec::new(),
+                    emitters: Vec::new(),
+                    last_seen: frame,
+                    parked: false,
+                }
             });
             tile.last_seen = frame;
             if !tile.built {
@@ -2191,6 +2207,7 @@ mod tests {
         let stray = arena.create(benilla_ui::widget::FrameKind::Frame, None, None);
         let req = TileRequest {
             path: r"Interface\Cooldown\UI-Cooldown-Indicator.mdx".into(),
+            depth_fill: false,
             size_px: UVec2::new(63, 63),
             px_per_unit: 1680.75,
             pos_px_per_unit: 2742.62,
@@ -2263,6 +2280,7 @@ mod tests {
                 h,
                 TileRequest {
                     path: r"Interface\Buttons\UI-AutoCastButton.mdx".into(),
+                    depth_fill: false,
                     size_px: UVec2::new(63, 63),
                     px_per_unit: 1.0,
                     pos_px_per_unit: 1.0,
@@ -2413,6 +2431,7 @@ mod tests {
             Tile {
                 root,
                 key: benilla_ui::widget::model_key(COOLDOWN_FILE),
+                depth_fill: false,
                 icon: None,
                 m2: Handle::default(),
                 built: true,
@@ -2432,6 +2451,7 @@ mod tests {
             handle,
             TileRequest {
                 path: COOLDOWN_FILE.into(),
+                depth_fill: false,
                 size_px: UVec2::new(36, 36),
                 px_per_unit: 1.0,
                 pos_px_per_unit: 1.0,
@@ -2555,6 +2575,7 @@ mod tests {
     fn persp_req(size: UVec2, root_scale: f32, root_pos: Vec3, facing: f32) -> TileRequest {
         TileRequest {
             path: String::new(),
+            depth_fill: false,
             size_px: size,
             px_per_unit: 1.0,
             pos_px_per_unit: 1.0,

@@ -79,6 +79,8 @@ pub enum QuadContent {
         character: bool,
         /// The `SetModel` file; `None` for a unit pane or an empty one.
         model: Option<String>,
+        /// The instance keeps its depth fill ([`crate::widget::ModelState::depth_fill`]).
+        depth_fill: bool,
         /// `SetFacing`'s radians (0 default).
         facing: f32,
         /// `SetModelScale`'s factor (1 default).
