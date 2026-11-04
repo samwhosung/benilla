@@ -6,7 +6,8 @@
 //! The keys, at the default `M2Faster` 1, whose scene mode is `0x17` (`0x4013b1`):
 //!
 //! 1. under mode bit 4, the kind's priority (`0x873184`: batches 0, ribbons and emitters 1), so
-//!    every batch draws before every ribbon and particle; only batches reach [`transparent_cmp`];
+//!    every batch draws before every ribbon and particle. Not built here: [`transparent_cmp`]
+//!    orders batches only, and benilla's ribbons and particles keep their own place in the list;
 //! 2. `+0x14` descending: the instance key under depth fill, else the batch's own centre depth;
 //! 3. `+0x8` descending: a depth-fill copy before every element of its key;
 //! 4. `+0x28` ascending, signed: the texture unit's priority plane (`0x707c76`);
@@ -40,11 +41,12 @@ pub struct BatchOrder {
     /// The material's flags and blend words (`0x70aba7`, `0x70abc1`).
     pub material_flags: u16,
     pub blend: u16,
-    /// Each stage's texture: its index in the model's texture table plus one, 0 past the table.
+    /// Each stage's texture: one plus the first index in the model's texture table that loads
+    /// the same texture (the same file, or the same replaceable type), 0 past the table.
     ///
     /// Deviation: the reference compares the texture objects' addresses (`0x41af70` on instance
     /// `+0xa4`, `0x70ac45`-`0x70ac69`), a fact of the run's allocator and not of the file; the
-    /// model's own texture order stands in for it.
+    /// model's own texture order stands in for it, so entries sharing a handle still tie.
     pub textures: [u16; 2],
     /// The unit's texture count (`+0x0e`), which bounds the stage compares (`0x70ac96`).
     pub texture_count: u16,
@@ -107,12 +109,11 @@ fn far_first(a: f32, b: f32) -> Ordering {
 
 /// The transparent order (`0x70ae10`) between two batches: [`Ordering::Less`] draws `a` first.
 pub fn transparent_cmp(a: &TransparentElement<'_>, b: &TransparentElement<'_>) -> Ordering {
-    far_first(a.key_depth, b.key_depth).then_with(|| transparent_tie_cmp(a, b))
+    far_first(a.key_depth, b.key_depth).then_with(|| tie_cmp(a, b))
 }
 
-/// [`transparent_cmp`] past its first key, for a drawer whose own first key stands in for
-/// `+0x14`.
-pub fn transparent_tie_cmp(a: &TransparentElement<'_>, b: &TransparentElement<'_>) -> Ordering {
+/// [`transparent_cmp`] past its first key.
+fn tie_cmp(a: &TransparentElement<'_>, b: &TransparentElement<'_>) -> Ordering {
     let (oa, ob) = (a.order, b.order);
     // `+0x8`, signed, the greater first (`0x70aea1`).
     b.fill_copy

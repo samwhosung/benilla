@@ -666,6 +666,30 @@ pub fn parse_m2_render_submeshes(
 /// `batch`'s keys in the transparent order (`0x70ae10`), `unit` its index in the view. The stage
 /// digits of its vertex shader id follow `0x71de50`: 0 past the texture count (`0x71dea5`), 2 for a
 /// generated coordinate (`0x71deaa`), 1 for a texture transform in range (`0x71debe`), else 0.
+/// The stand-in for texture `i`'s handle in the transparent order: one plus the first entry that
+/// loads the same texture, the same file for a named one (the path as the archives match it), the
+/// same type for a replaceable one.
+fn texture_handle_key(textures: &[benilla_m2::M2Texture], i: usize) -> u16 {
+    let name = |t: &benilla_m2::M2Texture| {
+        t.filename
+            .string
+            .to_string_lossy()
+            .replace('/', "\\")
+            .to_ascii_lowercase()
+    };
+    let same = |a: &benilla_m2::M2Texture, b: &benilla_m2::M2Texture| match a.texture_type {
+        benilla_m2::M2TextureType::Hardcoded => {
+            b.texture_type == benilla_m2::M2TextureType::Hardcoded && name(a) == name(b)
+        }
+        ty => b.texture_type == ty,
+    };
+    let first = textures[..i]
+        .iter()
+        .position(|t| same(t, &textures[i]))
+        .unwrap_or(i);
+    u16::try_from(first + 1).unwrap_or(u16::MAX)
+}
+
 fn batch_order(
     model: &benilla_m2::M2Model,
     bytes: &[u8],
@@ -692,7 +716,8 @@ fn batch_order(
             .copied()
             .unwrap_or(0)
     };
-    // A texture past the table is the null handle (`0x70ac40`).
+    // A texture past the table is the null handle (`0x70ac40`); entries naming one file, or one
+    // replaceable type, load one handle, so they key alike.
     let texture = |k: u16| {
         let i = lookup(
             &model.raw_data.texture_lookup_table,
@@ -700,7 +725,7 @@ fn batch_order(
             k,
         );
         if usize::from(i) < model.textures.len() {
-            i + 1
+            texture_handle_key(&model.textures, usize::from(i))
         } else {
             0
         }
@@ -857,6 +882,32 @@ pub fn m2_sequence_visible_textures(bytes: &[u8], anim_id: u16) -> Option<Vec<St
 
 #[cfg(test)]
 mod tests {
+
+    /// Two entries naming one file (case and separators aside), or one replaceable type, load
+    /// one texture and key alike; a different file or type does not.
+    #[test]
+    fn texture_entries_sharing_a_handle_key_alike() {
+        let tex = |ty, name: &str| benilla_m2::M2Texture {
+            texture_type: ty,
+            wrap_x: false,
+            wrap_y: false,
+            filename: benilla_m2::M2ArrayString {
+                string: std::ffi::CString::new(name).unwrap(),
+            },
+        };
+        use benilla_m2::M2TextureType::{Hardcoded, Monster1};
+        let textures = [
+            tex(Hardcoded, r"Item\Glow.blp"),
+            tex(Monster1, ""),
+            tex(Hardcoded, "item/glow.BLP"),
+            tex(Monster1, ""),
+            tex(Hardcoded, r"Item\Other.blp"),
+        ];
+        let keys: Vec<u16> = (0..textures.len())
+            .map(|i| super::texture_handle_key(&textures, i))
+            .collect();
+        assert_eq!(keys, vec![1, 2, 1, 2, 5]);
+    }
     use super::*;
 
     /// A bucket never sorts under the exact rung, which its sibling quad cloud keeps.
