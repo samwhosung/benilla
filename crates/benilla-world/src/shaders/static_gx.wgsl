@@ -282,25 +282,28 @@ fn fragment(in: GxVsOut) -> @location(0) vec4<f32> {
         discard;
     }
     // The sampler follows the wrap flags; a mixed batch clamps its clamped axis a half texel in.
-    // Every sample runs unconditionally: implicit derivatives need uniform control flow.
-    var base = vec4<f32>(1.0);
+    // Every sample runs unconditionally, then `textured` selects: implicit derivatives need
+    // uniform control flow, and `word` is a per-primitive fragment input. An untextured item
+    // samples layer 0, whose result the select drops.
+    let textured = (in.word & WORD_TEXTURED) != 0u;
     let wrap_x = (in.word & WORD_WRAP_X) != 0u;
     let wrap_y = (in.word & WORD_WRAP_Y) != 0u;
-    if ((in.word & WORD_TEXTURED) != 0u) {
-        let layer = i32(recs[in.word & 0xffffu].x);
-        let dims = vec2<f32>(textureDimensions(tex_array).xy);
-        let inset = 0.5 / dims;
-        var uv_mixed = in.uv;
-        if (!wrap_x) {
-            uv_mixed.x = clamp(uv_mixed.x, inset.x, 1.0 - inset.x);
-        }
-        if (!wrap_y) {
-            uv_mixed.y = clamp(uv_mixed.y, inset.y, 1.0 - inset.y);
-        }
-        // The render-scale LOD bias: bevy's material path applies it for free, this lane by hand.
-        let c_repeat = textureSampleBias(tex_array, samp_repeat, in.uv, layer, view.mip_bias);
-        let c_clamp = textureSampleBias(tex_array, samp_clamp, in.uv, layer, view.mip_bias);
-        let c_mixed = textureSampleBias(tex_array, samp_repeat, uv_mixed, layer, view.mip_bias);
+    let layer = select(0, i32(recs[in.word & 0xffffu].x), textured);
+    let dims = vec2<f32>(textureDimensions(tex_array).xy);
+    let inset = 0.5 / dims;
+    var uv_mixed = in.uv;
+    if (!wrap_x) {
+        uv_mixed.x = clamp(uv_mixed.x, inset.x, 1.0 - inset.x);
+    }
+    if (!wrap_y) {
+        uv_mixed.y = clamp(uv_mixed.y, inset.y, 1.0 - inset.y);
+    }
+    // The render-scale LOD bias: bevy's material path applies it for free, this lane by hand.
+    let c_repeat = textureSampleBias(tex_array, samp_repeat, in.uv, layer, view.mip_bias);
+    let c_clamp = textureSampleBias(tex_array, samp_clamp, in.uv, layer, view.mip_bias);
+    let c_mixed = textureSampleBias(tex_array, samp_repeat, uv_mixed, layer, view.mip_bias);
+    var base = vec4<f32>(1.0);
+    if (textured) {
         if (wrap_x && wrap_y) {
             base = c_repeat;
         } else if (!wrap_x && !wrap_y) {

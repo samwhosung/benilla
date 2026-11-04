@@ -55,4 +55,75 @@ mod tests {
         // One per `embedded_asset!` line in `plugin`.
         assert_eq!(found, 8, "the engine's shader set changed size");
     }
+    /// The lines of `src` that take an implicit derivative (`textureSample`, `textureSampleBias`,
+    /// `textureSampleCompare`, and the explicit builtins `dpdx`, `dpdy`, `fwidth` with their
+    /// `Coarse` and `Fine` variants) below a function body's top level. WGSL allows them only in
+    /// uniform control flow, and a branch on a fragment input is not. This reads text: it does not
+    /// follow helper calls, a sample after a `return` inside a branch, or `/* */` comments.
+    fn derivatives_in_nested_blocks(src: &str) -> Vec<usize> {
+        const IMPLICIT: [&str; 12] = [
+            "textureSample",
+            "textureSampleBias",
+            "textureSampleCompare",
+            "dpdx",
+            "dpdxCoarse",
+            "dpdxFine",
+            "dpdy",
+            "dpdyCoarse",
+            "dpdyFine",
+            "fwidth",
+            "fwidthCoarse",
+            "fwidthFine",
+        ];
+        let mut depth = 0usize;
+        let mut hits = Vec::new();
+        for (n, line) in src.lines().enumerate() {
+            let code = line.split("//").next().unwrap_or("");
+            let mut word = String::new();
+            for c in code.chars().chain(std::iter::once(' ')) {
+                if c.is_alphanumeric() || c == '_' {
+                    word.push(c);
+                    continue;
+                }
+                if depth > 1 && IMPLICIT.contains(&word.as_str()) {
+                    hits.push(n + 1);
+                }
+                word.clear();
+                match c {
+                    '{' => depth += 1,
+                    '}' => depth = depth.saturating_sub(1),
+                    _ => {}
+                }
+            }
+        }
+        hits
+    }
+
+    /// naga's check for this is compiled out of the fragment stage
+    /// (`DISABLE_UNIFORMITY_REQ_FOR_FRAGMENT_STAGE`, naga 27 and 30), so these shaders validate
+    /// natively and fail in a browser's compiler. This reads the text instead: no sample that
+    /// takes implicit derivatives sits in a nested block, where a branch on a fragment input
+    /// would make it non-uniform. Hoist the sample and `select` after.
+    #[test]
+    fn derivative_samples_stay_in_uniform_control_flow() {
+        let bad = "fn fragment(in: V) -> vec4<f32> {\n    if (in.flag != 0u) {\n        let c = textureSampleBias(t, s, in.uv, 0.0);\n    }\n    let d = textureSample(t, s, in.uv);\n}\n";
+        assert_eq!(
+            derivatives_in_nested_blocks(bad),
+            [3],
+            "the scanner finds the nested sample"
+        );
+
+        let root = env!("CARGO_MANIFEST_DIR");
+        for path in [
+            "/src/shaders/static_gx.wgsl",
+            "/../benilla-assets/src/shaders/terrain.wgsl",
+        ] {
+            let src = std::fs::read_to_string(format!("{root}{path}")).expect(path);
+            assert_eq!(
+                derivatives_in_nested_blocks(&src),
+                Vec::<usize>::new(),
+                "{path}"
+            );
+        }
+    }
 }

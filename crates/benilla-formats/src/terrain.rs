@@ -394,10 +394,13 @@ pub fn adt_to_tile_mesh(adt_bytes: &[u8]) -> Result<TileMesh> {
         let layer_effect_ids: Vec<u32> = layers.iter().map(|(_, e)| *e).collect();
         let base_texture = layer_textures.first().cloned();
 
-        // Layers 1..3 into one RGBA map; 1.12 alpha is 4-bit, last row and column duplicated.
+        // Layers 1..3 into one RGBA map; 1.12 alpha is 4-bit. A map is stored 63 × 63 with its last
+        // column and row copied, unless the chunk's flag bit 15 says 64 × 64 (`0x6b0a60`).
         let alpha_map = (layer_textures.len() > 1).then(|| {
             CombinedAlphaMap::new(
-                mcnk, /* has_big_alpha */ false, /* fix_alpha */ true,
+                mcnk,
+                /* has_big_alpha */ false,
+                /* fix_alpha */ !mcnk.header.alpha_maps_whole(),
             )
             .as_slice()
             .to_vec()
@@ -673,19 +676,98 @@ mod tests {
         }
     }
 
+    fn chunk_record(magic: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        [&magic[..], &(payload.len() as u32).to_le_bytes(), payload].concat()
+    }
+
+    /// A tile as the files lay one out: MVER, MHDR, MCIN with entry 0 pointing at the one MCNK
+    /// `mcnk` (its sub-record offsets counted from its magic), MTEX naming `a.blp` and `b.blp`.
+    fn one_chunk_tile(mcnk: &[u8]) -> Vec<u8> {
+        let mut out = chunk_record(b"REVM", &18u32.to_le_bytes());
+        out.extend(chunk_record(b"RDHM", &[0u8; 64]));
+        let mhdr_data = 20;
+        let mcin = out.len() - mhdr_data;
+        out.extend(chunk_record(b"NICM", &[0u8; 4096]));
+        let mtex = out.len() - mhdr_data;
+        out.extend(chunk_record(b"XETM", b"a.blp\0b.blp\0"));
+        out[mhdr_data + 0x04..mhdr_data + 0x08].copy_from_slice(&(mcin as u32).to_le_bytes());
+        out[mhdr_data + 0x08..mhdr_data + 0x0c].copy_from_slice(&(mtex as u32).to_le_bytes());
+        let mcin_entry = mhdr_data + mcin + 8;
+        let record = out.len() as u32;
+        out[mcin_entry..mcin_entry + 4].copy_from_slice(&record.to_le_bytes());
+        out.extend(chunk_record(b"KNCM", mcnk));
+        out
+    }
+
     /// One tile of a single flat MCNK (heights 0 over a base of 50) whose every MCNR normal is the
     /// bytes `n`.
     fn flat_tile(n: [u8; 3]) -> Vec<u8> {
-        let chunk = |magic: &[u8; 4], payload: &[u8]| {
-            [&magic[..], &(payload.len() as u32).to_le_bytes(), payload].concat()
-        };
-        let mcvt = chunk(b"TVCM", &[0u8; 145 * 4]);
-        let mcnr = chunk(b"RNCM", &[n.repeat(145), vec![0; 13]].concat());
+        let mcvt = chunk_record(b"TVCM", &[0u8; 145 * 4]);
+        let mcnr = chunk_record(b"RNCM", &[n.repeat(145), vec![0; 13]].concat());
         let mut h = vec![0u8; 128];
         h[0x14..0x18].copy_from_slice(&(8u32 + 128).to_le_bytes()); // MCVT, from the MCNK's magic
         h[0x18..0x1c].copy_from_slice(&(8 + 128 + mcvt.len() as u32).to_le_bytes()); // MCNR
         h[0x70..0x74].copy_from_slice(&50f32.to_le_bytes()); // base height
-        chunk(b"KNCM", &[h, mcvt, mcnr].concat())
+        one_chunk_tile(&[h, mcvt, mcnr].concat())
+    }
+
+    /// A tile of one flat MCNK with MCNK `flags`, a base layer and one alpha layer: nibble 15 in
+    /// column 63 and row 63, 0 elsewhere.
+    fn alpha_edge_tile(flags: u32) -> Vec<u8> {
+        let alpha: Vec<u8> = (0..64)
+            .flat_map(|y| {
+                (0..32).map(move |k| {
+                    if y == 63 {
+                        0xff
+                    } else if k == 31 {
+                        0xf0
+                    } else {
+                        0
+                    }
+                })
+            })
+            .collect();
+        let mut layers = vec![0u8; 32];
+        layers[16..20].copy_from_slice(&1u32.to_le_bytes()); // layer 1: texture 1
+        layers[20..24].copy_from_slice(&0x100u32.to_le_bytes()); // …with an alpha map at MCAL offset 0
+        let mcvt = chunk_record(b"TVCM", &[0u8; 145 * 4]);
+        let mcly = chunk_record(b"YLCM", &layers);
+        let mcal = chunk_record(b"LACM", &alpha);
+        let mut h = vec![0u8; 128];
+        let at = |len: usize| (8 + 128 + len) as u32;
+        let mut put = |o: usize, v: u32| h[o..o + 4].copy_from_slice(&v.to_le_bytes());
+        put(0x00, flags);
+        put(0x14, at(0)); // MCVT
+        put(0x1c, at(mcvt.len())); // MCLY
+        put(0x24, at(mcvt.len() + mcly.len())); // MCAL
+        put(0x28, mcal.len() as u32); // its size
+        one_chunk_tile(&[h, mcvt, mcly, mcal].concat())
+    }
+
+    /// Layer 1's weight at `(x, y)` in the map handed to the terrain shader.
+    fn alpha_weight(flags: u32, x: usize, y: usize) -> u8 {
+        adt_to_tile_mesh(&alpha_edge_tile(flags)).unwrap().chunks[0]
+            .alpha_map
+            .as_ref()
+            .unwrap()[(y * 64 + x) * 4]
+    }
+
+    /// MCNK flag bit 15 set: the map is stored whole at 64 × 64 (`0x6b0ac0`), so the authored
+    /// column 63 and row 63 stand. Clear: 63 × 63, column 62 and row 62 copied over them
+    /// (`0x6b0bf0`); the dispatcher `0x6b0a60` picks on the bit.
+    #[test]
+    fn alpha_edge_follows_mcnk_flag_bit_15() {
+        // nibble 15 is full coverage, read as n / 15.
+        for (x, y) in [(63, 10), (10, 63), (63, 63)] {
+            assert_eq!(alpha_weight(0x8000, x, y), 255, "whole map, ({x}, {y})");
+            assert_eq!(
+                alpha_weight(0, x, y),
+                0,
+                "63 x 63 map, ({x}, {y}) copied from 62"
+            );
+        }
+        assert_eq!(alpha_weight(0x8000, 62, 10), 0);
+        assert_eq!(alpha_weight(0, 62, 10), 0);
     }
 
     /// `CMapChunk::LoadNormals` (`0x6aff10`) keeps the MCNR bytes in file order, X, Y, Z, so the
