@@ -44,10 +44,24 @@ tree_key() {
 resolve_wow() { cargo run -q -p benilla-formats --example where 2>/dev/null || true; }
 # A delta only under docs/, in top-level *.md files or in the issue and PR templates keeps the
 # stamped verdict, since no gate reads those paths; a gate that starts to read one must narrow
-# this pattern.
+# this pattern. So does a release bump beside them: a change of only `[workspace.package]
+# version` in Cargo.toml and the lock's entries for the workspace's own crates (those without a
+# `source`), since the version reaches only the launchers' `env!("CARGO_PKG_VERSION")`.
+version_blind() { # $1 = Cargo.toml | Cargo.lock; stdin -> the file with the workspace's own versions blanked
+    case "$1" in
+        Cargo.toml) sed -E '/^\[workspace\.package\]/,/^\[/ s/^version = "[^"]*"$/version = ""/' ;;
+        Cargo.lock) awk 'BEGIN { RS = ""; ORS = "\n\n" } /^\[\[package\]\]/ && !/\nsource = / { sub(/\nversion = "[^"]*"/, "\nversion = \"\"") } { print }' ;;
+    esac
+}
 docs_only_delta() { # $1 = stamped tree, $2 = current tree
     git cat-file -e "$1^{tree}" 2>/dev/null && git cat-file -e "$2^{tree}" 2>/dev/null || return 1
-    [ -z "$(git diff-tree -r --name-only "$1" "$2" 2>/dev/null | grep -vE '^(docs/|[^/]*\.md$|\.github/(ISSUE_TEMPLATE/|pull_request_template\.md$))' || true)" ]
+    local paths p
+    paths="$(git diff-tree -r --name-only "$1" "$2" 2>/dev/null)" || return 1
+    [ -z "$(printf '%s\n' "$paths" | grep -vxE 'Cargo\.(toml|lock)' | grep -vE '^(docs/|[^/]*\.md$|\.github/(ISSUE_TEMPLATE/|pull_request_template\.md$))' || true)" ] || return 1
+    for p in Cargo.toml Cargo.lock; do
+        printf '%s\n' "$paths" | grep -qx "$p" || continue
+        [ "$(git show "$1:$p" | version_blind "$p")" = "$(git show "$2:$p" | version_blind "$p")" ] || return 1
+    done
 }
 key_start="$(tree_key || true)"
 if [ "${GATES_FORCE:-}" != "1" ] && [ -n "$key_start" ] && [ -f "$stamp" ]; then
@@ -57,7 +71,7 @@ if [ "${GATES_FORCE:-}" != "1" ] && [ -n "$key_start" ] && [ -f "$stamp" ]; then
     if [ "$old_key" = "$key_start" ]; then
         memo="this exact tree already passed"
     elif [ "${old_key#*|}" = "${key_start#*|}" ] && docs_only_delta "${old_key%%|*}" "${key_start%%|*}"; then
-        memo="this tree differs from one that passed only under docs/ or in top-level *.md, which no gate reads"
+        memo="this tree differs from one that passed only in docs or the workspace version, which no gate reads"
     fi
     if [ -n "$memo" ] && [ "${old##*|}" = "$(resolve_wow)$corpus" ]; then
         echo "ALL GATES GREEN (memoized — $memo; GATES_FORCE=1 re-runs)"
