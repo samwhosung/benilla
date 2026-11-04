@@ -1240,6 +1240,7 @@ fn convert_entry(
             name,
             character,
             model,
+            depth_fill,
             facing,
             model_scale,
             position,
@@ -1337,6 +1338,7 @@ fn convert_entry(
                     handle,
                     crate::ui_models::TileRequest {
                         path: path.to_string(),
+                        depth_fill,
                         size_px,
                         px_per_unit: units.px_per_unit,
                         pos_px_per_unit: units.pos_px_per_unit,

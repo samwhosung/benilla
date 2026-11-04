@@ -103,6 +103,7 @@ impl UiScript {
                             name: frame.and_then(|f| f.name.clone()),
                             character: m.character.is_some(),
                             model: m.path.clone(),
+                            depth_fill: m.depth_fill,
                             facing: m.facing,
                             model_scale: m.scale,
                             position: m.position,
