@@ -316,14 +316,14 @@ fn spawn_slot(
         && dm.animations.as_ref().is_some_and(|a| {
             a.owns(crate::ranged_flex::BOW_PULL) || a.owns(crate::ranged_flex::BOW_RELEASE)
         });
-    // Every M2 is armed with animation 0 at load (`0x710153`-`0x71019b`) and an attached model is
-    // animated by its parent's pass (`0x718684`, `0x71875c`): an item whose idle leaves its rest
-    // pose (`ModelAnimations::first_seq`, constant keys included) is posed from it.
+    // Every M2 is armed with animation 0 at load (`0x710153`-`0x71019b`), else its first record's
+    // id, and an attached model is animated by its parent's pass (`0x718684`, `0x71875c`): an item
+    // whose idle poses a bone (`ModelAnimations::posing_idle`) is posed from it.
     let idle_poses = !dm.skeleton.joints.is_empty()
         && dm
             .animations
             .as_ref()
-            .is_some_and(|a| a.first_seq.is_some());
+            .is_some_and(|a| a.posing_idle().is_some());
     let posed = flexes || idle_poses;
     // The item rig, for geometry welded to a billboard bone (an R14 pauldron's spikes): the
     // reference billboards an attached model like a standalone one (`0x718657`..`0x71876f`),
@@ -1150,6 +1150,60 @@ mod tests {
     /// and an emitter under a billboard bone rides its posed bone, not a rest-pose frame.
     #[test]
     fn an_item_whose_idle_leaves_rest_pose_is_posed_billboard_chain_included() {
+        assert_posed_by_its_idle(benilla_assets::ModelAnimations {
+            graph: Handle::default(),
+            clips: vec![posing_clip(0)],
+            hand_close: [None, None],
+            playable_animation_lookup: Vec::new(),
+            animation_lookup: vec![0],
+            global_bones: Vec::new(),
+            // The idle leaves rest pose.
+            first_seq: Some(0),
+            pose: Default::default(),
+        });
+    }
+
+    /// With no sequence of the idle's id, the load arms the first record's (`0x710181`): an item
+    /// whose first record poses a bone is posed by it.
+    #[test]
+    fn an_item_without_a_stand_is_posed_by_its_first_record() {
+        assert_posed_by_its_idle(benilla_assets::ModelAnimations {
+            graph: Handle::default(),
+            clips: vec![posing_clip(145)],
+            hand_close: [None, None],
+            playable_animation_lookup: Vec::new(),
+            animation_lookup: Vec::new(),
+            global_bones: Vec::new(),
+            first_seq: None,
+            pose: Default::default(),
+        });
+    }
+
+    /// A sequence of `anim_id` whose bone tracks pose the rig.
+    fn posing_clip(anim_id: u16) -> benilla_assets::AnimClip {
+        benilla_assets::AnimClip {
+            anim_id,
+            seq_index: 0,
+            node: bevy::animation::graph::AnimationNodeIndex::new(0),
+            blend_node: None,
+            looping: true,
+            duration: 1.0,
+            move_speed: 0.0,
+            blend_time: 0.0,
+            bounds_center: Vec3::ZERO,
+            bounds_radius: 0.0,
+            bounds_min: Vec3::ZERO,
+            bounds_max: Vec3::ZERO,
+            events: Vec::new().into(),
+            arm_nodes: None,
+            upper_node: None,
+            frequency: 0,
+            replay: (0, 0),
+            poses_bones: true,
+        }
+    }
+
+    fn assert_posed_by_its_idle(anims: benilla_assets::ModelAnimations) {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.init_resource::<benilla_world::rig_palette::RigPalettes>();
@@ -1179,17 +1233,7 @@ mod tests {
             head_bone: None,
         };
         dm.inverse_bindposes = Some(Handle::default());
-        dm.animations = Some(benilla_assets::ModelAnimations {
-            graph: Handle::default(),
-            clips: Vec::new(),
-            hand_close: [None, None],
-            playable_animation_lookup: Vec::new(),
-            animation_lookup: vec![0],
-            global_bones: Vec::new(),
-            // The idle leaves rest pose.
-            first_seq: Some(0),
-            pose: Default::default(),
-        });
+        dm.animations = Some(anims);
         let mut em = benilla_assets::ModelEmitter {
             def: benilla_world::testing::plain_particle_def(),
             texture: Some(Handle::default()),
