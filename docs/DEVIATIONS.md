@@ -37,7 +37,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - [benilla-protocol](#benilla-protocol): 29
 - [benilla-srp](#benilla-srp): 2
 - [benilla-ui](#benilla-ui): 135
-- [benilla-world](#benilla-world): 47
+- [benilla-world](#benilla-world): 48
 
 ### benilla-app
 
@@ -879,8 +879,9 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### collision
 
 - The reference's camera trace is a bare ray (`0x672170`); here it is a sphere because that keeps the near plane out of a wall. Nothing may hardcode it: a fixture sweeping another radius tests another client. ([`src/collision.rs:56`](../crates/benilla-world/src/collision.rs#L56))
-- The slide, step and snap are avian's kinematic controller, with parry's edge-hit normals, not the reference's resolver, because pieces of that resolver grafted onto the controller left the mover in states the reference never reaches; only its face filters, the facing law and the backface band, are ported. A cast also reports the hit face's own normal, and every class the reference takes from its face record reads it: the ground classify, the settle snap, the step trigger and the step-up's floor (`0x6334e6`, `0x636ecf`, `0x636592`), except on a shared edge (`EDGE_TIE`). ([`src/collision/one_sided.rs:12`](../crates/benilla-world/src/collision/one_sided.rs#L12))
-- The reference keeps the later record in file order on an exact tie (`0x6327e2`), and its box-and-cone volume meets a lip where our capsule does not, so a capsule hit on an edge two different front faces share is classified by its contact normal. A face the facing law drops (a riser under a down sweep) never ties, so a stair's nosing reads as its tread. ([`src/collision/one_sided.rs:54`](../crates/benilla-world/src/collision/one_sided.rs#L54))
+- The slide, step and snap are avian's kinematic controller, with parry's edge-hit normals, not the reference's resolver, because pieces of that resolver grafted onto the controller left the mover in states the reference never reaches; only its face filters, the facing law and the backface band, are ported, the band on the reference's own volume standing at the capsule's feet (`Band`). A cast also reports the hit face's own normal, and every class the reference takes from its face record reads it: the ground classify, the settle snap, the step trigger and the step-up's floor (`0x6334e6`, `0x636ecf`, `0x636592`), except on a shared edge (`EDGE_TIE`). ([`src/collision/one_sided.rs:12`](../crates/benilla-world/src/collision/one_sided.rs#L12))
+- The reference keeps the later record in file order on an exact tie (`0x6327e2`), and its box-and-cone volume meets a lip where our capsule does not, so a capsule hit on an edge two different front faces share is classified by its contact normal. A face the facing law drops (a riser under a down sweep) never ties, so a stair's nosing reads as its tread. ([`src/collision/one_sided.rs:68`](../crates/benilla-world/src/collision/one_sided.rs#L68))
+- A facet ahead of the face is kept at any distance, where `0x632700` keeps it only when its distance is at most the sweep length (`0x6327e2`), reset for each face (`0x632324`, `0x632e15`), the distance being the least of the clipped vertices' `max(t, 0)` (`0x632888`-`0x63289a`), because the capsule bulges past the volume's bevels (0.2 yd up, a half-width of 0.305 against 0.108), so a facet the capsule already overlaps is held as a contact rather than passed through, as before the clip. ([`src/collision/one_sided.rs:696`](../crates/benilla-world/src/collision/one_sided.rs#L696))
 
 #### doodad_anim
 
