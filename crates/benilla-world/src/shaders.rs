@@ -56,16 +56,24 @@ mod tests {
         assert_eq!(found, 8, "the engine's shader set changed size");
     }
     /// The lines of `src` that take an implicit derivative (`textureSample`, `textureSampleBias`,
-    /// `textureSampleCompare`, `dpdx`, `dpdy`, `fwidth`) below a function body's top level. WGSL
-    /// allows them only in uniform control flow, and a branch on a fragment input is not.
+    /// `textureSampleCompare`, and the explicit builtins `dpdx`, `dpdy`, `fwidth` with their
+    /// `Coarse` and `Fine` variants) below a function body's top level. WGSL allows them only in
+    /// uniform control flow, and a branch on a fragment input is not. This reads text: it does not
+    /// follow helper calls, a sample after a `return` inside a branch, or `/* */` comments.
     fn derivatives_in_nested_blocks(src: &str) -> Vec<usize> {
-        const IMPLICIT: [&str; 6] = [
+        const IMPLICIT: [&str; 12] = [
             "textureSample",
             "textureSampleBias",
             "textureSampleCompare",
             "dpdx",
+            "dpdxCoarse",
+            "dpdxFine",
             "dpdy",
+            "dpdyCoarse",
+            "dpdyFine",
             "fwidth",
+            "fwidthCoarse",
+            "fwidthFine",
         ];
         let mut depth = 0usize;
         let mut hits = Vec::new();

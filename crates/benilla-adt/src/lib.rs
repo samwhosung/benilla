@@ -137,7 +137,9 @@ pub const MCNK_IMPASSABLE: u32 = 0x2;
 
 /// MCNK header flag bit 15: the chunk's alpha maps are stored whole, 64 × 64. Clear, a map holds 63
 /// useful values per 64-value row and the decoder copies column 62 into 63 and row 62 into 63
-/// (`0x6b0a60` picks `0x6b0ac0` on the bit, else `0x6b0bf0`).
+/// (`0x6b0a60` picks `0x6b0ac0` on the bit, else `0x6b0bf0`). That holds at `shadowLevel` 0; with
+/// the global `0xc63284` non-zero the dispatcher takes the 32 × 32 decoders `0x6b0b30` and
+/// `0x6b0c80` instead (`cmp eax,2` at `0x6b0a72` is always 2, from its one caller `0x6b02d9`).
 pub const MCNK_ALPHA_64: u32 = 0x8000;
 
 /// The MCNK header fields the renderer reads. The names mislead: `pred_tex` and `no_effect_doodad`
@@ -220,13 +222,16 @@ pub struct RootAdt {
     pub models: Vec<String>,
     pub wmos: Vec<String>,
     /// The MDDF entries some chunk's MCRF references, in MDDF order, one per unique id. The
-    /// reference makes a doodad only from a chunk's ref (`0x6b00f0` → `0x694bc0`, which returns the
-    /// def already made for a unique id), and nothing else reads MDDF, so an unreferenced entry
-    /// never exists. When an id repeats, the entry referenced first, in chunk order, is the one.
+    /// reference makes a doodad only from a chunk's ref (`0x6b00f0` → `0x694bc0`), and nothing else
+    /// reads MDDF, so an unreferenced entry never exists. Its dedup is global, in a hash by unique
+    /// id (`0xca7dc0`, `0x694c08`): the first def made wins, in chunk load order. Here the dedup is
+    /// per tile, first reference in MCIN order; the streamer's by-uid refcount does the rest.
     pub doodad_placements: Vec<DoodadPlacement>,
-    /// The MODF entries some chunk's MCRF references, by the same rule (`0x6b00f0` → `0x695650`).
+    /// The MODF entries some chunk's MCRF references, by the same rule (`0x6b00f0` → `0x695650`,
+    /// hash `0xca7d98`, `0x695698`).
     pub wmo_placements: Vec<WmoPlacement>,
-    /// The tile's chunks in MCIN order (row · 16 + column), an entry with no offset skipped.
+    /// The tile's chunks in MCIN order (row · 16 + column). An entry the file cannot hold an MCNK
+    /// at, offset 0 included, is skipped: the reference does not check and would read garbage.
     pub mcnk_chunks: Vec<McnkChunk>,
 }
 
@@ -311,13 +316,16 @@ pub fn parse_adt(cursor: &mut Cursor<&[u8]>) -> Result<ParsedAdt> {
         .unwrap_or(&[]);
     let mut mcnk_chunks = Vec::new();
     for entry in mcin_data.as_chunks::<16>().0.iter().take(256) {
-        // The entry's first dword is the MCNK record's file offset; 0 is no chunk.
+        // The entry's first dword is the MCNK record's file offset (`0x6c299a`). The reference
+        // does not check it (an offset of 0 would read the file's start as an MCNK); a malformed
+        // entry that no MCNK header fits at is skipped here, the rest of the tile kept.
         let record = entry.u32_at(0).ok_or(Error::Truncated("MCIN"))? as usize;
         if record == 0 {
             continue;
         }
-        let data = b.get(record + 8..).ok_or(Error::Truncated("MCNK header"))?;
-        mcnk_chunks.push(read_mcnk(data)?);
+        if let Some(chunk) = b.get(record + 8..).and_then(|d| read_mcnk(d).ok()) {
+            mcnk_chunks.push(chunk);
+        }
     }
 
     // MDDF/MODF `name_id` indexes the MMID/MWID offset tables.
@@ -349,8 +357,9 @@ pub fn parse_adt(cursor: &mut Cursor<&[u8]>) -> Result<ParsedAdt> {
 }
 
 /// The `entries` some chunk's `refs` name (an index out of range names none), in entry order, one
-/// per unique id: the first reference in chunk order wins, as the first def made does
-/// (`0x694bc0`, `0x695650`).
+/// per unique id: the first reference in MCIN order wins. The client's table is global and its
+/// first def made wins, in chunk load order (`0x694bc0`, `0x695650`); with this per-tile pick, the
+/// streamer's by-uid refcount gives the same.
 fn referenced<T: Clone>(
     entries: &[T],
     unique_id: impl Fn(&T) -> u32,
@@ -580,7 +589,7 @@ fn read_mcnk(data: &[u8]) -> Result<McnkChunk> {
     }
 
     // MCRF: `+0x10` doodad refs then `+0x38` object refs, one dword each, from the offset at `+0x20`
-    // (`0x6af68b`, `0x6af695`). The counts are the header's; the record's own size is not read.
+    // (`0x6af9a7` reads `+0x20` into `+0xf28`; `0x6af68b`, `0x6af68e`). The counts are the header's; the record's own size is not read.
     let doodad_count = h.u32_at(0x10).ok_or(Error::Truncated("MCNK header"))? as usize;
     let object_count = h.u32_at(0x38).ok_or(Error::Truncated("MCNK header"))? as usize;
     if doodad_count + object_count > 0 {
@@ -913,9 +922,18 @@ mod tests {
     }
 
     #[test]
-    fn truncated_mcnk_header_is_an_error_not_a_panic() {
+    fn an_mcin_entry_no_mcnk_header_fits_at_is_skipped_not_fatal() {
+        // The only entry points at 40 bytes; the tile parses and holds no chunk.
         let b = one_mcnk(vec![0u8; 40]);
-        assert!(matches!(parse(&b), Err(Error::Truncated("MCNK header"))));
+        let ParsedAdt::Root(root) = parse(&b).expect("parses");
+        assert!(root.mcnk_chunks.is_empty());
+
+        // An entry past the file's end, beside a good chunk, loses only itself.
+        let mut b = one_mcnk(mcnk(0, &[], &[]));
+        let entry = 20 + 64 + 8 + 16;
+        b[entry..entry + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        let ParsedAdt::Root(root) = parse(&b).expect("parses");
+        assert_eq!(root.mcnk_chunks.len(), 1);
     }
 
     #[test]
