@@ -700,20 +700,25 @@ pub(in crate::net) fn ground_clamp_creatures(
     // extents are not built.
     capsule: Res<crate::player::PlayerCapsule>,
     mut commands: Commands,
-    mut q: Query<(
-        Entity,
-        &NetEntity,
-        Option<&Spline>,
-        &mut Transform,
-        Option<&mut GroundClamped>,
-        Has<CreatureSwimming>,
-        // HOVER and WATERWALKING both move the answer.
-        Option<&crate::net::UnitMoveModes>,
-        // [`ground_derived`]'s other Z authority, the controller.
-        Has<crate::net::Embodied>,
-        // The mover state a re-grounded unit's dead-reckoning goes on from.
-        Option<&mut crate::net::RemoteMotion>,
-    )>,
+    mut q: Query<
+        (
+            Entity,
+            &NetEntity,
+            Option<&Spline>,
+            &mut Transform,
+            Option<&mut GroundClamped>,
+            Has<CreatureSwimming>,
+            // HOVER and WATERWALKING both move the answer.
+            Option<&crate::net::UnitMoveModes>,
+            // [`ground_derived`]'s other Z authority, the controller.
+            Has<crate::net::Embodied>,
+            // The mover state a re-grounded unit's dead-reckoning goes on from.
+            Option<&mut crate::net::RemoteMotion>,
+        ),
+        // A mount is a model of its unit with no movement of its own (`0x607a00`), and its
+        // `Transform` is host-local: a world probe there would sink it under the rider.
+        Without<crate::entities::mount::MountBody>,
+    >,
 ) {
     let cost = clamp_cost_enabled();
     let legacy = clamp_seat_disabled();
@@ -1069,7 +1074,8 @@ fn creature_swim_state(marked: bool, depth: f32, boundary: f32, unit_flags: u32)
 /// Chained before [`ground_clamp_creatures`] so a fresh mark exempts the clamp the same frame.
 pub(in crate::net) fn mark_swimming_creatures(
     mut commands: Commands,
-    units: Query<SwimMarkQuery, SwimMarkGate>,
+    // A mount swims with its unit: its host-local `Transform` is no world point (`0x607a00`).
+    units: Query<SwimMarkQuery, (SwimMarkGate, Without<crate::entities::mount::MountBody>)>,
     stamped: Query<Entity, With<SwimEvaluated>>,
     world: benilla_world::world_point::WorldPoint,
     epoch: Res<benilla_world::collision::ColliderEpoch>,
@@ -1268,6 +1274,38 @@ mod under_floor {
             near,
             "inside the clearance the reference subtracts nothing — it must not climb"
         );
+    }
+
+    /// A mount child is a model of its unit (`0x607a00`) with a host-local `Transform`: the clamp
+    /// grounds the mounted unit and never probes the child's local origin as a world point, where
+    /// a floor just under it would sink the mount by its host's height.
+    #[test]
+    fn a_mount_child_is_never_grounded_by_its_local_origin() {
+        let (mut app, npc) = half_arrived_world();
+        // A floor under the child's local origin read as a world point, in the probe's reach.
+        floor_at(&mut app, -1.0);
+        app.update();
+        let mount = app
+            .world_mut()
+            .spawn((
+                NetEntity {
+                    kind: EntityKind::Unit,
+                    display_id: Some(1),
+                    scale: 1.0,
+                },
+                crate::entities::mount::MountBody { host: npc },
+                Transform::default(),
+                ChildOf(npc),
+            ))
+            .id();
+        clamp(&mut app);
+        assert_eq!(y_of(&app, npc), TERRAIN_Y, "the mounted unit is grounded");
+        assert_eq!(
+            y_of(&app, mount),
+            0.0,
+            "the mount stays at its unit's origin, not dropped onto a floor near (0, 0)"
+        );
+        assert!(app.world().get::<GroundClamped>(mount).is_none());
     }
 
     /// A re-sent identical pose (same seat) is re-grounded, not held at the wire Z.
