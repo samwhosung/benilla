@@ -925,10 +925,20 @@ const BIND_BUTTONS: [MouseButton; 5] = [
 ];
 
 /// A button record's binding, the world frame's slot's (`0x483c40`, `0x483cb0`): a press whose
-/// target was the world frame runs it; a release runs the up-half of what its press latched,
-/// unless a frame of the interface's took it, and with none latched, as for a press that went to
+/// target was the world frame runs it; a release runs the up-half of what its press latched, and
+/// with none latched, as for a press that went to
 /// a frame before freelook released through the hook (`0x492be5`), the chord the release makes
 /// (`0x4b6aa0` → `0x4b7990(…, 0)`) when it reached the world frame.
+///
+/// A latched mouse release runs its up-half whatever the walk made of the record: the reference
+/// holds the primary bits at the raw message handlers (`0x514b70` runs on every WM_LBUTTONUP,
+/// `0x514b70` → `0x50f940` ends mouselook), below the frame walk, so a release the interface
+/// consumed still ends the camera's session. Skipping it here once stranded the session: the
+/// left press that arms a cursor payload's world drop latches `CAMERAORSELECTORMOVE`, and the
+/// drop's release comes back `PointerTarget::Ui` (`world_dropped`, `pointer.rs`), which retired
+/// the latch without the Stop, so the held bit — and the look session with the hidden cursor —
+/// lived on while the StaticPopup stood. Keyboard releases keep the skip: a frame that ate the
+/// key owns it.
 fn button_leg(
     dispatch: &BindingDispatch,
     state: &mut BindingLatches,
@@ -961,10 +971,10 @@ fn button_leg(
         }
         ButtonState::Released => {
             let latched = state.latched.iter().any(|(k, _)| *k == Held::Mouse(button));
-            if reach == PointerTarget::Ui {
-                state.latched.retain(|(k, _)| *k != Held::Mouse(button));
-            } else if latched {
+            if latched {
                 release(state, script, Held::Mouse(button));
+            } else if reach == PointerTarget::Ui {
+                state.latched.retain(|(k, _)| *k != Held::Mouse(button));
             } else if reach == PointerTarget::World && !mods.sup {
                 let chord = Chord {
                     alt: mods.alt,
@@ -1042,10 +1052,13 @@ fn dispatch_records(
                     };
                     legs.key(s.as_deref_mut(), ev, r.mods, verdict, &layout);
                 }
-                // A release reached no frame: the test leaves no capture to route it.
+                // A release reached no frame: the test leaves no capture to route it. One the
+                // interface took (the walk's `released_to`, as a cursor payload's world drop's
+                // does) reads the hover, the frame under the cursor at the release.
                 Record::Button { button, state } => {
                     let reach = match (*state, hover.0) {
-                        (ButtonState::Released, _) => PointerTarget::Nothing,
+                        (ButtonState::Released, Some(_)) => PointerTarget::Ui,
+                        (ButtonState::Released, None) => PointerTarget::Nothing,
                         (_, Some(_)) => PointerTarget::Ui,
                         (_, None) => PointerTarget::World,
                     };
@@ -2454,6 +2467,45 @@ mod tests {
             .reset_all();
         app.update();
         assert!(!state(&app).steering(), "the sweep ran the up-half");
+    }
+
+    /// The click that drops a cursor payload onto the world comes back from the walk as the
+    /// interface's (`world_dropped` → `PointerTarget::Ui`), and its release must still run the
+    /// latched up-half: skipped, the press's bit stranded, and the look session it started kept
+    /// the hidden cursor under the discard StaticPopup while the mouse orbited the camera. The
+    /// reference's primary bits live below the frame walk (`0x514b70` runs on every
+    /// WM_LBUTTONUP, `0x514b70` → `0x50f940` ends mouselook), so a release the interface
+    /// consumed still ends the session.
+    #[test]
+    fn a_release_the_interface_took_still_ends_a_world_press() {
+        let mut script = UiScript::new().expect("VM");
+        script.set_default_bindings(benilla_ui::script::keybind::parse_bindings_wtf(
+            "bind BUTTON1 DROPCLICK\r\n",
+        ));
+        script.load_binding_set(1);
+        script.register_bindings(
+            &benilla_ui::bindings_xml::parse(
+                r#"<Bindings>
+                    <Binding name="DROPCLICK" runOnUp="true">DROPS = (DROPS or 0) + 1</Binding>
+                </Bindings>"#,
+            )
+            .expect("well-formed"),
+        );
+        let mut app = vm_harness(script);
+        app.update();
+        // The world press latches, its body runs.
+        mouse(&mut app, MouseButton::Left, ButtonState::Pressed);
+        app.update();
+        assert_eq!(lua_count(&app, "DROPS"), 1, "the press ran");
+        // The drop's release the walk sends to the interface: the up-half runs all the same.
+        app.world_mut().resource_mut::<PlayerUiHover>().0 = Some(7);
+        mouse(&mut app, MouseButton::Left, ButtonState::Released);
+        app.update();
+        assert_eq!(
+            lua_count(&app, "DROPS"),
+            2,
+            "the up-half ran through the interface's release"
+        );
     }
 
     /// A rebound BUTTON2 runs only its own command: the release of a right press the world frame
