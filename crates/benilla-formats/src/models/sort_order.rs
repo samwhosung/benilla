@@ -45,8 +45,9 @@ pub struct BatchOrder {
     /// the same texture (the same file, or the same replaceable type), 0 past the table.
     ///
     /// Deviation: the reference compares the texture objects' addresses (`0x41af70` on instance
-    /// `+0xa4`, `0x70ac45`-`0x70ac69`), a fact of the run's allocator and not of the file; the
-    /// model's own texture order stands in for it, so entries sharing a handle still tie.
+    /// `+0xa4`, `0x70ac45`-`0x70ac69`); the model's own texture order stands in for them, because
+    /// those addresses are a fact of the run's allocator and not of the file. Entries sharing a
+    /// handle still tie.
     pub textures: [u16; 2],
     /// The unit's texture count (`+0x0e`), which bounds the stage compares (`0x70ac96`).
     pub texture_count: u16,
