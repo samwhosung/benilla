@@ -211,12 +211,11 @@ fn fragment(in: TerrainVsOut) -> @location(0) vec4<f32> {
     // `terrainp_s.bls`, which reads the MCSH bit from the blend texture's alpha (1 lit, 0 shadowed)
     // and uses it twice, below; with them off the reference draws a separate ambient-tint overlay.
     // Our `shadow_array` is 255 shadowed, 0 lit; a chunk with no MCSH map (`uv_b.y < 0`) is lit.
-    var shadow_lit = 1.0;
+    // The sample runs unconditionally, at layer 0 for a chunk with none, and `si` selects after:
+    // implicit derivatives need uniform control flow, and `si` is a varying.
     let si = in.uv_b.y;
-    if (si >= 0.0) {
-        let mcsh = textureSample(shadow_array, splat_samp, auv, i32(round(si))).r;
-        shadow_lit = 1.0 - mcsh;
-    }
+    let mcsh = textureSample(shadow_array, splat_samp, auv, max(i32(round(si)), 0)).r;
+    let shadow_lit = select(1.0, 1.0 - mcsh, si >= 0.0);
 
     // The `terrainp_s.bls` combine, then an LDR clamp:
     //   diffuse  = tex · primary · (0.3·shadow + 0.7)   (a flat −30% in shadow, no tint)
