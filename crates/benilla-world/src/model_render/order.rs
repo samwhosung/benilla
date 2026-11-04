@@ -705,10 +705,6 @@ mod tests {
         assert_eq!(got(&world, body_batch), (body, v(0.0, 0.0, -10.0), true));
         assert_eq!(got(&world, item_batch), (item, v(0.0, 0.0, -10.0), true));
         assert_eq!(got(&world, mount_batch), (mount, v(0.0, 2.0, -5.0), true));
-        assert_eq!(
-            got(&world, framed_batch).2,
-            false,
-            "no depth fill below the tile"
-        );
+        assert!(!got(&world, framed_batch).2, "no depth fill below the tile");
     }
 }
