@@ -19,8 +19,8 @@ const W: usize = 64;
 
 impl CombinedAlphaMap {
     /// Decode `chunk`'s alpha layers. `has_big_alpha` makes uncompressed layers 8-bit, and
-    /// `fix_alpha` fills the last row and column from their neighbours (a 63×63 source); vanilla
-    /// is `false`, `true`.
+    /// `fix_alpha` fills the last row and column from their neighbours (a 63×63 source): vanilla
+    /// is `false`, and `true` unless the chunk sets [`crate::MCNK_ALPHA_64`] (`0x6b0a60`).
     pub fn new(chunk: &McnkChunk, has_big_alpha: bool, fix_alpha: bool) -> Self {
         let mut map = vec![0u8; W * W * 4];
         for px in map.as_chunks_mut::<4>().0 {

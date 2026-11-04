@@ -1375,3 +1375,68 @@ fn resolves_the_ghost_skybox_everywhere() {
         .expect("the ghost sky model the DBC names must be readable from the chain");
     assert_eq!(&bytes[..4], b"MD20", "DeathClouds is an M2");
 }
+
+/// An install tile's size walk and the reference's MHDR and MCIN reading (`0x6c2010`, `0x6c2880`)
+/// agree: the same 256 chunks in the same order, their headers and heights as the walk's payloads
+/// hold them, and every doodad listed, as every one is referenced. AhnQiraj's sub-records are not
+/// contiguous.
+#[test]
+fn install_tiles_read_through_mhdr_and_mcin_as_the_size_walk_read_them() {
+    use benilla_bytes::{chunks, ByteExt};
+
+    let data = benilla_formats::wow_data_or_skip!();
+    let mut chain = open_chain(&data).expect("open vanilla patch chain");
+    for path in [
+        "World\\Maps\\Azeroth\\Azeroth_32_48.adt",
+        "World\\Maps\\Kalimdor\\Kalimdor_31_32.adt",
+        "World\\Maps\\AhnQiraj\\AhnQiraj_29_49.adt",
+    ] {
+        let bytes = chain.read_file(path).expect(path);
+        let benilla_adt::ParsedAdt::Root(root) =
+            benilla_adt::parse_adt(&mut std::io::Cursor::new(&bytes[..])).expect("parse the tile");
+
+        let walked = |magic: &[u8; 4]| -> Vec<&[u8]> {
+            chunks(&bytes)
+                .filter(|(m, _)| m == magic)
+                .map(|(_, d)| d)
+                .collect()
+        };
+        let mcnks = walked(b"KNCM");
+        assert_eq!(mcnks.len(), 256, "{path}");
+        assert_eq!(root.mcnk_chunks.len(), 256, "{path}");
+        for (i, (raw, chunk)) in mcnks.iter().zip(&root.mcnk_chunks).enumerate() {
+            let h = &chunk.header;
+            assert_eq!(h.flags, raw.u32_at(0).unwrap(), "{path} chunk {i} flags");
+            assert_eq!(
+                h.index_x,
+                raw.u32_at(4).unwrap(),
+                "{path} chunk {i} index_x"
+            );
+            assert_eq!(
+                h.index_y,
+                raw.u32_at(8).unwrap(),
+                "{path} chunk {i} index_y"
+            );
+            assert_eq!(
+                h.area_id,
+                raw.u32_at(0x34).unwrap(),
+                "{path} chunk {i} area"
+            );
+            // MCVT's offset counts from the MCNK's magic; its data is 8 bytes on.
+            let mcvt = raw.u32_at(0x14).unwrap() as usize;
+            let heights = &chunk.heights.as_ref().expect("MCVT").heights;
+            for (n, &height) in heights.iter().enumerate().take(145) {
+                assert_eq!(
+                    height,
+                    raw.f32_at(mcvt + n * 4).unwrap(),
+                    "{path} chunk {i}"
+                );
+            }
+        }
+        assert_eq!(
+            root.doodad_placements.len(),
+            walked(b"FDDM")[0].len() / 36,
+            "{path}"
+        );
+    }
+}
