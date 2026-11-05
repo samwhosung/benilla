@@ -155,7 +155,7 @@ pub(crate) fn take_drag(model: &mut Model, button: &str) -> Option<DragRelease> 
 #[cfg(test)]
 mod tests {
     use crate::script::cursor::{CursorItem, CursorPayload};
-    use crate::script::UiScript;
+    use crate::script::{PointerTarget, UiScript};
 
     /// Seat the backpack's slot 1 with the Tough Jerky of `guid` and its record, so a held copy
     /// resolves and its popup reads a cached record, as the world drop needs (`0x495337`,
@@ -439,7 +439,7 @@ mod tests {
             "the press alone is not the trigger"
         );
         let consumed = s.mouse_button(-50.0, -50.0, "LeftButton", false);
-        assert!(consumed, "a world-drop click consumes the event");
+        assert!(!consumed, "a world drop leaves the release the world's");
         s.tick(0.01);
         assert_eq!(s.eval::<i64>("return heard").unwrap(), 1);
         assert!(
@@ -480,7 +480,7 @@ mod tests {
 
         s.mouse_button(-50.0, -50.0, "LeftButton", true);
         let consumed = s.mouse_button(-50.0, -50.0, "LeftButton", false); // the completed click
-        assert!(consumed, "a world drop consumes the event");
+        assert!(!consumed, "a world drop leaves the release the world's");
         s.tick(0.01);
         assert_eq!(s.eval::<i64>("return heard").unwrap(), 1);
         assert_eq!(s.eval::<String>("return name").unwrap(), "");
@@ -527,8 +527,13 @@ mod tests {
         assert!(s.is_world_frame(hit));
 
         s.mouse_button(400.0, 300.0, "LeftButton", true);
-        let consumed = s.mouse_button(400.0, 300.0, "LeftButton", false);
-        assert!(consumed, "a world drop consumes the completed click");
+        // The release is the world frame's, so its binding's up-half ends the camera's session.
+        let target = s.mouse_button_to(400.0, 300.0, "LeftButton", false);
+        assert_eq!(
+            target,
+            PointerTarget::World,
+            "the drop leaves the release the world's"
+        );
         s.tick(0.01);
         assert_eq!(s.eval::<i64>("return heard").unwrap(), 1, "the popup fires");
         assert!(s.cursor_item().is_some(), "the payload stays held");

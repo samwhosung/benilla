@@ -650,18 +650,9 @@ impl UiScript {
         };
         let mut press_art: Option<crate::widget::FrameHandle> = None;
         #[allow(clippy::type_complexity)]
-        let (
-            click_id,
-            drag_release,
-            world_dropped,
-            slider_jump,
-            released,
-            abandoned,
-            color_jump,
-        ): (
+        let (click_id, drag_release, slider_jump, released, abandoned, color_jump): (
             Option<u32>,
             Option<cursor::DragRelease>,
-            bool,
             Option<(u32, f32)>,
             Option<crate::widget::FrameHandle>,
             Option<crate::widget::FrameHandle>,
@@ -709,7 +700,7 @@ impl UiScript {
                 let click = inside
                     .filter(|&h| button::wants_click(&model, h, &wants))
                     .and(press_id);
-                (click, None, false, jump, None, abandoned, color_jump)
+                (click, None, jump, None, abandoned, color_jump)
             } else {
                 let pressed = release_target(&model, button);
                 let entry = model.mouse_down_on.remove(button);
@@ -729,16 +720,28 @@ impl UiScript {
                 let started = release.as_ref().is_some_and(|r| r.started);
                 // The world drop: a completed left click on the world, never a drag release, which
                 // keeps carrying (`0x495300` runs on the WorldFrame click release). The world is
-                // `over_world`, not "no frame": the stock `WorldFrame` covers the screen.
-                let dropped = button == "LeftButton"
+                // `over_world`, not "no frame": the stock `WorldFrame` covers the screen. It does
+                // not consume the release: the reference drops from the click the release's
+                // binding dispatches (`0x514b70` → `0x481f60(1)`), after that release has ended
+                // the camera's session (`0x514c48`).
+                if button == "LeftButton"
                     && !started
                     && over_world(&model, hit_handle)
                     && over_world(&model, pressed)
                     && !capture_lost
-                    && cursor::world_drop_click(&self.lua, &mut model);
+                {
+                    cursor::world_drop_click(&self.lua, &mut model);
+                }
                 // The Button release slot `0x7792d0` (below, after `OnMouseUp`) does nothing on a
                 // started drag (`0x7792df` tests `0x76c040`), which already un-pressed the button.
-                (None, release, dropped, None, pressed.filter(|_| !started), None, None)
+                (
+                    None,
+                    release,
+                    None,
+                    pressed.filter(|_| !started),
+                    None,
+                    None,
+                )
             }
         };
         // A track press's value jump fires `OnValueChanged` first, outside the borrow.
@@ -829,10 +832,11 @@ impl UiScript {
         // The event is the frame's it went to, the press's target (the capture, else the hover,
         // `0x76637f`) or the release's capture (`0x76642b`), not the frame under the cursor. The
         // world frame's slot runs its `OnMouseDown` without consuming (`0x483c40`), then the
-        // `BUTTON1`/`BUTTON2` binding; a world drop is consumed. A press with no frame at all is
-        // the world's, where `WorldFrame.xml` is not loaded; a release with none reached nothing.
+        // `BUTTON1`/`BUTTON2` binding, its release `OnMouseUp` then the binding's up-half
+        // (`0x483cb0`), a world drop's included. A press with no frame at all is the world's,
+        // where `WorldFrame.xml` is not loaded; a release with none reached nothing.
         let target = if down { press_id } else { captured_id };
-        if world_dropped || target.is_some_and(|id| !self.is_world_frame(id)) {
+        if target.is_some_and(|id| !self.is_world_frame(id)) {
             PointerTarget::Ui
         } else if down || target.is_some() {
             PointerTarget::World

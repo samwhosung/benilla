@@ -806,9 +806,10 @@ pub(super) fn world_click(s: &mut UiScript) {
     let (x, y) = world_point(s);
     s.mouse_move(x, y);
     s.mouse_button(x, y, "LeftButton", true);
-    assert!(
-        s.mouse_button(x, y, "LeftButton", false),
-        "a world drop consumes the completed click"
+    assert_eq!(
+        s.mouse_button_to(x, y, "LeftButton", false),
+        benilla_ui::script::PointerTarget::World,
+        "the completed click's release is the world frame's"
     );
 }
 
