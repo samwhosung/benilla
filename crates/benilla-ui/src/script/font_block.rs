@@ -30,7 +30,11 @@ pub(crate) fn own_font(model: &mut Model, h: FrameHandle) -> Option<FontId> {
         return Some(id);
     }
     let rh = match model.arena.frame(h)?.kind_state {
-        KindState::EditBox(_) => super::editbox::ensure_text_region_in(model, h)?,
+        // A box's font comes with its label.
+        KindState::EditBox(_) => {
+            super::editbox::ensure_text_region_in(model, h)?;
+            return model.own_fonts.get(&h).copied();
+        }
         KindState::Message(_) | KindState::ScrollingMessage(_) => {
             super::messageframe::ensure_font_region_in(model, h)?
         }
