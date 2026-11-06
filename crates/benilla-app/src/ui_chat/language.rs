@@ -47,6 +47,8 @@ impl ChatLanguages {
 /// skill per language, the GM bit and whether a local player is held at all.
 pub(crate) struct Gate<'a> {
     words: Option<&'a LanguageWords>,
+    /// `Languages.dbc` at the client's locale, which names a line's language to Lua.
+    names: Option<&'a benilla_formats::Languages>,
     /// language id → this character's skill in it. Absent = 0 = never understood.
     skill: HashMap<u32, u32>,
     /// `PLAYER_FLAGS & 0x8`: a GM reads every line plain, with no `[Language]` header.
@@ -56,6 +58,17 @@ pub(crate) struct Gate<'a> {
 }
 
 impl Gate<'_> {
+    /// The line's language as Lua reads it, `arg3`: its `Languages.dbc` name in the client's
+    /// locale, which is also what `GetDefaultLanguage()` answers, so the stock header test
+    /// (`arg3 ~= this.defaultLanguage`, `ChatFrame.lua:1442`) compares like with like. Language 0
+    /// has no row, so it is empty and draws no header.
+    pub(crate) fn language_name(&self, language: u32) -> String {
+        self.names
+            .and_then(|n| n.name(language))
+            .unwrap_or_default()
+            .to_string()
+    }
+
     /// This character's skill in `language`, the second argument of `0x49b560`.
     pub(crate) fn skill(&self, language: u32) -> u32 {
         self.skill.get(&language).copied().unwrap_or(0)
@@ -136,6 +149,8 @@ pub(crate) struct LanguageReads<'w, 's> {
     actions: Option<Res<'w, PlayerActions>>,
     spells: Option<Res<'w, Spells>>,
     skill_lines: Option<Res<'w, SkillLines>>,
+    /// The language names; absent without an install, where a line's language is unnamed.
+    names: Option<Res<'w, crate::ui_unit::LanguagesRes>>,
     me: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
 }
 
@@ -146,10 +161,12 @@ impl LanguageReads<'_, '_> {
     /// `PLAYER_SKILL_INFO` value.
     pub(crate) fn gate(&self) -> Gate<'_> {
         let words = self.langs.as_deref().and_then(|l| l.words.as_ref());
+        let names = self.names.as_deref().map(|n| &n.0);
         let Ok(store) = self.me.single() else {
             // No body: every line renders plain.
             return Gate {
                 words,
+                names,
                 skill: HashMap::new(),
                 gm: false,
                 have_player: false,
@@ -176,6 +193,7 @@ impl LanguageReads<'_, '_> {
         }
         Gate {
             words,
+            names,
             skill,
             gm: store.0.player_flags() & PLAYER_FLAGS_GM != 0,
             have_player: true,
@@ -272,6 +290,7 @@ mod tests {
     fn langs(skill: &[(u32, u32)], gm: bool) -> Gate<'static> {
         Gate {
             words: None,
+            names: None,
             skill: skill.iter().copied().collect(),
             gm,
             have_player: true,
