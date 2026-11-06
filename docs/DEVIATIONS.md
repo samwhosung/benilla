@@ -648,8 +648,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### vm
 
-- These are benilla's own needs, past what the client's checks (`Vm::checkstack`) reserve: a frame's registers above `c_maxstack` (`Proto::maxstack`), and the host's and natives' pushes, which ask for no margin of `EXTRA_STACK` and one more. Where they pass what the client reserved, the stack grows where the client's would not. ([`src/vm.rs:975`](../crates/benilla-lua/src/vm.rs#L975))
-- benilla's scratch registers above a frame's `c_maxstack` (`Proto::maxstack`) stay on the stack; the client has none, and halves. ([`src/vm.rs:2322`](../crates/benilla-lua/src/vm.rs#L2322))
+- These are benilla's own needs, past what the client's checks (`Vm::checkstack`) reserve: a frame's registers above `c_maxstack` (`Proto::maxstack`), and the host's and natives' pushes, which ask for no margin of `EXTRA_STACK` and one more. Where they pass what the client reserved, the stack grows where the client's would not. ([`src/vm.rs:1007`](../crates/benilla-lua/src/vm.rs#L1007))
+- benilla's scratch registers above a frame's `c_maxstack` (`Proto::maxstack`) stay on the stack; the client has none, and halves. ([`src/vm.rs:2354`](../crates/benilla-lua/src/vm.rs#L2354))
 ### benilla-protocol
 
 #### (crate root)
