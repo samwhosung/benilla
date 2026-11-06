@@ -143,6 +143,38 @@ pub struct Names {
     pub ipairs: StrRef,
 }
 
+impl Names {
+    /// Every name, for the collector's roots. The pattern names each field, so a name added
+    /// without a root does not compile.
+    fn all(&self) -> [StrRef; 19] {
+        let Names {
+            index,
+            newindex,
+            call,
+            add,
+            sub,
+            mul,
+            div,
+            pow,
+            unm,
+            concat,
+            eq,
+            lt,
+            le,
+            mode,
+            metatable,
+            tostring,
+            n,
+            next,
+            ipairs,
+        } = *self;
+        [
+            index, newindex, call, add, sub, mul, div, pow, unm, concat, eq, lt, le, mode,
+            metatable, tostring, n, next, ipairs,
+        ]
+    }
+}
+
 #[derive(Clone)]
 pub struct Vm {
     pub heap: Heap,
@@ -2358,30 +2390,9 @@ impl Vm {
         // a new function took would step a table without calling that function.
         roots.push(self.builtin_next);
         let open: Vec<u32> = self.open.iter().map(|&(_, u)| u).collect();
-        // Names live forever.
-        let n = &self.names;
-        for s in [
-            n.index,
-            n.newindex,
-            n.call,
-            n.add,
-            n.sub,
-            n.mul,
-            n.div,
-            n.pow,
-            n.unm,
-            n.concat,
-            n.eq,
-            n.lt,
-            n.le,
-            n.mode,
-            n.metatable,
-            n.tostring,
-            n.n,
-            n.next,
-        ] {
-            roots.push(Value::Str(s));
-        }
+        // Names live forever: the VM reads them by id, so a freed one would come back under
+        // another.
+        roots.extend(self.names.all().map(Value::Str));
         // A frame running code a hot reload replaced reads that code's constants and upvalues;
         // with no frame left, nothing runs it.
         if self.frames.is_empty() {
