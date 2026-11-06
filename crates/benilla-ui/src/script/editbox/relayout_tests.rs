@@ -1,7 +1,7 @@
 //! The text region's rect (`0x77b8c0`, re-seated on every resize by `0x77a8d0`) and a multi-line
 //! box's own height (`0x77d4d0` @`0x77d8ad`), driven through the Lua methods and the tick.
 
-use crate::script::{MeasureRequest, QuadContent, TextMeasure, UiScript};
+use crate::script::{JustifyH, JustifyV, MeasureRequest, QuadContent, TextMeasure, UiScript};
 
 /// A stand-in font engine: each character [`CW`] wide and each line `.0` tall. Hard breaks split
 /// lines, a trailing one opening none as in the host's line law, and each line wraps by
@@ -328,6 +328,56 @@ fn text_rect(s: &UiScript, text: &str) -> Option<(f32, f32, f32, f32)> {
         }
         _ => None,
     })
+}
+
+/// The text quad's drawn justify as `(h, v)`.
+fn text_justify(s: &UiScript, text: &str) -> Option<(JustifyH, JustifyV)> {
+    s.extract().into_iter().find_map(|q| match &q.content {
+        QuadContent::Text {
+            text: Some(t),
+            justify_h,
+            justify_v,
+            ..
+        } if t == text => Some((*justify_h, *justify_v)),
+        _ => None,
+    })
+}
+
+/// The label follows the box's font horizontally (`0x779c27`, `0x797a17` → `0x79fc20`), so
+/// `SetJustifyH` draws; its vertical justify is the box's own (`0x77a4a0`), whatever
+/// `SetJustifyV` says.
+#[test]
+fn the_text_draws_by_the_boxs_justify_h_and_its_own_justify_v() {
+    let mut s = script();
+    s.run(
+        r#"
+        E = CreateFrame("EditBox", "E")
+        E:SetAutoFocus(false)
+        E:SetPoint("BOTTOMLEFT", 100, 50)
+        E:SetWidth(200); E:SetHeight(32)
+        E:SetFont("Fonts\\FRIZQT__.TTF", 14)
+        E:SetText("1")
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    assert_eq!(
+        text_justify(&s, "1"),
+        Some((JustifyH::Left, JustifyV::Middle))
+    );
+    for (h, want) in [("RIGHT", JustifyH::Right), ("CENTER", JustifyH::Center)] {
+        s.run(&format!(r#"E:SetJustifyH("{h}") E:SetJustifyV("BOTTOM")"#))
+            .unwrap();
+        s.resolve();
+        assert_eq!(text_justify(&s, "1"), Some((want, JustifyV::Middle)), "{h}");
+    }
+    s.run("E:SetMultiLine(true)").unwrap();
+    s.resolve();
+    assert_eq!(
+        text_justify(&s, "1"),
+        Some((JustifyH::Center, JustifyV::Top))
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
 /// A box built in Lua, with no `<FontString>` and no `SetTextInsets`, has its text seated at its

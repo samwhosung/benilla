@@ -140,18 +140,9 @@ pub struct EditBoxState {
     /// `<HighlightColor>` through `SetSelectionColor` (`0x77e330`), which no Lua method reaches;
     /// the ctor's is `0xFF606060` (`0x779c7a`).
     pub highlight_color: crate::color::Rgba8,
-    /// The bits of `Set/GetJustifyH` and `Set/GetJustifyV` (`0x797990`-`0x797bd0`), kept on the
-    /// box and not drawn. For V that is the reference: `SetMultiLine` (`0x77a4a0`) makes the
-    /// text's V bits local, so a `SetJustifyV` is masked out (`0x77086e`) and only the getter sees
-    /// it. Whether the draw (`0x77da80`) reads H is untraced.
-    pub justify: u32,
 }
 
 impl EditBoxState {
-    /// The horizontal justify bits (0-2).
-    pub const JUSTIFY_H_MASK: u32 = crate::justify::H_MASK;
-    /// The vertical justify bits (3-5).
-    pub const JUSTIFY_V_MASK: u32 = crate::justify::V_MASK;
     /// Dirty bit 0, the text changed: every edit raises it, and the flush relayouts (`0x77d447`)
     /// and fires `OnTextChanged` (`0x77d498`).
     pub const DIRTY_TEXT: u8 = 1;
@@ -160,23 +151,6 @@ impl EditBoxState {
     /// leg (`0x77d475` → `0x77da80`), which fires `OnCursorChanged`. Bit 1, the
     /// highlight's (`0x77d950`), has no counterpart: the host paints the selection each frame.
     pub const DIRTY_CURSOR: u8 = 4;
-
-    /// A justify token's bit; `None` makes the caller raise the reference's
-    /// `Usage: %s:SetJustifyH("justify")`.
-    pub fn justify_bit(token: &str) -> Option<u32> {
-        crate::justify::parse_bits(token)
-    }
-
-    /// Replace one axis's bits with `parsed`'s. `SetJustifyH("TOP")` parses but clears the H bits,
-    /// so `GetJustifyH()` then answers `"UNKNOWN"`, with no error.
-    pub fn set_justify_axis(&mut self, mask: u32, parsed: u32) {
-        self.justify = crate::justify::set_axis(self.justify, mask, parsed);
-    }
-
-    /// The token for one axis.
-    pub fn justify_token(&self, mask: u32) -> &'static str {
-        crate::justify::name_of(self.justify, mask)
-    }
 }
 
 impl Default for EditBoxState {
@@ -219,9 +193,6 @@ impl Default for EditBoxState {
             selection_regions: [None; 3],
             caret_region: None,
             highlight_color: crate::color::Rgba8::rgba(0x60, 0x60, 0x60, 0xff),
-            // The ctor's `0x211` less the unread bit 0x200: LEFT | MIDDLE, since the ctor
-            // overrides the font default's CENTER (`0x779be4`).
-            justify: 0x01 | 0x10,
         }
     }
 }

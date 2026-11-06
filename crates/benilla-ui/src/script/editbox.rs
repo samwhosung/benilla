@@ -540,6 +540,19 @@ pub(super) fn ensure_text_region_in(model: &mut Model, h: FrameHandle) -> Option
         slot.insert(data);
         model.touch_layout_region(rh);
     }
+    if !model.own_fonts.contains_key(&h) {
+        // The ctor's font (`0x779bc7`), justified `LEFT` with the group marked set and still
+        // following (`0x779bd2`-`0x779be7`), which the label links to (`0x779c27`).
+        let id = model.fonts.anonymous();
+        let mut block = model.fonts.get(id).block.clone();
+        block
+            .justify
+            .get_or_insert_with(Default::default)
+            .set_h(crate::script::JustifyH::Left);
+        super::font::replace_block(model, id, block);
+        model.own_fonts.insert(h, id);
+        super::font::link_region(model, rh, Some(id));
+    }
     if let Some(KindState::EditBox(eb)) = model.arena.frame_mut(h).map(|f| &mut f.kind_state) {
         eb.text_region = Some(rh);
     }
@@ -552,21 +565,23 @@ pub(super) fn ensure_text_region_in(model: &mut Model, h: FrameHandle) -> Option
 pub(super) fn refresh_text_region(lua: &Lua, this: &Table) -> mlua::Result<()> {
     let h = frame_handle_of(lua, this)?;
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    let Some(rh) = ensure_text_region_in(&mut model, h) else {
+        return Ok(());
+    };
     let Some(KindState::EditBox(eb)) = model.arena.frame(h).map(|f| &f.kind_state) else {
         return Ok(());
     };
-    let (Some(rh), multi_line) = (eb.text_region, eb.multi_line) else {
-        return Ok(());
-    };
+    let multi_line = eb.multi_line;
     apply_text_region_justify(model.region_data.entry(rh).or_default(), multi_line);
     relayout::seat_text_region(&mut model, h);
     Ok(())
 }
 
-/// Left-justified whatever the font string declares (the draw `0x77da80` anchors left at the
-/// insets), from the top in a multiLine box and vertically centered otherwise.
+/// The label's vertical justify, cut off from the box's font for good (`0x77a509`, `0x77a599`):
+/// from the top in a multiLine box and centered otherwise (`0x77a517`, `0x77a5a7`). Its horizontal
+/// justify still follows the font, so `SetJustifyH` draws.
 fn apply_text_region_justify(data: &mut RegionData, multi_line: bool) {
-    data.justify.set_h(crate::script::JustifyH::Left);
+    data.justify_mask.0 &= !crate::justify::V_MASK;
     data.justify.set_v(if multi_line {
         crate::script::JustifyV::Top
     } else {

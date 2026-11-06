@@ -3,8 +3,11 @@
 
 use mlua::{Lua, Table, Value};
 
+use crate::justify;
 use crate::script::binding_abi;
+use crate::script::font_block::own_font;
 use crate::script::object::frame_handle_of;
+use crate::script::{FontMask, Model};
 use crate::widget::EditBoxState;
 
 use super::{
@@ -358,36 +361,50 @@ fn install_font_block(lua: &Lua, m: &Table) -> mlua::Result<()> {
         }),
     )?;
 
+    // The justify four act on the box's font (`[this+0x324]`, `0x797a17`) through the shared
+    // setter (`0x79fc20`), which pushes to the label: its H draws, its V is cut off (`0x77a4a0`).
     // SetJustifyH/SetJustifyV return nothing. An unknown token raises `Usage:` (`0x87c77c`); a
     // token of the other axis parses and masks to nothing, so `SetJustifyH("TOP")` clears justifyH
     // and `GetJustifyH()` answers "UNKNOWN".
     for (name, mask) in [
-        ("SetJustifyH", EditBoxState::JUSTIFY_H_MASK),
-        ("SetJustifyV", EditBoxState::JUSTIFY_V_MASK),
+        ("SetJustifyH", justify::H_MASK),
+        ("SetJustifyV", justify::V_MASK),
     ] {
         m.set(
             name,
             lua.create_function(move |lua, (this, token): (Table, Value)| {
-                frame_handle_of(lua, &this)?;
+                let h = frame_handle_of(lua, &this)?;
                 let bits = binding_abi::optional_string(lua, &token)
-                    .and_then(|t| EditBoxState::justify_bit(&t))
+                    .and_then(|t| justify::parse_bits(&t))
                     .ok_or_else(|| {
                         binding_abi::usage(lua, &this, &format!("{name}(\"justify\")"))
                     })?;
-                with_editbox(lua, &this, |eb| eb.set_justify_axis(mask, bits))
+                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                let id = own_font(&mut model, h)
+                    .ok_or_else(|| mlua::Error::runtime("not an EditBox"))?;
+                crate::script::font::set(&mut model, id, FontMask::JUSTIFY, |fo| {
+                    let word = fo.justify.get_or_insert_with(Default::default);
+                    word.0 = justify::set_axis(word.0, mask, bits);
+                });
+                Ok(())
             })?,
         )?;
     }
     // GetJustifyH/GetJustifyV: one string, the first set bit's token in the reference's table
     // order, else "UNKNOWN".
     for (name, mask) in [
-        ("GetJustifyH", EditBoxState::JUSTIFY_H_MASK),
-        ("GetJustifyV", EditBoxState::JUSTIFY_V_MASK),
+        ("GetJustifyH", justify::H_MASK),
+        ("GetJustifyV", justify::V_MASK),
     ] {
         m.set(
             name,
             lua.create_function(move |lua, this: Table| {
-                with_editbox(lua, &this, |eb| eb.justify_token(mask))
+                let h = frame_handle_of(lua, &this)?;
+                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                let id = own_font(&mut model, h)
+                    .ok_or_else(|| mlua::Error::runtime("not an EditBox"))?;
+                let word = model.fonts.get(id).block.justify.unwrap_or_default();
+                Ok(justify::name_of(word.0, mask))
             })?,
         )?;
     }
