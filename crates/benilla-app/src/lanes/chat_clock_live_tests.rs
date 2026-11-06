@@ -318,3 +318,29 @@ fn the_channel_lookups_read_the_slots_at_the_call() {
         "the copy holds none"
     );
 }
+
+/// A line's language reaches Lua as its `Languages.dbc` name in the client's locale, the name
+/// `GetDefaultLanguage()` also answers, so a localized client's stock header test sees its own
+/// tongue and draws no `[Language]` tag.
+#[test]
+fn a_line_names_its_language_in_the_locale() {
+    let mut c = client();
+    c.app
+        .world_mut()
+        .insert_resource(crate::ui_unit::LanguagesRes(
+            benilla_formats::Languages::from_rows(&[(7, "通用语")]),
+        ));
+    c.eval::<()>(
+        false,
+        r#"Lang = nil
+        local g = CreateFrame("Frame")
+        g:RegisterEvent("CHAT_MSG_MONSTER_SAY")
+        g:SetScript("OnEvent", function() Lang = arg3 end)"#,
+    );
+    let mut line = boar_says("hi");
+    if let SessionEvent::Chat(m) = &mut line {
+        m.language = 7;
+    }
+    c.frame(vec![vec![line]]);
+    assert_eq!(c.eval::<String>(false, "return Lang"), "通用语");
+}

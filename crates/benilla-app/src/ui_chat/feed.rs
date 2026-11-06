@@ -14,7 +14,7 @@ use crate::names::NameCache;
 use crate::net::{GuidIndex, NetCommands, ObjectStore, SelfGuid};
 
 use super::edit::ChannelState;
-use super::event::{flag_of_tag, kind_of_wire, language_name, ChatEvent, ChatEventKind};
+use super::event::{flag_of_tag, kind_of_wire, ChatEvent, ChatEventKind};
 use super::frames::{route, ChatWindows};
 use crate::query_cache::Ask;
 
@@ -1927,7 +1927,7 @@ fn fire_one(
                     }),
                     // The effective language, not the wire's: narration types and GM mode force
                     // 0, which also drops the `[Language]` header.
-                    language: language_name(language).to_string(),
+                    language: langs.language_name(language),
                     channel: channel_base,
                     flag: flag_of_tag(msg.chat_tag).to_string(),
                     ..Default::default()

@@ -85,6 +85,14 @@ impl Languages {
             .filter_map(|(id, name)| Some((*id, name.as_deref()?)))
     }
 
+    /// The name of the row whose id is `id`, in the locale's column; `None` with no such row.
+    pub fn name(&self, id: u32) -> Option<&str> {
+        self.0
+            .iter()
+            .find(|(row, _)| *row == id)
+            .and_then(|(_, name)| name.as_deref())
+    }
+
     pub fn len(&self) -> usize {
         self.0.len()
     }
