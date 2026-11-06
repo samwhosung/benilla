@@ -236,6 +236,8 @@ impl ViewLog {
 /// begins ([`crate::lanes::span_starts`]), in debug builds.
 #[derive(Resource, Default)]
 pub(crate) struct SpanStart {
+    /// Read only by the debug build's check that the snapshot is of the entries it saw.
+    #[cfg(debug_assertions)]
     epoch: u64,
     mark: usize,
     stores: HashMap<u64, (Option<Entity>, Option<ObjectStore>)>,
