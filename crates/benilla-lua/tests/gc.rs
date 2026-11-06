@@ -116,6 +116,22 @@ fn the_builtin_next_outlives_its_globals() {
     }
 }
 
+/// `ipairs` reads the global `ipairs` as its iterator (`0x702d15`), by the name the VM interned at
+/// start: a script that clears the global and sets it again after a collection still gets it.
+#[test]
+fn ipairs_finds_its_global_after_it_is_cleared_and_collected() {
+    let mut vm = benilla_lua::new_state();
+    run(&mut vm, "f = ipairs ipairs = nil");
+    vm.full_gc();
+    vm.full_gc();
+    run(
+        &mut vm,
+        "local t = {} for i = 1, 4096 do t['g' .. i] = i end",
+    );
+    run(&mut vm, "ipairs = f");
+    assert_eq!(run(&mut vm, "return type(ipairs({}))"), "function");
+}
+
 /// A vararg call's `arg` table is counted, but the client's `adjust_varargs` never checks the
 /// collector (`0x6f6200`..`0x6f6366`): a loop of nothing but vararg calls collects nothing, and
 /// the next check, a table made, collects what it left.
