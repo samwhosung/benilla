@@ -157,7 +157,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### loading_screen
 
-- The live window's aspect stands in for `gxResolution`'s, as in `portrait`'s `GxAspect`, because the window here takes any shape a drag gives it, where the reference's keeps `gxResolution`'s (`0x5989d7`). In fullscreen the window is the screen in logical pixels and `gxResolution` the screen in device pixels, so their aspects agree and their sizes need not. ([`src/loading_screen.rs:66`](../crates/benilla-app/src/loading_screen.rs#L66))
+- The live window's aspect stands in for `gxResolution`'s, as in `portrait`'s `GxAspect`, because the window here takes any shape a drag gives it, where the reference's keeps `gxResolution`'s (`0x5989d7`). In fullscreen the window is the screen in logical pixels and `gxResolution` the screen in device pixels, so their aspects agree and their sizes need not. ([`src/loading_screen.rs:67`](../crates/benilla-app/src/loading_screen.rs#L67))
 - The wheel is swallowed, where the reference still zooms the hidden camera, because nothing should act through the screen. ([`src/loading_screen/input.rs:12`](../crates/benilla-app/src/loading_screen/input.rs#L12))
 - The world pick is cleared, where the reference's freezes: the screen's layer blocks the frame pass (bit 0 clear, `0x406808` → `0x4083c0`), so `0x481790` does not run, except after a transport arrival (`0x5debb6`), when it picks at the frozen point. ([`src/loading_screen/input.rs:14`](../crates/benilla-app/src/loading_screen/input.rs#L14))
 
