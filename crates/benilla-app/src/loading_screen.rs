@@ -201,6 +201,12 @@ pub(crate) struct LoadingScreen {
     /// never shows without our body. A ship's leg change brings none, and an abort or a logout
     /// drops the wait.
     awaiting_arrival: bool,
+    /// The wait is a world entry's, which our own player's arrival also ends
+    /// ([`release_interface_on_arrival`]): the reference loads the world at the roster's map and
+    /// position before the login (`0x46c236` → `0x401570`) and its `SMSG_LOGIN_VERIFY_WORLD`
+    /// handler does nothing for that map (`0x401de0`, `0x468580`), so a server may leave the packet
+    /// out (MaNGOS Zero does, when the map is the character list's).
+    entry_snap: bool,
     /// The map this screen's art resolves from, the reference's `[0x82f00c]`, set by every raise;
     /// `None` is its `-1`, no backdrop. Not `CurrentMap`: vmangos can relocate a character inside
     /// `Player::LoadFromDB` (`Player.cpp:15020`), under a live screen. Its writers: `0x4067e6` and
@@ -296,6 +302,7 @@ impl LoadingScreen {
         self.blackout = false;
         self.awaiting_snap = awaiting_snap;
         self.awaiting_arrival = awaiting_arrival;
+        self.entry_snap = false;
         self.map = map;
         self.ready_frames = 0;
         self.displayed = 0.0; // restart the fill for the new load
@@ -420,11 +427,22 @@ impl Plugin for LoadingScreenPlugin {
 /// though here the cover stays up for the readiness poll. A pending cinematic (`0xc4d75c`,
 /// `0x5deb80`) takes the arrival instead and does neither, leaving the screen to the
 /// cinematic's black frame (`0x48edd0`).
+///
+/// The same arrival ends a world entry's wait for its snap ([`LoadingScreen::entry_snap`]), with a
+/// cinematic pending too: the snap says only that the world around us is the destination's. Ours
+/// may exist before the raise reads its edge, so this asks whether it is there, not whether it came.
 fn release_interface_on_arrival(
     arrived: Query<(), Added<crate::net::SelfPlayer>>,
+    present: Query<(), With<crate::net::SelfPlayer>>,
     cinematic: Option<Res<crate::cinematic::Cinematic>>,
     mut screen: ResMut<LoadingScreen>,
 ) {
+    if screen.active && screen.awaiting_snap && screen.entry_snap && !present.is_empty() {
+        info!("loading screen: our player arrived - the world entry's snap");
+        screen.snap_landed(None);
+        // and its arrival, which may have come before the raise read its edge
+        screen.awaiting_arrival = false;
+    }
     if arrived.is_empty() {
         return;
     }
@@ -649,6 +667,7 @@ fn drive_loading_screen(
     {
         let map = roster.as_ref().and_then(|r| r.pending_map());
         screen.raise("world entry", true, map, now);
+        screen.entry_snap = true;
         // The tip rides this edge alone: the reference's setter `0x406630` has one caller, in
         // `CGlueMgr::EnterWorld`, which neither `SMSG_TRANSFER_PENDING` arm reaches.
         screen.tip_edge = Some(TipEdge::Pick);
@@ -1373,6 +1392,73 @@ mod tests {
         assert!(
             screen.hides_interface(),
             "a raise hides the layers below again"
+        );
+    }
+
+    /// A world entry's wait for its snap ends with our own player's arrival, cinematic or not, for
+    /// a server that sends no `SMSG_LOGIN_VERIFY_WORLD` for the character list's map (`0x401de0`
+    /// ignores that map); a transfer's wait does not, `SMSG_NEW_WORLD` ends that one.
+    #[test]
+    fn an_arrival_ends_a_world_entrys_wait_for_its_snap() {
+        use bevy::ecs::system::RunSystemOnce;
+        for cinematic in [false, true] {
+            let mut world = World::new();
+            let mut screen = LoadingScreen::default();
+            screen.raise("world entry", true, Some(0), 0.0);
+            screen.entry_snap = true;
+            world.insert_resource(screen);
+            world.insert_resource(if cinematic {
+                crate::cinematic::Cinematic::pending_for_test(81)
+            } else {
+                crate::cinematic::Cinematic::default()
+            });
+            world.run_system_once(release_interface_on_arrival).unwrap();
+            assert!(
+                world.resource::<LoadingScreen>().awaiting_snap,
+                "no player yet: the wait holds"
+            );
+            world.spawn(crate::net::SelfPlayer);
+            world.run_system_once(release_interface_on_arrival).unwrap();
+            assert!(
+                !world.resource::<LoadingScreen>().awaiting_snap,
+                "our player is there: the snap landed (cinematic {cinematic})"
+            );
+            assert!(
+                !world.resource::<LoadingScreen>().awaiting_arrival,
+                "and arrived (cinematic {cinematic})"
+            );
+        }
+
+        // Our create came before the raise read its edge: its `Added` is spent, and its presence
+        // ends both waits.
+        let mut app = App::new();
+        app.init_resource::<LoadingScreen>()
+            .init_resource::<crate::cinematic::Cinematic>()
+            .add_systems(Update, release_interface_on_arrival);
+        app.world_mut().spawn(crate::net::SelfPlayer);
+        app.update();
+        {
+            let mut screen = app.world_mut().resource_mut::<LoadingScreen>();
+            screen.raise("world entry", true, Some(0), 0.0);
+            screen.entry_snap = true;
+        }
+        app.update();
+        let screen = app.world().resource::<LoadingScreen>();
+        assert!(
+            !screen.awaiting_snap && !screen.awaiting_arrival,
+            "an earlier create ends a world entry's waits"
+        );
+
+        let mut world = World::new();
+        let mut screen = LoadingScreen::default();
+        screen.raise("transfer pending", true, Some(1), 0.0);
+        world.insert_resource(screen);
+        world.init_resource::<crate::cinematic::Cinematic>();
+        world.spawn(crate::net::SelfPlayer);
+        world.run_system_once(release_interface_on_arrival).unwrap();
+        assert!(
+            world.resource::<LoadingScreen>().awaiting_snap,
+            "a transfer waits for SMSG_NEW_WORLD"
         );
     }
 
