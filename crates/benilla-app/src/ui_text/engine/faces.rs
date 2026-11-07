@@ -13,6 +13,18 @@ pub(super) const CLIENT_FONTS: &[&str] = &[
     "Fonts\\SKURRI.TTF",
 ];
 
+/// The face `s_loadingFontPaths` (`0x82f018`) adds for the locale, the one the stock localized
+/// FrameXML's Font objects name: koKR (1) `2002.TTF`, zhCN (4) and zhTW (5) `FZLBJW.TTF`, no
+/// fourth face on the Latin locales (`None`). This is `UNIT_NAME_FONT` (and `NAMEPLATE_FONT`,
+/// `STANDARD_TEXT_FONT`), so the overhead unit name's face follows it.
+pub(crate) fn locale_font_path(locale: usize) -> Option<&'static str> {
+    match locale {
+        1 => Some("Fonts\\2002.TTF"),
+        4 | 5 => Some("Fonts\\FZLBJW.TTF"),
+        _ => None,
+    }
+}
+
 /// The face's ascender as a fraction of the em, `hhea.asc / (hhea.asc + |hhea.desc|)`, off the raw
 /// sfnt bytes. The reference puts the baseline at `cellTop + round(em · ratio)` (`[CGxFont+0x17c]`,
 /// set at `0x5ca030`, reaching the placement kernel `0x5d1360` through `0x5ca160` and `0x5d1120`);
@@ -140,6 +152,55 @@ mod tests {
         }
         font.extend(cmap);
         font
+    }
+
+    /// The locale face by index, the same table [`locale_font_path`] reads.
+    #[test]
+    fn the_locale_face_follows_the_locale() {
+        let want: [Option<&str>; 8] = [
+            None,
+            Some("Fonts\\2002.TTF"),
+            None,
+            None,
+            Some("Fonts\\FZLBJW.TTF"),
+            Some("Fonts\\FZLBJW.TTF"),
+            None,
+            None,
+        ];
+        for (locale, face) in want.into_iter().enumerate() {
+            assert_eq!(locale_font_path(locale), face, "locale {locale}");
+        }
+        assert_eq!(locale_font_path(99), None);
+    }
+
+    /// On an install that carries the locale face, it opens, maps its script, and registers into
+    /// the shaper's database: the chain a localized install's `Fonts.xml` names (`NAMEPLATE_FONT`,
+    /// the Font templates) must turn into a working face, or its text draws nothing.
+    #[test]
+    fn the_locale_face_opens_and_maps_its_script() {
+        benilla_formats::wow_data_or_skip!();
+        let data = benilla_formats::wow_data().expect("the install");
+        let chain = benilla_formats::open_chain(&data).expect("the chain opens");
+        let Some(path) = locale_font_path(chain.locale().index()) else {
+            eprintln!("skip: the install's locale carries no face of its own");
+            return;
+        };
+        let Ok(bytes) = chain.read(path) else {
+            panic!("{path}, the locale's own face, is not in the install's chain");
+        };
+        let record = unicode_charmap(&bytes)
+            .unwrap_or_else(|| panic!("{path} has no Unicode charmap, so it does not open"));
+        for ch in ['中', '文', '字'] {
+            assert!(
+                charmap_glyph(&bytes, 0, record, ch).is_some(),
+                "{path} does not map {ch:?}"
+            );
+        }
+        let mut fs =
+            FontSystem::new_with_locale_and_db("en-US".to_string(), fontdb::Database::new());
+        let registered = register_font(&mut fs, bytes)
+            .unwrap_or_else(|e| panic!("{path} does not register: {e:#}"));
+        assert!(!registered.family.is_empty());
     }
 
     /// FreeType's table names platform 3 encoding 1 Unicode and not encoding 10 (`0x81eb70`), and

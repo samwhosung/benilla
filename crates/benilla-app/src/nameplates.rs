@@ -37,7 +37,9 @@ use crate::names::NameCache;
 use crate::net::{Guid, NetCommands, NetEntity, ObjectStore, SelfPlayer};
 use crate::query_cache::Ask;
 use crate::target::{selection_variant, CombatFlash, RingVariant, Selection};
-use crate::ui_text::{layout_text_quads, FontSpec, Justify, TextSeat, UiFontAtlas};
+use crate::ui_text::{
+    layout_text_quads, locale_font_path, FontSpec, Justify, TextSeat, UiFontAtlas,
+};
 use benilla_world::view::WorldCamera;
 
 /// The height-scale law (`0x6c6e90`): `d > KNEE ? d/KNEE · RATE · FLOOR : FLOOR`, `d` the anchor's
@@ -325,11 +327,15 @@ fn build_name_mesh(atlas: &mut UiFontAtlas, lines: &[String]) -> Mesh {
     let n = lines.len() as f32;
     // The baseline's place in the one-pitch cell, `round(size * asc/(asc+|desc|))`; it only has to
     // agree with `layout_text_quads`, since the baseline stays on the grid either way.
+    // The face is `UNIT_NAME_FONT`, the locale's own (`s_loadingFontPaths`, `0x82f018`): Friz for
+    // the Latin locales, `FZLBJW.TTF`/`2002.TTF` for zhCN·zhTW/koKR, so a localized name draws its
+    // script instead of Friz's Latin-only charmap.
+    let font = locale_font_path(crate::ui_script::client_locale().index());
     let mut e = atlas.lock();
     // The size the glyphs are laid out at: `BAKE_PX` rounded to whole device pixels and back.
     let src = e.drawn_size(BAKE_PX);
     let baseline_frac =
-        ((f64::from(src) * f64::from(e.ascent_ratio(None)) + 0.5).floor() / f64::from(src)) as f32;
+        ((f64::from(src) * f64::from(e.ascent_ratio(font)) + 0.5).floor() / f64::from(src)) as f32;
     for (i, line) in lines.iter().enumerate() {
         let glyphs = layout_text_quads(
             &mut e,
@@ -342,7 +348,7 @@ fn build_name_mesh(atlas: &mut UiFontAtlas, lines: &[String]) -> Mesh {
             },
             0,
             FontSpec {
-                path: None, // UNIT_NAME_FONT = Friz Quadrata, the default face
+                path: font, // UNIT_NAME_FONT, the locale's own face
                 height: Some(BAKE_PX),
                 outline: Outline::None,
                 monochrome: false,
@@ -858,6 +864,29 @@ fn evict_name_meshes(
 mod tests {
     use super::*;
     use crate::target::{ring_variant, PlayerPath, SelectorInput};
+
+    /// A CJK name draws only through the locale's own `UNIT_NAME_FONT` (`s_loadingFontPaths`,
+    /// `0x82f018`): a zhCN/zhTW install's `FZLBJW.TTF` maps it, a koKR's `2002.TTF`; Friz, the
+    /// Latin default, has no CJK and would draw nothing. This is the reported blank-name symptom
+    /// closed end to end: the mesh [`build_name_mesh`] lays out off the locale face, not the
+    /// hardcoded Latin default.
+    #[test]
+    fn a_chinese_name_builds_glyphs_off_the_locales_face() {
+        benilla_formats::wow_data_or_skip!();
+        let mut atlas = UiFontAtlas::for_test(1.0).expect("the client faces open");
+        let mesh = build_name_mesh(&mut atlas, &["丹小姐".to_string()]);
+        match crate::ui_script::client_locale().index() {
+            1 | 4 | 5 => assert!(
+                mesh.count_vertices() > 0,
+                "the CJK name draws in the locale's own face"
+            ),
+            _ => assert_eq!(
+                mesh.count_vertices(),
+                0,
+                "a Latin locale's UNIT_NAME_FONT (Friz) has no CJK — the locale gate, not a defect"
+            ),
+        }
+    }
 
     /// `ShouldShowName`'s first leg is `IsSelectable`: an encounter trigger such as Naxxramas's
     /// invisible "The Lich King" (`UNIT_FLAG_NOT_SELECTABLE`) shows no name with NPC names on, nor
