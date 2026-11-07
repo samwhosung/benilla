@@ -3878,6 +3878,7 @@ fn a_combat_word_follows_its_line_and_only_a_written_one() {
         &mut s,
         &mut windows,
         &line(damage, SPELLLOGABSORB, Some(2), absorbed.clone()),
+        None,
     );
     assert_eq!(
         seen(&s),
@@ -3891,6 +3892,7 @@ fn a_combat_word_follows_its_line_and_only_a_written_one() {
         &mut s,
         &mut windows,
         &line(damage, SPELLLOGABSORB, Some(9), absorbed),
+        None,
     );
     assert_eq!(seen(&s).len(), 2);
     // The healer's name is the line's subject.
@@ -3898,6 +3900,7 @@ fn a_combat_word_follows_its_line_and_only_a_written_one() {
         &mut s,
         &mut windows,
         &line(buffs, HEALED, None, LineWord::named("HEAL", 75)),
+        None,
     );
     assert_eq!(seen(&s)[3], "HEAL|Shaman|75");
     assert!(s.errors().is_empty(), "handler errors: {:?}", s.errors());
@@ -3927,10 +3930,10 @@ fn honor_gained_follows_its_line_and_only_a_written_one() {
     )
     .unwrap();
     let seen = |s: &benilla_ui::script::UiScript| s.eval::<Vec<String>>("return Seen").unwrap();
-    super::feed::write_honor_line(&mut s, &mut windows, Some("Grimtusk"), None, -40);
+    super::feed::write_honor_line(&mut s, &mut windows, Some("Grimtusk"), None, -40, None);
     assert_eq!(seen(&s), ["CHAT_MSG_COMBAT_HONOR_GAIN", "HONOR_GAINED|-40"]);
     s.run("COMBATLOG_HONORAWARD = nil").unwrap();
-    super::feed::write_honor_line(&mut s, &mut windows, None, None, 25);
+    super::feed::write_honor_line(&mut s, &mut windows, None, None, 25, None);
     assert_eq!(seen(&s).len(), 2);
     assert!(s.errors().is_empty(), "handler errors: {:?}", s.errors());
 }

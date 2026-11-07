@@ -5,13 +5,14 @@
 
 use std::collections::HashMap;
 
-use benilla_protocol::messages::{
+pub use benilla_protocol::messages::{
     QuestDetails, QuestGiverList, QuestOfferReward, QuestRequestItems, QuestRewardItem,
     QuestShareMsg,
 };
 use bevy::prelude::*;
 
-use benilla_ui::script::{QuestItemView, QuestPanel, QuestRewardSpell, QuestState};
+pub use benilla_ui::script::QuestState;
+use benilla_ui::script::{QuestItemView, QuestPanel, QuestRewardSpell};
 
 use crate::entities::ItemDisplays;
 use crate::items::Items;
@@ -23,7 +24,7 @@ use crate::ui_script::{SweepApp, SweepLeg};
 use crate::ui_session::{LatchApp, LatchedWindow, NpcWindow};
 
 /// The wire packet that opened the current panel.
-pub(crate) enum QuestView {
+pub enum QuestView {
     Greeting(QuestGiverList),
     Detail(QuestDetails),
     Progress(QuestRequestItems),
@@ -32,30 +33,30 @@ pub(crate) enum QuestView {
 
 /// The open questgiver window; the per-guid dialog statuses survive a close.
 #[derive(Resource, Default)]
-pub(crate) struct QuestGiver {
-    pub(crate) completed_fanfare: bool,
+pub struct QuestGiver {
+    pub completed_fanfare: bool,
     /// The panel's source: an NPC, a GameObject, a quest-starter item or a sharing player.
-    pub(crate) npc: Option<u64>,
-    pub(crate) view: Option<QuestView>,
+    pub npc: Option<u64>,
+    pub view: Option<QuestView>,
     /// The reference's latch `0xbe0824`, written by DETAILS and OFFER_REWARD (`0x500ef0`) and by
     /// REQUEST_ITEMS' `closeOnCancel` (`0x501070`), and zeroed only on world enter (`0x500af0`).
     /// Non-zero turns a plain unit's decline into the silent teardown ([`decline_leg`]). vmangos
     /// sends 1 on every DETAILS and OFFER_REWARD; REQUEST_ITEMS carries 1 on a single-quest
     /// auto-open and 0 on `COMPLETE_QUEST` (`QuestHandler.cpp:390-395`).
-    pub(crate) close_on_cancel: u32,
+    pub close_on_cancel: u32,
     /// The reference's already-acted latch `0xbe0844`, set by `AcceptQuest` and by a re-opening
     /// `DeclineQuest`, which keeps the panel up; both refuse while it is set (`0x5013a8`,
     /// `0x5013fe`) until a panel publish clears it ([`Self::open`]).
-    pub(crate) acted: bool,
+    pub acted: bool,
     /// The reference's `0xbe0828`: the chosen reward's item id, latched by `GetQuestReward`
     /// (`0x50161a`) for the turn-in's item line (`0x5dc676`-`0x5dc6c6`), and zeroed by a panel
     /// publish (`0x500d8c`), world enter (`0x500b15`) and the turn-in.
-    pub(crate) chosen_reward: u32,
+    pub chosen_reward: u32,
     /// The greeting's two pools, which only the selects read.
-    pub(crate) pools: QuestPools,
+    pub pools: QuestPools,
     /// The reference's `0xbe0840`: the last escort confirm's quest, written by its packet
     /// (`0x5019c7`), never cleared, and sent by `ConfirmAcceptQuest` (`0x5021e0`).
-    pub(crate) confirm: u32,
+    pub confirm: u32,
     /// Per-guid dialog status from `SMSG_QUESTGIVER_STATUS`, the `!`/`?` marker's value.
     statuses: HashMap<u64, u32>,
     /// The lines a handler raised, each a GlobalStrings key and its fills, which the handler moves
@@ -67,7 +68,14 @@ pub(crate) struct QuestGiver {
     refused: HashMap<u64, u32>,
     refused_count: u32,
     /// The cells the getters read ([`live`]).
-    pub(crate) cells: QuestCells,
+    pub cells: QuestCells,
+}
+
+impl QuestGiver {
+    /// The panel's cells and dialogue texts ([`live`]).
+    pub fn state(&self) -> &QuestState {
+        &self.cells.state
+    }
 }
 
 /// The panel's cells the getters read, each written by its panel's setters and kept past a close
@@ -77,17 +85,17 @@ pub(crate) struct QuestGiver {
 /// required rows, title, flag and wanted money by `0x501070` (a progress). The world entry zeroes
 /// all but the reward money and the spell (`0x500af0`).
 #[derive(Clone, Debug, Default)]
-pub(crate) struct QuestCells {
+pub struct QuestCells {
     /// The texts, the pools' titles and levels, the money and the flag; the rows are below.
-    pub(crate) state: QuestState,
-    pub(crate) choices: Vec<QuestRewardItem>,
-    pub(crate) rewards: Vec<QuestRewardItem>,
-    pub(crate) required: Vec<QuestRewardItem>,
+    pub state: QuestState,
+    pub choices: Vec<QuestRewardItem>,
+    pub rewards: Vec<QuestRewardItem>,
+    pub required: Vec<QuestRewardItem>,
     /// `0xbe0830`, the reward spell's id.
-    pub(crate) reward_spell: u32,
+    pub reward_spell: u32,
     /// `0xbe081c`, the last panel's quest id (0 for a greeting), stored by every panel
     /// (`0x500d6e`) and zeroed at world enter (`0x500b01`).
-    pub(crate) quest: u32,
+    pub quest: u32,
 }
 
 impl QuestCells {
@@ -219,9 +227,9 @@ pub(crate) struct LatchRefreshes(pub(crate) u32);
 /// refilled by a greeting (`0x500c41`, `0x500e40`, `0x500e90`) and zeroed at world enter
 /// (`0x500b21`), so they outlive the greeting panel and the window.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct QuestPools {
-    pub(crate) available: Vec<(u32, bool)>,
-    pub(crate) active: Vec<u32>,
+pub struct QuestPools {
+    pub available: Vec<(u32, bool)>,
+    pub active: Vec<u32>,
 }
 
 impl QuestPools {

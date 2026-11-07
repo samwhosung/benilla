@@ -3,10 +3,11 @@
 //! it at the VM, where the stock `ChatFrame_OnEvent` prints it.
 
 use benilla_ui::script::ScriptValue;
+use bevy::ecs::message::Message;
 
 /// The chat-event kinds: the `ChatTypeInfo` keys benilla produces.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum ChatEventKind {
+pub enum ChatEventKind {
     Say,
     Party,
     Raid,
@@ -124,7 +125,7 @@ impl ChatEventKind {
     /// The combat log's own kinds. The reference tests the `COMBAT_`/`SPELL_` prefix
     /// (`ChatFrame.lua:1397-1399`); `COMBAT_XP_GAIN` and `COMBAT_HONOR_GAIN`, composed apart from
     /// the combat log, are outside this set.
-    pub(crate) fn is_combat_log(self) -> bool {
+    pub fn is_combat_log(self) -> bool {
         use ChatEventKind as K;
         matches!(
             self,
@@ -309,8 +310,8 @@ impl ChatEventKind {
 /// arg4, arg7, arg8 and arg9 are one record ([`super::edit::ChannelState::stamp_channel`]). arg1
 /// is the garbled text: the reference fills one buffer (`SStrCopy` at `0x49a9f0`, the garble
 /// `0x49b560` at `0x49aa7c`) that the line, arg1 and the bubble share ([`super::language`]).
-#[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) struct ChatEvent {
+#[derive(Clone, Debug, Default, PartialEq, Message)]
+pub struct ChatEvent {
     pub kind: Option<ChatEventKind>,
     pub text: String,
     pub sender: String,
@@ -338,7 +339,7 @@ pub(crate) struct ChatEvent {
 
 impl ChatEvent {
     /// A bare kind+text event (SYSTEM lines, loot receive lines, TEXT_EMOTE sentences).
-    pub(crate) fn text_only(kind: ChatEventKind, text: String) -> Self {
+    pub fn text_only(kind: ChatEventKind, text: String) -> Self {
         ChatEvent {
             kind: Some(kind),
             text,
@@ -347,19 +348,19 @@ impl ChatEvent {
     }
 
     /// The `SMSG_CHANNEL_NOTIFY` byte behind a channel notice, which `notice` holds in decimal.
-    pub(crate) fn notice_byte(&self) -> Option<u8> {
+    pub fn notice_byte(&self) -> Option<u8> {
         self.notice.parse().ok()
     }
 
     /// The `CHAT_<token>_NOTICE` token of a channel notice: the one it was built with, else the
     /// byte's ([`notice_token`]).
-    pub(crate) fn notice_token(&self) -> Option<&'static str> {
+    pub fn notice_token(&self) -> Option<&'static str> {
         self.token
             .or_else(|| notice_token(self.notice_byte()?, self.slot_state))
     }
 
     /// This event's `arg1..arg10` in the reference's order and types; ten values, never nil.
-    pub(crate) fn script_args(&self) -> Vec<ScriptValue> {
+    pub fn script_args(&self) -> Vec<ScriptValue> {
         // arg1 is the token for a channel notice, else the body.
         let arg1 = match (self.kind, self.notice_byte()) {
             (Some(ChatEventKind::ChannelNotice | ChatEventKind::ChannelNoticeUser), Some(_)) => {
@@ -384,7 +385,7 @@ impl ChatEvent {
 
 /// The reference's event name for a kind, `CHAT_MSG_` and its `ChatTypeInfo` key, which
 /// `ChatFrame_OnEvent` recovers with `strsub(event, 10)`.
-pub(crate) fn event_name(kind: ChatEventKind) -> &'static str {
+pub fn event_name(kind: ChatEventKind) -> &'static str {
     use ChatEventKind as K;
     match kind {
         K::Say => "CHAT_MSG_SAY",

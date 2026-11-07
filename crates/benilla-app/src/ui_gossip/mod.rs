@@ -4,7 +4,8 @@
 //! ([`GossipVerbs`]), and so does `CloseGossip`'s close core.
 //! As in the reference's `0x4e2010`, a menu shows only once its greeting is drawn.
 
-use benilla_protocol::messages::{select_greeting, GossipOption, NpcTextBlock};
+pub use benilla_protocol::messages::GossipOption;
+use benilla_protocol::messages::{select_greeting, NpcTextBlock};
 use bevy::prelude::*;
 
 use benilla_ui::script::{GossipMenu, GossipOptionView, GossipQuestRow};
@@ -17,19 +18,19 @@ use crate::ui_session::{LatchApp, LatchedWindow, NpcWindow};
 /// The open gossip menu, plus the NPC-text records by id, which outlive it. The cache holds whole
 /// records: the reference draws the greeting afresh at each open, from the NPC's gender and a roll.
 #[derive(Resource, Default)]
-pub(crate) struct GossipState {
-    pub(crate) npc: Option<u64>,
-    pub(crate) text_id: u32,
+pub struct GossipState {
+    pub npc: Option<u64>,
+    pub text_id: u32,
     /// This open's drawn greeting, unexpanded; `None` while its text query is out.
-    pub(crate) greeting: Option<String>,
+    pub greeting: Option<String>,
     /// The text buffer `0xbbb678`: the last drawn greeting, expanded at its draw (`0x4e2274`,
     /// `0x4e229a`), which `GetGossipText` returns (`0x4e28c0`). No close or message clears it.
-    pub(crate) text: String,
-    pub(crate) options: Vec<GossipOption>,
+    pub text: String,
+    pub options: Vec<GossipOption>,
     /// The packet's quest rows, `(quest_id, dialog-status icon, level, title)`. The level is kept
     /// because `GetGossipAvailableQuests` and `GetGossipActiveQuests` return `(title, level)`
     /// pairs, walked in twos by stock `GossipFrame.lua` (lines 66 and 90).
-    pub(crate) quests: Vec<(u32, u32, u32, String)>,
+    pub quests: Vec<(u32, u32, u32, String)>,
     /// The NPC-text store (`0xc0e264`), which [`crate::wdb`] saves; the menu sends its own query.
     records: QueryCache<u32, Vec<NpcTextBlock>>,
     /// The drawn record had no line for the NPC's gender: the close core is owed.
@@ -42,6 +43,9 @@ pub(crate) struct GossipState {
 }
 
 impl GossipState {
+    pub fn text(&self) -> &str {
+        &self.text
+    }
     pub(crate) fn cached_record(&self, text_id: u32) -> Option<&[NpcTextBlock]> {
         self.records.get(text_id).map(Vec::as_slice)
     }

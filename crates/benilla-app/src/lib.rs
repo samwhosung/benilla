@@ -131,14 +131,14 @@ mod ui_bind_confirm;
 mod ui_binder;
 mod ui_cast;
 mod ui_char;
-mod ui_chat;
+pub mod ui_chat;
 mod ui_craft;
 mod ui_dialog_verbs;
 mod ui_dressup;
 mod ui_duel;
 mod ui_gamma;
 mod ui_gm_ticket;
-mod ui_gossip;
+pub mod ui_gossip;
 mod ui_guild;
 mod ui_honor;
 mod ui_inspect;
@@ -163,7 +163,7 @@ mod ui_pet;
 mod ui_pet_book;
 mod ui_pet_stats;
 mod ui_petition;
-mod ui_quest;
+pub mod ui_quest;
 mod ui_quest_log;
 mod ui_quest_share;
 mod ui_reputation;
@@ -210,6 +210,9 @@ pub use bevy::app::AppExit;
 pub use benilla_protocol::{messages::ObjectType, ObjectFields};
 pub use net::Objects;
 pub use target::Interact;
+pub use ui_chat::{ChatEvent, ChatEventKind};
+pub use ui_gossip::{GossipOption, GossipState};
+pub use ui_quest::QuestGiver;
 
 /// Builds and runs the client app. `build` is the launcher's compile-time git stamp, passed in as
 /// data so the sha lives in the shim's fingerprint and a commit does not recompile this crate.
