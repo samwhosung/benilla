@@ -36,6 +36,8 @@ use cosmic_text::{
 use benilla_assets::WorldAssets;
 
 use faces::{charmap_glyph, hhea_ascent_ratio, register_font, unicode_charmap, CLIENT_FONTS};
+
+pub(crate) use faces::locale_font_path;
 pub(crate) use gpu::{FontAtlasInit, UiTextPlugin};
 
 use super::outline::{mono_cell, outlined_cell, Bake};
@@ -168,7 +170,8 @@ fn client_font_system() -> FontSystem {
 
 impl TextEngine {
     /// Register the client TTFs, each read as a font face opens ([`read_font_bytes`]); `None`, and
-    /// no text, without Friz Quadrata.
+    /// no text, without Friz Quadrata. The locale's own face ([`locale_font_path`]) joins them,
+    /// so a localized install's `Fonts.xml` names a face the engine holds.
     fn load(world_assets: &WorldAssets, images: &Assets<Image>, dpi: f32) -> Option<Self> {
         let mut font_system = client_font_system();
         let mut faces: Vec<Face> = Vec::new();
@@ -181,32 +184,31 @@ impl TextEngine {
             },
         };
         for &path in CLIENT_FONTS {
-            let Some(bytes) = read_font_bytes(&source, path) else {
+            if !register_client_face(
+                &mut font_system,
+                &mut faces,
+                &mut path_to_face,
+                &source,
+                path,
+            ) {
                 warn!("ui_text: failed to read {path} from the loose files or the patch chain");
-                continue;
-            };
-            let Some(charmap) = unicode_charmap(&bytes) else {
-                warn!("ui_text: {path} has no Unicode charmap, so it does not open");
-                continue;
-            };
-            let ascent_ratio = hhea_ascent_ratio(&bytes).unwrap_or(0.794);
-            let sfnt = sfnt::Sfnt::parse(bytes.clone()).map(Arc::new);
-            match register_font(&mut font_system, bytes) {
-                Ok(r) => {
-                    path_to_face.insert(path.to_ascii_lowercase(), faces.len());
-                    faces.push(Face {
-                        id: r.id,
-                        path: path.to_string(),
-                        family: r.family,
-                        weight: r.weight,
-                        style: r.style,
-                        stretch: r.stretch,
-                        ascent_ratio,
-                        sfnt,
-                        charmap,
-                    });
-                }
-                Err(e) => warn!("ui_text: failed to register {path}: {e:#}"),
+            }
+        }
+        // The locale's own face, the one the localized FrameXML's Font objects and
+        // `NAMEPLATE_FONT` name (`s_loadingFontPaths`, `0x82f018`); a Latin install has none.
+        let locale = world_assets
+            .chain
+            .lock()
+            .map(|chain| locale_font_path(chain.locale().index()));
+        if let Ok(Some(path)) = locale {
+            if !register_client_face(
+                &mut font_system,
+                &mut faces,
+                &mut path_to_face,
+                &source,
+                path,
+            ) {
+                warn!("ui_text: failed to read {path}, the locale's own face");
             }
         }
         let default_face = *path_to_face.get(&CLIENT_FONTS[0].to_ascii_lowercase())?;
@@ -734,6 +736,48 @@ impl UiFontAtlas {
 /// Read one font path as a font face opens it (`0x5d0060`, flags 3 at `0x5d0121`): a loose file
 /// by its bare name, then by its whole path, then the chain
 /// ([`benilla_assets::read_loose_or_chain`]).
+/// Read `path` off the loose files or the patch chain and register it as a face: the one open
+/// sequence the four client faces and the locale's own ([`locale_font_path`]) take. `false`
+/// leaves it out; the caller's warning names the path.
+fn register_client_face(
+    font_system: &mut FontSystem,
+    faces: &mut Vec<Face>,
+    path_to_face: &mut HashMap<String, usize>,
+    source: &FontSource,
+    path: &str,
+) -> bool {
+    let Some(bytes) = read_font_bytes(source, path) else {
+        return false;
+    };
+    let Some(charmap) = unicode_charmap(&bytes) else {
+        warn!("ui_text: {path} has no Unicode charmap, so it does not open");
+        return false;
+    };
+    let ascent_ratio = hhea_ascent_ratio(&bytes).unwrap_or(0.794);
+    let sfnt = sfnt::Sfnt::parse(bytes.clone()).map(Arc::new);
+    match register_font(font_system, bytes) {
+        Ok(r) => {
+            path_to_face.insert(path.to_ascii_lowercase(), faces.len());
+            faces.push(Face {
+                id: r.id,
+                path: path.to_string(),
+                family: r.family,
+                weight: r.weight,
+                style: r.style,
+                stretch: r.stretch,
+                ascent_ratio,
+                sfnt,
+                charmap,
+            });
+            true
+        }
+        Err(e) => {
+            warn!("ui_text: failed to register {path}: {e:#}");
+            false
+        }
+    }
+}
+
 fn read_font_bytes(source: &FontSource, path: &str) -> Option<Vec<u8>> {
     benilla_assets::read_loose_or_chain(
         &source.chain,
