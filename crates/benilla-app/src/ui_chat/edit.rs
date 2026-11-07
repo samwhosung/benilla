@@ -174,7 +174,7 @@ impl From<ChannelSlot> for SlotRecord {
 
 /// The reference's per-slot state (`+0x9c`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SlotState {
+pub enum SlotState {
     /// `0`, confirmed by the server's `YOU_JOINED` (`0x49bb8b`): the one state the by-number
     /// lookups (`0x49be50`, `0x49bf30`), the lists and the walk's LEAVE (`0x49a35e`) take.
     Confirmed,

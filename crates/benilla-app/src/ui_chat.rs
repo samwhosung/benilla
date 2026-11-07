@@ -25,7 +25,9 @@ pub(crate) mod commands;
 /// The edit box's send path: the chat-type token passed to `SendChatMessage` and its wire kind.
 /// `pub(crate)` for `ui_script::chat_tests`, which joins the stock file's token to this resolve.
 pub(crate) mod edit;
-mod event;
+pub mod event;
+pub use edit::SlotState;
+pub use event::{event_name, ChatEvent, ChatEventKind};
 mod feed;
 #[cfg(test)]
 pub(crate) use feed::NAME_MAX_TRIES;
@@ -68,10 +70,7 @@ pub(crate) use channels::{
 };
 /// The joined-channel roster and the `ChatChannels.dbc` catalog.
 pub(crate) use edit::ChannelState;
-/// Test-only: `ui_script::chat_tests` checks every fired name against the live `ChatTypeInfo`.
-#[cfg(test)]
-pub(crate) use event::event_name;
-pub(crate) use event::{default_color, ChatEvent, ChatEventKind};
+pub(crate) use event::default_color;
 #[cfg(test)]
 pub(crate) use feed::EmoteTexts;
 pub(crate) use feed::{release_display, Answer, ChatLog};
@@ -248,6 +247,7 @@ impl Plugin for UiChatPlugin {
 pub(crate) fn add_chat_lane(app: &mut App) {
     use crate::lanes::LaneApp;
     app.init_resource::<ChatLog>()
+        .add_message::<event::ChatEvent>()
         .add_lane(
             "chat",
             |world| world.get_resource::<ChatLog>()?.peek(),

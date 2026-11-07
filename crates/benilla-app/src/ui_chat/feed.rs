@@ -1128,18 +1128,37 @@ pub(super) fn xp_loss_line(total: u32, get: &dyn Fn(&str) -> Option<String>) -> 
     )
 }
 
+/// Emit a chat event to the external observer channel (if registered) and route it to the UI frames.
+fn emit_and_route(
+    script: &mut benilla_ui::script::UiScript,
+    windows: &mut ChatWindows,
+    event: &ChatEvent,
+    events: Option<&mut MessageWriter<ChatEvent>>,
+) {
+    if let Some(events) = events {
+        events.write(event.clone());
+    }
+    route(script, windows, event);
+}
+
 /// A combat line whose names are in: composed, routed, then the word its formatter raises after
 /// it. A line that does not compose (no template, no school name) writes neither.
 pub(super) fn write_combat_line(
     script: &mut benilla_ui::script::UiScript,
     windows: &mut ChatWindows,
     line: &super::combat::PendingCombat,
+    events: Option<&mut MessageWriter<ChatEvent>>,
 ) {
     let Some(text) = super::combat::compose_line(script, line.family, line.variant, &line.fills)
     else {
         return;
     };
-    route(script, windows, &ChatEvent::text_only(line.kind, text));
+    emit_and_route(
+        script,
+        windows,
+        &ChatEvent::text_only(line.kind, text),
+        events,
+    );
     if let Some(word) = &line.word {
         crate::ui_unit::fire_combat_text(
             script,
@@ -1159,14 +1178,16 @@ pub(super) fn write_honor_line(
     victim: Option<&str>,
     rank_title: Option<&str>,
     honor: i32,
+    events: Option<&mut MessageWriter<ChatEvent>>,
 ) {
     let Some(text) = honor_gain_line(victim, rank_title, honor, &globals(script)) else {
         return;
     };
-    route(
+    emit_and_route(
         script,
         windows,
         &ChatEvent::text_only(ChatEventKind::CombatHonorGain, text),
+        events,
     );
     crate::ui_unit::fire_combat_text(script, "HONOR_GAINED", Some(honor.to_string()), None);
 }
@@ -1357,12 +1378,13 @@ fn deliver_hosted(
     set: &mut SlotsAndHost,
     windows: &mut ChatWindows,
     event: &mut ChatEvent,
+    mut events: Option<&mut MessageWriter<ChatEvent>>,
 ) {
     let flag = set.p0().channels.defense_channel;
     let dropping = deliver_before(script, &mut set.p0().channels, event);
     defense_flip(script, set, flag);
     crate::script_calls::lent(script, set.p1().as_mut(), |script| {
-        route(script, windows, event)
+        emit_and_route(script, windows, event, events.as_deref_mut());
     });
     let flag = set.p0().channels.defense_channel;
     deliver_after(script, &mut set.p0().channels, dropping);
@@ -1515,6 +1537,7 @@ pub(crate) struct ChatFiring<'w, 's> {
     vm: crate::script_calls::VmWith<'w, 's, ChatSlots<'static>>,
     log: Res<'w, ChatLog>,
     reads: ChatReads<'w, 's>,
+    events: Option<MessageWriter<'w, ChatEvent>>,
 }
 
 impl ChatFiring<'_, '_> {
@@ -1524,16 +1547,22 @@ impl ChatFiring<'_, '_> {
     /// ([`ChatLog::hold`]); the answers and the frame's age pass retry the held lines in the
     /// order they began to wait. With no VM nothing fires and the items wait.
     fn fire(&mut self, until: crate::lanes::Until) {
-        let Self { vm, log, reads } = self;
+        let Self {
+            vm,
+            log,
+            reads,
+            events,
+        } = self;
         let (Some(script), set) = vm.parts() else {
             return;
         };
         while let Some(Queued { stamp, item }) = log.pop(until) {
             let moved = if let Pending::Release { cause, from } = item {
-                release(reads, log, script, set, stamp, cause, from)
+                release(reads, log, script, set, stamp, cause, from, events.as_mut())
             } else {
-                let (waits, moved) =
-                    crate::lanes::firing(stamp, || fire_one(reads, log, script, set, item, stamp));
+                let (waits, moved) = crate::lanes::firing(stamp, || {
+                    fire_one(reads, log, script, set, item, stamp, events.as_mut())
+                });
                 if let Some(item) = waits {
                     log.hold(item.waited(1));
                 }
@@ -1561,6 +1590,7 @@ fn release(
     at: crate::lanes::Stamp,
     cause: Release,
     from: u64,
+    mut events: Option<&mut MessageWriter<ChatEvent>>,
 ) -> bool {
     let (step, before) = match cause {
         Release::Answer(_) | Release::Display => (0, None),
@@ -1573,8 +1603,9 @@ fn release(
             log.hold_again(seq, item);
             continue;
         }
-        let (waits, moved) =
-            crate::lanes::firing(at, || fire_one(reads, log, script, set, item, at));
+        let (waits, moved) = crate::lanes::firing(at, || {
+            fire_one(reads, log, script, set, item, at, events.as_deref_mut())
+        });
         if let Some(item) = waits {
             log.hold_again(seq, item.waited(step));
         }
@@ -1589,6 +1620,7 @@ fn release(
 /// Fire one item at `at`, or hand it back to wait: for a name the cache lacks, for one whose
 /// answer comes later in the frame than `at`, so the record the reference's lookup missed there
 /// is not read early (a name), or for an item's name.
+#[allow(clippy::too_many_arguments)]
 fn fire_one(
     reads: &mut ChatReads,
     log: &ChatLog,
@@ -1596,6 +1628,7 @@ fn fire_one(
     set: &mut SlotsAndHost,
     item: Pending,
     at: crate::lanes::Stamp,
+    mut events: Option<&mut MessageWriter<ChatEvent>>,
 ) -> Option<Pending> {
     // A held item waits, unaged, for the cascade's release; once the latch is clear it runs as
     // it came in, its names now cached.
@@ -1621,7 +1654,8 @@ fn fire_one(
                 super::broadcast::BroadcastLine::Display(e) => Pending::Display(e),
                 super::broadcast::BroadcastLine::Event(e) => Pending::Event(e),
             };
-            if let Some(waits) = fire_one(reads, log, script, set, line, at) {
+            if let Some(waits) = fire_one(reads, log, script, set, line, at, events.as_deref_mut())
+            {
                 log.hold(waits);
             }
         }
@@ -1657,14 +1691,14 @@ fn fire_one(
     // A channel notice writes its slot around its event, outside the host's lend.
     let item = match item {
         Pending::Event(mut event) => {
-            deliver_hosted(script, set, windows, &mut event);
+            deliver_hosted(script, set, windows, &mut event, events.as_deref_mut());
             None
         }
         Pending::Display(event) if log.latched_at(at) => {
             return Some(Pending::Latched(Box::new(Pending::Display(event))));
         }
         Pending::Display(mut event) => {
-            deliver_hosted(script, set, windows, &mut event);
+            deliver_hosted(script, set, windows, &mut event, events.as_deref_mut());
             None
         }
         Pending::Notice {
@@ -1702,7 +1736,7 @@ fn fire_one(
                 // composer looks it up among the joined channels (`0x49aa1e`-`0x49aa31`).
                 // Unstamped, arg7-arg9 are empty and the stock filter
                 // (`ChatFrame.lua:1374-1392`) drops the line.
-                deliver_hosted(script, set, windows, &mut event);
+                deliver_hosted(script, set, windows, &mut event, events.as_deref_mut());
             }
             None
         }
@@ -1720,7 +1754,7 @@ fn fire_one(
                 .map(str::to_string);
             if let Some(name) = known {
                 for mut event in mode_change_events(&channel, &name, old_flags, new_flags) {
-                    deliver_hosted(script, set, windows, &mut event);
+                    deliver_hosted(script, set, windows, &mut event, events.as_deref_mut());
                 }
             }
             None
@@ -1935,7 +1969,7 @@ fn fire_one(
                 if let Some(record) = record {
                     record.apply(&mut event);
                 }
-                route(script, windows, &event);
+                emit_and_route(script, windows, &event, events.as_deref_mut());
                 // The bubble gets the same text: the reference spawns it in this path
                 // (`0x49acd9`).
                 if let Some(kind) = event.kind {
@@ -2015,10 +2049,11 @@ fn fire_one(
                     )
                 };
                 if let Some(text) = line {
-                    route(
+                    emit_and_route(
                         script,
                         windows,
                         &ChatEvent::text_only(ChatEventKind::System, text),
+                        events.as_deref_mut(),
                     );
                 }
             }
@@ -2053,20 +2088,22 @@ fn fire_one(
                 let line =
                     xp_gain_line(name.as_deref(), total, base, group, rest, &globals(script));
                 if let Some(text) = line {
-                    route(
+                    emit_and_route(
                         script,
                         windows,
                         &ChatEvent::text_only(ChatEventKind::CombatXpGain, text),
+                        events.as_deref_mut(),
                     );
                 }
             }
             Pending::XpLoss { total } => {
                 let line = xp_loss_line(total, &globals(script));
                 if let Some(text) = line {
-                    route(
+                    emit_and_route(
                         script,
                         windows,
                         &ChatEvent::text_only(ChatEventKind::CombatXpGain, text),
+                        events.as_deref_mut(),
                     );
                 }
             }
@@ -2103,6 +2140,7 @@ fn fire_one(
                     name.as_deref(),
                     title.flatten().as_deref(),
                     honor,
+                    events.as_deref_mut(),
                 );
             }
             Pending::TextEmote {
@@ -2155,7 +2193,7 @@ fn fire_one(
                 );
                 // No sentence is a real outcome: `/sit` prints nothing.
                 let event = event?;
-                route(script, windows, &event);
+                emit_and_route(script, windows, &event, events.as_deref_mut());
             }
             Pending::Combat(mut line) => {
                 // Its item was looked up by its formatter, at the packet or again at the item's
@@ -2189,7 +2227,9 @@ fn fire_one(
                 match ready {
                     super::combat::Filled::Waiting => return Some(Pending::Combat(line)),
                     super::combat::Filled::Dropped => return None,
-                    super::combat::Filled::Ready => write_combat_line(script, windows, &line),
+                    super::combat::Filled::Ready => {
+                        write_combat_line(script, windows, &line, events.as_deref_mut())
+                    }
                 }
             }
             Pending::Standing {
@@ -2204,10 +2244,11 @@ fn fire_one(
                     &faction,
                 );
                 if let Some(text) = line {
-                    route(
+                    emit_and_route(
                         script,
                         windows,
                         &ChatEvent::text_only(ChatEventKind::System, text),
+                        events.as_deref_mut(),
                     );
                 }
             }
@@ -2229,10 +2270,11 @@ fn fire_one(
                     );
                 }
                 if let Some(text) = line {
-                    route(
+                    emit_and_route(
                         script,
                         windows,
                         &ChatEvent::text_only(ChatEventKind::System, text),
+                        events.as_deref_mut(),
                     );
                 }
             }
@@ -2252,13 +2294,27 @@ pub(super) fn fire_chat(In(until): In<crate::lanes::Until>, mut firing: ChatFiri
 /// the cascade's stamp, with the host lent; one still waiting on its name stays held. The AFK
 /// mirror's reseed beside it is [`super::away`]'s. With no VM the latch clears and the lines wait.
 pub(crate) fn release_display(mut firing: ChatFiring) {
-    let ChatFiring { vm, log, reads } = &mut firing;
+    let ChatFiring {
+        vm,
+        log,
+        reads,
+        events,
+    } = &mut firing;
     log.q().latched = None;
     let (Some(script), set) = vm.parts() else {
         return;
     };
     let at = crate::lanes::firing_now().unwrap_or_else(crate::lanes::stamp);
-    release(reads, log, script, set, at, Release::Display, 0);
+    release(
+        reads,
+        log,
+        script,
+        set,
+        at,
+        Release::Display,
+        0,
+        events.as_mut(),
+    );
 }
 
 /// The leave-world sweep's chat leg (`0x490a9e` → `0x498a10`): the display latch set.
