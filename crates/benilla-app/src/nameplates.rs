@@ -311,10 +311,19 @@ const ROCK_SNAP: f32 = 1.0;
 /// larger source is crisper up close.
 const BAKE_PX: f32 = 36.0;
 
+/// The face of the overhead names: the Lua global `UNIT_NAME_FONT`, resolved once per world
+/// session. `PlayerNameInitialize` (`0x6c7470`) reads it through `FrameScript::GetVariable`
+/// (`0x704350`) at world entry and creates the name font from it (`GxuFontCreateFont`, `0x5c1ae0`,
+/// size 0.99, flags 4) into `s_nameFont` (`0xce8738`); each locale's `Fonts.xml` assigns it, so a
+/// zhCN install names a CJK face. `None` draws in the default face, as `DamageTextFont` does.
+#[derive(Resource, Default)]
+pub(crate) struct UnitNameFont(pub(crate) Option<String>);
+
 /// Build one name-block mesh in pitch units: x centered, y up, line `i`'s baseline at
 /// `lineCount - i`, one pitch being the font size. The baseline sits `TextEngine::ascent_ratio`
-/// into the layout cell (the `[0x17c]` load param), as in the 2-D path.
-fn build_name_mesh(atlas: &mut UiFontAtlas, lines: &[String]) -> Mesh {
+/// into the layout cell (the `[0x17c]` load param), as in the 2-D path. `font` is the
+/// `UNIT_NAME_FONT` face, for the baseline and the glyphs both.
+fn build_name_mesh(atlas: &mut UiFontAtlas, lines: &[String], font: Option<&str>) -> Mesh {
     use bevy::asset::RenderAssetUsages;
     use bevy::mesh::{Indices, PrimitiveTopology};
 
@@ -329,7 +338,7 @@ fn build_name_mesh(atlas: &mut UiFontAtlas, lines: &[String]) -> Mesh {
     // The size the glyphs are laid out at: `BAKE_PX` rounded to whole device pixels and back.
     let src = e.drawn_size(BAKE_PX);
     let baseline_frac =
-        ((f64::from(src) * f64::from(e.ascent_ratio(None)) + 0.5).floor() / f64::from(src)) as f32;
+        ((f64::from(src) * f64::from(e.ascent_ratio(font)) + 0.5).floor() / f64::from(src)) as f32;
     for (i, line) in lines.iter().enumerate() {
         let glyphs = layout_text_quads(
             &mut e,
@@ -342,7 +351,7 @@ fn build_name_mesh(atlas: &mut UiFontAtlas, lines: &[String]) -> Mesh {
             },
             0,
             FontSpec {
-                path: None, // UNIT_NAME_FONT = Friz Quadrata, the default face
+                path: font, // UNIT_NAME_FONT
                 height: Some(BAKE_PX),
                 outline: Outline::None,
                 monochrome: false,
@@ -448,6 +457,7 @@ pub(crate) fn drive_nameplates(
     mirror: Res<crate::ui_chat::AfkMirror>,
     // The show-gate inputs, one tuple param for Bevy's 16-param ceiling.
     gates: (
+        Res<UnitNameFont>,
         Res<Selection>,
         Res<CombatFlash>,
         Option<Res<crate::player::CameraControl>>,
@@ -480,12 +490,17 @@ pub(crate) fn drive_nameplates(
         Query<(), With<crate::entities::mount::MountChild>>,
     ),
 ) {
-    let (selection, flash, rig, vplates, bubbles, name_cfg, pvp_strings, self_guid) = gates;
+    let (unit_font, selection, flash, rig, vplates, bubbles, name_cfg, pvp_strings, self_guid) =
+        gates;
     let (Ok(cam_tf), Some(atlas)) = (camera.single(), atlas.as_mut()) else {
         return;
     };
     // A glyph-sheet reset moves every cached UV.
     drop_stale_glyph_caches(&mut plates, atlas.generation, &mut commands);
+    // The cached meshes were laid out in the old name face.
+    if unit_font.is_changed() {
+        drop_name_meshes(&mut plates, &mut commands);
+    }
     // The palette materials, once (they need the atlas image).
     if plates.materials.is_empty() {
         let image = atlas.image();
@@ -633,7 +648,9 @@ pub(crate) fn drive_nameplates(
                 let mesh = plates
                     .meshes
                     .entry(lines.clone())
-                    .or_insert_with(|| meshes.add(build_name_mesh(atlas, &lines)))
+                    .or_insert_with(|| {
+                        meshes.add(build_name_mesh(atlas, &lines, unit_font.0.as_deref()))
+                    })
                     .clone();
                 let material = plates.materials[&color].clone();
                 // The spawn-frame seat: placement can miss a plate whose unit despawns later
@@ -798,6 +815,7 @@ impl Plugin for NameplatesPlugin {
         .init_resource::<Nameplates>()
         .init_resource::<NameConfig>()
         .init_resource::<NameLineStrings>()
+        .init_resource::<UnitNameFont>()
         // After targeting, V-key plates and chat bubbles: the gate reads their verdicts. After the
         // VM pass too, whose script calls change the selection a plate marks.
         .add_systems(
@@ -831,15 +849,20 @@ fn drop_stale_glyph_caches(plates: &mut Nameplates, generation: u64, commands: &
             plates.meshes.len(),
             plates.live.len(),
         );
-        for live in plates.live.values() {
-            if let Ok(mut e) = commands.get_entity(live.plate) {
-                e.despawn();
-            }
-        }
-        plates.live.clear();
-        plates.meshes.clear();
+        drop_name_meshes(plates, commands);
     }
     plates.baked_from = Some(generation);
+}
+
+/// Empty the mesh cache and despawn the live plates, which hold the old `Mesh3d`.
+fn drop_name_meshes(plates: &mut Nameplates, commands: &mut Commands) {
+    for live in plates.live.values() {
+        if let Ok(mut e) = commands.get_entity(live.plate) {
+            e.despawn();
+        }
+    }
+    plates.live.clear();
+    plates.meshes.clear();
 }
 
 /// Drop the line-stack mesh dedup on a cross-map transition: the old map's names never return.
@@ -1389,6 +1412,56 @@ mod tests {
         assert_eq!(plates.materials.len(), 1);
         assert_eq!(plates.live.len(), 1);
         assert!(world.get_entity(plate).is_ok());
+    }
+
+    /// A changed `UNIT_NAME_FONT` drops every mesh laid out in the old face, and the live plates.
+    #[test]
+    fn a_new_name_face_drops_the_meshes_and_the_live_plates() {
+        let mut world = World::new();
+        let unit = world.spawn_empty().id();
+        let plate = world.spawn_empty().id();
+        let mut plates = primed(Some(7), unit, plate);
+
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        {
+            let mut commands = Commands::new(&mut queue, &world);
+            drop_name_meshes(&mut plates, &mut commands);
+        }
+        queue.apply(&mut world);
+
+        assert!(plates.meshes.is_empty());
+        assert!(plates.live.is_empty());
+        assert_eq!(plates.materials.len(), 1, "materials hold no glyphs");
+        assert!(world.get_entity(plate).is_err());
+    }
+
+    /// The face reaches the layout: the same line is wider in Friz Quadrata than in Arial Narrow.
+    #[test]
+    fn the_name_mesh_lays_out_in_the_unit_name_font() {
+        use bevy::mesh::VertexAttributeValues;
+        benilla_formats::wow_data_or_skip!();
+        let mut atlas = UiFontAtlas::for_test(1.0).expect("the client faces open");
+        let lines = vec!["Magister Kalendris".to_string()];
+        let span = |mesh: &Mesh| {
+            let Some(VertexAttributeValues::Float32x3(p)) =
+                mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+            else {
+                panic!("positions");
+            };
+            let xs = p.iter().map(|v| v[0]);
+            xs.clone().fold(f32::MIN, f32::max) - xs.fold(f32::MAX, f32::min)
+        };
+        let friz = span(&build_name_mesh(&mut atlas, &lines, None));
+        let arial = span(&build_name_mesh(
+            &mut atlas,
+            &lines,
+            Some("Fonts\\ARIALN.TTF"),
+        ));
+        assert!(friz > 0.0 && arial > 0.0);
+        assert!(
+            (friz - arial).abs() > 0.05,
+            "the face is honoured: {friz} vs {arial}"
+        );
     }
 
     /// The block goes through `0x7716f0` whole: a plain block is left as it is, and a `|2` rewrites
