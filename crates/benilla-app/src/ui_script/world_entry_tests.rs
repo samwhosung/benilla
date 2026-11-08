@@ -3246,6 +3246,43 @@ fn a_reload_keeps_the_damage_text_font_the_login_read() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// The overhead names' face is read at world entry (`0x6c7470` reads `UNIT_NAME_FONT` through
+/// `0x704350`): an addon's assignment reaches the resource; an unset global leaves `None`.
+#[test]
+fn world_entry_reads_unit_name_font() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let face = |world: &World| {
+        world
+            .get_resource::<crate::nameplates::UnitNameFont>()
+            .and_then(|f| f.0.clone())
+    };
+    let (tmp, _c, _h) = hermetic_addon(
+        "unitnamefont",
+        "FontProbe",
+        "## Interface: 11200\nFontProbe.lua\n",
+        "UNIT_NAME_FONT = \"Fonts\\\\ARIALN.TTF\"\n",
+    );
+    let mut world = booted_world();
+    log_in_as(&mut world, "Onehunter", 1);
+    assert_eq!(face(&world).as_deref(), Some("Fonts\\ARIALN.TTF"));
+
+    let file = tmp
+        .join("benilla-config")
+        .join("AddOns")
+        .join("FontProbe")
+        .join("FontProbe.lua");
+    std::fs::write(&file, "UNIT_NAME_FONT = \"\"\n").expect("the addon's empty face");
+    super::end_ui_session(&mut world);
+    log_in_as(&mut world, "Onehunter", 1);
+    assert_eq!(face(&world), None, "an empty face is None");
+
+    drop(world);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// A `/reload` releases every command: its shutdown's leave clears the once-per-world latch
 /// (`0x490c20`, `0x490a8d`), so the re-init's world-enter cascade runs its release of every
 /// command (`0x490168` → `0x4908c0` → `0x49093c` → `0x5144c0`). A right held and a mouselook

@@ -747,6 +747,9 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
     // `0x495669`), so the face the login read stays until the next login.
     if seat == LoadSeat::Roster {
         world.insert_resource(crate::combat_text::read_damage_text_font(&script));
+        // `UNIT_NAME_FONT` binds at the same point: `0x6c7470` runs at world entry beside
+        // `0x6c8470`, so a `/reload` keeps the face the login read.
+        world.insert_resource(read_unit_name_font(&script));
     }
     // The load is over: disarm its instruction bound, so no handler is killed for being slow.
     script.clear_instruction_budget();
@@ -1385,6 +1388,14 @@ pub(crate) fn is_emote_token_line(line: &str) -> bool {
         && name
             .bytes()
             .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+}
+
+/// Read `UNIT_NAME_FONT` at the tail of the world-entry UI load (`0x6c7470`, reached with
+/// `0x6c8470` at world entry). `0x704350` takes a string or number and leaves `""` otherwise,
+/// which the font factory rejects; empty is `None`.
+fn read_unit_name_font(script: &benilla_ui::script::UiScript) -> crate::nameplates::UnitNameFont {
+    let value: Option<String> = script.lua().globals().get("UNIT_NAME_FONT").ok();
+    crate::nameplates::UnitNameFont(value.filter(|v| !v.is_empty()))
 }
 
 #[cfg(test)]
