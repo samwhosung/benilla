@@ -54,6 +54,24 @@ fn enter_on_connected(
     }
 }
 
+/// A glue entry ([`EnteredWorldMessage`] outside the world) opens the world on the pick's map, as
+/// the reference's state 8 opens it at the record's map before the login (`0x46c236` →
+/// `0x401570`): `SMSG_LOGIN_VERIFY_WORLD` only moves it, and its handler ignores that map
+/// (`0x401de0`, `0x468580`), so a server may leave the packet out (MaNGOS Zero does). Outside
+/// [`session_edges`]' chain, whose systems take no `Commands`.
+pub(crate) fn open_world_on_pick(
+    mut msgs: MessageReader<EnteredWorldMessage>,
+    roster: Res<Roster>,
+    state: Res<State<ClientState>>,
+    mut commands: Commands,
+) {
+    if msgs.read().next().is_some() && *state.get() != ClientState::InWorld {
+        if let Some(map) = roster.pending_map() {
+            commands.insert_resource(benilla_world::world_map::CurrentMap(map));
+        }
+    }
+}
+
 /// The session died: back to the login screen, as `GlueParent.lua`'s `DISCONNECTED_FROM_SERVER`
 /// does. Chained after [`enter_on_connected`]: a stream dying during entry drains `Connected` and
 /// `Disconnected` in one frame, and the dead session must be the last word.
@@ -131,6 +149,36 @@ mod tests {
             "and the reconnect's pending pick goes with it, or the next roster walks straight \
              back into the world the player was just thrown out of",
         );
+    }
+
+    /// A glue entry opens the world on the pick's map, before any `SMSG_LOGIN_VERIFY_WORLD`; an
+    /// entry while in the world (the seamless reconnect) leaves the map to the server.
+    #[test]
+    fn a_glue_entry_opens_the_world_on_the_picks_map() {
+        let entry = |from: ClientState| {
+            let mut app = App::new();
+            let mut kalimdor = character(7, "Blue");
+            kalimdor.map = 1;
+            app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+                .insert_state(from)
+                .insert_resource(Roster::with_pending_pick(vec![kalimdor], 7))
+                .insert_resource(benilla_world::world_map::CurrentMap(0))
+                .add_message::<EnteredWorldMessage>()
+                .add_systems(Update, open_world_on_pick);
+            app.world_mut().write_message(EnteredWorldMessage {
+                tutorial_flags: None,
+            });
+            app.update();
+            app.world()
+                .resource::<benilla_world::world_map::CurrentMap>()
+                .0
+        };
+        assert_eq!(
+            entry(ClientState::CharSelect),
+            1,
+            "the pick's map, Kalimdor"
+        );
+        assert_eq!(entry(ClientState::InWorld), 0, "a reconnect keeps the map");
     }
 
     /// A teardown whose session is not over (a logout, or a reconnect) still enters the world.

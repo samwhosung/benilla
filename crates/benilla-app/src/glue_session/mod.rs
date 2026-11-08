@@ -28,6 +28,13 @@ impl Plugin for GlueSessionPlugin {
                     .in_set(edges::SessionEdges)
                     .after(benilla_world::schedule::WorldStage::Net),
             )
+            // A worldport the server sends with the entry lands after it, in `Input`.
+            .add_systems(
+                Update,
+                edges::open_world_on_pick
+                    .after(benilla_world::schedule::WorldStage::Net)
+                    .before(benilla_world::schedule::WorldStage::Input),
+            )
             .add_systems(
                 Update,
                 reconnect::answer_reconnect.after(edges::SessionEdges),
