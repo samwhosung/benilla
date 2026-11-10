@@ -63,8 +63,8 @@ pub fn tuned_default_plugins(primary_window: Window) -> PluginGroupBuilder {
         // ScenePlugin (avian's collider backend reads `SceneSpawner`); the ForwardDecal family is
         // registered inside `PbrPlugin::build`, so it cannot be disabled on its own.
         //
-        // M2/WMO/ADT load through our own `mpq://` loaders; there is no glTF.
-        .disable::<bevy::gltf::GltfPlugin>()
+        // M2/WMO/ADT load through our own `mpq://` loaders. glTF is on for Hero Defense's own
+        // models (`benilla_app::hero_defense`).
         // No bevy AA: no Fxaa/TAA/SMAA/CAS component anywhere (MSAA is core render, unaffected).
         .disable::<bevy::anti_alias::AntiAliasPlugin>()
         // No gamepad input; 1.12's bindings are keyboard/mouse.

@@ -106,6 +106,8 @@ impl PluginGroup for GamePlugins {
             .add(QuestMarkersPlugin)
             .add(crate::pipe_warm::plugin)
             .add(EntitiesPlugin)
+            // Hero Defense: vlastni modely (glTF) pres puvodni M2.
+            .add(crate::hero_defense::plugin)
             // The combat log, ahead of the animation layer, whose environmental-damage handler runs
             // second; its swing handler registers ahead of the line (`net_handler_ahead`).
             .add(crate::combat_log::CombatLogPlugin)
