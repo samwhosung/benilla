@@ -169,7 +169,7 @@ impl Plugin for CameraShakePlugin {
                 Update,
                 (fire_shakes, fire_kit_shakes)
                     .in_set(WorldStage::Present)
-                    .run_if(not(resource_exists::<crate::run_mode::CaptureMode>)),
+                    .run_if(crate::run_mode::player_drives_rig),
             );
     }
 }

@@ -408,14 +408,15 @@ impl Plugin for PlayerPlugin {
             Update,
             setup::gate_world_camera.before(crate::vm_pass::VmPass::Start),
         )
-        // Off in capture mode, where the harness pins the camera, and in world only, so the glue
+        // Off in capture mode and under a host's [`crate::run_mode::ExternalAuthority`], where the
+        // camera is pinned elsewhere, and in world only, so the glue
         // screens keep the cursor and send no movement.
         .add_systems(
             Update,
             control
                 .in_set(PlayerControlSet)
                 .in_set(WorldStage::Input)
-                .run_if(not(resource_exists::<crate::run_mode::CaptureMode>))
+                .run_if(crate::run_mode::player_drives_rig)
                 .in_set(crate::client_state::InWorldGated),
         )
         // The posture queue (the `/sit` family), which `control` alone executes.
@@ -436,7 +437,7 @@ impl Plugin for PlayerPlugin {
             server_ride::drive_self_ride
                 .in_set(WorldStage::Input)
                 .before(control)
-                .run_if(not(resource_exists::<crate::run_mode::CaptureMode>))
+                .run_if(crate::run_mode::player_drives_rig)
                 .in_set(crate::client_state::InWorldGated),
         )
         // A session end (a `/logout` or a lost session) drops `active`, re-arming the take-control
@@ -468,7 +469,7 @@ impl Plugin for PlayerPlugin {
                 .in_set(WorldStage::Input)
                 .after(control)
                 // Off in capture mode, where the camera is pinned.
-                .run_if(not(resource_exists::<crate::run_mode::CaptureMode>)),
+                .run_if(crate::run_mode::player_drives_rig),
         )
         // The cast bar's self-cancel inside the press, between its verdict and its tick, so
         // `CMSG_CANCEL_CAST` goes out ahead of the start (`0x51512a` before `0x5151a0`).
@@ -517,7 +518,7 @@ impl Plugin for PlayerPlugin {
                 .chain()
                 .in_set(WorldMouse)
                 .after(camera::latch_world_mouse)
-                .run_if(not(resource_exists::<crate::run_mode::CaptureMode>))
+                .run_if(crate::run_mode::player_drives_rig)
                 .in_set(crate::client_state::InWorldGated),
         )
         // `/follow` and Click to Move steer before `control`, so the player's own turn input
@@ -540,7 +541,7 @@ impl Plugin for PlayerPlugin {
                 .after(benilla_world::interior::classify_entity_interior)
                 .after(benilla_world::model_fade::apply_render_fade)
                 .after(benilla_world::model_render::ModelVisSet)
-                .run_if(not(resource_exists::<crate::run_mode::CaptureMode>)),
+                .run_if(crate::run_mode::player_drives_rig),
         );
     }
 }

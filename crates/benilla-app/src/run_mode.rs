@@ -13,6 +13,22 @@ use bevy::prelude::*;
 #[derive(Resource)]
 pub(crate) struct CaptureMode;
 
+/// A host application that embeds the client authors the body and the camera this run, by its own
+/// systems. The player's controller, its look session, the camera views and the camera shake stand
+/// down exactly as under [`CaptureMode`], and the cursor and the movement packets are the host's.
+/// The host inserts it before the first frame. Deviation: 1.12.1 has no host to hand the rig to.
+#[derive(Resource, Default)]
+pub struct ExternalAuthority;
+
+/// Run condition: the player's own rig drives the body and the camera, neither a capture nor a host
+/// having taken them ([`CaptureMode`], [`ExternalAuthority`]).
+pub(crate) fn player_drives_rig(
+    capture: Option<Res<CaptureMode>>,
+    host: Option<Res<ExternalAuthority>>,
+) -> bool {
+    capture.is_none() && host.is_none()
+}
+
 /// The rig's derived character name when `$WOW_RIG` names a body, inserted by
 /// `capture::ProbeRigPlugin`. While present the roster ignores `$WOW_CHAR`: the rig may have to
 /// create its body first, and the `WOW_CHAR` one-shot cannot wait for that.
@@ -317,6 +333,23 @@ fn suffix_of(character: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn the_rig_stands_down_for_a_capture_or_a_host() {
+        let drives = |build: fn(&mut World)| {
+            let mut world = World::new();
+            build(&mut world);
+            world.run_system_once(player_drives_rig).unwrap()
+        };
+        assert!(drives(|_| {}), "the player's rig by default");
+        assert!(!drives(|w| {
+            w.insert_resource(CaptureMode);
+        }));
+        assert!(!drives(|w| {
+            w.insert_resource(ExternalAuthority);
+        }));
+    }
 
     /// Outside the dev roots, only [`super::dev_chord`] may call the engine's `dev_chord`, and no
     /// file may name the `dev` feature: the player build gate cannot see either. The display

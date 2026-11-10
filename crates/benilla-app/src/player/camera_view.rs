@@ -389,8 +389,9 @@ pub(crate) struct ViewSteps<'w, 's> {
     zoom: Option<Res<'w, super::camera_zoom::ZoomLimit>>,
     cam: Query<'w, 's, &'static mut FlyCam, With<WorldCamera>>,
     player: Option<Res<'w, Player>>,
-    /// Capture parks the camera itself; a view must not move it.
+    /// Capture parks the camera itself; a view must not move it. A host that authors it does too.
     capture: Option<Res<'w, crate::run_mode::CaptureMode>>,
+    external: Option<Res<'w, crate::run_mode::ExternalAuthority>>,
 }
 
 impl ViewSteps<'_, '_> {
@@ -418,7 +419,7 @@ impl ViewSteps<'_, '_> {
     /// to take inside the same call.
     pub(crate) fn apply(&mut self, request: CameraViewRequest) -> Vec<(&'static str, String)> {
         let mut writes = Vec::new();
-        if self.capture.is_some() {
+        if self.capture.is_some() || self.external.is_some() {
             return writes;
         }
         let cvars = ViewCvars::read(self.follow.as_deref(), self.options.as_deref());
