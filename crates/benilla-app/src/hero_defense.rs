@@ -6,12 +6,21 @@
 //!
 //! Modely se ctou ze zdroje `hd://`: slozka z promenne prostredi `HD_ASSETS`, jinak `hd_assets`
 //! vedle spustitelneho souboru.
+//!
+//! Tri veci, ktere puvodni M2 dostava od klienta zadarmo a GLB ne:
+//! - Svetlo: klient kresli modely vlastnim shaderem a ve scene neni zadne svetlo Bevy, takze
+//!   materialy z glTF se prepnou na neosvetlene (`unlit`).
+//! - Orezavani: jednotka se kresli, jen kdyz je v zaberu jeji obrys ([`ModelBound`]), ktery by
+//!   jinak byl obrys schovaneho M2.
+//! - Kolize: jednotky ve WoW kolize nemaji, vlastni model dostane pevny valec.
 
+use avian3d::prelude::{Collider, RigidBody};
 use bevy::asset::io::AssetSourceBuilder;
+use bevy::camera::primitives::Aabb;
 use bevy::gltf::GltfAssetLabel;
 use bevy::prelude::*;
 
-use crate::entities::VisualAttached;
+use crate::entities::{ModelBound, VisualAttached};
 use crate::net::{Guid, NetEntity};
 
 /// Zdroj assetu s modely Hero Defense.
@@ -27,6 +36,12 @@ struct CustomModel {
     scale: f32,
     /// Natoceni modelu kolem svisle osy vuci smeru jednotky, v radianech.
     yaw: f32,
+    /// Obrys modelu v jeho vlastnich jednotkach (pred `scale`): polovina sirky a vyska.
+    /// Pocatek modelu je uprostred zakladny.
+    half_width: f32,
+    height: f32,
+    /// Polomer kolizniho valce v jednotkach modelu; `None` = bez kolize.
+    collision_radius: Option<f32>,
 }
 
 const MODELS: &[CustomModel] = &[CustomModel {
@@ -34,15 +49,22 @@ const MODELS: &[CustomModel] = &[CustomModel {
     path: "castle/castle.glb",
     scale: 13.0, // model je ~1.9 jednotky siroky, hrad tak ma kolem 25 yardu
     yaw: 0.0,
+    half_width: 0.95,
+    height: 1.9,
+    collision_radius: Some(0.7), // kousek uvnitr obrysu, at se o hroty nezasekava
 }];
 
-/// Jednotka, ktere uz byl vlastni model pridan.
+/// Jednotka, ktere uz byl vlastni model pridan; nese index do [`MODELS`].
 #[derive(Component)]
-struct HdModelSwapped;
+struct HdModelSwapped(usize);
 
 /// Dite jednotky s vlastnim modelem (to jedine se neschovava).
 #[derive(Component)]
 struct HdModelRoot;
+
+/// Dite jednotky s kolizi vlastniho modelu (take se neschovava).
+#[derive(Component)]
+struct HdModelCollider;
 
 /// Zaregistruje zdroj `hd://`. Musi probehnout pred `AssetPlugin` (v `DefaultPlugins`).
 pub(crate) fn register_source(app: &mut App) {
@@ -58,7 +80,10 @@ pub(crate) fn register_source(app: &mut App) {
 }
 
 pub(crate) fn plugin(app: &mut App) {
-    app.add_systems(Update, (forget_rebuilt, swap_models, hide_original).chain());
+    app.add_systems(
+        Update,
+        (forget_rebuilt, swap_models, hide_original, keep_bound, unlit_materials).chain(),
+    );
 }
 
 /// Jednotka, jejiz vizual se prestavuje (zmena display id), dostane vlastni model znovu.
@@ -70,29 +95,49 @@ fn forget_rebuilt(mut commands: Commands, mut removed: RemovedComponents<VisualA
     }
 }
 
+/// Pomer mezi jednotkami modelu a mistnimi jednotkami jednotky: rodic uz nese scale ze serveru,
+/// model ho vyrovna na pozadovanou velikost.
+fn local_scale(model: &CustomModel, net: &NetEntity) -> f32 {
+    model.scale / net.scale.max(0.01)
+}
+
 fn swap_models(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     units: Query<(Entity, &Guid, &NetEntity), (With<VisualAttached>, Without<HdModelSwapped>)>,
+    mut collider_epoch: ResMut<benilla_world::collision::ColliderEpoch>,
 ) {
     for (entity, guid, net) in &units {
         let Some(entry) = benilla_protocol::guid::entry(guid.0) else {
             continue;
         };
-        let Some(model) = MODELS.iter().find(|m| m.entry == entry) else {
+        let Some(index) = MODELS.iter().position(|m| m.entry == entry) else {
             continue;
         };
+        let model = &MODELS[index];
 
-        // Rodic uz nese scale jednotky ze serveru, model ho vyrovna na pozadovanou velikost.
-        let scale = model.scale / net.scale.max(0.01);
+        let scale = local_scale(model, net);
         let scene = asset_server.load(GltfAssetLabel::Scene(0).from_asset(format!("{HD_SOURCE}://{}", model.path)));
-        commands.entity(entity).insert(HdModelSwapped).with_children(|parent| {
+        commands.entity(entity).insert(HdModelSwapped(index)).with_children(|parent| {
             parent.spawn((
                 SceneRoot(scene),
                 Transform::from_rotation(Quat::from_rotation_y(model.yaw)).with_scale(Vec3::splat(scale)),
                 HdModelRoot,
             ));
+            if let Some(radius) = model.collision_radius {
+                let height = model.height * scale;
+                parent.spawn((
+                    RigidBody::Static,
+                    Collider::cylinder(radius * scale, height),
+                    Transform::from_xyz(0.0, height / 2.0, 0.0),
+                    HdModelCollider,
+                ));
+            }
         });
+        if model.collision_radius.is_some() {
+            // Mimo frontu stavby kolizi, takze sadu kolideru oznaci sam (jako GameObject v attach).
+            collider_epoch.bump();
+        }
         info!("hero defense: jednotka {entry} vykreslena modelem {}", model.path);
     }
 }
@@ -100,7 +145,7 @@ fn swap_models(
 /// Puvodni model schova kazdy snimek: jine systemy (prolinani, LOD) mohou viditelnost vratit.
 fn hide_original(
     units: Query<&Children, With<HdModelSwapped>>,
-    mut parts: Query<&mut Visibility, Without<HdModelRoot>>,
+    mut parts: Query<&mut Visibility, (Without<HdModelRoot>, Without<HdModelCollider>)>,
 ) {
     for children in &units {
         for child in children.iter() {
@@ -108,6 +153,45 @@ fn hide_original(
                 if *visibility != Visibility::Hidden {
                     *visibility = Visibility::Hidden;
                 }
+            }
+        }
+    }
+}
+
+/// Obrys pro orezavani podle vlastniho modelu, ne podle schovaneho M2. Prepisuje se, kdykoli ho
+/// klient vrati na obrys M2 (pri stavbe vizualu).
+fn keep_bound(
+    mut commands: Commands,
+    units: Query<(Entity, &HdModelSwapped, &NetEntity, Option<&ModelBound>)>,
+) {
+    for (entity, swapped, net, current) in &units {
+        let model = &MODELS[swapped.0];
+        let s = local_scale(model, net);
+        let want = Aabb::from_min_max(
+            Vec3::new(-model.half_width * s, 0.0, -model.half_width * s),
+            Vec3::new(model.half_width * s, model.height * s, model.half_width * s),
+        );
+        if current.is_none_or(|b| b.0 != want) {
+            commands.entity(entity).insert(ModelBound(want));
+        }
+    }
+}
+
+/// Materialy vlastnich modelu bez osvetleni: ve scene klienta neni svetlo, ktere by je osvetlilo.
+fn unlit_materials(
+    added: Query<(Entity, &MeshMaterial3d<StandardMaterial>), Added<MeshMaterial3d<StandardMaterial>>>,
+    parents: Query<&ChildOf>,
+    roots: Query<(), With<HdModelRoot>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    for (entity, handle) in &added {
+        let in_model = parents.iter_ancestors(entity).any(|a| roots.contains(a));
+        if !in_model {
+            continue;
+        }
+        if let Some(material) = materials.get_mut(&handle.0) {
+            if !material.unlit {
+                material.unlit = true;
             }
         }
     }
