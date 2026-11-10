@@ -931,7 +931,18 @@ pub(crate) fn spawn_cycles() -> Cycles {
     let (events_tx, events) = crossbeam_channel::unbounded();
     let (commands, cmd_rx) = crossbeam_channel::unbounded::<ClientCommand>();
     let (writer_tx, writer_rx) = crossbeam_channel::unbounded::<WriterSwap>();
-    thread::spawn(move || writer_loop(&cmd_rx, writer_rx, &Mutex::new(PingClock::default())));
+    let hung_up = Arc::new(AtomicBool::new(false));
+    let hung_up_read = Arc::clone(&hung_up);
+    let hang_events = events_tx.clone();
+    thread::spawn(move || {
+        writer_loop(
+            &cmd_rx,
+            writer_rx,
+            &Mutex::new(PingClock::default()),
+            &hung_up,
+            &hang_events,
+        )
+    });
     let (login, login_rx) = crossbeam_channel::unbounded();
     let (park_tx, park_rx) = crossbeam_channel::unbounded::<ParkRequest>();
     let abandon = Arc::new(AtomicU64::new(0));
@@ -951,6 +962,7 @@ pub(crate) fn spawn_cycles() -> Cycles {
             ) {
                 Ok(Cycle::Exit) => return,
                 Ok(Cycle::Repark) => {}
+                Err(_) if hung_up_read.swap(false, Ordering::SeqCst) => {}
                 Err(e) => {
                     if events_tx
                         .send(SessionEvent::Disconnected {
