@@ -23,7 +23,7 @@
 //! hands it the [`WorldWriter`] over a swap channel, and a logout takes it back, so there is only
 //! ever one writer.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -285,6 +285,11 @@ pub(super) fn spawn_net(connect: bool) -> NetHandles {
     let login_abandon = Arc::new(AtomicU64::new(0));
     let ping_clock = Arc::new(Mutex::new(PingClock::default()));
     if connect {
+        // Set by the write thread when it hangs up on purpose ([`ClientCommand::HangUp`]), taken
+        // by the read thread when the stream then fails: an ended session, not a lost one.
+        let hung_up = Arc::new(AtomicBool::new(false));
+        let hung_up_read = Arc::clone(&hung_up);
+        let hang_events = events_tx.clone();
         // The writer thread outlives connections; the read thread hands it each world entry's
         // WorldWriter and takes it back after a logout.
         let (writer_tx, writer_rx) = crossbeam_channel::unbounded::<WriterSwap>();
@@ -299,7 +304,7 @@ pub(super) fn spawn_net(connect: bool) -> NetHandles {
                 benilla_world::thread_qos::promote_current_thread(
                     benilla_world::thread_qos::QosClass::UserInitiated,
                 );
-                writer_loop(&cmd_rx, writer_rx, &clock)
+                writer_loop(&cmd_rx, writer_rx, &clock, &hung_up, &hang_events)
             })
             .expect("spawn wow-net-write thread");
         thread::Builder::new()
@@ -325,6 +330,10 @@ pub(super) fn spawn_net(connect: bool) -> NetHandles {
                     ) {
                         Ok(Cycle::Exit) => return,
                         Ok(Cycle::Repark) => {}
+                        // The write thread said this end when it hung up.
+                        Err(_) if hung_up_read.swap(false, Ordering::SeqCst) => {
+                            bevy::log::info!("net: the ended session's socket closed");
+                        }
                         Err(e) => {
                             // A stream failure; a displacement kick arrives as a bare EOF. No
                             // sleep: what follows is the app's policy.
@@ -1323,12 +1332,23 @@ fn apply_swap(
     }
 }
 
+/// A new writer starts with no hang-up pending: one that raced a logout's own end (the link is
+/// kept across it) must not make the next session's real loss read as ended.
+fn clear_stale_hang_up(swap: &WriterSwap, hung_up: &AtomicBool) {
+    if matches!(swap, WriterSwap::Install { .. }) {
+        hung_up.store(false, Ordering::SeqCst);
+    }
+}
+
 /// The write thread: app commands, writer swaps and the [`PING_INTERVAL`] keepalive. With no live
 /// writer, commands drop with a capped warning. Ends when the app drops every command sender.
+/// `hung_up` and `events` serve [`ClientCommand::HangUp`], which says the session's end itself.
 pub(super) fn writer_loop(
     cmd_rx: &Receiver<ClientCommand>,
     mut writer_rx: Receiver<WriterSwap>,
     ping_clock: &Mutex<PingClock>,
+    hung_up: &AtomicBool,
+    events: &Sender<SessionEvent>,
 ) {
     let mut writer: Option<WorldWriter> = None;
     let mut warned = 0u32;
@@ -1338,7 +1358,10 @@ pub(super) fn writer_loop(
     loop {
         crossbeam_channel::select! {
             recv(writer_rx) -> w => match w {
-                Ok(swap) => apply_swap(swap, &mut writer, &mut warned, &mut ping_tick, ping_clock),
+                Ok(swap) => {
+                    clear_stale_hang_up(&swap, hung_up);
+                    apply_swap(swap, &mut writer, &mut warned, &mut ping_tick, ping_clock)
+                }
                 // The read thread ended (app exit). A disconnected receiver is always ready and
                 // would spin the select, so stop selecting it.
                 Err(_) => writer_rx = crossbeam_channel::never(),
@@ -1377,6 +1400,7 @@ pub(super) fn writer_loop(
                 // the app sends on that announcement finds it here even when this wake-up took
                 // the command first, whether no writer is held or a lost link's dead one is.
                 while let Ok(swap) = writer_rx.try_recv() {
+                    clear_stale_hang_up(&swap, hung_up);
                     apply_swap(swap, &mut writer, &mut warned, &mut ping_tick, ping_clock);
                 }
                 let Some(w) = writer.as_mut() else {
@@ -1396,6 +1420,7 @@ pub(super) fn writer_loop(
                     }
                     continue;
                 };
+                let hang_up = matches!(cmd, ClientCommand::HangUp);
                 let result = match cmd {
                     ClientCommand::Move {
                         kind,
@@ -1924,6 +1949,19 @@ pub(super) fn writer_loop(
                         slot,
                     } => w.set_trade_item(trade_slot, bag, slot),
                     ClientCommand::ClearTradeItem { trade_slot } => w.clear_trade_item(trade_slot),
+                    ClientCommand::HangUp => {
+                        hung_up.store(true, Ordering::SeqCst);
+                        // The end is said now, as a logout's is, not when the read thread sees the
+                        // socket go: a blocked read is not always woken by our own shutdown, and
+                        // the server closes its side only once it has ended the session.
+                        let _ = events.send(SessionEvent::LoggedOut);
+                        let _ = events.send(SessionEvent::Disconnected {
+                            reason: "the session was ended".into(),
+                            end: SessionEnd::LoggedOut,
+                        });
+                        bevy::log::info!("net: the session was ended by the app");
+                        w.shutdown()
+                    }
                     ClientCommand::Logout => w.logout_request(),
                     ClientCommand::LogoutCancel => w.logout_cancel(),
                     ClientCommand::OpeningCinematic => w.opening_cinematic(),
@@ -2084,6 +2122,11 @@ pub(super) fn writer_loop(
                         bevy::log::warn!("net: send failed: {e:#}");
                         warned += 1;
                     }
+                }
+                // The hung-up session's writer goes with it; what is sent next finds none.
+                if hang_up {
+                    writer = None;
+                    ping_tick = crossbeam_channel::never();
                 }
             },
         }

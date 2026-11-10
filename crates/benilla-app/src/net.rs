@@ -106,6 +106,7 @@ impl Plugin for NetPlugin {
             .init_resource::<crate::items::Items>()
             .init_resource::<crate::world_state::WorldStates>()
             .init_resource::<crate::world_state::WorldStateLane>()
+            .add_message::<EndSession>()
             .add_message::<TeleportMessage>()
             .add_message::<FieldChanged>()
             .add_message::<AuraFieldsChanged>()
@@ -176,7 +177,8 @@ impl Plugin for NetPlugin {
                     .in_set(WorldStage::Net)
                     .after(apply_net_updates),
             )
-            .add_systems(Update, population_pulse.in_set(WorldStage::Net));
+            .add_systems(Update, population_pulse.in_set(WorldStage::Net))
+            .add_systems(Update, send_end_session);
     }
 }
 
@@ -522,6 +524,21 @@ impl NetEvents {
 /// The outbound command channel.
 #[derive(Resource, Debug)]
 pub(crate) struct NetCommands(pub(crate) Sender<ClientCommand>);
+
+/// A host application asks to end the world session now: the socket is closed on purpose and the
+/// session is reported ended, as a logout's is, not lost (no "disconnected" dialog, no
+/// reconnect). The client is then at character select with no link; the stock
+/// `DisconnectFromServer()` there returns it to the login screen. With no session live it does
+/// nothing. Deviation: 1.12.1 has no such request; a player ends a session with a logout.
+#[derive(Message, Clone, Copy, Debug, Default)]
+pub struct EndSession;
+
+/// Each [`EndSession`] as the write thread's [`ClientCommand::HangUp`].
+fn send_end_session(mut asks: MessageReader<EndSession>, commands: Res<NetCommands>) {
+    if asks.read().count() > 0 {
+        let _ = commands.0.send(ClientCommand::HangUp);
+    }
+}
 
 /// The character-select channel to the IO thread parked at select: create and delete are served
 /// in place until an [`CharRequest::Enter`] moves into the world.
@@ -1903,6 +1920,10 @@ pub(crate) enum ClientCommand {
     ClearTradeItem {
         trade_slot: u8,
     },
+    /// An [`EndSession`]: the socket closed on purpose and the session's end said at once
+    /// (`LoggedOut`, then a `Disconnected` that is not a loss), instead of waiting for the server
+    /// to close its side. No packet is sent.
+    HangUp,
     /// `CMSG_LOGOUT_REQUEST`: `SMSG_LOGOUT_COMPLETE` becomes a [`LoggedOutMessage`] and a
     /// reconnect to character select.
     Logout,
@@ -2926,5 +2947,27 @@ mod tests {
             .unwrap();
         assert_eq!(listed, [(ME, me, Some(256)), (BOAR, boar, Some(40))]);
         assert_eq!(player, Some(me));
+    }
+}
+
+#[cfg(test)]
+mod end_session_tests {
+    use super::*;
+
+    /// An [`EndSession`] reaches the write thread as one `HangUp`, however many were asked in a frame.
+    #[test]
+    fn an_end_session_is_one_hang_up() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.insert_resource(NetCommands(tx))
+            .add_message::<EndSession>()
+            .add_systems(Update, send_end_session);
+        app.update();
+        assert!(rx.try_recv().is_err(), "nothing asked, nothing sent");
+        app.world_mut().write_message(EndSession);
+        app.world_mut().write_message(EndSession);
+        app.update();
+        assert!(matches!(rx.try_recv(), Ok(ClientCommand::HangUp)));
+        assert!(rx.try_recv().is_err());
     }
 }
