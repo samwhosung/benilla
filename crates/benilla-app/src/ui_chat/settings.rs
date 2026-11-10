@@ -443,9 +443,6 @@ fn restore_chat_looks_again(world: &mut World, script: &mut UiScript, again: boo
             .get_resource::<crate::glue_session::roster::Roster>()
             .and_then(crate::ui_macro::identity)
     };
-    let Some(id) = id else {
-        return;
-    };
     // Owned rows up front: `ChatWindowFile` is borrowed mutably below.
     let Some(channels) = world.get_resource::<super::edit::ChannelState>() else {
         return;
@@ -460,6 +457,18 @@ fn restore_chat_looks_again(world: &mut World, script: &mut UiScript, again: boo
     let seed_mask = auto_rows.iter().fold(0, |m, (_, id)| m | zone_bit(*id));
     // Scoped, so `ChannelState` can take the mask afterwards.
     let mut parsed;
+    // No character (a session with no character select) has no file to read, but the loader's two
+    // events are not about a character and fire either way: without them no window is registered
+    // for any `CHAT_MSG_*`, so every line printed is lost, and `ChatFrameBackground` draws as an
+    // untinted white slab. It takes the no-file path, then the events.
+    let Some(id) = id else {
+        parsed = Parsed::default();
+        let mut general = ChatWindowLook::stock(0);
+        general.channels = auto_rows.clone();
+        parsed.looks.push((0, general));
+        finish_chat_restore(world, script, parsed, seed_mask);
+        return;
+    };
     {
         let Some(mut file) = world.get_resource_mut::<ChatWindowFile>() else {
             return;
@@ -524,6 +533,13 @@ fn restore_chat_looks_again(world: &mut World, script: &mut UiScript, again: boo
             info!("chat cache: repaired an unmarked file's zone channels for {who}");
         }
     }
+    finish_chat_restore(world, script, parsed, seed_mask);
+}
+
+/// The half of [`restore_chat_looks_again`] that is not about a character: the durable zone mask,
+/// the looks and colours into the VM, and the loader's two events. Shared by the file path and the
+/// no-character path, so the two cannot drift.
+fn finish_chat_restore(world: &mut World, script: &mut UiScript, parsed: Parsed, seed_mask: u32) {
     // The durable mask: the file's word, else the DBC seed; confirmed joins OR into it after.
     let mask = parsed.zone_mask.unwrap_or(seed_mask);
     if let Some(mut channels) = world.get_resource_mut::<super::edit::ChannelState>() {
@@ -1566,6 +1582,49 @@ mod tests {
         );
         drop(world);
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A session with no character select has no chat file to read, and the loader's events fire all
+    /// the same (`0x4996b9`, `0x499934`): `UPDATE_CHAT_WINDOWS` once, which registers a window for
+    /// every `CHAT_MSG_*`, then `UPDATE_CHAT_COLOR` per registry entry, which tints the frames.
+    #[test]
+    fn the_loader_fires_its_events_with_no_character() {
+        let mut world = World::new();
+        world.init_resource::<super::super::edit::ChannelState>();
+        world.init_resource::<super::super::channels::ZoneChannelWalk>();
+        world.init_resource::<ChatWindowFile>();
+        world.init_resource::<crate::account_data::AccountData>();
+        world
+            .resource::<crate::account_data::AccountData>()
+            .settle_section_for_test(crate::account_data::CHAT);
+        let mut script = UiScript::new().expect("a VM");
+        script
+            .run(
+                r#"
+                Heard = {}
+                local f = CreateFrame("Frame")
+                f:RegisterEvent("UPDATE_CHAT_WINDOWS")
+                f:RegisterEvent("UPDATE_CHAT_COLOR")
+                f:SetScript("OnEvent", function() table.insert(Heard, event) end)
+                "#,
+            )
+            .expect("the spy");
+        restore_chat_looks(&mut world, &mut script);
+        let heard = script
+            .eval::<Vec<String>>("return Heard")
+            .expect("the spy's record");
+        assert_eq!(
+            heard.first().map(String::as_str),
+            Some("UPDATE_CHAT_WINDOWS")
+        );
+        assert_eq!(
+            heard.iter().filter(|e| *e == "UPDATE_CHAT_WINDOWS").count(),
+            1
+        );
+        assert!(
+            heard.iter().any(|e| e == "UPDATE_CHAT_COLOR"),
+            "the colours reach the frames: {heard:?}"
+        );
     }
 
     /// A reload's read of the cache stores the option line through `0x49ea70` (`0x498e35`), which
