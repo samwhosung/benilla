@@ -38,6 +38,8 @@ const RETRY_SECS: f32 = 1.0;
 // a cesty bosse.
 const COLOR_LINE: Color = Color::srgba(0.12, 0.08, 0.04, 0.22);
 const COLOR_BOUNDARY: Color = COLOR_LINE;
+/// Kruhy vnitrni a vnejsi hranice aren (perimetr hradu a okraj zony). Vypnute: na plose rusily.
+const SHOW_RINGS: bool = false;
 const COLOR_ARENA: Color = COLOR_LINE;
 const COLOR_CELL: Color = COLOR_LINE;
 const COLOR_SPAWN: Color = Color::srgba(1.0, 0.2, 0.15, 0.90);
@@ -130,7 +132,8 @@ fn build(world: &WorldPoint, cx: f32, cy: f32, o: f32) -> (Vec<(Vec3, Vec3, Colo
     let depth = ROWS as f32 * CELL;
     let half = COLS as f32 * CELL / 2.0;
     let outer = (FINAL_PATH + depth).hypot(half);
-    for r in [FINAL_PATH, outer] {
+    // Kruhy jsou schovane (SHOW_RINGS), hranice aren je videt z jejich obrysu.
+    for r in [FINAL_PATH, outer].into_iter().filter(|_| SHOW_RINGS) {
         let n = (std::f32::consts::TAU * r / 3.0).ceil() as i32;
         let pts: Vec<_> = (0..=n)
             .map(|i| local(o + std::f32::consts::TAU * i as f32 / n as f32, r, 0.0))
