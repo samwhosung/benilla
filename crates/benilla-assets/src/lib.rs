@@ -35,6 +35,8 @@ pub use model::{
     ATTRIBUTE_WOW_JOINT_WEIGHT, ATTRIBUTE_WOW_MERGED_SLOT,
 };
 mod adt;
+mod hd_rocks;
+mod hd_terrain;
 mod hd_zone;
 mod terrain;
 mod wdt;
