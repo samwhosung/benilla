@@ -47,7 +47,21 @@ pub(super) fn apply(spells: &mut HashMap<u32, SpellDisplay>) {
         spell.icon = Some("Interface\\Icons\\INV_Scroll_03".to_string());
         spell.description = Some("Prida 25 % zkusenosti potrebnych do dalsiho levelu.".to_string());
     }
+
+    // Melee ma manu misto rage: jeho (zatim zastupna) kouzla Warriora stoji manu. Musi sedet
+    // se serverem (hero_defense_heroes.sql: mana = rage x 2).
+    for (id, mana) in HD_MANA_SPELLS {
+        if let Some(spell) = spells.get_mut(&id) {
+            spell.power_type = 0;
+            spell.mana_cost = mana;
+        }
+    }
 }
+
+/// Kouzla Warriora pro Melee a jejich cena v mane: Heroic Strike 1 a 2, Battle Shout, Charge,
+/// Rend 1 a 2, Thunder Clap, Hamstring.
+const HD_MANA_SPELLS: [(u32, u32); 8] =
+    [(78, 30), (284, 30), (6673, 20), (100, 0), (772, 20), (6546, 20), (6343, 40), (1715, 20)];
 
 /// Kouzlo svitku zkusenosti, musi sedet s hero_defense_loot.sql.
 const XP_SCROLL_SPELL: u32 = 5202;
