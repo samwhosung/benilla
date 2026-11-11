@@ -38,4 +38,16 @@ pub(super) fn apply(spells: &mut HashMap<u32, SpellDisplay>) {
         // Server ma stejny dosah v hero_defense_towers.sql.
         spell.range_index = HD_RANGE_ANYWHERE;
     }
+
+    // Svitek zkusenosti (item 90200 z truhly po vlne): kouzlo-nosic 5202 (MHTest01), server
+    // ho prepise v hero_defense_loot.sql. Text je radek "Use:" v tooltipu svitku.
+    if let Some(spell) = spells.get_mut(&XP_SCROLL_SPELL) {
+        spell.name = "Svitek zkusenosti".to_string();
+        spell.rank = None;
+        spell.icon = Some("Interface\\Icons\\INV_Scroll_03".to_string());
+        spell.description = Some("Prida 25 % zkusenosti potrebnych do dalsiho levelu.".to_string());
+    }
 }
+
+/// Kouzlo svitku zkusenosti, musi sedet s hero_defense_loot.sql.
+const XP_SCROLL_SPELL: u32 = 5202;
