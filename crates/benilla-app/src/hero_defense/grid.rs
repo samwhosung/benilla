@@ -36,7 +36,7 @@ const RETRY_SECS: f32 = 1.0;
 // Vsechny cary mrizky a zony stejnou tmavou barvou: bile cary svetly pisek za ostreho svetla
 // prezari, tmava cara je videt v kazdem svetle. Barevne zustavaji jen znacky spawnu, vychodu
 // a cesty bosse.
-const COLOR_LINE: Color = Color::srgba(0.12, 0.08, 0.04, 0.30);
+const COLOR_LINE: Color = Color::srgba(0.12, 0.08, 0.04, 0.22);
 const COLOR_BOUNDARY: Color = COLOR_LINE;
 const COLOR_ARENA: Color = COLOR_LINE;
 const COLOR_CELL: Color = COLOR_LINE;
