@@ -13,6 +13,8 @@
 //! - Orezavani: jednotka se kresli, jen kdyz je v zaberu jeji obrys ([`ModelBound`]), ktery by
 //!   jinak byl obrys schovaneho M2.
 //! - Kolize: jednotky ve WoW kolize nemaji, vlastni model dostane pevny valec.
+//!
+//! Znazorneni aren na zemi je v [`grid`].
 
 use avian3d::prelude::{Collider, RigidBody};
 use bevy::asset::io::AssetSourceBuilder;
@@ -22,6 +24,8 @@ use bevy::prelude::*;
 
 use crate::entities::{ModelBound, VisualAttached};
 use crate::net::{Guid, NetEntity};
+
+mod grid;
 
 /// Zdroj assetu s modely Hero Defense.
 const HD_SOURCE: &str = "hd";
@@ -80,6 +84,7 @@ pub(crate) fn register_source(app: &mut App) {
 }
 
 pub(crate) fn plugin(app: &mut App) {
+    grid::plugin(app);
     app.add_systems(
         Update,
         (forget_rebuilt, swap_models, hide_original, keep_bound, unlit_materials).chain(),
