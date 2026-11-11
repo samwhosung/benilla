@@ -48,15 +48,41 @@ struct CustomModel {
     collision_radius: Option<f32>,
 }
 
-const MODELS: &[CustomModel] = &[CustomModel {
-    entry: 90000, // Hrad
-    path: "castle/castle.glb",
-    scale: 13.0, // model je ~1.9 jednotky siroky, hrad tak ma kolem 25 yardu
-    yaw: 0.0,
-    half_width: 0.95,
-    height: 1.9,
-    collision_radius: Some(0.7), // kousek uvnitr obrysu, at se o hroty nezasekava
-}];
+const MODELS: &[CustomModel] = &[
+    CustomModel {
+        entry: 90000, // Hrad
+        path: "castle/castle.glb",
+        scale: 13.0, // model je ~1.9 jednotky siroky, hrad tak ma kolem 25 yardu
+        yaw: 0.0,
+        half_width: 0.95,
+        height: 1.9,
+        collision_radius: Some(0.7), // kousek uvnitr obrysu, at se o hroty nezasekava
+    },
+    // Veze 90010 az 90018 (server hd_defs.h HD_TOWERS). Kazda stoji na jednom poli mrizky
+    // 4 x 4 yd: velikost tak, aby byla nejvys 3.8 yd siroka a 7 yd vysoka.
+    tower(90010, "towers/human_cannon.glb", 2.0, 0.945, 1.588),
+    tower(90011, "towers/human_holy_spire.glb", 3.68, 0.368, 1.902),
+    tower(90012, "towers/human_watchtower.glb", 3.68, 0.355, 1.901),
+    tower(90013, "towers/nelf_glaive.glb", 2.0, 0.944, 1.895),
+    tower(90014, "towers/nelf_moonwell.glb", 3.1, 0.611, 1.905),
+    tower(90015, "towers/nelf_sentinel.glb", 3.1, 0.608, 1.903),
+    tower(90016, "towers/orc_totem.glb", 2.8, 0.675, 1.903),
+    tower(90017, "towers/orc_catapult.glb", 2.0, 0.951, 1.59),
+    tower(90018, "towers/orc_watchtower.glb", 3.68, 0.433, 1.901),
+];
+
+/// Vez: obrys a kolize podle modelu (kolize kousek uvnitr obrysu).
+const fn tower(entry: u32, path: &'static str, scale: f32, half_width: f32, height: f32) -> CustomModel {
+    CustomModel {
+        entry,
+        path,
+        scale,
+        yaw: 0.0,
+        half_width,
+        height,
+        collision_radius: Some(half_width * 0.85),
+    }
+}
 
 /// Jednotka, ktere uz byl vlastni model pridan; nese index do [`MODELS`].
 #[derive(Component)]
