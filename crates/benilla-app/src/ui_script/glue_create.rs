@@ -127,7 +127,10 @@ pub(crate) fn create_catalog(
         }
     }
     for race in catalog.races.iter().map(|r| r.id).collect::<Vec<_>>() {
-        let list = create.class_list(race);
+        // Hero Defense: kazda rasa muze byt kazdou z nasich 4 class a zadnou jinou (rasa je
+        // jen vzhled; server jine classy odmitne). Puvodni seznam z CharBaseInfo se nepouzije.
+        let _stock = create.class_list(race);
+        let list: Vec<u8> = benilla_formats::HD_CLASS_NAMES.iter().map(|&(id, _)| id as u8).collect();
         for &class in &list {
             if let Some(table) = classes.filter(|t| t.has_row(u32::from(class))) {
                 catalog.classes.insert(
@@ -223,12 +226,13 @@ mod tests {
             tauren.faction,
             Some(("Horde".to_string(), "Horde".to_string()))
         );
-        assert_eq!(c.class_lists[&3], [1, 2, 3, 4, 5]);
+        // Hero Defense: kazda rasa ma nase 4 classy s vlastnimi nazvy.
+        assert_eq!(c.class_lists[&3], [1, 3, 8, 9]);
         assert_eq!(
-            c.classes[&11],
+            c.classes[&9],
             GlueCreateClass {
-                name: "Druid".into(),
-                file: "DRUID".into()
+                name: "DoT".into(),
+                file: "WARLOCK".into()
             }
         );
         for r in &c.races {
