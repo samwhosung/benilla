@@ -33,12 +33,14 @@ const LIFT: f32 = 0.08;
 /// Jak casto zkusit znovu spocitat cary, kdyz pod nimi jeste nebyl teren (s).
 const RETRY_SECS: f32 = 1.0;
 
-const COLOR_BOUNDARY: Color = Color::srgba(1.0, 0.92, 0.75, 0.40);
-const COLOR_ARENA: Color = Color::srgba(1.0, 1.0, 1.0, 0.30);
-const COLOR_CELL: Color = Color::srgba(1.0, 1.0, 1.0, 0.10);
-const COLOR_SPAWN: Color = Color::srgba(1.0, 0.25, 0.2, 0.65);
-const COLOR_EXIT: Color = Color::srgba(0.3, 1.0, 0.35, 0.65);
-const COLOR_BOSS: Color = Color::srgba(0.95, 0.25, 0.2, 0.35);
+// Svetly pisek za ostreho svetla bile cary prezari: bunky jsou tmave (vidi se na svetle zemi
+// v kazdem svetle), okraje aren a zony svetle a vyrazne.
+const COLOR_BOUNDARY: Color = Color::srgba(1.0, 0.92, 0.75, 0.70);
+const COLOR_ARENA: Color = Color::srgba(1.0, 1.0, 1.0, 0.85);
+const COLOR_CELL: Color = Color::srgba(0.12, 0.08, 0.04, 0.45);
+const COLOR_SPAWN: Color = Color::srgba(1.0, 0.2, 0.15, 0.90);
+const COLOR_EXIT: Color = Color::srgba(0.2, 1.0, 0.3, 0.90);
+const COLOR_BOSS: Color = Color::srgba(0.95, 0.2, 0.15, 0.60);
 
 /// Vlastni skupina car, at jeji tloustka a hloubka nemeni ostatni cary klienta (tetiva luku...).
 #[derive(Default, Reflect, GizmoConfigGroup)]
@@ -63,7 +65,7 @@ pub(super) fn plugin(app: &mut App) {
 
 fn configure_gizmos(mut store: ResMut<GizmoConfigStore>) {
     let (config, _) = store.config_mut::<HdGridGizmos>();
-    config.line.width = 1.5;
+    config.line.width = 2.0;
     // Kousek k divakovi, at cary nezmizi v terenu, ale postavy a hrad je porad zakryji.
     config.depth_bias = -0.0005;
 }
