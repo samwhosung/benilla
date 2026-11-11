@@ -236,6 +236,7 @@ fn wow_lit_materials(
     roots: Query<(), With<HdModelRoot>>,
     standard: Res<Assets<StandardMaterial>>,
     mut wow: ResMut<Assets<WowModelMaterial>>,
+    mut images: ResMut<Assets<Image>>,
     light: Option<Res<SharedLightBuffer>>,
     mut cache: Local<MaterialCache>,
 ) {
@@ -249,6 +250,16 @@ fn wow_lit_materials(
         let texture = standard
             .get(&handle.0)
             .and_then(|m| m.base_color_texture.clone());
+        // Shader modelu WoW pocita v gamma prostoru a textury WoW nahrava jako surove bajty
+        // (`Rgba8Unorm`). glTF nahrava zakladni barvu jako sRGB, ktere GPU pri cteni prevede do
+        // linearniho prostoru, a model by vysel o hodne tmavsi. Stejna data, jen bez prevodu.
+        if let Some(image) = texture.as_ref().and_then(|t| images.get_mut(t)) {
+            let format = image.texture_descriptor.format;
+            if format.is_srgb() {
+                image.texture_descriptor.format = format.remove_srgb_suffix();
+                image.texture_view_descriptor = None;
+            }
+        }
         let material = model_material(
             &mut cache,
             &mut wow,
