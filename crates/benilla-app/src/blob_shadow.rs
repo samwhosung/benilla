@@ -56,6 +56,15 @@ const BOX_CLAMP: f32 = 5.0;
 /// The reference's degenerate-box epsilon (`[0x8029d4]`).
 const DEGENERATE_EPS: f32 = 2.384e-7;
 
+/// Hero Defense: a unit drawn by its own model (`crate::hero_defense`) casts the shadow of that
+/// model's box, not of the hidden M2's Stand box. Pre-scale like the Stand box, but never clamped
+/// to ±5: a castle is bigger than any creature.
+#[derive(Component, Clone, Copy, PartialEq)]
+pub(crate) struct BlobShadowBox {
+    pub(crate) min: Vec3,
+    pub(crate) max: Vec3,
+}
+
 /// One unit's shadow record, a top-level entity despawned with its owner.
 #[derive(Component)]
 struct BlobShadow {
@@ -241,6 +250,7 @@ fn update_shadows(
             Option<&crate::entities::mount::MountChild>,
             // The exterior-scene election's verdict on the root, after propagation.
             Option<&InheritedVisibility>,
+            Option<&BlobShadowBox>,
         ),
         Without<BlobShadow>,
     >,
@@ -264,7 +274,7 @@ fn update_shadows(
     let surface_count = decals.receiver_count();
     for (shadow, mut key, mut verts) in &mut shadows {
         n_total += 1;
-        let Ok((unit, anims, is_self, mount_child, drawn)) = owners.get(shadow.owner) else {
+        let Ok((unit, anims, is_self, mount_child, drawn, own_box)) = owners.get(shadow.owner) else {
             // `sync_shadows` despawns it next frame.
             hide(&mut key, &mut verts);
             n_no_owner += 1;
@@ -283,23 +293,28 @@ fn update_shadows(
         };
         // The box is `playableAnimationLookup[0]`'s sequence, Stand, fixed per model; `resolve(0)`
         // walks the same table, so a Stand-less model gets the reference's substitute.
-        let stand = catalog.as_deref().map_or(0, |c| anims.resolve(0, &c.0).id);
-        let clip = anims.find(stand);
-        let Some(clip) = clip else {
-            hide(&mut key, &mut verts);
-            n_no_clip += 1;
-            continue;
-        };
-        // Clamp into ±5 pre-scale, then scale.
         let s = (unit.scale.x * extra_scale).max(0.0);
-        let bmin = clip
-            .bounds_min
-            .clamp(Vec3::splat(-BOX_CLAMP), Vec3::splat(BOX_CLAMP))
-            * s;
-        let bmax = clip
-            .bounds_max
-            .clamp(Vec3::splat(-BOX_CLAMP), Vec3::splat(BOX_CLAMP))
-            * s;
+        let (bmin, bmax) = if let Some(own) = own_box {
+            // Hero Defense's own model: its box, unclamped.
+            (own.min * s, own.max * s)
+        } else {
+            let stand = catalog.as_deref().map_or(0, |c| anims.resolve(0, &c.0).id);
+            let clip = anims.find(stand);
+            let Some(clip) = clip else {
+                hide(&mut key, &mut verts);
+                n_no_clip += 1;
+                continue;
+            };
+            // Clamp into ±5 pre-scale, then scale.
+            (
+                clip.bounds_min
+                    .clamp(Vec3::splat(-BOX_CLAMP), Vec3::splat(BOX_CLAMP))
+                    * s,
+                clip.bounds_max
+                    .clamp(Vec3::splat(-BOX_CLAMP), Vec3::splat(BOX_CLAMP))
+                    * s,
+            )
+        };
         if bmax.x - bmin.x <= DEGENERATE_EPS || bmax.z - bmin.z <= DEGENERATE_EPS {
             // The reference's degenerate-box no-op exit (`0x61e9c0`): no shadow.
             hide(&mut key, &mut verts);

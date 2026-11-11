@@ -7,11 +7,12 @@
 //! Modely se ctou ze zdroje `hd://`: slozka z promenne prostredi `HD_ASSETS`, jinak `hd_assets`
 //! vedle spustitelneho souboru.
 //!
-//! Tri veci, ktere puvodni M2 dostava od klienta zadarmo a GLB ne:
-//! - Svetlo: klient kresli modely vlastnim shaderem a ve scene neni zadne svetlo Bevy, takze
-//!   materialy z glTF se prepnou na neosvetlene (`unlit`).
+//! Ctyri veci, ktere puvodni M2 dostava od klienta zadarmo a GLB ne:
+//! - Svetlo: materialy z glTF se prevedou na material modelu WoW (`WowModelMaterial`), takze je
+//!   osvetluje slunce, okolni svetlo, mlha a den/noc stejne jako budovy a objekty mapy.
 //! - Orezavani: jednotka se kresli, jen kdyz je v zaberu jeji obrys ([`ModelBound`]), ktery by
 //!   jinak byl obrys schovaneho M2.
+//! - Stin pod jednotkou: velikost podle vlastniho modelu ([`BlobShadowBox`]), ne podle M2.
 //! - Kolize: jednotky ve WoW kolize nemaji, vlastni model dostane pevny valec.
 //!
 //! Znazorneni aren na zemi je v [`grid`].
@@ -22,6 +23,12 @@ use bevy::camera::primitives::Aabb;
 use bevy::gltf::GltfAssetLabel;
 use bevy::prelude::*;
 
+use benilla_assets::materials::WowModelMaterial;
+use benilla_formats::{FogPolicy, ModelBlend};
+use benilla_world::lighting::SharedLightBuffer;
+use benilla_world::model_render::{model_material, MaterialCache, ShadeSel};
+
+use crate::blob_shadow::BlobShadowBox;
 use crate::entities::{ModelBound, VisualAttached};
 use crate::net::{Guid, NetEntity};
 
@@ -113,7 +120,7 @@ pub(crate) fn plugin(app: &mut App) {
     grid::plugin(app);
     app.add_systems(
         Update,
-        (forget_rebuilt, swap_models, hide_original, keep_bound, unlit_materials).chain(),
+        (forget_rebuilt, swap_models, hide_original, keep_bound, wow_lit_materials).chain(),
     );
 }
 
@@ -189,41 +196,91 @@ fn hide_original(
     }
 }
 
-/// Obrys pro orezavani podle vlastniho modelu, ne podle schovaneho M2. Prepisuje se, kdykoli ho
-/// klient vrati na obrys M2 (pri stavbe vizualu).
+/// Obrys pro orezavani a stin pod jednotkou podle vlastniho modelu, ne podle schovaneho M2.
+/// Prepisuje se, kdykoli ho klient vrati na obrys M2 (pri stavbe vizualu).
 fn keep_bound(
     mut commands: Commands,
-    units: Query<(Entity, &HdModelSwapped, &NetEntity, Option<&ModelBound>)>,
+    units: Query<(
+        Entity,
+        &HdModelSwapped,
+        &NetEntity,
+        Option<&ModelBound>,
+        Option<&BlobShadowBox>,
+    )>,
 ) {
-    for (entity, swapped, net, current) in &units {
+    for (entity, swapped, net, current, shadow) in &units {
         let model = &MODELS[swapped.0];
         let s = local_scale(model, net);
-        let want = Aabb::from_min_max(
+        let (min, max) = (
             Vec3::new(-model.half_width * s, 0.0, -model.half_width * s),
             Vec3::new(model.half_width * s, model.height * s, model.half_width * s),
         );
+        let want = Aabb::from_min_max(min, max);
         if current.is_none_or(|b| b.0 != want) {
             commands.entity(entity).insert(ModelBound(want));
+        }
+        let want_shadow = BlobShadowBox { min, max };
+        if shadow != Some(&want_shadow) {
+            commands.entity(entity).insert(want_shadow);
         }
     }
 }
 
-/// Materialy vlastnich modelu bez osvetleni: ve scene klienta neni svetlo, ktere by je osvetlilo.
-fn unlit_materials(
-    added: Query<(Entity, &MeshMaterial3d<StandardMaterial>), Added<MeshMaterial3d<StandardMaterial>>>,
+/// Materialy vlastnich modelu prevede na material modelu WoW (`WowModelMaterial`): slunce,
+/// okolni svetlo, mlha a den/noc jako u budov a objektu mapy (stinovani `Matte`). Textura zustava
+/// z glTF. Ceka, nez je sdileny buffer svetla k dispozici.
+fn wow_lit_materials(
+    mut commands: Commands,
+    meshes: Query<(Entity, &MeshMaterial3d<StandardMaterial>)>,
     parents: Query<&ChildOf>,
     roots: Query<(), With<HdModelRoot>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    standard: Res<Assets<StandardMaterial>>,
+    mut wow: ResMut<Assets<WowModelMaterial>>,
+    light: Option<Res<SharedLightBuffer>>,
+    mut cache: Local<MaterialCache>,
 ) {
-    for (entity, handle) in &added {
-        let in_model = parents.iter_ancestors(entity).any(|a| roots.contains(a));
-        if !in_model {
+    let Some(light) = light else {
+        return;
+    };
+    for (entity, handle) in &meshes {
+        if !parents.iter_ancestors(entity).any(|a| roots.contains(a)) {
             continue;
         }
-        if let Some(material) = materials.get_mut(&handle.0) {
-            if !material.unlit {
-                material.unlit = true;
-            }
-        }
+        let texture = standard
+            .get(&handle.0)
+            .and_then(|m| m.base_color_texture.clone());
+        let material = model_material(
+            &mut cache,
+            &mut wow,
+            texture,
+            ModelBlend::Opaque,
+            false, // two_sided
+            false, // is_wmo
+            false, // is_interior
+            false, // is_emissive
+            false, // is_additive
+            false, // fade_variant
+            false, // no_depth_write
+            false, // no_depth_test
+            FogPolicy::Scene,
+            false, // env_map
+            None,  // stage1
+            None,  // combine
+            ShadeSel::Matte,
+            0,    // batch_order
+            None, // order
+            None, // uv_anim
+            None, // rgb_anim
+            None, // wmo_class
+            None, // sidn
+            false, // window
+            false, // sky_depth
+            &light.0,
+            None, // instance
+        );
+        commands
+            .entity(entity)
+            .remove::<MeshMaterial3d<StandardMaterial>>()
+            .insert(MeshMaterial3d(material));
     }
 }
