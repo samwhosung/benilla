@@ -8,8 +8,8 @@
 //! serverem (`hd_defs.h`, `HdArenaGroundOffset`), jinak by nepratele chodili pod terenem nebo nad
 //! nim. Skaly server nepotrebuje, nikdo z jeho jednotek na ne nechodi.
 //!
-//! Prototyp a overeni (rovinnost aren, oddeleni aren, nedostupne vrcholy skal) jsou v changelogu;
-//! sum je deterministicky, pocita se v `f64` kvuli shode s prototypem.
+//! Prototyp a overeni (rovinnost aren, oddeleni aren, nedostupne vrcholy skal) jsou v
+//! `core/tools/terrain` (Python); sum je deterministicky, pocita se v `f64` kvuli shode s nim.
 
 /// Hrad (mapa 1, Kalimdor): poloha a natoceni jako na serveru, viz `hd_zone::CENTER`.
 const CX: f64 = -6180.0;

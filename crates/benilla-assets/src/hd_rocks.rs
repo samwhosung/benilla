@@ -1,5 +1,5 @@
-// Vygenerovano skriptem z prototypu terenu (field.py, doodads.py). Neupravovat rucne:
-// pri zmene vyskoveho pole znovu vygenerovat, at modely nestoji na pochozi plose.
+// Vygenerovano skriptem z prototypu terenu (core/tools/terrain: doodads.py, gen_rocks.py).
+// Neupravovat rucne: pri zmene vyskoveho pole znovu vygenerovat, at modely nestoji na pochozi plose.
 
 /// Modely skal z dat hry (Thousand Needles a Tanaris).
 pub(crate) const ROCK_MODELS: [&str; 16] = [

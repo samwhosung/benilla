@@ -65,17 +65,19 @@ const MODELS: &[CustomModel] = &[
         height: 1.9,
         collision_radius: Some(0.7), // kousek uvnitr obrysu, at se o hroty nezasekava
     },
-    // Veze 90010 az 90018 (server hd_defs.h HD_TOWERS). Kazda stoji na jednom poli mrizky
-    // 4 x 4 yd: velikost tak, aby byla nejvys 3.8 yd siroka a 7 yd vysoka.
-    tower(90010, "towers/human_cannon.glb", 2.0, 0.945, 1.588),
-    tower(90011, "towers/human_holy_spire.glb", 3.68, 0.368, 1.902),
-    tower(90012, "towers/human_watchtower.glb", 3.68, 0.355, 1.901),
-    tower(90013, "towers/nelf_glaive.glb", 2.0, 0.944, 1.895),
-    tower(90014, "towers/nelf_moonwell.glb", 3.1, 0.611, 1.905),
-    tower(90015, "towers/nelf_sentinel.glb", 3.1, 0.608, 1.903),
-    tower(90016, "towers/orc_totem.glb", 2.8, 0.675, 1.903),
-    tower(90017, "towers/orc_catapult.glb", 2.0, 0.951, 1.59),
-    tower(90018, "towers/orc_watchtower.glb", 3.68, 0.433, 1.901),
+    // Zakladni veze linii s vlastnim modelem (server hd_defs.h HD_LINES, cislo 90300 + linie * 10).
+    // Vylepsene varianty linie (+1 az +9) maji stejny model, viz [`model_index`]. Kazda vez stoji
+    // na jednom poli mrizky 4 x 4 yd: velikost tak, aby byla nejvys 3.8 yd siroka a 7 yd vysoka.
+    // Ostatni linie maji zatim zastupny model z klienta (display id ze serveru).
+    tower(90300, "towers/human_watchtower.glb", 3.68, 0.355, 1.901), // Guard Tower
+    tower(90310, "towers/human_holy_spire.glb", 3.68, 0.368, 1.902), // Spire
+    tower(90320, "towers/human_cannon.glb", 2.0, 0.945, 1.588),      // Cannon Bastion
+    tower(90370, "towers/nelf_sentinel.glb", 3.1, 0.608, 1.903),     // Sentinel Tower
+    tower(90380, "towers/nelf_moonwell.glb", 3.1, 0.611, 1.905),     // Moonwell
+    tower(90390, "towers/nelf_glaive.glb", 2.0, 0.944, 1.895),       // Glaive Thrower
+    tower(90440, "towers/orc_watchtower.glb", 3.68, 0.433, 1.901),   // Watch Tower
+    tower(90450, "towers/orc_totem.glb", 2.8, 0.675, 1.903),         // Totem
+    tower(90460, "towers/orc_catapult.glb", 2.0, 0.951, 1.59),       // Siege Catapult
 ];
 
 /// Vez: obrys a kolize podle modelu (kolize kousek uvnitr obrysu).
@@ -89,6 +91,22 @@ const fn tower(entry: u32, path: &'static str, scale: f32, half_width: f32, heig
         height,
         collision_radius: Some(half_width * 0.85),
     }
+}
+
+/// Veze Hero Defense: 90300 + linie * 10 + varianta (server `hd_defs.h`).
+const TOWER_FIRST: u32 = 90300;
+const TOWER_LAST: u32 = 90509;
+
+/// Index vlastniho modelu jednotky do [`MODELS`]. Vez se vylepsuje zmenou zaznamu na serveru
+/// (`UpdateEntry`), guid ale nese cislo, se kterym vznikla; varianty linie proto hledaji model
+/// zakladni veze (cislo zaokrouhlene dolu na desitky).
+fn model_index(entry: u32) -> Option<usize> {
+    let key = if (TOWER_FIRST..=TOWER_LAST).contains(&entry) {
+        entry - (entry - TOWER_FIRST) % 10
+    } else {
+        entry
+    };
+    MODELS.iter().position(|m| m.entry == key)
 }
 
 /// Jednotka, ktere uz byl vlastni model pridan; nese index do [`MODELS`].
@@ -149,7 +167,7 @@ fn swap_models(
         let Some(entry) = benilla_protocol::guid::entry(guid.0) else {
             continue;
         };
-        let Some(index) = MODELS.iter().position(|m| m.entry == entry) else {
+        let Some(index) = model_index(entry) else {
             continue;
         };
         let model = &MODELS[index];
