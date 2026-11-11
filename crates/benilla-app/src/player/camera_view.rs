@@ -470,6 +470,21 @@ impl ViewSteps<'_, '_> {
                 // `[cam+0x100] += arg * pi/180` (`0x50b6c9`-`0x50b6d8`), wrapped as at `0x50d779`.
                 rig.flip_yaw = wrap_pi(rig.flip_yaw + degrees.to_radians());
             }
+            CameraViewRequest::HdPose {
+                distance,
+                pitch_deg,
+            } => {
+                // Hero Defense: seat the pose through view slot 5 (index 4) as SetView would, the
+                // yaw kept, then put the slot back. Nothing is written to the CVars, so the
+                // player's saved views stay as they were.
+                const HD_SLOT: usize = 4;
+                let keep = views.pose(HD_SLOT);
+                let yaw_deg = wrap_pi(cam.yaw - face_yaw).to_degrees();
+                views.save(HD_SLOT, ViewPose::from_reference(distance, pitch_deg, yaw_deg));
+                rig.view_moved = true; // always glide, never jump
+                set_view(views, rig, &mut cam, face_yaw, HD_SLOT, &cvars);
+                views.save(HD_SLOT, keep);
+            }
         }
         if write_active {
             writes.push((CVAR_ACTIVE_VIEW, views.current.to_string()));

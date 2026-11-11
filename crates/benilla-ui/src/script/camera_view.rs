@@ -30,6 +30,10 @@ pub enum CameraViewRequest {
     Prev,
     /// `FlipCameraYaw(degrees)`: add degrees to the camera's yaw; `Bindings.xml:795` passes 180.
     FlipYaw(f32),
+    /// Hero Defense, not in 1.12: `HeroDefense_CameraPose(distance, pitch)` glides the camera to
+    /// `distance` yards and `pitch` degrees down (positive), keeping its yaw, as `SetView`
+    /// does. The addon's camera switch (WoW view / war view) calls it.
+    HdPose { distance: f32, pitch_deg: f32 },
 }
 
 /// Hand `request` to the host inside the call.
@@ -95,6 +99,25 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "PrevView",
         lua.create_function(|lua, ()| submit(lua, CameraViewRequest::Prev))?,
+    )?;
+
+    // Hero Defense: HeroDefense_CameraPose(distance, pitchDegrees), see [`CameraViewRequest::HdPose`].
+    g.set(
+        "HeroDefense_CameraPose",
+        lua.create_function(|lua, (distance, pitch): (Value, Value)| {
+            let d = lua.coerce_number(distance).ok().flatten();
+            let p = lua.coerce_number(pitch).ok().flatten();
+            if let (Some(d), Some(p)) = (d, p) {
+                return submit(
+                    lua,
+                    CameraViewRequest::HdPose {
+                        distance: d as f32,
+                        pitch_deg: p as f32,
+                    },
+                );
+            }
+            Ok(())
+        })?,
     )?;
 
     // FlipCameraYaw(degrees), `0x50b6a0`: adds `degrees × π/180` to the camera's yaw, fraction
