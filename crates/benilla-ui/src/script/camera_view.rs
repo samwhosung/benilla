@@ -34,6 +34,10 @@ pub enum CameraViewRequest {
     /// `distance` yards and `pitch` degrees down (positive), keeping its yaw, as `SetView`
     /// does. The addon's camera switch (WoW view / war view) calls it.
     HdPose { distance: f32, pitch_deg: f32 },
+    /// Hero Defense, not in 1.12: `HeroDefense_Spectate([on])` detaches the camera from the
+    /// body (free-fly, the "eye") or attaches it back; no argument toggles. The body stays where
+    /// it stands and keeps fighting on the server.
+    HdSpectate(Option<bool>),
 }
 
 /// Hand `request` to the host inside the call.
@@ -99,6 +103,20 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "PrevView",
         lua.create_function(|lua, ()| submit(lua, CameraViewRequest::Prev))?,
+    )?;
+
+    // Hero Defense: HeroDefense_Spectate([on]), see [`CameraViewRequest::HdSpectate`]. Any value
+    // other than nil/false/0 switches it on.
+    g.set(
+        "HeroDefense_Spectate",
+        lua.create_function(|lua, on: Value| {
+            let want = match on {
+                Value::Nil => None,
+                Value::Boolean(b) => Some(b),
+                v => Some(lua.coerce_number(v).ok().flatten().map_or(true, |n| n != 0.0)),
+            };
+            submit(lua, CameraViewRequest::HdSpectate(want))
+        })?,
     )?;
 
     // Hero Defense: HeroDefense_CameraPose(distance, pitchDegrees), see [`CameraViewRequest::HdPose`].

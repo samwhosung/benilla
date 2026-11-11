@@ -5,6 +5,10 @@
 
 use super::*;
 
+/// Hero Defense spectate: the eye's flying speed in yards per second (Ctrl still ×5). The dev
+/// free fly starts at 40.
+const HD_SPECTATE_SPEED: f32 = 80.0;
+
 #[cfg(test)]
 mod tests;
 
@@ -261,6 +265,8 @@ pub(super) fn control(
         // Whether the live view is customised, the auto-return's view gate (`0x50fc30`), and the
         // views a scope's start and end select.
         Option<ResMut<camera_view::CameraViews>>,
+        // Hero Defense: the addon's spectate switch (`HeroDefense_Spectate`).
+        Option<ResMut<camera_view::HdSpectate>>,
     ),
     mut net: (
         Res<NetCommands>,
@@ -485,6 +491,15 @@ pub(super) fn control(
     camera_view::step_pitch(&mut rig, &mut cam, dt);
 
     // Free fly is a dev tool on the dev chord: a bare `F` is the player's to bind.
+    // Hero Defense spectate: the same free fly, switched by the addon and flown faster. The body
+    // stays put and keeps fighting on the server; casts still go out as our own (gold, towers).
+    if let Some(want) = pointer.7.as_deref_mut().and_then(|s| s.request.take()) {
+        let on = want.unwrap_or(!player.detached);
+        if on && !player.detached {
+            cam.speed = HD_SPECTATE_SPEED;
+        }
+        player.detached = on;
+    }
     if crate::run_mode::dev_chord(&keys, KeyCode::KeyF) {
         player.detached = !player.detached;
     }

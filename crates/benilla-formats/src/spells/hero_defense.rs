@@ -9,6 +9,9 @@ use std::collections::HashMap;
 
 use super::SpellDisplay;
 
+/// `SpellRange.dbc` radek 13: 0 az 50 000 yd (Eye of Kilrogg).
+const HD_RANGE_ANYWHERE: u32 = 13;
+
 /// (kouzlo, nazev veze, rasa, ikona)
 const TOWER_SPELLS: [(u32, &str, &str, &str); 9] = [
     (8333, "Human Cannon Bastion", "Human", "INV_Misc_Bomb_05"),
@@ -31,5 +34,8 @@ pub(super) fn apply(spells: &mut HashMap<u32, SpellDisplay>) {
         spell.rank = Some(race.to_string());
         spell.icon = Some(format!("Interface\\Icons\\{icon}"));
         spell.description = Some(format!("Postavi vez {name} na pole mrizky areny."));
+        // Stavba odkudkoli, i z "ocicka" (spectate) daleko od hrdiny: SpellRange 13 "Anywhere".
+        // Server ma stejny dosah v hero_defense_towers.sql.
+        spell.range_index = HD_RANGE_ANYWHERE;
     }
 }

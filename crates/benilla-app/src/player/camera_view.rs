@@ -391,6 +391,15 @@ pub(crate) struct ViewSteps<'w, 's> {
     player: Option<Res<'w, Player>>,
     /// Capture parks the camera itself; a view must not move it.
     capture: Option<Res<'w, crate::run_mode::CaptureMode>>,
+    /// Hero Defense: the addon's spectate switch, for the controller ([`HdSpectate`]).
+    spectate: Option<ResMut<'w, HdSpectate>>,
+}
+
+/// Hero Defense spectate ("the eye"): free-fly asked for by the addon (`HeroDefense_Spectate`).
+/// `request` is `Some(None)` to toggle, `Some(Some(on))` to set; the controller takes it.
+#[derive(Resource, Default)]
+pub(crate) struct HdSpectate {
+    pub(crate) request: Option<Option<bool>>,
 }
 
 impl ViewSteps<'_, '_> {
@@ -484,6 +493,12 @@ impl ViewSteps<'_, '_> {
                 rig.view_moved = true; // always glide, never jump
                 set_view(views, rig, &mut cam, face_yaw, HD_SLOT, &cvars);
                 views.save(HD_SLOT, keep);
+            }
+            CameraViewRequest::HdSpectate(want) => {
+                // The controller owns `Player::detached`; it takes the request on its next tick.
+                if let Some(spectate) = self.spectate.as_deref_mut() {
+                    spectate.request = Some(want);
+                }
             }
         }
         if write_active {
@@ -605,6 +620,7 @@ pub(super) fn scope_edge(
 
 pub(super) fn plugin(app: &mut App) {
     app.init_resource::<CameraViews>()
+        .init_resource::<HdSpectate>()
         // After the config load, so the persisted views are in before anything selects one.
         .add_systems(Startup, load_saved_views.after(crate::cvars::CvarLoad));
 }
