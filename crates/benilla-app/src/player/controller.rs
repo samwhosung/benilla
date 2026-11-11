@@ -464,7 +464,12 @@ pub(super) fn control(
     ] {
         if binds.fired(input) {
             rig.view_axes
-                .zoom(out, binds.amount(input), pointer.2.move_speed);
+                // Hero Defense: bigger steps over the 100 yd zoom range.
+                .zoom(
+                    out,
+                    binds.amount(input) * super::camera_zoom::HD_ZOOM_STEP_SCALE,
+                    pointer.2.move_speed,
+                );
         }
     }
     rig.view_axes.apply(binds.view_calls());

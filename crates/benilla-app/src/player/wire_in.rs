@@ -35,7 +35,8 @@ enum ControlVerdict {
 }
 
 /// The pitch a login opens at when no saved camera pose names one.
-const LOGIN_PITCH: f32 = -0.45;
+/// Hero Defense: -0.9 (about 52 degrees down, reference -0.45), an overview of the board.
+const LOGIN_PITCH: f32 = -0.9;
 
 /// Give our own body back on a hand-over: the stop, then `CMSG_MOVE_NOT_ACTIVE_MOVER` (`0x2D1`).
 /// That packet is only ever about our own character: the reference sends it from `SetActiveMover`

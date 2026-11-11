@@ -14,10 +14,13 @@ use super::camera::CameraControl;
 pub(super) const CAM_DIST_MIN: f32 = 0.0;
 /// The zoom ceiling, yd (`ds:0x8089a4` = 50.0): the cap on [`ZoomLimit`] (`0x511309`) and the top
 /// of the distance validator `0x50b310`; also the clamp for a distance read back off disk.
-pub(super) const CAM_DIST_MAX: f32 = 50.0;
-pub(super) const CAM_DIST_DEFAULT: f32 = 15.0;
-/// `cameraDistanceMax`'s registered default, "15.0" (`0x84fbd0`).
-const CAM_DISTANCE_MAX_DEFAULT: f32 = 15.0;
+///
+/// Hero Defense: 100 yd (the reference's 50), so the camera can rise over a whole arena (the grid
+/// is 60 yd deep) and the castle ring; the default limit is the same and the start is 45 yd.
+pub(super) const CAM_DIST_MAX: f32 = 100.0;
+pub(super) const CAM_DIST_DEFAULT: f32 = 45.0;
+/// `cameraDistanceMax`'s registered default, "15.0" (`0x84fbd0`). Hero Defense: 100.
+const CAM_DISTANCE_MAX_DEFAULT: f32 = 100.0;
 /// `cameraDistanceMaxFactor`'s registered default, "1.0" (`0x82e92c`). The CVar has no validator:
 /// the options slider's 1 to 2 (`UIOptionsFrame.lua:90`) bounds the slider, not the value.
 const CAM_DISTANCE_MAX_FACTOR_DEFAULT: f32 = 1.0;
@@ -26,8 +29,11 @@ const CAM_DISTANCE_MAX_FACTOR_DEFAULT: f32 = 1.0;
 pub(crate) const CAM_DISTANCE_MAX_RANGE: std::ops::RangeInclusive<f32> =
     CAM_DIST_MIN..=CAM_DIST_MAX;
 /// Zoom speed in yd/s, `cameraDistanceMoveSpeed`'s default "8.33" (`0x50b7f3`): the reference runs
-/// the distance axis at this constant speed (`0x5112d0`), not an ease.
-const CAM_MOVE_SPEED: f32 = 8.33;
+/// the distance axis at this constant speed (`0x5112d0`), not an ease. Hero Defense: 33.3, four
+/// times the reference, to match the wheel's four-times step over the 100 yd range.
+const CAM_MOVE_SPEED: f32 = 33.3;
+/// Hero Defense: yards per wheel notch or `CameraZoomIn/Out` unit, times the reference's.
+pub(crate) const HD_ZOOM_STEP_SCALE: f32 = 4.0;
 
 /// The max orbit distance, yd, from `cameraDistanceMax` and `cameraDistanceMaxFactor`: 15 at the
 /// reference's defaults. Lowering it pulls the live target in on the next frame.
