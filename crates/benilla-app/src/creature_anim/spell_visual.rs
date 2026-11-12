@@ -1184,10 +1184,18 @@ pub(super) fn route_cast_visuals(
             if !shots.targets.is_empty() || !shots.grounds.is_empty() {
                 // The release gate (`0x6e7a70`, inverted): a cast kit animation above 0 waits for
                 // the release keyframe (`0x6e8295 jg`); Stand launches at once (`0x6e829d`).
-                let awaits_release = (stages.cast != 0)
-                    .then(|| visuals.0.kit(stages.cast))
-                    .flatten()
-                    .is_some_and(|k| k.positive_anim().is_some());
+                // Hero Defense: vez nema animaci sesilani (model totemu je schovany nebo nema
+                // klip kitu), strela by cekala na keyframe, ktery neprijde: leti hned.
+                let hd_tower = units
+                    .get(caster)
+                    .ok()
+                    .and_then(|(_, store)| store.0.object_entry())
+                    .is_some_and(crate::hero_defense::is_tower_unit);
+                let awaits_release = !hd_tower
+                    && (stages.cast != 0)
+                        .then(|| visuals.0.kit(stages.cast))
+                        .flatten()
+                        .is_some_and(|k| k.positive_anim().is_some());
                 missiles.write(MissileSpawn {
                     caster,
                     spell_id: go.spell_id,

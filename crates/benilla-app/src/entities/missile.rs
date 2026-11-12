@@ -82,6 +82,10 @@ const DEST_FALLBACKS: [u16; 2] = [0xf, 0x13];
 /// tumbles end over end and shows its trail only here; a model without it plays its first clip.
 const INFLIGHT_ANIM: u16 = 144;
 
+/// Hero Defense pojistka: strela, ktera leti (vcetne cekani ve fronte) dele nez tolik sekund, se
+/// zahodi. Zadna strela by tak dlouho letet nemela; zbyla strela by jinak visela ve vzduchu.
+const MAX_FLIGHT_AGE: f32 = 12.0;
+
 /// The missile's orientation for flight direction `f`, the reference's frame (`0x61e2a0`): model
 /// +X along the flight, side = up × dir, up = dir × side, so it never rolls however the flight
 /// pitches. In Bevy, local −Z (wow +X) maps to `f` and local +Y (wow +Z) to that up.
@@ -577,6 +581,15 @@ fn launch_go(
             weapon_visual: go.spawn.weapon_visual,
         };
         launch_flight(&mut missile, launch, aim, out);
+        if benilla_assets::trace::enabled() {
+            benilla_assets::trace::line(
+                "msl",
+                &format!(
+                    "launch spell={} caster={} from={launch:?} to={aim:?} speed={:.1} arrive_in={:.2}",
+                    missile.spell_id, missile.caster, missile.speed, missile.arrive_in
+                ),
+            );
+        }
         let dir = (aim - launch).normalize_or(-Vec3::Z);
         let entity = commands
             .spawn((
@@ -815,6 +828,15 @@ pub(super) fn move_missiles(
             }
         };
         missile.last_aim = aim;
+        if missile.age > MAX_FLIGHT_AGE {
+            warn!(
+                "missile: spell {} letela {:.1} s, zahozena (arrive_in {:.2})",
+                missile.spell_id, missile.age, missile.arrive_in
+            );
+            sounds.write(MissileSound::Stop { entity });
+            commands.entity(entity).despawn();
+            continue;
+        }
         let to_target = aim - transform.translation;
         if missile.arrive_in <= dt {
             transform.translation = aim;
@@ -830,6 +852,15 @@ pub(super) fn move_missiles(
                     });
                 }
             } else {
+                if benilla_assets::trace::enabled() {
+                    benilla_assets::trace::line(
+                        "msl",
+                        &format!(
+                            "land spell={} entity={entity} at={aim:?} age={:.2}",
+                            missile.spell_id, missile.age
+                        ),
+                    );
+                }
                 commands.entity(entity).despawn();
             }
             continue;

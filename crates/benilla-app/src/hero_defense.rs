@@ -97,6 +97,11 @@ const fn tower(entry: u32, path: &'static str, scale: f32, half_width: f32, heig
 const TOWER_FIRST: u32 = 90300;
 const TOWER_LAST: u32 = 90509;
 
+/// Vez nebo jednotka vyvolana vezi (90300 az 90529, server `hd_defs.h`), podle cisla zaznamu.
+pub(crate) fn is_tower_unit(entry: u32) -> bool {
+    (TOWER_FIRST..=90529).contains(&entry)
+}
+
 /// Index vlastniho modelu jednotky do [`MODELS`]. Vez se vylepsuje zmenou zaznamu na serveru
 /// (`UpdateEntry`), guid ale nese cislo, se kterym vznikla; varianty linie proto hledaji model
 /// zakladni veze (cislo zaokrouhlene dolu na desitky).

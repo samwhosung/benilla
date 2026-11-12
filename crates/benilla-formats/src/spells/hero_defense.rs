@@ -71,6 +71,18 @@ pub(super) fn apply(spells: &mut HashMap<u32, SpellDisplay>) {
         }
     }
 
+    // Vizualni aury vezi (debuffy na neprateli, buffy vezi): server je prepisuje na neskodnou
+    // auru (hero_defense_towers.sql, cast "vizualni aury"), tady dostanou jmeno, ikonu a text.
+    for (id, name, icon, text) in HD_VISUAL_AURAS {
+        if let Some(spell) = spells.get_mut(&id) {
+            spell.name = name.to_string();
+            spell.rank = None;
+            spell.icon = Some(format!("Interface\\Icons\\{icon}"));
+            spell.description = Some(text.to_string());
+            spell.aura_description = Some(text.to_string());
+        }
+    }
+
     // Melee ma manu misto rage: jeho (zatim zastupna) kouzla Warriora stoji manu. Musi sedet
     // se serverem (hero_defense_heroes.sql: mana = rage x 2).
     for (id, mana) in HD_MANA_SPELLS {
@@ -84,6 +96,21 @@ pub(super) fn apply(spells: &mut HashMap<u32, SpellDisplay>) {
 /// Rychlost strel vezi (yd/s): Axe Flurry, sekery Watch Tower a glevy (puvodne 40), Boulder,
 /// katapult, delo a Treant (puvodne 30).
 const HD_SPELL_SPEEDS: [(u32, f32); 2] = [(24020, 20.0), (9483, 15.0)];
+
+/// Vizualni aury vezi: (kouzlo, jmeno, ikona, text). Cisla jako `HdVisual` v serveru (`hd_defs.h`).
+const HD_VISUAL_AURAS: [(u32, &str, &str, &str); 11] = [
+    (12881, "Jed", "Spell_Nature_CorrosiveBreath", "Jed: poskozeni prirodou v case."),
+    (28330, "Horeni", "Spell_Fire_Immolation", "Hori: poskozeni ohnem v case."),
+    (23072, "Temna rana", "Spell_Shadow_ShadowWordPain", "Stinove poskozeni v case nebo vyssi prijate poskozeni."),
+    (7742, "Mraz", "Spell_Frost_FrostBolt02", "Zpomaleny mrazem."),
+    (6388, "Zpomaleni", "Spell_Nature_StrengthOfEarthTotem02", "Zpomaleny."),
+    (28356, "Nemoc", "Spell_Shadow_CallofBone", "Dostava vic poskozeni."),
+    (24152, "Korinky", "Spell_Nature_StrangleVines", "Nemuze se hnout."),
+    (10017, "Zamrznuti", "Spell_Frost_FrostNova", "Zamrzly, nemuze se hnout."),
+    (18970, "Omraceni", "Spell_Frost_Stun", "Omraceny."),
+    (22751, "Bloodlust", "Spell_Nature_BloodLust", "Rychlejsi utok."),
+    (22108, "Arkanove pretizeni", "Spell_Nature_WispSplode", "Kazdy stack: +10 % poskozeni a dosahu Arcane Explosion."),
+];
 
 /// Kouzla Warriora pro Melee a jejich cena v mane: Heroic Strike 1 a 2, Battle Shout, Charge,
 /// Rend 1 a 2, Thunder Clap, Hamstring.

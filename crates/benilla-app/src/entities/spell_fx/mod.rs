@@ -654,6 +654,12 @@ pub(super) fn resolve_spell_fx(
                 // What the wire put after it stands.
                 SpellKitFx::Release { .. } => {
                     for inst in instances.drain(..) {
+                        if benilla_assets::trace::enabled() {
+                            benilla_assets::trace::line(
+                                "fx",
+                                &format!("kit release unit={entity} path={}", inst.path),
+                            );
+                        }
                         if let Some(root) = inst.root {
                             release_root(&mut commands, &mut emitters, root);
                         }
