@@ -19,6 +19,7 @@ mod display;
 mod duration;
 mod forms;
 mod hero_defense;
+mod hero_defense_heroes;
 mod radius;
 mod ranges;
 mod soft_float;
