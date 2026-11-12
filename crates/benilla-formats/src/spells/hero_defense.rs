@@ -81,8 +81,9 @@ pub(super) fn apply(spells: &mut HashMap<u32, SpellDisplay>) {
     }
 }
 
-/// Rychlost strel vezi (yd/s): Axe Flurry, sekery Watch Tower a glevy (puvodne 40).
-const HD_SPELL_SPEEDS: [(u32, f32); 1] = [(24020, 20.0)];
+/// Rychlost strel vezi (yd/s): Axe Flurry, sekery Watch Tower a glevy (puvodne 40), Boulder,
+/// katapult, delo a Treant (puvodne 30).
+const HD_SPELL_SPEEDS: [(u32, f32); 2] = [(24020, 20.0), (9483, 15.0)];
 
 /// Kouzla Warriora pro Melee a jejich cena v mane: Heroic Strike 1 a 2, Battle Shout, Charge,
 /// Rend 1 a 2, Thunder Clap, Hamstring.
