@@ -58,6 +58,9 @@ pub struct WorldSession {
     /// The `SMSG_GUILD_QUERY_RESPONSE`s read at character select, until
     /// [`Self::take_guild_answers`].
     guild_answers: Vec<messages::GuildQueryResponse>,
+    /// Hero Defense: radky dat pro menu (`SMSG_DBLOOKUP`) prectene na vyberu postavy, do
+    /// [`Self::take_hd_data`].
+    hd_data: Vec<String>,
 }
 
 /// What the connection learned that outlives one character's world session, carried by the read
@@ -165,6 +168,7 @@ impl WorldSession {
             chat_language: messages::LANGUAGE_COMMON,
             tutorial_flags: None,
             guild_answers: Vec::new(),
+            hd_data: Vec::new(),
         };
 
         // AUTH_RESPONSE is not always first, so others are skipped.
@@ -248,6 +252,8 @@ impl WorldSession {
             ServerPacket::AddonInfo { records } => self.link.addon_info = Some(records.clone()),
             // So can a guild's answer, which is no reply to any of them (`0x555290`).
             ServerPacket::GuildQueryResponse(answer) => self.guild_answers.push(answer.clone()),
+            // Hero Defense: data pro menu prijdou hned za seznamem postav.
+            ServerPacket::HdData(text) => self.hd_data.push(text.clone()),
             // Deviation: benilla runs no Warden module and answers nothing, because the answers
             // come from native Win32 x86 code the server sends, which the client maps, links and
             // runs in its own process (`0x7a79d0`), and benilla runs no such code on any platform
@@ -372,6 +378,11 @@ impl WorldSession {
     /// The guild answers read at character select since the last call, in the order they came.
     pub fn take_guild_answers(&mut self) -> Vec<messages::GuildQueryResponse> {
         std::mem::take(&mut self.guild_answers)
+    }
+
+    /// Hero Defense: radky dat pro menu prectene na vyberu postavy od posledniho volani.
+    pub fn take_hd_data(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.hd_data)
     }
 
     /// Create a character; returns the `SMSG_CHAR_CREATE` result byte.
@@ -946,6 +957,7 @@ impl WorldSession {
             chat_language: writer.chat_language,
             tutorial_flags: None,
             guild_answers: Vec::new(),
+            hd_data: Vec::new(),
         };
         session
             .set_read_timeout(Some(HANDSHAKE_READ_TIMEOUT))

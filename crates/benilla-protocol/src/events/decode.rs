@@ -636,6 +636,7 @@ pub fn decode(packet: ServerPacket) -> Vec<SessionEvent> {
         ServerPacket::GuildQueryResponse(response) => {
             vec![SessionEvent::GuildQueryResponse(response)]
         }
+        ServerPacket::HdData(text) => vec![SessionEvent::HdData(text)],
         ServerPacket::GuildRoster(roster) => vec![SessionEvent::GuildRoster(roster)],
         ServerPacket::GuildEvent(notice) => vec![SessionEvent::GuildEvent(notice)],
         ServerPacket::GuildCommandResult(result) => vec![SessionEvent::GuildCommandResult(result)],

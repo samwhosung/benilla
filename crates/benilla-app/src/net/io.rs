@@ -980,6 +980,12 @@ fn world(
                         return Ok(WorldEnd::Cycle(Cycle::Exit));
                     }
                 }
+                // Hero Defense: data pro menu (statistiky hrdinu, zebricek) jdou nahoru stejne.
+                for text in session.take_hd_data() {
+                    if events_tx.send(SessionEvent::HdData(text)).is_err() {
+                        return Ok(WorldEnd::Cycle(Cycle::Exit));
+                    }
+                }
                 let (action, code) = match answer {
                     Parked::Exit => return Ok(WorldEnd::Cycle(Cycle::Exit)),
                     Parked::Repark => return Ok(WorldEnd::Cycle(Cycle::Repark)),

@@ -135,11 +135,28 @@ pub(crate) fn register_source(app: &mut App) {
 }
 
 pub(crate) fn plugin(app: &mut App) {
+    use crate::net::NetHandlerApp;
     grid::plugin(app);
     app.add_systems(
         Update,
         (forget_rebuilt, swap_models, hide_original, keep_bound, wow_lit_materials).chain(),
     );
+    app.net_handler(benilla_protocol::SessionEventKind::HdData, on_hd_data);
+}
+
+/// Radek dat Hero Defense ze serveru (`SMSG_DBLOOKUP`: statistiky hrdinu, zebricek) jako Lua
+/// udalost `HD_GLUE_DATA` (arg1 = text) v prave bezicim VM: v menu ji cte vrstva
+/// `core/glue/HeroDefenseGlue`.
+fn on_hd_data(
+    In(ev): In<benilla_protocol::SessionEvent>,
+    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
+) {
+    let benilla_protocol::SessionEvent::HdData(text) = ev else {
+        return;
+    };
+    if let Some(mut script) = script {
+        script.fire_event("HD_GLUE_DATA", vec![benilla_ui::script::ScriptValue::Str(text)]);
+    }
 }
 
 /// Jednotka, jejiz vizual se prestavuje (zmena display id), dostane vlastni model znovu.
