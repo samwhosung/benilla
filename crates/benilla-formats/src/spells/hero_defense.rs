@@ -83,14 +83,8 @@ pub(super) fn apply(spells: &mut HashMap<u32, SpellDisplay>) {
         }
     }
 
-    // Melee ma manu misto rage: jeho (zatim zastupna) kouzla Warriora stoji manu. Musi sedet
-    // se serverem (hero_defense_heroes.sql: mana = rage x 2).
-    for (id, mana) in HD_MANA_SPELLS {
-        if let Some(spell) = spells.get_mut(&id) {
-            spell.power_type = 0;
-            spell.mana_cost = mana;
-        }
-    }
+    // Kouzla hrdinu (vygenerovana z core/tools/heroes/spells.csv).
+    super::hero_defense_heroes::apply(spells);
 }
 
 /// Rychlost strel vezi (yd/s): Axe Flurry, sekery Watch Tower a glevy (puvodne 40), Boulder,
@@ -111,11 +105,6 @@ const HD_VISUAL_AURAS: [(u32, &str, &str, &str); 11] = [
     (22751, "Bloodlust", "Spell_Nature_BloodLust", "Rychlejsi utok."),
     (22108, "Arkanove pretizeni", "Spell_Nature_WispSplode", "Kazdy stack: +10 % poskozeni a dosahu Arcane Explosion."),
 ];
-
-/// Kouzla Warriora pro Melee a jejich cena v mane: Heroic Strike 1 a 2, Battle Shout, Charge,
-/// Rend 1 a 2, Thunder Clap, Hamstring.
-const HD_MANA_SPELLS: [(u32, u32); 8] =
-    [(78, 30), (284, 30), (6673, 20), (100, 0), (772, 20), (6546, 20), (6343, 40), (1715, 20)];
 
 /// Kouzlo svitku zkusenosti, musi sedet s hero_defense_loot.sql.
 const XP_SCROLL_SPELL: u32 = 5202;
