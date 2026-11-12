@@ -65,22 +65,13 @@ const MODELS: &[CustomModel] = &[
         height: 1.9,
         collision_radius: Some(0.7), // kousek uvnitr obrysu, at se o hroty nezasekava
     },
-    // Zakladni veze linii s vlastnim modelem (server hd_defs.h HD_LINES, cislo 90300 + linie * 10).
-    // Vylepsene varianty linie (+1 az +9) maji stejny model, viz [`model_index`]. Kazda vez stoji
-    // na jednom poli mrizky 4 x 4 yd: velikost tak, aby byla nejvys 3.8 yd siroka a 7 yd vysoka.
-    // Ostatni linie maji zatim zastupny model z klienta (display id ze serveru).
-    tower(90300, "towers/human_watchtower.glb", 3.68, 0.355, 1.901), // Guard Tower
-    tower(90310, "towers/human_holy_spire.glb", 3.68, 0.368, 1.902), // Spire
-    tower(90320, "towers/human_cannon.glb", 2.0, 0.945, 1.588),      // Cannon Bastion
-    tower(90370, "towers/nelf_sentinel.glb", 3.1, 0.608, 1.903),     // Sentinel Tower
-    tower(90380, "towers/nelf_moonwell.glb", 3.1, 0.611, 1.905),     // Moonwell
-    tower(90390, "towers/nelf_glaive.glb", 2.0, 0.944, 1.895),       // Glaive Thrower
-    tower(90440, "towers/orc_watchtower.glb", 3.68, 0.433, 1.901),   // Watch Tower
-    tower(90450, "towers/orc_totem.glb", 2.8, 0.675, 1.903),         // Totem
-    tower(90460, "towers/orc_catapult.glb", 2.0, 0.951, 1.59),       // Siege Catapult
+    // Veze s vlastnim modelem (assets/towers/*.glb) uz nejsou: misto vezi jsou jednotky s chodicim
+    // modelem z klienta (server hero_defense_units.sql, HERO_DEFENSE_UNITS.md). Funkce [`tower`]
+    // zustava pro pripadne dalsi staticke modely.
 ];
 
 /// Vez: obrys a kolize podle modelu (kolize kousek uvnitr obrysu).
+#[allow(dead_code)]
 const fn tower(entry: u32, path: &'static str, scale: f32, half_width: f32, height: f32) -> CustomModel {
     CustomModel {
         entry,
