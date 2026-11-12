@@ -63,6 +63,14 @@ pub(super) fn apply(spells: &mut HashMap<u32, SpellDisplay>) {
         spell.description = Some("Prida 25 % zkusenosti potrebnych do dalsiho levelu.".to_string());
     }
 
+    // Strely vezi, ktere jsou v klientu moc rychle. Musi sedet se serverem
+    // (hero_defense_towers.sql, cast "rychlost strel"): server podle ni pocita, kdy zasah prijde.
+    for (id, speed) in HD_SPELL_SPEEDS {
+        if let Some(spell) = spells.get_mut(&id) {
+            spell.speed = speed;
+        }
+    }
+
     // Melee ma manu misto rage: jeho (zatim zastupna) kouzla Warriora stoji manu. Musi sedet
     // se serverem (hero_defense_heroes.sql: mana = rage x 2).
     for (id, mana) in HD_MANA_SPELLS {
@@ -72,6 +80,9 @@ pub(super) fn apply(spells: &mut HashMap<u32, SpellDisplay>) {
         }
     }
 }
+
+/// Rychlost strel vezi (yd/s): Axe Flurry, sekery Watch Tower a glevy (puvodne 40).
+const HD_SPELL_SPEEDS: [(u32, f32); 1] = [(24020, 20.0)];
 
 /// Kouzla Warriora pro Melee a jejich cena v mane: Heroic Strike 1 a 2, Battle Shout, Charge,
 /// Rend 1 a 2, Thunder Clap, Hamstring.
