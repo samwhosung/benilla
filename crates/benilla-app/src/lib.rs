@@ -63,6 +63,7 @@ mod game_plugins;
 mod glue_session;
 mod go_anim;
 mod go_templates;
+mod hero_defense;
 #[cfg(feature = "dev")]
 mod hover_log;
 mod item_lane;
@@ -356,6 +357,8 @@ fn launch(build: BuildId, extend: Option<Extension<'_>>) -> AppExit {
             run_mode::unattended(),
         );
     }
+    // Hero Defense: vlastni modely (glTF), take pred `AssetPlugin`.
+    hero_defense::register_source(&mut app);
 
     // No `game://` source: the five UI shaders are compiled in by `crate::shaders`
     // (`embedded://benilla_app/shaders/…`), so no build-machine path reaches the binary.

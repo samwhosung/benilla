@@ -484,7 +484,8 @@ pub(crate) const REGISTERED: &[Registered] = &[
     same("cameraPitchMoveSpeed", "90.0").checked(benilla_ui::script::check_camera_rate),
     // The distance axis's yards a second (`0x50b7f3`, read at `0x5113d9`): the wheel's glide and
     // `MoveViewIn`/`Out`. Its validator `0x50c040` refuses a value out of range.
-    same("cameraDistanceMoveSpeed", "8.33").checked(benilla_ui::script::check_camera_decay),
+    // Hero Defense: 33.3 (reference 8.33), see `camera_zoom::CAM_MOVE_SPEED`.
+    same("cameraDistanceMoveSpeed", "33.3").checked(benilla_ui::script::check_camera_decay),
     // MOUSE_SENSITIVITY (`UIOptionsFrame.lua:87`): FrameXML's spelling of the binary's `mouseSpeed`
     // (`0x402c7b`); lookups are case-insensitive (`CVar::Lookup 0x63de30`), here as there. The
     // reference's default is `SPI_GETMOUSESPEED × 0.1` (`0x42cd60`) formatted `%1.1f` (`0x82e994`,
@@ -498,7 +499,8 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // validator `0x50b310` refuses a value outside [0, 50]. The factor is MAX_FOLLOW_DIST
     // (`UIOptionsFrame.lua:90`), registered "1.0" (`0x82e92c`) with no validator: the slider's 1
     // to 2 is the slider's, not the CVar's.
-    same("cameraDistanceMax", "15.0").checked(benilla_ui::script::check_camera_distance_max),
+    // Hero Defense: 100 (reference 15), see `camera_zoom::CAM_DIST_MAX`.
+    same("cameraDistanceMax", "100.0").checked(benilla_ui::script::check_camera_distance_max),
     same("cameraDistanceMaxFactor", "1.0"),
     // `cameraSmoothStyle` (`0x50ba92`, default `[0x84f4f4]` "1"), the auto-return behind the
     // character. The engine's enum is 0 Never, 1 Smart, 2 Always, as the stock dropdown writes it

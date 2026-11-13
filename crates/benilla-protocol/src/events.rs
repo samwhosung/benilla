@@ -1178,6 +1178,9 @@ pub enum SessionEvent {
     LfgResults(LfgResults),
     /// A guild's name, ten rank names and tabard (`SMSG_GUILD_QUERY_RESPONSE`), cached by id.
     GuildQueryResponse(GuildQueryResponse),
+    /// Hero Defense: radek dat pro menu (`SMSG_DBLOOKUP`): v menu i ve hre Lua udalost
+    /// `HD_GLUE_DATA` s textem.
+    HdData(String),
     /// The whole guild (`SMSG_GUILD_ROSTER`), a complete snapshot that replaces what is held.
     GuildRoster(GuildRoster),
     /// A guild event (`SMSG_GUILD_EVENT`): a [`guild_event`](crate::messages::guild_event) id and

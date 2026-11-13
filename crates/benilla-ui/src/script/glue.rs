@@ -56,10 +56,18 @@ fn event_names(table: &'static str) -> Vec<&'static str> {
 /// `RegisterEvent` matches a name against them case-insensitively (`0x702140` with `0x64a4c0`) and
 /// drops one they lack without an error.
 pub fn glue_events() -> &'static [&'static str] {
-    static NAMES: std::sync::LazyLock<Vec<&'static str>> =
-        std::sync::LazyLock::new(|| event_names(GLUE_EVENT_TABLE));
+    static NAMES: std::sync::LazyLock<Vec<&'static str>> = std::sync::LazyLock::new(|| {
+        let mut names = event_names(GLUE_EVENT_TABLE);
+        // Hero Defense: data ze serveru pro menu (statistiky hrdinu, zebricek), viz
+        // `crate::hero_defense` v benilla-app. Bez zaznamu tady by se na ni menu neregistrovalo.
+        names.push(HD_GLUE_DATA);
+        names
+    });
     &NAMES
 }
+
+/// Hero Defense: udalost s radkem dat ze serveru (`SMSG_DBLOOKUP`), arg1 = text.
+pub const HD_GLUE_DATA: &str = "HD_GLUE_DATA";
 
 /// The in-game table's distinct names, in id order.
 pub(crate) fn in_game_events() -> &'static [&'static str] {

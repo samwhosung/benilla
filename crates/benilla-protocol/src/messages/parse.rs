@@ -1524,6 +1524,7 @@ fn parse_server_body(
         opcode::SMSG_GUILD_QUERY_RESPONSE => {
             ServerPacket::GuildQueryResponse(guild::read_guild_query_response(&mut r)?)
         }
+        opcode::SMSG_DBLOOKUP => ServerPacket::HdData(read_cstring(&mut r)?),
         opcode::SMSG_GUILD_ROSTER => ServerPacket::GuildRoster(guild::read_guild_roster(&mut r)?),
         opcode::SMSG_GUILD_EVENT => ServerPacket::GuildEvent(guild::read_guild_event(&mut r)?),
         opcode::SMSG_GUILD_COMMAND_RESULT => {

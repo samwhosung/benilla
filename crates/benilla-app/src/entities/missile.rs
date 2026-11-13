@@ -82,6 +82,10 @@ const DEST_FALLBACKS: [u16; 2] = [0xf, 0x13];
 /// tumbles end over end and shows its trail only here; a model without it plays its first clip.
 const INFLIGHT_ANIM: u16 = 144;
 
+/// Hero Defense pojistka: strela, ktera leti (vcetne cekani ve fronte) dele nez tolik sekund, se
+/// zahodi. Zadna strela by tak dlouho letet nemela; zbyla strela by jinak visela ve vzduchu.
+const MAX_FLIGHT_AGE: f32 = 12.0;
+
 /// The missile's orientation for flight direction `f`, the reference's frame (`0x61e2a0`): model
 /// +X along the flight, side = up × dir, up = dir × side, so it never rolls however the flight
 /// pitches. In Bevy, local −Z (wow +X) maps to `f` and local +Y (wow +Z) to that up.
@@ -159,6 +163,10 @@ pub(super) struct Missile {
     /// Remaining flight time in seconds, the arrive-on-time integrator's state.
     arrive_in: f32,
     parts_spawned: bool,
+    /// Hero Defense: the launch aimed at a unit whose world position was not computed yet (a unit
+    /// spawned this frame reads the origin), so the flight is fitted again once the aim resolves.
+    /// Without it the flight time came out of the distance to the origin, hundreds of seconds.
+    refit: bool,
     /// The caster's ranged-weapon `SpellVisual`, resolved at GO, so a basic shot's impact kit
     /// resolves even if the caster despawns mid-flight.
     weapon_visual: Option<u32>,
@@ -192,6 +200,12 @@ pub(super) fn attach_world_pos(
         p.posed_point(joints.get(p.joints_root).ok()?, bone, offset)
     });
     Some(point.unwrap_or_else(|| base.translation()))
+}
+
+/// A point at the world origin: the `GlobalTransform` of a unit spawned this frame, before
+/// transform propagation. No unit stands within a yard of the origin in practice.
+fn unplaced(p: Vec3) -> bool {
+    p.length_squared() < 1.0
 }
 
 /// This frame's aim, re-solved every tick as the reference does.
@@ -575,8 +589,18 @@ fn launch_go(
             // An invisible flight has no parts to wait on.
             parts_spawned: go.key.is_none(),
             weapon_visual: go.spawn.weapon_visual,
+            refit: unplaced(aim),
         };
         launch_flight(&mut missile, launch, aim, out);
+        if benilla_assets::trace::enabled() {
+            benilla_assets::trace::line(
+                "msl",
+                &format!(
+                    "launch spell={} caster={} from={launch:?} to={aim:?} speed={:.1} arrive_in={:.2}",
+                    missile.spell_id, missile.caster, missile.speed, missile.arrive_in
+                ),
+            );
+        }
         let dir = (aim - launch).normalize_or(-Vec3::Z);
         let entity = commands
             .spawn((
@@ -815,6 +839,30 @@ pub(super) fn move_missiles(
             }
         };
         missile.last_aim = aim;
+        // Hero Defense: the aim resolved after the launch, so fit the flight from here.
+        if missile.refit && !unplaced(aim) {
+            missile.refit = false;
+            let from = transform.translation;
+            launch_flight(&mut missile, from, aim, &mut out);
+            if benilla_assets::trace::enabled() {
+                benilla_assets::trace::line(
+                    "msl",
+                    &format!(
+                        "refit spell={} entity={entity} to={aim:?} arrive_in={:.2}",
+                        missile.spell_id, missile.arrive_in
+                    ),
+                );
+            }
+        }
+        if missile.age > MAX_FLIGHT_AGE {
+            warn!(
+                "missile: spell {} letela {:.1} s, zahozena (arrive_in {:.2})",
+                missile.spell_id, missile.age, missile.arrive_in
+            );
+            sounds.write(MissileSound::Stop { entity });
+            commands.entity(entity).despawn();
+            continue;
+        }
         let to_target = aim - transform.translation;
         if missile.arrive_in <= dt {
             transform.translation = aim;
@@ -830,6 +878,15 @@ pub(super) fn move_missiles(
                     });
                 }
             } else {
+                if benilla_assets::trace::enabled() {
+                    benilla_assets::trace::line(
+                        "msl",
+                        &format!(
+                            "land spell={} entity={entity} at={aim:?} age={:.2}",
+                            missile.spell_id, missile.age
+                        ),
+                    );
+                }
                 commands.entity(entity).despawn();
             }
             continue;

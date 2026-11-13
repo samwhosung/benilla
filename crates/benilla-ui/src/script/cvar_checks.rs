@@ -594,8 +594,9 @@ pub fn check_camera_decay(value: &str, _applied: &str, _rows: CvarRows<'_>) -> C
 }
 
 /// `0x50b310`, `cameraDistanceMax`: `[0x8089a8]` 0 to `[0x8089a4]` 50.
+/// Hero Defense: up to 100 (the client's `CAM_DIST_MAX`).
 pub fn check_camera_distance_max(value: &str, _applied: &str, _rows: CvarRows<'_>) -> CvarVerdict {
-    camera_range(value, 0.0, 50.0)
+    camera_range(value, 0.0, 100.0)
 }
 
 /// `0x50c060`, `cameraSmoothStyle` and `cameraSmoothTrackingStyle`: 0 to 3.

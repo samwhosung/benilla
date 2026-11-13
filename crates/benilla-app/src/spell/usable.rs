@@ -150,7 +150,10 @@ pub(crate) fn ammo_refusal(
     const SUBCLASS_NO_AMMO: u32 = 0x10;
     /// `ITEM_CLASS_PROJECTILE`, the class the carried walk's callback takes (`0x6e43ab`).
     const CLASS_PROJECTILE: u32 = 6;
-    if !needs_equipped_item(d) {
+    // Hero Defense: Ranged strili bez munice, server ji nekontroluje ani nebere
+    // (Spell::CheckCast, Spell::TakeAmmo; HERO_DEFENSE_HEROES.md).
+    const HD_NO_AMMO: bool = true;
+    if HD_NO_AMMO || !needs_equipped_item(d) {
         return None;
     }
     let weapon = first_fitting_item(d, store, objects, items)?;

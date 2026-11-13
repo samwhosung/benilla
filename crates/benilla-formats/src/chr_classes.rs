@@ -236,8 +236,18 @@ pub fn load_chr_classes(chain: &mut Chain) -> Result<ChrClasses> {
             },
         );
     }
+    // Hero Defense: nase 4 classy maji vlastni nazvy (tvorba postavy, UnitClass, tooltipy).
+    for (id, name) in HD_CLASS_NAMES {
+        if let Some(row) = by_id.get_mut(&id) {
+            row.name = Some(name.to_string());
+        }
+    }
     Ok(ChrClasses(by_id))
 }
+
+/// Hero Defense: jen tyto 4 classy jdou vytvorit (server: `CharacterHandler.cpp`), kazda pro
+/// kazdou rasu. Zaklad ve WoW: Warrior, Hunter, Mage, Warlock (HERO_DEFENSE_HEROES.md).
+pub const HD_CLASS_NAMES: [(u32, &str); 4] = [(1, "Melee"), (3, "Ranged"), (8, "Spell"), (9, "DoT")];
 
 #[cfg(test)]
 mod tests {

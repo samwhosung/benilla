@@ -143,7 +143,9 @@ impl AssetLoader for AdtLoader {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
         let to_io = |e: anyhow::Error| std::io::Error::other(format!("{e:#}"));
-        let tile = adt_to_tile_mesh(&bytes).map_err(to_io)?;
+        let mut tile = adt_to_tile_mesh(&bytes).map_err(to_io)?;
+        // Hero Defense: herni plocha kolem hradu bez objektu a se srovnanym terenem.
+        crate::hd_zone::apply(&ctx.path().to_string(), &mut tile);
 
         // Layer array: a solid-green fallback at index 0, then each unique layer texture, packed
         // once the whole tile is read.

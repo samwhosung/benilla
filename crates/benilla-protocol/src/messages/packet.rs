@@ -1139,6 +1139,8 @@ pub enum ServerPacket {
     LookingForGroup(LfgResults),
     /// `SMSG_GUILD_QUERY_RESPONSE`: a guild's name, ten rank names and tabard, cached by guild id.
     GuildQueryResponse(GuildQueryResponse),
+    /// Hero Defense: radek dat pro menu (`SMSG_DBLOOKUP`, jeden C retezec).
+    HdData(String),
     /// `SMSG_GUILD_ROSTER`: a complete snapshot, resent on any change: MOTD, info, ranks, members.
     GuildRoster(GuildRoster),
     /// `SMSG_GUILD_EVENT`: an event id and its formatted string arguments.
@@ -1653,6 +1655,7 @@ impl ServerPacket {
             ServerPacket::WhoResults(..) => "SMSG_WHO".into(),
             ServerPacket::LookingForGroup(..) => "MSG_LOOKING_FOR_GROUP".into(),
             ServerPacket::GuildQueryResponse(..) => "SMSG_GUILD_QUERY_RESPONSE".into(),
+            ServerPacket::HdData(..) => "SMSG_DBLOOKUP".into(),
             ServerPacket::GuildRoster(..) => "SMSG_GUILD_ROSTER".into(),
             ServerPacket::GuildEvent(..) => "SMSG_GUILD_EVENT".into(),
             ServerPacket::GuildCommandResult(..) => "SMSG_GUILD_COMMAND_RESULT".into(),

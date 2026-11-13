@@ -13,6 +13,9 @@ pub const MSG_MOVE_TELEPORT_CHEAT: u16 = 0x00C6;
 pub const CMSG_MOVE_SET_RAW_POSITION: u16 = 0x00E1;
 pub const SMSG_CHAR_CREATE: u16 = 0x003A;
 pub const SMSG_CHAR_ENUM: u16 = 0x003B;
+/// Hero Defense: vlastni data ze serveru do menu (statistiky hrdinu, zebricek), text. Ladici
+/// opcode, ktery puvodni server klientum neposila.
+pub const SMSG_DBLOOKUP: u16 = 0x0003;
 // Character delete: CMSG a full u64 guid, SMSG one result byte (`CHAR_DELETE_SUCCESS` = 0x39).
 pub const CMSG_CHAR_DELETE: u16 = 0x0038;
 pub const SMSG_CHAR_DELETE: u16 = 0x003C;

@@ -154,6 +154,7 @@ pub(super) fn load_glue(script: &mut UiScript) -> Vec<String> {
     };
     if super::manifest::layer_enabled() {
         failures.extend(load_glue_layer(script));
+        failures.extend(load_hd_glue(script));
     }
     script.fire_event("FRAMES_LOADED", vec![]);
     failures.extend(
@@ -183,6 +184,32 @@ fn load_glue_layer(script: &UiScript) -> Vec<String> {
     );
     layer.load_files(script, &files)
 }
+
+/// Hero Defense: menu (prihlaseni, hlavni menu, vyber a tvorba hrdiny) jako vrstva nad GlueXML,
+/// nactena z disku po vrstve Benilly, at jde ladit bez prekladu klienta. Slozka `HD_GLUE`, jinak
+/// `<HD_ASSETS>/../glue` (repo core: `core/glue`), v ni addon `HeroDefenseGlue` se svym `.toc`.
+/// Bez slozky se nenacte nic a zustane puvodni menu.
+fn load_hd_glue(script: &UiScript) -> Vec<String> {
+    let root = std::env::var_os("HD_GLUE")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HD_ASSETS").map(|a| std::path::PathBuf::from(a).join("..").join("glue")));
+    let Some(root) = root else {
+        return Vec::new();
+    };
+    let toc_path = root.join(HD_GLUE_ADDON).join(format!("{HD_GLUE_ADDON}.toc"));
+    let Ok(text) = std::fs::read_to_string(&toc_path) else {
+        info!("hero defense: menu {} nenalezeno, zustava puvodni", toc_path.display());
+        return Vec::new();
+    };
+    info!("hero defense: menu z {}", toc_path.display());
+    let toc = benilla_ui::toc::Toc::parse(&text);
+    let files = toc.files.clone();
+    let addon = super::addons::Addon::new(HD_GLUE_ADDON.to_string(), toc, super::addons::Source::Dir(root));
+    addon.load_files(script, &files)
+}
+
+/// Slozka a `.toc` menu Hero Defense.
+const HD_GLUE_ADDON: &str = "HeroDefenseGlue";
 
 /// Drain the glue load's record into `Logs\GlueXML.log`, as the builder does after
 /// `FRAMES_LOADED` (`0x46aa61`-`0x46aa94`).

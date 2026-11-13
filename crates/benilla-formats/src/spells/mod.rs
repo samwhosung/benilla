@@ -18,6 +18,8 @@ mod dispel_types;
 mod display;
 mod duration;
 mod forms;
+mod hero_defense;
+mod hero_defense_heroes;
 mod radius;
 mod ranges;
 mod soft_float;
@@ -727,6 +729,8 @@ pub fn load_spell_catalog(chain: &mut Chain) -> Result<SpellCatalog> {
             },
         );
     }
+    // Hero Defense: nazvy a ikony kouzel, kterymi se stavi veze.
+    hero_defense::apply(&mut spells);
     Ok(SpellCatalog {
         weapon_skills: weapon_skill_table(&spells),
         spells,
