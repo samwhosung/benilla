@@ -70,19 +70,20 @@ const MODELS: &[CustomModel] = &[
     // zustava pro pripadne dalsi staticke modely.
 ];
 
-/// Vez: obrys a kolize podle modelu (kolize kousek uvnitr obrysu).
-#[allow(dead_code)]
-const fn tower(entry: u32, path: &'static str, scale: f32, half_width: f32, height: f32) -> CustomModel {
-    CustomModel {
-        entry,
-        path,
-        scale,
-        yaw: 0.0,
-        half_width,
-        height,
-        collision_radius: Some(half_width * 0.85),
-    }
-}
+// Staticke veze s vlastnim GLB modelem se zatim nepouzivaji (misto vezi jsou jednotky,
+// HERO_DEFENSE_UNITS.md). Zpet: odkomentovat a pridat zaznamy tower(...) do MODELS.
+// /// Vez: obrys a kolize podle modelu (kolize kousek uvnitr obrysu).
+// const fn tower(entry: u32, path: &'static str, scale: f32, half_width: f32, height: f32) -> CustomModel {
+//     CustomModel {
+//         entry,
+//         path,
+//         scale,
+//         yaw: 0.0,
+//         half_width,
+//         height,
+//         collision_radius: Some(half_width * 0.85),
+//     }
+// }
 
 /// Veze Hero Defense: 90300 + linie * 10 + varianta (server `hd_defs.h`).
 const TOWER_FIRST: u32 = 90300;
