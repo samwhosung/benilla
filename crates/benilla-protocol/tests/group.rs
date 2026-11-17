@@ -345,6 +345,36 @@ fn group_list_raid_with_assistant_flag() {
     }
 }
 
+/// A list whose loot tail ends at the threshold, as MaNGOS Zero sends it, still applies: 1.12.1's
+/// read of the unused fourth byte fails silently on a short body (`0x5e6e3d`, `0x418cb0`).
+#[test]
+fn group_list_without_the_difficulty_byte_applies() {
+    let mut body = vec![0u8, 0x00];
+    body.extend_from_slice(&1u32.to_le_bytes()); // memberCount
+    body.extend_from_slice(b"Erin\0");
+    body.extend_from_slice(&0x5555u64.to_le_bytes());
+    body.push(member_status::ONLINE);
+    body.push(0x00);
+    body.extend_from_slice(&0x5555u64.to_le_bytes()); // leaderGuid
+    body.push(0); // lootMethod: free for all
+    body.extend_from_slice(&0u64.to_le_bytes()); // looterGuid
+    body.push(2); // lootThreshold, and no byte after it
+
+    let p = messages::parse_server(opcode::SMSG_GROUP_LIST, &body).unwrap();
+    match decode(p).as_slice() {
+        [SessionEvent::GroupList {
+            members,
+            leader: 0x5555,
+            loot: Some(loot),
+            ..
+        }] => {
+            assert_eq!(members.len(), 1);
+            assert_eq!(loot.threshold, 2);
+        }
+        other => panic!("group list decode: {other:?}"),
+    }
+}
+
 /// The "you left the group" shape (`Group.cpp:155-180`, no members): 14 bytes, no loot tail.
 #[test]
 fn group_list_empty_you_left_shape_is_14_bytes() {

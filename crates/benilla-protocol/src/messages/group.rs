@@ -102,7 +102,9 @@ pub(super) fn read_group_list(
         let method = read_u8(r)?;
         let master = read_u64_le(r)?;
         let threshold = read_u8(r)?;
-        let _dungeon_difficulty = read_u8(r)?; // always 0 at 5875 (Group.h:281)
+        // 1.12.1 reads a fourth byte it never uses, and a short body leaves it unread without
+        // failing (`0x5e6e3d`, `0x418cb0`): MaNGOS Zero sends none, vmangos a 0 (Group.h:281).
+        let _dungeon_difficulty = read_u8(r).ok();
         Some(GroupLootInfo {
             method,
             master,
