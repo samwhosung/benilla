@@ -60,7 +60,9 @@ downloads: a packaged build, a particular server's changes or anything 1.12.1 ne
 in a fork, and forks are welcome. GitHub lists
 [every public fork](https://github.com/samwhosung/benilla/forks).
 
-Not planned: other expansions or client versions, Warden (anticheat).
+Not planned: other expansions or client versions, Warden (anticheat). For Wrath of the Lich King
+(3.3.5a), [benilla-wotlk](https://github.com/Onixaz/benilla-wotlk) is a separate client built from
+benilla.
 
 ## Running it
 
