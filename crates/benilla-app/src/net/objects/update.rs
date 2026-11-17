@@ -122,10 +122,18 @@ enum Created {
 /// their place.
 #[derive(Resource, Default)]
 pub(crate) struct Released {
-    objects: HashMap<u64, Kept>,
+    /// Each released object with the stamp of the release that put it here.
+    objects: HashMap<u64, (u64, Kept)>,
     /// Each type's released guids, oldest first: the reuse lists from the manager's `+0x50`,
-    /// which a release appends to (`0x464a83`-`0x464ac4`).
-    reuse: HashMap<u8, VecDeque<u64>>,
+    /// which a release appends to (`0x464a83`-`0x464ac4`). An entry whose stamp no longer
+    /// matches its object's was taken out of the table: [`Self::take`] leaves it here rather than
+    /// walking the list, and [`Self::free_oldest`] skips it, so the order of the live entries is
+    /// the list's and a take costs no walk however many objects are released.
+    reuse: HashMap<u8, VecDeque<(u64, u64)>>,
+    /// The last stamp handed out.
+    stamp: u64,
+    /// Entries left behind by takes and not yet skipped; past the live count, the lists compact.
+    stale: usize,
 }
 
 /// A released object as it left.
@@ -173,18 +181,24 @@ impl Kept {
 
 impl Released {
     fn insert(&mut self, guid: u64, kept: Kept) {
+        self.stamp += 1;
+        let stamp = self.stamp;
         self.reuse
             .entry(kept.type_id())
             .or_default()
-            .push_back(guid);
-        self.objects.insert(guid, kept);
+            .push_back((guid, stamp));
+        if self.objects.insert(guid, (stamp, kept)).is_some() {
+            self.stale += 1;
+        }
     }
 
-    /// Takes `guid` out of the table and its type's reuse list (`0x464635`, `0x46464c`).
+    /// Takes `guid` out of the table and its type's reuse list (`0x464635`, `0x46464c`). Its
+    /// list entry stays behind, stale, for [`Self::free_oldest`] to skip.
     fn take(&mut self, guid: u64) -> Option<Kept> {
-        let kept = self.objects.remove(&guid)?;
-        if let Some(list) = self.reuse.get_mut(&kept.type_id()) {
-            list.retain(|&g| g != guid);
+        let (_, kept) = self.objects.remove(&guid)?;
+        self.stale += 1;
+        if self.stale > self.objects.len() + 64 {
+            self.compact();
         }
         Some(kept)
     }
@@ -192,15 +206,31 @@ impl Released {
     /// A new object of type `type_id` frees the oldest released one of that type (`0x466e55`,
     /// the head of the list); the guid it freed.
     fn free_oldest(&mut self, type_id: u8) -> Option<u64> {
-        let guid = self.reuse.get_mut(&type_id).and_then(VecDeque::pop_front)?;
-        self.objects.remove(&guid);
-        Some(guid)
+        let list = self.reuse.get_mut(&type_id)?;
+        while let Some((guid, stamp)) = list.pop_front() {
+            if self.objects.get(&guid).is_some_and(|(s, _)| *s == stamp) {
+                self.objects.remove(&guid);
+                return Some(guid);
+            }
+            self.stale = self.stale.saturating_sub(1);
+        }
+        None
+    }
+
+    /// Drops the stale entries from every list, keeping the live ones in order.
+    fn compact(&mut self) {
+        let objects = &self.objects;
+        for list in self.reuse.values_mut() {
+            list.retain(|(g, s)| objects.get(g).is_some_and(|(live, _)| live == s));
+        }
+        self.stale = 0;
     }
 
     /// Frees every released object, as leaving the world does (`0x467700`).
     pub(crate) fn clear(&mut self) {
         self.objects.clear();
         self.reuse.clear();
+        self.stale = 0;
     }
 }
 
@@ -1720,5 +1750,66 @@ fn token_update(guid: u64) -> crate::field_watch::FieldNotice {
     crate::field_watch::FieldNotice::TokenFlags {
         guid,
         change: benilla_ui::script::TokenChange::Update,
+    }
+}
+
+#[cfg(test)]
+mod released_tests {
+    use super::{Body, Kept, Released};
+
+    fn item(container: bool) -> Kept {
+        Kept {
+            fields: Default::default(),
+            body: Body::Item {
+                container,
+                countdowns: Default::default(),
+            },
+        }
+    }
+
+    /// A take out of the middle leaves the rest freed oldest first, the taken guid never freed,
+    /// and a guid released again joins at the tail, not at its old place.
+    #[test]
+    fn takes_keep_the_reuse_order() {
+        let mut r = Released::default();
+        for g in 1..=5 {
+            r.insert(g, item(false));
+        }
+        assert!(r.take(3).is_some());
+        assert!(r.take(3).is_none(), "a taken guid is gone");
+        assert!(r.take(1).is_some());
+        r.insert(1, item(false));
+        let freed: Vec<u64> = std::iter::from_fn(|| r.free_oldest(1)).collect();
+        assert_eq!(freed, [2, 4, 5, 1]);
+        assert!(r.objects.is_empty());
+    }
+
+    /// Each type keeps its own list: a container's release is not freed by a new item.
+    #[test]
+    fn the_lists_are_per_type() {
+        let mut r = Released::default();
+        r.insert(10, item(true));
+        r.insert(11, item(false));
+        assert_eq!(r.free_oldest(1), Some(11));
+        assert_eq!(r.free_oldest(1), None);
+        assert_eq!(r.free_oldest(2), Some(10));
+    }
+
+    /// Many takes with no frees compact the lists, so stale entries do not pile up, and the live
+    /// order survives the compaction.
+    #[test]
+    fn stale_entries_compact() {
+        let mut r = Released::default();
+        for g in 1..=1000 {
+            r.insert(g, item(false));
+        }
+        for g in (1..=1000).filter(|g| g % 10 != 0) {
+            r.take(g);
+        }
+        // Stale entries never pass the live count by more than 64 before a compaction.
+        assert!(r.reuse[&1].len() <= 2 * r.objects.len() + 65);
+        assert!(r.reuse[&1].len() < 1000, "the takes compacted the list");
+        let freed: Vec<u64> = std::iter::from_fn(|| r.free_oldest(1)).collect();
+        assert_eq!(freed, (1..=100).map(|g| g * 10).collect::<Vec<_>>());
     }
 }
