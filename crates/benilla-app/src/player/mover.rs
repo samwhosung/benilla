@@ -874,14 +874,17 @@ pub(crate) fn step_up(
         contact: None,
         verdict,
     };
-    // A steep, non-overhanging face opposing the motion within `look`. The reference has no
-    // incidence gate; a graze nets zero in the settle.
+    // A steep face opposing the motion within `look`. The reference has no incidence gate; a
+    // graze nets zero in the settle.
     let Some(ahead) = cast(center, dir_h * look) else {
         return none(StepVerdict::NoFace);
     };
     // The face's own normal: `0x6334a0` classifies the hit's record (`0x6334e6`), not a contact.
+    // With `0x4000000` clear it sends every non-walkable record to the step probe (`0x636b6e`), a
+    // face leaning out over its foot included (`n.z < 0`, `0x63352b`), save one facing down by
+    // more than 50° at the box's top (`0x63353c`-`0x633595`), where a level sweep meets one.
     let n = ahead.face_normal;
-    if n.y >= GROUND_COS || n.y < OVERHANG_EPS || n.dot(dir_h) >= 0.0 {
+    if n.y >= GROUND_COS || n.y < -GROUND_COS || n.dot(dir_h) >= 0.0 {
         return none(StepVerdict::NoFace);
     }
     let at = |verdict| StepAttempt {
@@ -1271,6 +1274,27 @@ mod tests {
                  kerb; feet {feet:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_thelsamar_inn_door_sill_is_walked_over() {
+        // The Thelsamar inn's door, WoW `(-5367, -2963.9, 326.5)`: a 0.28 yd sill whose riser
+        // leans out over its foot, face normal `z` −0.063. The step probe takes any record that
+        // is not walkable (`0x636b6e`), so the body steps onto the 326.8 yd floor inside.
+        let Some(world) = world_from_wmo("Azeroth", "wet_inn.wmo", -5367.0, -2964.0, 12.0) else {
+            return;
+        };
+        let feet = walk_wow(
+            world,
+            [-5367.0, -2961.0, 327.0],
+            -std::f32::consts::FRAC_PI_2,
+            60,
+        );
+        let top = feet.iter().copied().fold(f32::MIN, f32::max);
+        assert!(
+            top > 326.7,
+            "the body must step over the sill, not stall at it; feet {feet:?}"
+        );
     }
 
     #[test]
