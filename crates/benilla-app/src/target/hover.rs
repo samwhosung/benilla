@@ -596,8 +596,9 @@ pub(super) fn track_go_pick_parts(
         // Through the hit's own resolver, so a card and its mesh siblings agree.
         !stores.get(resolve_net(e)).is_ok_and(|s| {
             let kind = s.0.gameobject_type_id();
-            // AV banner aura traps have no capture action and overlap the flag.
-            let banner_aura = kind == 6 && matches!(s.0.object_entry(), Some(180421..=180423));
+            // Battleground banner aura traps have no capture action and overlap the flag.
+            let banner_aura =
+                kind == 6 && matches!(s.0.object_entry(), Some(180100..=180102 | 180421..=180423));
             matches!(kind, 11 | 14 | 15) || banner_aura
         })
     }));
@@ -2005,17 +2006,19 @@ mod tests {
     #[test]
     fn banner_aura_does_not_take_the_pick_from_the_flag() {
         use benilla_protocol::field::FIELD_OBJECT_ENTRY;
-        let mut world = go_pick_world();
-        let aura = chest_at(&mut world, 0xF110_0000_0800_0002, 180421, 5.0, 0);
-        world
-            .entity_mut(aura)
-            .insert(ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
-                (2, 0x21),
-                (FIELD_OBJECT_ENTRY, 180421),
-                (21, 6),
-            ])));
-        let flag = chest_at(&mut world, 0xF110_0000_0700_0001, 7, 0.0, 0);
-        assert_eq!(go_pick_under(&mut world, None), Some(flag));
+        for entry in (180100..=180102).chain(180421..=180423) {
+            let mut world = go_pick_world();
+            let aura = chest_at(&mut world, 0xF110_0000_0800_0002, entry, 5.0, 0);
+            world
+                .entity_mut(aura)
+                .insert(ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                    (2, 0x21),
+                    (FIELD_OBJECT_ENTRY, entry),
+                    (21, 6),
+                ])));
+            let flag = chest_at(&mut world, 0xF110_0000_0700_0001, 7, 0.0, 0);
+            assert_eq!(go_pick_under(&mut world, None), Some(flag), "aura {entry}");
+        }
     }
 
     /// `0x481050` sets the GameObject flag `0x4` while targeting only for a word in `0x4800`
