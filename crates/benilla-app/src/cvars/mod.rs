@@ -2628,7 +2628,11 @@ mod tests {
             .eval::<String>("return GetCVar('accountName')")
             .unwrap();
         assert_eq!(glue, "PLAYER", "the VM's mirror has it");
-        assert!(old.exists(), "kept until the save");
+        // The file goes only with the save that writes the row, in whichever frame the quiet
+        // second ends: the first, when the boot itself took that long, or the next below.
+        let saved = std::fs::read_to_string(tmp.join("config.toml"))
+            .is_ok_and(|text| text.contains("accountName = \"PLAYER\""));
+        assert_eq!(old.exists(), !saved, "kept until the save");
         app.world_mut().resource_mut::<Cvars>().last_change =
             Instant::now().checked_sub(SAVE_QUIET * 2);
         app.update();
@@ -2658,12 +2662,12 @@ mod tests {
         let old = tmp.join("account");
         std::fs::write(&old, "PLAYER").unwrap();
 
-        let mut app = cvar_app_in(&env);
-        app.update();
-        // The folder turns read-only: the write of `config.toml` fails (unless the run is root's,
-        // which no mode stops).
+        // The folder is read-only from before the boot, so every write of `config.toml` fails,
+        // whichever frame the quiet second ends in (unless the run is root's, which no mode stops).
         std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o555)).unwrap();
         let read_only = std::fs::write(tmp.join("probe"), "").is_err();
+        let mut app = cvar_app_in(&env);
+        app.update();
         app.world_mut().resource_mut::<Cvars>().save();
         std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)).unwrap();
         if read_only {
