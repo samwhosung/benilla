@@ -2582,15 +2582,20 @@ mod tests {
 
         let mut app = cvar_app_in(&env);
         app.update();
+        let changed = Instant::now();
         app.world_mut()
             .non_send_resource_mut::<UiScript>()
             .run(r#"SetCVar("MusicVolume", 0.75)"#)
             .unwrap();
         app.update();
-        assert!(
-            !tmp.join("config.toml").exists(),
-            "inside the quiet second nothing is written"
-        );
+        // The change is younger than the quiet second whenever the call and the frame took less
+        // than that second; a slower machine may already have saved it.
+        if changed.elapsed() < SAVE_QUIET {
+            assert!(
+                !tmp.join("config.toml").exists(),
+                "inside the quiet second nothing is written"
+            );
+        }
 
         // The change ages past the quiet second; no `AppExit` anywhere.
         {
