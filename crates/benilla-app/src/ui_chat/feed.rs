@@ -273,9 +273,8 @@ struct ChatQueue {
     /// The lane: every item not held, in stamp order.
     pending: std::collections::VecDeque<Queued>,
     /// The lines waiting for a name or an item's, out of the merge, in the order they began to
-    /// wait, keyed by their place in that order. A map, not a list: each release takes every
-    /// line out and puts most back, so a list's shifts made a frame cost the square of its
-    /// length.
+    /// wait, keyed by their place in that order. Each release takes every line out and puts most
+    /// back, which a map does in log time where a sorted list shifts its tail at each.
     held: std::collections::BTreeMap<u64, Pending>,
     /// The places of the held lines that wait on their `$`-macro subject, oldest first, so the
     /// cap ([`MAX_HELD_SUBJECT_LINES`]) finds its oldest without a walk.
