@@ -101,6 +101,7 @@ fn the_shape_ignores_edge_on_correct_and_degenerate_batches() {
         additive: false,
         no_depth_write: false,
         no_depth_test: false,
+        no_hit_test: false,
         fog_policy: benilla_formats::FogPolicy::Scene,
         billboard: billboard.then(|| Billboard {
             bone: 0,

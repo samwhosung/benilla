@@ -88,6 +88,7 @@ fn remap_submesh(
             additive: false,
             no_depth_write: false,
             no_depth_test: false,
+            no_hit_test: false,
             fog_policy: FogPolicy::Scene,
             billboard: None,
             welded_billboard: false,
