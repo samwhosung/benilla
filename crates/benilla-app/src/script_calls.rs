@@ -1905,14 +1905,13 @@ pub(crate) fn with_hosted_vm<R>(
 
 /// The [`SystemState`](bevy::ecs::system::SystemState) of `P` an exclusive entry builds its host
 /// from, kept in the world between calls. Building one matches each of its queries against every
-/// archetype the world holds, and the host's queries are many, so an entry that ran it per call
-/// paid for all of them each time; a kept state only matches the archetypes made since its last
-/// use. Its `Local`s live on between calls, as a system's do.
+/// archetype the world holds, and the host's queries are many; a kept state matches only the
+/// archetypes made since its last use. Its `Local`s live on between calls, as a system's do.
 struct CachedState<P: SystemParam + 'static>(Option<bevy::ecs::system::SystemState<P>>);
 
 /// Run `f` on the kept [`CachedState`] of `P`, built on the first call. The state is out of the
-/// world while `f` runs, so an entry nested in its apply (a command that reaches the VM again)
-/// builds one of its own, as every call did before.
+/// world while `f` runs, so an entry nested in it (a command in its apply that reaches the VM
+/// again) builds one of its own.
 fn with_cached_state<P: SystemParam + 'static, R>(
     world: &mut World,
     f: impl FnOnce(&mut bevy::ecs::system::SystemState<P>, &mut World) -> R,
