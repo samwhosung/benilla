@@ -201,7 +201,7 @@ fn a_crowd_composites_off_the_main_thread_and_each_body_waits_for_its_atlas() {
         assert_eq!(children(&app, e), 0, "and draws nothing meanwhile");
     }
 
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + Duration::from_secs(120);
     while crowd.iter().any(|&e| !built(&app, e)) {
         assert!(Instant::now() < deadline, "every composite lands");
         std::thread::sleep(Duration::from_millis(1));
@@ -256,7 +256,7 @@ fn a_body_that_waited_for_its_atlas_fades_from_its_arrival() {
         .0;
     assert!(!built(&app, player), "the body waits for its atlas");
 
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + Duration::from_secs(120);
     while !built(&app, player) {
         assert!(Instant::now() < deadline, "the composite lands");
         std::thread::sleep(Duration::from_millis(1));
@@ -297,7 +297,7 @@ fn a_healed_rig_rebuilds_its_body_in_the_same_frame() {
         equip: SETS[1],
     };
     let player = arrive(&mut app, look);
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + Duration::from_secs(120);
     while !built(&app, player) {
         assert!(Instant::now() < deadline, "the composite lands");
         std::thread::sleep(Duration::from_millis(1));

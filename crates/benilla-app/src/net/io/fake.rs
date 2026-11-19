@@ -29,8 +29,9 @@ const SALT: [u8; 32] = [0x5a; 32];
 /// The PIN a realmd of [`servers_with_pin`] asks [`USER`] for, until [`Realmd::set_pin`].
 pub(crate) const PIN: u32 = 2590;
 const PIN_SALT: [u8; 16] = [0x6b; 16];
-/// Every wait in the tests: long enough for a loaded machine, short of a hung gate.
-pub(crate) const WAIT: Duration = Duration::from_secs(20);
+/// Every wait in the tests, a bound on a hang and never on a pass: the gates run the workspace at
+/// background priority beside other work, where one glue frame can take seconds.
+pub(crate) const WAIT: Duration = Duration::from_secs(120);
 
 /// A session key, realmd to the world server.
 type Key = [u8; SESSION_KEY_LENGTH];

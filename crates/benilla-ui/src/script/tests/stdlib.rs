@@ -848,7 +848,8 @@ fn debugprofilestop_measures_within_a_frame_in_milliseconds() {
     std::thread::sleep(std::time::Duration::from_millis(20));
     let ms = s.eval::<f64>("return debugprofilestop()").unwrap();
     assert!(
-        (20.0..2000.0).contains(&ms),
+        // Milliseconds, not microseconds (20 000 and up), whatever a loaded machine adds.
+        (20.0..20_000.0).contains(&ms),
         "no tick between, 20 ms slept: {ms}"
     );
     let busy = s

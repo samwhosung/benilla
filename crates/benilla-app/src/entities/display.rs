@@ -616,7 +616,8 @@ mod tests {
             })
         };
         let mut got = None;
-        for _ in 0..3000 {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        while std::time::Instant::now() < deadline {
             app.update();
             if let (Some(a), Some(b)) = (shape(&app, &handle), shape(&app, &cube)) {
                 got = Some((a, b));

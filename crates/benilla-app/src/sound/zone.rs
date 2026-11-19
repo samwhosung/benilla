@@ -1778,20 +1778,21 @@ mod tests {
         Ok(mixer::stream_from_bytes(wav)?.loop_region(..))
     }
 
-    /// An opener held until `gate` fires; run on the caller's thread it gives up after 2 s.
+    /// An opener held until `gate` fires; run on the caller's thread it gives up after 120 s, a
+    /// bound on a hang that a loaded machine's late release never reaches.
     fn held(
         gate: mpsc::Receiver<()>,
         ran_on: Arc<Mutex<Option<std::thread::ThreadId>>>,
     ) -> impl FnOnce() -> anyhow::Result<StreamingSoundData<FromFileError>> + Send + 'static {
         move || {
             *ran_on.lock().unwrap() = Some(std::thread::current().id());
-            let _ = gate.recv_timeout(Duration::from_secs(2));
+            let _ = gate.recv_timeout(Duration::from_secs(120));
             bed()
         }
     }
 
     fn wait_landed(zone: &mut ZoneAudio) -> Option<OpenedBed> {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(120);
         while Instant::now() < deadline {
             if let Some(bed) = poll_bed_open(zone) {
                 return Some(bed);
