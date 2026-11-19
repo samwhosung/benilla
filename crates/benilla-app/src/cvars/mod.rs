@@ -2597,13 +2597,13 @@ mod tests {
             );
         }
 
-        // The change ages past the quiet second; no `AppExit` anywhere.
-        {
-            let mut cvars = app.world_mut().resource_mut::<Cvars>();
-            assert!(cvars.dirty);
-            cvars.last_change = Instant::now().checked_sub(SAVE_QUIET * 2);
+        // The change ages past the quiet second, unless that slower frame already saved it; no
+        // `AppExit` anywhere.
+        if app.world().resource::<Cvars>().dirty {
+            app.world_mut().resource_mut::<Cvars>().last_change =
+                Instant::now().checked_sub(SAVE_QUIET * 2);
+            app.update();
         }
-        app.update();
         let text = std::fs::read_to_string(tmp.join("config.toml")).unwrap();
         assert!(text.contains("MusicVolume = \"0.75\""), "{text}");
         assert!(!app.world().resource::<Cvars>().dirty);
