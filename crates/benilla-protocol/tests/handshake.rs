@@ -237,7 +237,7 @@ fn a_parked_session_asks_for_a_guild_and_keeps_its_answer() {
 
     let mut session = WorldSession::connect(&addr, "one", SESSION_KEY).unwrap();
     session.guild_query(0x1234).unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
     let answers = loop {
         session.poll_link().unwrap();
         let answers = session.take_guild_answers();

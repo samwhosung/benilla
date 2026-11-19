@@ -245,17 +245,22 @@ fn a_600_ms_stall_reaches_gettime_by_the_next_frame_under_pipelined_rendering() 
         app.update();
         presented = start;
     };
-    for _ in 0..10 {
+    for _ in 0..8 {
+        frame(&mut app);
+    }
+    // GetTime at `before` reads a presented instant no older than this, so the wall since it
+    // bounds every second GetTime moves, however long a loaded machine takes over the frames.
+    let since = Instant::now();
+    for _ in 0..2 {
         frame(&mut app);
     }
     let (_, before) = last(&app);
     app.world_mut().resource_mut::<Stall>().0 = Some(Duration::from_millis(600));
     frame(&mut app);
     let (_, during) = last(&app);
-    let wall = Instant::now();
     frame(&mut app);
     let (elapsed, after) = last(&app);
-    let wall = wall.elapsed().as_secs_f64();
+    let wall = since.elapsed().as_secs_f64();
     assert!(
         after - before >= 0.595,
         "GetTime moved {} s over the frame that stalled 600 ms and the next ({} s, then {} s)",
@@ -270,7 +275,7 @@ fn a_600_ms_stall_reaches_gettime_by_the_next_frame_under_pipelined_rendering() 
     );
     // And not ahead of the wall: nothing past the stall and the frames around it.
     assert!(
-        after - before < 0.6 + wall + 0.25,
+        after - before < wall + 0.25,
         "GetTime ran ahead: {} s",
         after - before
     );

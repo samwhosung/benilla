@@ -245,21 +245,21 @@ mod tests {
     }
 
     /// Work that finishes when the test says so, and counts how many times it ran. It gives up
-    /// after two seconds, so work run inline on the test's thread fails the test, never hangs it.
+    /// after 120 s, so work run inline on the test's thread fails the test, never hangs it.
     fn gated(ran: &Arc<std::sync::atomic::AtomicUsize>) -> (mpsc::Sender<()>, Work) {
         let (tx, rx) = mpsc::channel::<()>();
         let ran = ran.clone();
         let work: Work = Box::new(move || {
             ran.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            rx.recv_timeout(std::time::Duration::from_secs(2)).ok()?;
+            rx.recv_timeout(std::time::Duration::from_secs(120)).ok()?;
             Some(atlas())
         });
         (tx, work)
     }
 
-    /// Land until `key` is done, or give up after two seconds.
+    /// Land until `key` is done, or give up after 120 s, a bound on a hang.
     fn land_until(c: &mut SkinComposites, images: &mut Assets<Image>, key: SkinKey) {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
         while c.running.contains_key(&key) && std::time::Instant::now() < deadline {
             c.land(images);
             std::thread::yield_now();

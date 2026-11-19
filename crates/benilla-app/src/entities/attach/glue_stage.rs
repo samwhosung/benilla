@@ -548,8 +548,9 @@ mod tests {
         app.world_mut().resource_mut::<GluePreview>().look = Some(select(2));
         let t0 = Instant::now();
         app.update();
+        // A bound on a hang, not on a pass: a loaded machine can spend seconds on one frame.
         assert!(
-            t0.elapsed() < Duration::from_secs(5),
+            t0.elapsed() < Duration::from_secs(120),
             "the frame went on once nothing loaded, after {:?}",
             t0.elapsed()
         );

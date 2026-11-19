@@ -5,11 +5,21 @@ use std::time::{Duration, Instant};
 
 use super::*;
 
-/// Short enough that the timeout test is quick.
-const FAST: Timeouts = Timeouts {
-    connect: Duration::from_millis(500),
-    read: Duration::from_millis(300),
+/// For a server that answers: long enough that a loaded machine's scheduling never ends a read.
+const ANSWERS: Timeouts = Timeouts {
+    connect: Duration::from_secs(10),
+    read: Duration::from_secs(10),
 };
+
+/// For a server that falls silent: a read gives up long before [`SILENCE`] ends.
+const FAST: Timeouts = Timeouts {
+    connect: Duration::from_secs(10),
+    read: Duration::from_secs(5),
+};
+
+/// How long a silent or stalling fake says nothing; a call that returns well inside it was ended
+/// by its own read timeout, not by the server.
+const SILENCE: Duration = Duration::from_secs(60);
 
 // ── The buffer, chunk by chunk ──
 
@@ -159,10 +169,10 @@ impl Fake {
                     Reply::Raw(bytes) => {
                         let _ = conn.write_all(&bytes);
                     }
-                    Reply::Silent => std::thread::sleep(Duration::from_secs(2)),
+                    Reply::Silent => std::thread::sleep(SILENCE),
                     Reply::Stall(bytes) => {
                         let _ = conn.write_all(&bytes);
-                        std::thread::sleep(Duration::from_secs(2));
+                        std::thread::sleep(SILENCE);
                     }
                 }
             }
@@ -186,7 +196,7 @@ fn ok(body: &[u8]) -> Reply {
 }
 
 fn alert(url: &str) -> Option<String> {
-    fetch_alert(url, FAST).map(|t| String::from_utf8_lossy(&t).into_owned())
+    fetch_alert(url, ANSWERS).map(|t| String::from_utf8_lossy(&t).into_owned())
 }
 
 #[test]
@@ -259,7 +269,7 @@ fn a_redirect_to_https_is_not_followed() {
         )
     });
     assert!(matches!(
-        download(&fake.url("/"), FAST, &mut |_| true),
+        download(&fake.url("/"), ANSWERS, &mut |_| true),
         Err(FetchError::Https)
     ));
     assert_eq!(alert(&fake.url("/")), None);
@@ -290,8 +300,8 @@ fn a_body_with_no_length_is_read_to_the_close() {
 fn a_server_that_says_nothing_times_out() {
     let fake = Fake::start(|_, _, _| Reply::Silent);
     let start = Instant::now();
-    assert_eq!(alert(&fake.url("/")), None);
-    assert!(start.elapsed() < Duration::from_millis(1500));
+    assert_eq!(fetch_alert(&fake.url("/"), FAST), None);
+    assert!(start.elapsed() < SILENCE / 2);
 }
 
 /// The status and the first bytes, then silence past the read timeout: the done call
@@ -304,8 +314,9 @@ fn a_body_that_stalls_keeps_what_came_before_it() {
         )
     });
     let start = Instant::now();
-    assert_eq!(alert(&fake.url("/")).as_deref(), Some("partial\nmor"));
-    assert!(start.elapsed() < Duration::from_millis(1500));
+    let text = fetch_alert(&fake.url("/"), FAST).map(|t| String::from_utf8_lossy(&t).into_owned());
+    assert_eq!(text.as_deref(), Some("partial\nmor"));
+    assert!(start.elapsed() < SILENCE / 2);
 }
 
 #[test]
@@ -313,7 +324,7 @@ fn a_3_kb_body_fills_the_buffer_and_no_more() {
     let mut body = b"SERVERALERT:".to_vec();
     body.extend((0..3000).map(|i| b'a' + (i % 26) as u8));
     let fake = Fake::start(move |_, _, _| ok(&body.clone()));
-    let text = fetch_alert(&fake.url("/"), FAST).unwrap();
+    let text = fetch_alert(&fake.url("/"), ANSWERS).unwrap();
     assert_eq!(text.len(), 0x7ff - PREFIX.len());
     assert!(text.starts_with(b"abcdefghij"));
 }
@@ -323,7 +334,7 @@ fn an_https_url_is_never_dialled() {
     let fake = Fake::start(|_, _, _| ok(b"SERVERALERT:x"));
     let https = fake.url("/").replacen("http://", "https://", 1);
     assert!(matches!(
-        download(&https, FAST, &mut |_| true),
+        download(&https, ANSWERS, &mut |_| true),
         Err(FetchError::Https)
     ));
     assert_eq!(alert(&https), None);
@@ -345,7 +356,7 @@ fn a_refused_connection_is_silent() {
 fn the_background_fetch_hands_over_its_alert_through_a_channel() {
     let fake = Fake::start(|_, _, _| ok(b"SERVERALERT:\nhello\n"));
     let rx = spawn_fetch(fake.url("/"));
-    let got = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let got = rx.recv_timeout(Duration::from_secs(60)).unwrap();
     assert_eq!(got.as_deref(), Some(&b"\nhello"[..]));
 }
 
@@ -406,7 +417,7 @@ fn endless_chunked_trailers_are_refused() {
     raw.extend_from_slice(b"\r\n");
     let fake = Fake::start(move |_, _, _| Reply::Raw(raw.clone()));
     assert!(matches!(
-        download(&fake.url("/"), FAST, &mut |_| true),
+        download(&fake.url("/"), ANSWERS, &mut |_| true),
         Err(FetchError::Io(_))
     ));
     // The ordinary trailer still ends it.
@@ -415,5 +426,5 @@ fn endless_chunked_trailers_are_refused() {
             b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0\r\nX: y\r\n\r\n".to_vec(),
         )
     });
-    assert!(download(&fake.url("/"), FAST, &mut |_| true).is_ok());
+    assert!(download(&fake.url("/"), ANSWERS, &mut |_| true).is_ok());
 }

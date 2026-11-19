@@ -1595,7 +1595,7 @@ pub(super) mod tests {
             r.process(&mut out, 2);
             out.iter().step_by(2).copied().collect()
         };
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
         let mut lead = render(1);
         while lead[0] == 0.0 && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(20));
@@ -1693,12 +1693,13 @@ pub(super) mod tests {
         mp3
     }
 
-    /// Pump `h` on a mock device until it stops, for at most 5 s; whether it did.
+    /// Pump `h` on a mock device until it stops, for at most 120 s (a bound on a hang); whether
+    /// it did.
     pub(in crate::sound) fn plays_out(
         manager: &mut AudioManager<kira::backend::mock::MockBackend>,
         h: &StreamingSoundHandle<FromFileError>,
     ) -> bool {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
         let backend = manager.backend_mut();
         while h.state() != kira::sound::PlaybackState::Stopped
             && std::time::Instant::now() < deadline

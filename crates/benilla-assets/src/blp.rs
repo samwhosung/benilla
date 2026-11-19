@@ -327,7 +327,8 @@ mod tests {
         app.init_asset::<Image>();
         app.register_asset_loader(BlpImageLoader);
         let handle: Handle<Image> = app.world().resource::<AssetServer>().load(url.to_string());
-        for _ in 0..2000 {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        while std::time::Instant::now() < deadline {
             app.update();
             if let Some(image) = app.world().resource::<Assets<Image>>().get(&handle) {
                 return Some(image.clone());

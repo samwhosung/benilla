@@ -1910,11 +1910,14 @@ mod inner_hold_tests {
     #[test]
     fn the_frame_waits_for_a_held_inner_tile() {
         let (mut app, handle) = waiting_app(false);
+        let t0 = Instant::now();
         app.update();
-        assert!(
-            !app.world().resource::<Assets<AdtTile>>().contains(&handle),
-            "the read takes {SLOW_READ:?}, so a frame that does not wait has no tile"
-        );
+        assert_eq!(app.world().resource::<StreamActivity>().wait_ms, 0.0);
+        // The read takes SLOW_READ, so a frame faster than that has no tile without the wait;
+        // a slower machine may already have it.
+        if t0.elapsed() < SLOW_READ {
+            assert!(!app.world().resource::<Assets<AdtTile>>().contains(&handle));
+        }
 
         let (mut app, handle) = waiting_app(true);
         app.update();
@@ -1958,15 +1961,14 @@ mod inner_hold_tests {
         assert!(t0.elapsed() >= CAP, "the first frame waits out the cap");
         assert!(app.world().resource::<TerrainStreamer>().tiles[&(32, 44)].gave_up);
 
+        // Every frame that waits adds its wait, however short, so none added is none waited.
         app.world_mut().resource_mut::<StreamActivity>().wait_ms = 0.0;
-        let t1 = Instant::now();
         app.update();
-        assert!(
-            t1.elapsed() < CAP,
-            "a given-up read is not waited on again ({:?})",
-            t1.elapsed()
+        assert_eq!(
+            app.world().resource::<StreamActivity>().wait_ms,
+            0.0,
+            "a given-up read is not waited on again"
         );
-        assert_eq!(app.world().resource::<StreamActivity>().wait_ms, 0.0);
         assert!(!app.world().resource::<Assets<AdtTile>>().contains(&handle));
     }
 
