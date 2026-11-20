@@ -212,19 +212,30 @@ pub(crate) struct StickyPicks {
 #[allow(clippy::type_complexity)] // the picker's own part query, borrowed as-is
 fn posed_parts<'a>(
     kids: &Children,
-    parts: &'a Query<(
-        &Mesh3d,
-        &benilla_world::rig_palette::RigPart,
-        Option<&InheritedVisibility>,
-    )>,
+    parts: &'a PosedParts<'_, '_>,
     is_self: bool,
 ) -> Vec<(&'a Mesh3d, &'a benilla_world::rig_palette::RigPart)> {
     kids.iter()
         .filter_map(|c| parts.get(c).ok())
-        .filter(|(_, _, drawn)| !is_self || drawn.is_none_or(|v| v.get()))
-        .map(|(mesh, part, _)| (mesh, part))
+        .filter(|(_, _, drawn, _)| !is_self || drawn.is_none_or(|v| v.get()))
+        // A texture unit flagged 0x08 is out of the scene ray's hit test (`0x70902f`), as on a
+        // GameObject: a totem's flagged glow units never take the pick.
+        .filter(|(_, _, _, geometry)| !geometry.is_some_and(|g| g.0.no_hit_test))
+        .map(|(mesh, part, _, _)| (mesh, part))
         .collect()
 }
+
+/// A model root's skinned part children, as the posed pick reads them.
+type PosedParts<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static Mesh3d,
+        &'static benilla_world::rig_palette::RigPart,
+        Option<&'static InheritedVisibility>,
+        Option<&'static benilla_world::interact::PickMesh>,
+    ),
+>;
 
 /// The unit roots the pick walks. An undrawn body is not in the reference's draw list, so it takes
 /// no mouseover, cursor or click.
@@ -257,16 +268,7 @@ pub(super) struct UnitPicker<'w, 's> {
     roots: PickRoots<'w, 's>,
     // The part children of every pick model root: body, worn items and mount.
     child_sets: Query<'w, 's, &'static Children>,
-    #[allow(clippy::type_complexity)]
-    parts: Query<
-        'w,
-        's,
-        (
-            &'static Mesh3d,
-            &'static benilla_world::rig_palette::RigPart,
-            Option<&'static InheritedVisibility>,
-        ),
-    >,
+    parts: PosedParts<'w, 's>,
     // The box fallback: every `CreaturePickPart`, the fallback cube included.
     #[allow(clippy::type_complexity)]
     meshes: Query<
@@ -1137,12 +1139,7 @@ mod tests {
         let shown = part(&mut world, InheritedVisibility::VISIBLE);
         part(&mut world, InheritedVisibility::HIDDEN);
         let count = move |is_self: bool| {
-            move |kids: Query<&Children>,
-                  parts: Query<(
-                &Mesh3d,
-                &benilla_world::rig_palette::RigPart,
-                Option<&InheritedVisibility>,
-            )>| {
+            move |kids: Query<&Children>, parts: PosedParts| {
                 posed_parts(kids.get(root).expect("the parts"), &parts, is_self).len()
             }
         };
@@ -1158,6 +1155,32 @@ mod tests {
             0,
             "first person: nothing of ours to pick"
         );
+    }
+
+    /// A unit's part whose texture unit is flagged 0x08 (a totem's glow) leaves the posed pick, as
+    /// the scene ray skips it (`0x70902f`); its other parts stay.
+    #[test]
+    fn a_flagged_unit_part_leaves_the_posed_pick() {
+        let mut world = World::new();
+        let root = world.spawn_empty().id();
+        let rig = world.spawn_empty().id();
+        for no_hit_test in [false, true] {
+            world.spawn((
+                ChildOf(root),
+                Mesh3d(Handle::default()),
+                benilla_world::rig_palette::RigPart(rig),
+                benilla_world::interact::PickMesh(std::sync::Arc::new(
+                    benilla_formats::RenderSubmesh {
+                        no_hit_test,
+                        ..Default::default()
+                    },
+                )),
+            ));
+        }
+        let count = move |kids: Query<&Children>, parts: PosedParts| {
+            posed_parts(kids.get(root).expect("the parts"), &parts, false).len()
+        };
+        assert_eq!(world.run_system_once(count).unwrap(), 1);
     }
 
     /// Under a `sweep` probe the aim moves every frame, and the occlusion trace casts from the
