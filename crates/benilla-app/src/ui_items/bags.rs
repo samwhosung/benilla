@@ -259,10 +259,26 @@ impl Bags<'_, '_, '_> {
 impl Bags<'_, '_, '_> {
     /// `ask` answered off the bags; `false` for not one of the family's.
     fn answer(&self, ask: &mut LiveAsk<'_>) -> bool {
+        // Another family's question reads neither the player nor the items.
+        if !is_bag_question(ask) {
+            return false;
+        }
         // No player declines, and a harness's copy answers.
         self.player()
             .is_some_and(|store| self.answer_held(&store.0, ask))
     }
+}
+
+/// Whether `ask` is one of the questions [`Bags::answer_held`] answers.
+fn is_bag_question(ask: &LiveAsk<'_>) -> bool {
+    ask.is::<BagSlotQuery>()
+        || ask.is::<BagQuery>()
+        || ask.is::<BagItemsQuery>()
+        || ask.is::<BagGuidQuery>()
+        || ask.is::<HasKeyQuery>()
+        || ask.is::<WornSlotQuery>()
+        || ask.is::<WornKeysQuery>()
+        || ask.is::<WeaponEnchantQuery>()
 }
 
 impl crate::script_calls::live::LiveFamily for BagLive<'_, '_> {

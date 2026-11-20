@@ -32,6 +32,11 @@ impl LiveAsk<'_> {
         }
         true
     }
+
+    /// Whether the question is a `Q`, for a family that reads its inputs only for its own.
+    pub fn is<Q: LiveQuery>(&self) -> bool {
+        self.query.is::<Q>()
+    }
 }
 
 /// `query`'s answer through the lent host, as of the place the getter runs, or through the reads
