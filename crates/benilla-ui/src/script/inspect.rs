@@ -79,16 +79,9 @@ impl super::UiScript {
             .unwrap_or_else(|| guids.tokens_of(guid))
     }
 
-    /// Whether one unit carries the unit-field watchers now ([`super::unit::field_watchers_in`]),
-    /// read as [`Self::bound_unit_tokens`] reads.
+    /// Whether `guid`'s unit-field watchers are linked, as its token flags leave them (`0x60c4a0`).
     pub fn unit_has_field_watchers(&self, guid: u64) -> bool {
-        let model = self.model_ref();
-        let guids = &model.unit_guids;
-        let globals = super::unit::LiveGlobals::asked(self.lua(), guids);
-        super::unit::with_live_objects(self.lua(), |o| {
-            super::unit::field_watchers_in(&globals, o, guid)
-        })
-        .unwrap_or_else(|| guids.has_field_watchers(guid))
+        self.model_ref().unit_watches.linked(guid)
     }
 
     /// Push, or clear with `None`, the visible items of the player `guid` by slot id 1..=19:

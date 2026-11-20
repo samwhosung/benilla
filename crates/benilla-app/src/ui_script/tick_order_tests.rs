@@ -151,6 +151,8 @@ fn client(chunk: &str) -> Client {
             transport: None,
             spline: None,
             fields: ObjectFields::from_pairs(&[
+                // `OBJECT_FIELD_TYPE`, a player's type mask, which every create carries.
+                (2, 0x19),
                 (FIELD_UNIT_HEALTH, 100),
                 (FIELD_UNIT_MAXHEALTH, 100),
             ])
