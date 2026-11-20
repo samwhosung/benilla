@@ -21,6 +21,11 @@ pub struct LiveAsk<'a> {
 }
 
 impl LiveAsk<'_> {
+    /// The question's type.
+    pub fn question(&self) -> std::any::TypeId {
+        (*self.query).type_id()
+    }
+
     /// Answer with `f` when the question is a `Q`, `None` declining it, so the getter reads its
     /// snapshot; whether it was a `Q`.
     pub fn answer<Q: LiveQuery>(&mut self, f: impl FnOnce(&Q) -> Option<Q::Answer>) -> bool {
