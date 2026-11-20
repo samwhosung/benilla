@@ -1894,10 +1894,37 @@ pub(crate) fn with_hosted_vm<R>(
     world: &mut World,
     f: impl FnOnce(Option<&mut UiScript>) -> R,
 ) -> R {
-    let mut state = bevy::ecs::system::SystemState::<HostedVm>::new(world);
-    let r = state.get_mut(world).run(f);
-    state.apply(world);
+    let r = with_cached_state::<HostedVm, _>(world, |state, world| {
+        let r = state.get_mut(world).run(f);
+        state.apply(world);
+        r
+    });
     crate::creature_anim::apply_unit_edits(world);
+    r
+}
+
+/// The [`SystemState`](bevy::ecs::system::SystemState) of `P` an exclusive entry builds its host
+/// from, kept in the world between calls. Building one matches each of its queries against every
+/// archetype the world holds, and the host's queries are many; a kept state matches only the
+/// archetypes made since its last use. Its `Local`s live on between calls, as a system's do.
+struct CachedState<P: SystemParam + 'static>(Option<bevy::ecs::system::SystemState<P>>);
+
+/// Run `f` on the kept [`CachedState`] of `P`, built on the first call. The state is out of the
+/// world while `f` runs, so an entry nested in it (a command in its apply that reaches the VM
+/// again) builds one of its own.
+fn with_cached_state<P: SystemParam + 'static, R>(
+    world: &mut World,
+    f: impl FnOnce(&mut bevy::ecs::system::SystemState<P>, &mut World) -> R,
+) -> R {
+    let kept = world
+        .get_non_send_resource_mut::<CachedState<P>>()
+        .and_then(|mut cached| cached.0.take());
+    let mut state = kept.unwrap_or_else(|| bevy::ecs::system::SystemState::<P>::new(world));
+    let r = f(&mut state, world);
+    match world.get_non_send_resource_mut::<CachedState<P>>() {
+        Some(mut cached) => cached.0 = Some(state),
+        None => world.insert_non_send_resource(CachedState(Some(state))),
+    }
     r
 }
 
@@ -1925,15 +1952,17 @@ pub(crate) fn lent_by_world<R>(
     script: &mut UiScript,
     f: impl FnOnce(&mut UiScript) -> R,
 ) -> R {
-    let mut state = bevy::ecs::system::SystemState::<Option<ScriptCallHost>>::new(world);
-    let r = {
-        let mut host = state.get_mut(world);
-        match host.as_mut() {
-            Some(host) => script.hosted(host, f),
-            None => script.refusing(f),
-        }
-    };
-    state.apply(world);
+    let r = with_cached_state::<Option<ScriptCallHost>, _>(world, |state, world| {
+        let r = {
+            let mut host = state.get_mut(world);
+            match host.as_mut() {
+                Some(host) => script.hosted(host, f),
+                None => script.refusing(f),
+            }
+        };
+        state.apply(world);
+        r
+    });
     crate::creature_anim::apply_unit_edits(world);
     r
 }
@@ -5363,5 +5392,61 @@ mod tests {
              so a call their Lua makes is refused:\n  {}",
             unhosted.join("\n  ")
         );
+    }
+}
+
+#[cfg(test)]
+mod cached_state_tests {
+    use super::*;
+
+    #[derive(Component)]
+    struct Mark;
+
+    #[derive(Component)]
+    struct Other;
+
+    fn count(world: &mut World) -> usize {
+        with_cached_state::<Query<&Mark>, _>(world, |state, world| state.get(world).iter().count())
+    }
+
+    #[test]
+    fn a_kept_state_sees_the_archetypes_made_after_it() {
+        let mut world = World::new();
+        world.spawn(Mark);
+        assert_eq!(count(&mut world), 1);
+        assert!(world
+            .get_non_send_resource::<CachedState<Query<&Mark>>>()
+            .is_some());
+        // A new archetype holding the component, made after the state was built and kept.
+        world.spawn((Mark, Other));
+        assert_eq!(count(&mut world), 2);
+    }
+
+    #[test]
+    fn an_entry_nested_in_the_apply_builds_its_own() {
+        let mut world = World::new();
+        world.spawn(Mark);
+        let (outer, inner) = with_cached_state::<Query<&Mark>, _>(&mut world, |state, world| {
+            let outer = state.get(world).iter().count();
+            world.spawn(Mark);
+            (outer, count(world))
+        });
+        assert_eq!((outer, inner), (1, 2));
+        // The outer state goes back last, and still answers for the world as it stands.
+        assert_eq!(count(&mut world), 2);
+    }
+
+    #[test]
+    fn the_hosted_vm_keeps_one_state_across_calls() {
+        let mut app = crate::game_plugins::schedule_tests::headless_client_unrun();
+        let world = app.world_mut();
+        with_hosted_vm(world, |_| ());
+        assert!(world
+            .get_non_send_resource::<CachedState<HostedVm>>()
+            .is_some_and(|c| c.0.is_some()));
+        with_hosted_vm(world, |_| ());
+        assert!(world
+            .get_non_send_resource::<CachedState<HostedVm>>()
+            .is_some_and(|c| c.0.is_some()));
     }
 }
