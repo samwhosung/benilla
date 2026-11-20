@@ -1341,7 +1341,11 @@ type SlotsAndHost<'w, 's> = crate::script_calls::disjoint::Pair<
     'w,
     's,
     ChatSlots<'static>,
-    Option<crate::script_calls::ScriptCallHost<'w, 's>>,
+    crate::script_calls::disjoint::ValidOnce<
+        'static,
+        'static,
+        crate::script_calls::ScriptCallHost<'static, 'static>,
+    >,
 >;
 
 /// The chat lane's channel slots, and the bubble and filter switches a line reads as it shows:
