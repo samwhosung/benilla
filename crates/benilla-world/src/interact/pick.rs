@@ -726,7 +726,11 @@ mod tests {
                 !hits.iter().any(|(e, _)| *e == aura),
                 "inflate {inflate}: the glow must not be hit: {hits:?}"
             );
-            assert_eq!(hits.first().map(|(e, _)| *e), Some(banner), "inflate {inflate}");
+            assert_eq!(
+                hits.first().map(|(e, _)| *e),
+                Some(banner),
+                "inflate {inflate}"
+            );
         }
     }
 
