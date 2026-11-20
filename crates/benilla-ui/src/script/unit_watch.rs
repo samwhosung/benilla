@@ -72,6 +72,11 @@ impl UnitWatches {
         }
     }
 
+    /// Whether `guid`'s unit-field watchers are linked.
+    pub(crate) fn linked(&self, guid: u64) -> bool {
+        self.bridges.contains_key(&guid)
+    }
+
     /// A tooltip build that shows a unit links the tooltip's watcher on it at the tail.
     pub(crate) fn link_tooltip(&mut self, tooltip: FrameHandle) {
         let at = self.link();
