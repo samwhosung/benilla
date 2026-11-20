@@ -3249,3 +3249,74 @@ fn a_travelling_spell_without_a_missile_or_ammo_flies_nothing() {
         );
     }
 }
+
+/// A recast of a running channel (Fishing over its own bobber): the server fails the old cast
+/// (`SMSG_SPELL_FAILED_OTHER`) and starts the new one inside one update, so `UNIT_CHANNEL_SPELL`
+/// reads the same spell on both sides. The failure's `0x614150(spell, 0)` spares the channel kit's
+/// effect (kind 2, flagged 0x1000 at `0x60eec7`; skipped at `0x614179`), so FishingLoop holds; only
+/// the field's own change ends it.
+#[test]
+fn a_failure_of_the_channelled_spell_keeps_the_channels_hold() {
+    use benilla_protocol::field::FIELD_UNIT_CHANNEL_SPELL;
+    const FISHING: u32 = 7620;
+    const FISHING_VISUAL: u32 = 759;
+    const FISHING_CHANNEL_KIT: u32 = 830;
+    let mut app = app();
+    app.insert_resource(SpellVisuals(SpellVisualCatalog::from_tables(
+        HashMap::from([(
+            FISHING_VISUAL,
+            VisualStages {
+                channel: FISHING_CHANNEL_KIT,
+                ..Default::default()
+            },
+        )]),
+        HashMap::from([(
+            FISHING_CHANNEL_KIT,
+            VisualKit {
+                anim_id: Some(HOLD_ANIM),
+                ..Default::default()
+            },
+        )]),
+    )));
+    app.insert_resource(crate::ui_action::Spells {
+        catalog: SpellCatalog::from_displays(HashMap::from([(
+            FISHING,
+            SpellDisplay {
+                visual: FISHING_VISUAL,
+                attributes_ex: 0x4,
+                ..Default::default()
+            },
+        )])),
+        ..crate::ui_action::Spells::empty_for_tests()
+    });
+    let unit = app
+        .world_mut()
+        .spawn(crate::net::ObjectStore(
+            benilla_protocol::ObjectFields::from_pairs(&[(FIELD_UNIT_CHANNEL_SPELL, FISHING)]),
+        ))
+        .id();
+    app.update();
+    assert_eq!(hold(&app, unit), Some(FISHING), "the channel's rising edge");
+
+    for kind in [CastEventKind::Fail, CastEventKind::Reap, CastEventKind::Go] {
+        app.world_mut()
+            .write_message(cast_event(unit, FISHING, kind));
+    }
+    app.update();
+    assert_eq!(
+        hold(&app, unit),
+        Some(FISHING),
+        "the old cast's stop spares it"
+    );
+
+    app.world_mut()
+        .get_mut::<crate::net::ObjectStore>(unit)
+        .unwrap()
+        .0
+        .merge(benilla_protocol::ObjectFields::from_pairs(&[(
+            FIELD_UNIT_CHANNEL_SPELL,
+            0,
+        )]));
+    app.update();
+    assert_eq!(hold(&app, unit), None, "the channel's end");
+}

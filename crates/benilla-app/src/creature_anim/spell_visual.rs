@@ -866,12 +866,15 @@ pub(super) fn route_cast_visuals(
 
     // `holds` lags one command flush and an instant cast's START and GO drain together, so
     // `pending` overlays this frame's hold writes (else the cast pose sticks).
-    let mut pending: EntityHashMap<Option<u32>> = EntityHashMap::default();
-    let held_spell = |pending: &EntityHashMap<Option<u32>>, entity: Entity| -> Option<u32> {
-        match pending.get(&entity) {
+    // Each overlay is the held spell and whether the channel armed it.
+    let mut pending: EntityHashMap<Option<(u32, bool)>> = EntityHashMap::default();
+    let held =
+        |pending: &EntityHashMap<Option<(u32, bool)>>, entity: Entity| match pending.get(&entity) {
             Some(&overlaid) => overlaid,
-            None => holds.get(entity).ok().map(|h| h.spell_id),
-        }
+            None => holds.get(entity).ok().map(|h| (h.spell_id, h.channel)),
+        };
+    let held_spell = |pending: &EntityHashMap<Option<(u32, bool)>>, entity: Entity| {
+        held(pending, entity).map(|(spell_id, _)| spell_id)
     };
 
     for p in pushes.read() {
@@ -948,8 +951,9 @@ pub(super) fn route_cast_visuals(
                             anim_id,
                             spell_id: ev.spell_id,
                             ranged,
+                            channel: false,
                         });
-                        pending.insert(ev.entity, Some(ev.spell_id));
+                        pending.insert(ev.entity, Some((ev.spell_id, false)));
                     }
                     if let Some(kit_sound) = kit.sound {
                         out.sounds.write(SpellKitSound::Play {
@@ -1092,7 +1096,11 @@ pub(super) fn route_cast_visuals(
                 }
             }
             CastEventKind::Fail | CastEventKind::Reap => {
-                if held_spell(&pending, ev.entity) == Some(ev.spell_id) {
+                // `0x614150(spell, 0)` (`0x6e8de4`, `0x6e8e99`, `0x6ea139`) spares an effect
+                // flagged 0x1000 (`0x614179`), which a channel's kit, played as kind 2, carries
+                // (`0x60eec7`): a recast's failure of the old cast keeps the running channel's
+                // anim, which only the channel field's own change ends (`0x60d1c0`).
+                if held(&pending, ev.entity) == Some((ev.spell_id, false)) {
                     commands.entity(ev.entity).try_remove::<CastHold>();
                     pending.insert(ev.entity, None);
                 }
@@ -1242,8 +1250,9 @@ pub(super) fn route_cast_visuals(
                         anim_id,
                         spell_id: cur,
                         ranged: false, // no basic shot channels
+                        channel: true,
                     });
-                    pending.insert(entity, Some(cur));
+                    pending.insert(entity, Some((cur, true)));
                 }
                 if let Some(kit_sound) = kit.sound {
                     out.sounds.write(SpellKitSound::Play {

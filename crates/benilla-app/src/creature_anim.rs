@@ -760,6 +760,9 @@ pub(crate) struct CastHold {
     /// A ranged wind-up (`Attributes & 0x2`): the reference brackets it with ranged snaps
     /// (`0x60f34c`, `0x6e5930`), so the sheath reconcile's force-stow never survives the frame.
     pub(crate) ranged: bool,
+    /// Armed by the channel field's kit (kind 2, flagged 0x1000 at `0x60eec7`), which a cast's
+    /// stop without force (`0x614150(spell, 0)`) spares; only the field's change ends it.
+    pub(crate) channel: bool,
 }
 
 /// The live aura state kits that carry an animation, `(spell id, kit AnimID)` newest first: the
