@@ -1663,7 +1663,12 @@ fn freelook_edges(script: &mut UiScript, looked: crate::player::Looked) {
 #[derive(SystemParam)]
 pub(crate) struct VmWith<'w, 's, P: SystemParam + 'static> {
     script: Option<NonSendMut<'w, UiScript>>,
-    set: disjoint::Pair<'w, 's, P, Option<ScriptCallHost<'w, 's>>>,
+    set: disjoint::Pair<
+        'w,
+        's,
+        P,
+        disjoint::ValidOnce<'static, 'static, ScriptCallHost<'static, 'static>>,
+    >,
 }
 
 impl<P: SystemParam + 'static> VmWith<'_, '_, P> {
@@ -1881,7 +1886,12 @@ impl<'w, 's, P: SystemParam + 'static> VmWith<'w, 's, P> {
         &mut self,
     ) -> (
         Option<&mut UiScript>,
-        &mut disjoint::Pair<'w, 's, P, Option<ScriptCallHost<'w, 's>>>,
+        &mut disjoint::Pair<
+            'w,
+            's,
+            P,
+            disjoint::ValidOnce<'static, 'static, ScriptCallHost<'static, 'static>>,
+        >,
     ) {
         (self.script.as_deref_mut(), &mut self.set)
     }
