@@ -273,8 +273,12 @@ struct ChatQueue {
     /// The lane: every item not held, in stamp order.
     pending: std::collections::VecDeque<Queued>,
     /// The lines waiting for a name or an item's, out of the merge, in the order they began to
-    /// wait, each with its place in that order.
-    held: Vec<(u64, Pending)>,
+    /// wait, keyed by their place in that order. Each release takes every line out and puts most
+    /// back, which a map does in log time where a sorted list shifts its tail at each.
+    held: std::collections::BTreeMap<u64, Pending>,
+    /// The places of the held lines that wait on their `$`-macro subject, oldest first, so the
+    /// cap ([`MAX_HELD_SUBJECT_LINES`]) finds its oldest without a walk.
+    held_subjects: std::collections::BTreeSet<u64>,
     /// The next held line's place.
     held_count: u64,
     /// How many player-name answers `pending` holds, so a line looks for a later one only then.
@@ -320,6 +324,14 @@ pub(super) enum Release {
 }
 
 impl ChatQueue {
+    /// Hold `item` at place `seq`.
+    fn put_held(&mut self, seq: u64, item: Pending) {
+        if item.held_for_subject() {
+            self.held_subjects.insert(seq);
+        }
+        self.held.insert(seq, item);
+    }
+
     /// Stamp `item` and queue it at its place: behind everything stamped before it, and a nested
     /// item ahead of what its cause fired before.
     fn push(&mut self, item: Pending) {
@@ -399,35 +411,30 @@ impl ChatLog {
     /// subject no player owns never answers.
     fn hold(&self, item: Pending) {
         let mut q = self.q();
-        if item.held_for_subject() {
-            let held: Vec<usize> = (0..q.held.len())
-                .filter(|&i| q.held[i].1.held_for_subject())
-                .collect();
-            if held.len() >= MAX_HELD_SUBJECT_LINES {
-                q.held.remove(held[0]);
+        if item.held_for_subject() && q.held_subjects.len() >= MAX_HELD_SUBJECT_LINES {
+            if let Some(oldest) = q.held_subjects.pop_first() {
+                q.held.remove(&oldest);
             }
         }
         let seq = q.held_count;
         q.held_count += 1;
-        q.held.push((seq, item));
+        q.put_held(seq, item);
     }
 
     /// Hold again a line a release point retried, at its place.
     fn hold_again(&self, seq: u64, item: Pending) {
-        let mut q = self.q();
-        let at = q.held.partition_point(|(s, _)| *s < seq);
-        q.held.insert(at, (seq, item));
+        self.q().put_held(seq, item);
     }
 
     /// Take the first held line at place `from` or later, and before `before` when given.
     fn take_held(&self, from: u64, before: Option<u64>) -> Option<(u64, Pending)> {
         let mut q = self.q();
-        let at = q.held.partition_point(|(s, _)| *s < from);
-        let (seq, _) = q.held.get(at)?;
-        if before.is_some_and(|b| *seq >= b) {
+        let seq = *q.held.range(from..).next()?.0;
+        if before.is_some_and(|b| seq >= b) {
             return None;
         }
-        Some(q.held.remove(at))
+        q.held_subjects.remove(&seq);
+        q.held.remove(&seq).map(|item| (seq, item))
     }
 
     /// Queue a release point for the held lines from place `from` on.
@@ -474,8 +481,8 @@ impl ChatLog {
     pub(super) fn a_line_waits_on(&self, answer: Answer) -> bool {
         let q = self.q();
         q.held
-            .iter()
-            .any(|(_, item)| item.waits_on().contains(&Some(answer)))
+            .values()
+            .any(|item| item.waits_on().contains(&Some(answer)))
             || q.pending
                 .iter()
                 .any(|i| i.item.waits_on().contains(&Some(answer)))
@@ -778,6 +785,7 @@ impl ChatLog {
         let mut q = self.q();
         q.pending.clear();
         q.held.clear();
+        q.held_subjects.clear();
         q.answers = 0;
         q.waits.clear();
     }
@@ -2305,4 +2313,66 @@ fn needs_name(chat_type: u8) -> bool {
             | m::CHAT_MSG_BATTLEGROUND
             | m::CHAT_MSG_BATTLEGROUND_LEADER
     )
+}
+
+#[cfg(test)]
+mod held_tests {
+    use super::{ChatLog, Pending};
+
+    fn tee(n: u32) -> Pending {
+        Pending::Tee {
+            combat: false,
+            line: n.to_string(),
+        }
+    }
+
+    fn line(item: &Pending) -> String {
+        match item {
+            Pending::Tee { line, .. } => line.clone(),
+            _ => unreachable!(),
+        }
+    }
+
+    /// A release walks the held lines in the order they began to wait, and a line held again
+    /// keeps its place among them.
+    #[test]
+    fn a_release_walks_the_held_lines_in_place() {
+        let log = ChatLog::default();
+        for n in 0..5 {
+            log.hold(tee(n));
+        }
+        let mut walked = Vec::new();
+        let mut next = 0;
+        while let Some((seq, item)) = log.take_held(next, None) {
+            next = seq + 1;
+            walked.push(line(&item));
+            if seq % 2 == 0 {
+                log.hold_again(seq, item);
+            }
+        }
+        assert_eq!(walked, ["0", "1", "2", "3", "4"]);
+        let mut kept = Vec::new();
+        let mut next = 0;
+        while let Some((seq, item)) = log.take_held(next, None) {
+            next = seq + 1;
+            kept.push((seq, line(&item)));
+        }
+        assert_eq!(kept, [(0, "0".into()), (2, "2".into()), (4, "4".into())]);
+    }
+
+    /// The age pass stops at the lines held after it was queued.
+    #[test]
+    fn the_age_pass_stops_at_its_bound() {
+        let log = ChatLog::default();
+        for n in 0..4 {
+            log.hold(tee(n));
+        }
+        assert_eq!(log.take_held(1, Some(3)).map(|(s, _)| s), Some(1));
+        assert_eq!(log.take_held(2, Some(3)).map(|(s, _)| s), Some(2));
+        assert!(
+            log.take_held(3, Some(3)).is_none(),
+            "line 3 began after the bound"
+        );
+        assert_eq!(log.take_held(3, None).map(|(s, _)| s), Some(3));
+    }
 }
