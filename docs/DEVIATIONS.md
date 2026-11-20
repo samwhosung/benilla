@@ -322,7 +322,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - A missing global prints nothing, where the reference prints an empty line (`0x703c02`), because benilla's other `DisplayError` routes do the same. ([`src/ui_chat/broadcast.rs:167`](../crates/benilla-app/src/ui_chat/broadcast.rs#L167))
 - A dropped link re-enters the world in this session, where the reference logs in anew, because of benilla's same-character reconnect, which the reference lacks. ([`src/ui_chat/channels.rs:49`](../crates/benilla-app/src/ui_chat/channels.rs#L49))
 - In a capital with a blank city word the walk composes `"Trade - "` (it tests the row pointer, not the string, `0x49a2e4`-`0x49a2ed`); we decline, because a wrong channel name is joined silently and for good. ([`src/ui_chat/channels.rs:160`](../crates/benilla-app/src/ui_chat/channels.rs#L160))
-- The reference holds every line that waits on its `$`-macro subject's name in the name cache's callback list (`0x49daea` → `0x55f080`) until the name answers, with no bound; here at most `MAX_HELD_SUBJECT_LINES` wait, the oldest dropped past that, because a subject no player owns never answers. ([`src/ui_chat/feed.rs:396`](../crates/benilla-app/src/ui_chat/feed.rs#L396))
+- The reference holds every line that waits on its `$`-macro subject's name in the name cache's callback list (`0x49daea` → `0x55f080`) until the name answers, with no bound; here at most `MAX_HELD_SUBJECT_LINES` wait, the oldest dropped past that, because a subject no player owns never answers. ([`src/ui_chat/feed.rs:408`](../crates/benilla-app/src/ui_chat/feed.rs#L408))
 - A probe's bare `/assist` assists the live selection, `AssistByName("")` (`0x489c89`), where the stock handler (`ChatFrame.lua:740`) resolves a selected player's name through `AssistByName`, because a name resolve can land on a different player. ([`src/ui_chat/input/mod.rs:594`](../crates/benilla-app/src/ui_chat/input/mod.rs#L594))
 - A line of 256 bytes or more, which reaches here only through `chat_send`'s deviation for `0x49f604`, is slurred whole instead of cut to that buffer, because that way it reaches the server whole for the refusal that deviation leaves to it. ([`src/ui_chat/input/send.rs:305`](../crates/benilla-app/src/ui_chat/input/send.rs#L305))
 - The files live in `benilla-config/Logs/`, not the install's `Logs`, because the install is read-only. ([`src/ui_chat/logging.rs:14`](../crates/benilla-app/src/ui_chat/logging.rs#L14))
@@ -588,10 +588,10 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### models
 
 - The fraction is clamped to `[0, 1]` because the reference extrapolates, which for a window whose brackets miss the band can push a fix16 factor negative and cull the batch on a quirk. ([`src/models/key_anim.rs:130`](../crates/benilla-formats/src/models/key_anim.rs#L130))
-- Owners past the ceiling (Maraudon's waterfalls, the glue screens) keep the interleave with their emitters, because a bias past a 200-yard owner would jump every transparent surface in the zone. ([`src/models/m2_batches.rs:804`](../crates/benilla-formats/src/models/m2_batches.rs#L804))
+- Owners past the ceiling (Maraudon's waterfalls, the glue screens) keep the interleave with their emitters, because a bias past a 200-yard owner would jump every transparent surface in the zone. ([`src/models/m2_batches.rs:809`](../crates/benilla-formats/src/models/m2_batches.rs#L809))
 - The reference compares the texture objects' addresses (`0x41af70` on instance `+0xa4`, `0x70ac45`-`0x70ac69`); the model's own texture order stands in for them, because those addresses are a fact of the run's allocator and not of the file. Entries sharing a handle still tie. ([`src/models/sort_order.rs:47`](../crates/benilla-formats/src/models/sort_order.rs#L47))
-- The fx lane redraws them as projected decals (`ground_fx`) because that way they drape the terrain. ([`src/models/types.rs:398`](../crates/benilla-formats/src/models/types.rs#L398))
-- Consumers light such a card off the side it presents, because the reference's shading of it is inverted and follows the camera. ([`src/models/types.rs:472`](../crates/benilla-formats/src/models/types.rs#L472))
+- The fx lane redraws them as projected decals (`ground_fx`) because that way they drape the terrain. ([`src/models/types.rs:403`](../crates/benilla-formats/src/models/types.rs#L403))
+- Consumers light such a card off the side it presents, because the reference's shading of it is inverted and follows the camera. ([`src/models/types.rs:478`](../crates/benilla-formats/src/models/types.rs#L478))
 - The UV comes from the model-space position, not each surface's own `(i, j)`, because the two agree on cell-aligned surfaces and the position never seams where they are not. Magma and slime use this period too; the reference reads their UV from the vertex's authored `int16` pair × 1/256 (`0x6b6993`), which is not parsed. ([`src/models/wmo/group.rs:19`](../crates/benilla-formats/src/models/wmo/group.rs#L19))
 
 #### particles
@@ -903,7 +903,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### interact
 
-- The broad bound is the mesh `Aabb` grown by 1 unit, not the reference's sequence-bounds sphere, because it can only err permissive. ([`src/interact/pick.rs:190`](../crates/benilla-world/src/interact/pick.rs#L190))
+- The broad bound is the mesh `Aabb` grown by 1 unit, not the reference's sequence-bounds sphere, because it can only err permissive. ([`src/interact/pick.rs:191`](../crates/benilla-world/src/interact/pick.rs#L191))
 
 #### lighting
 
