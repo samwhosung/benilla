@@ -288,6 +288,10 @@ fn separable_billboard_bones(
     separable
 }
 
+/// Texture unit flag `0x08`: the scene ray skips the unit (`0x70902f`), see
+/// [`RenderSubmesh::no_hit_test`].
+const TEX_UNIT_NO_HIT_TEST: u16 = 0x08;
+
 /// An in-memory M2 as render submeshes; `dir` resolves texture paths, `skins` fill `Monster1/2/3`.
 pub fn parse_m2_render_submeshes(
     bytes: &[u8],
@@ -611,6 +615,7 @@ pub fn parse_m2_render_submeshes(
             sub.additive = additive;
             sub.no_depth_write = no_depth_write;
             sub.no_depth_test = no_depth_test;
+            sub.no_hit_test = batch.flags & TEX_UNIT_NO_HIT_TEST != 0;
             sub.fog_policy = fog_policy;
             sub.skin_slot = skin_slot;
             sub.geoset_id = section.id;

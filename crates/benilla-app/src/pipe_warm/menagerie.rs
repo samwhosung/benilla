@@ -799,6 +799,7 @@ fn warm_quad(colors: bool, skinned: bool, uv1: bool) -> RenderSubmesh {
         additive: false,
         no_depth_write: false,
         no_depth_test: false,
+        no_hit_test: false,
         fog_policy: FogPolicy::Scene,
         env_map: false,
         stage1: None,

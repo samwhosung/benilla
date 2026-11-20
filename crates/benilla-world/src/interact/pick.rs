@@ -71,6 +71,7 @@ pub trait PickSource {
 pub fn occludes_pick(object: &WorldObject, geometry: &RenderSubmesh) -> bool {
     object.kind == crate::model_render::ModelKind::Doodad
         && geometry.blend == benilla_formats::ModelBlend::Opaque
+        && !geometry.no_hit_test
 }
 
 /// One triangle-accurate hit; the normal follows the authored winding, not the ray.
@@ -306,7 +307,8 @@ fn cast_pick_ray_impl(
 /// keeps its parameter, so a local `t` is the world distance. Vertices take the render form's own
 /// bake (`wow_to_bevy`, a billboard card centred at its pivot). With `inflate`, each vertex also
 /// moves by its authored normal, raw (the reference's `skinned_pos + rot·normal`); a submesh
-/// without normals then reports a miss.
+/// without normals then reports a miss. A unit out of the hit test ([`RenderSubmesh::no_hit_test`])
+/// is never hit, as the reference skips it before its triangles (`0x70902f`).
 fn ray_submesh(
     geo: &RenderSubmesh,
     gt: &GlobalTransform,
@@ -314,6 +316,9 @@ fn ray_submesh(
     dir: Vec3,
     inflate: bool,
 ) -> Option<RayHit> {
+    if geo.no_hit_test {
+        return None;
+    }
     if inflate && geo.normals.len() != geo.positions.len() {
         return None; // no authored normals, no halo
     }
@@ -696,6 +701,37 @@ mod tests {
             "the mesh-less pool must not be pickable at all, yet it hit: {hits:?}",
         );
         assert_eq!(hits.first().map(|(e, _)| *e), Some(npc));
+    }
+
+    /// A battleground banner inside its aura glow: the glow's units carry texture unit flag `0x08`,
+    /// which the reference's scene ray skips (`0x70902f`), so the pick (both passes) reaches the
+    /// banner behind.
+    #[test]
+    fn a_unit_out_of_the_hit_test_lets_the_pick_through() {
+        let mut world = World::new();
+        let glow = RenderSubmesh {
+            no_hit_test: true,
+            ..wow_tri_with_x_normals()
+        };
+        let aura = drawn(&mut world, Vec3::new(0.0, -5.0, 0.0), Vec3::splat(1.0))
+            .insert(PickMesh(std::sync::Arc::new(glow)))
+            .id();
+        let banner = drawn(&mut world, Vec3::new(0.0, -10.0, 0.0), Vec3::splat(1.0))
+            .insert(PickMesh(std::sync::Arc::new(wow_tri_with_x_normals())))
+            .id();
+        // x = 0.5 lies inside both the exact triangle and its +X halo.
+        for inflate in [false, true] {
+            let hits = cast_in(&mut world, Vec3::new(0.5, 0.0, 0.0), Vec3::NEG_Y, inflate);
+            assert!(
+                !hits.iter().any(|(e, _)| *e == aura),
+                "inflate {inflate}: the glow must not be hit: {hits:?}"
+            );
+            assert_eq!(
+                hits.first().map(|(e, _)| *e),
+                Some(banner),
+                "inflate {inflate}"
+            );
+        }
     }
 
     #[test]

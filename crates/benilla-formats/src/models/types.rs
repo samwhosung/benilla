@@ -323,6 +323,11 @@ pub struct RenderSubmesh {
     pub no_depth_write: bool,
     /// M2 render flag `0x08`: drawn over everything.
     pub no_depth_test: bool,
+    /// M2 texture unit flag `0x08` (texUnit `+0x00`): drawn, but out of the scene ray's hit test,
+    /// which skips such a unit in modes 1 and 2 (`test cl,0x8` at `0x70902f` in `0x7089c0`). The
+    /// battleground banners' aura glows (`ParticleEmitters\Aura*.m2`, units `0x18`) carry it, so
+    /// the pick reaches the banner inside them.
+    pub no_hit_test: bool,
     pub fog_policy: FogPolicy,
     pub billboard: Option<Billboard>,
     /// Geometry on a billboard bone the card split refused: the reference blends it per vertex, so
@@ -445,6 +450,7 @@ impl Default for RenderSubmesh {
             additive: false,
             no_depth_write: false,
             no_depth_test: false,
+            no_hit_test: false,
             fog_policy: FogPolicy::Scene,
             billboard: None,
             welded_billboard: false,
