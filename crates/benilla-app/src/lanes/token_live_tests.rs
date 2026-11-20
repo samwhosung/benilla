@@ -307,6 +307,11 @@ fn client() -> Client {
         guid: Some(WOLF),
         ..Default::default()
     };
+    // The selection's token flag its store writes (`0x49372a`).
+    world.non_send_resource_mut::<UiScript>().unit_token_flags(
+        WOLF,
+        benilla_ui::script::TokenChange::Add(benilla_ui::script::TOKEN_TARGET),
+    );
     c.frame(vec![]);
     c.frame(vec![]);
     c.eval::<()>(false, "Seen = {} PetSeen = {} DeepSeen = {}");
