@@ -36,14 +36,16 @@ pub(super) fn install(
     builder
 }
 
-/// Install a tap writing `path`, and return its frame clock: the count of frames processed, which
-/// is the write position in the file. A game system reads it to place an event on the waveform,
-/// since the game and device clocks drift. `None` when the file cannot be created.
+/// Install a tap writing `path`, and return its frame clock and its writer thread. The clock is
+/// the count of frames processed, which is the write position in the file: a game system reads it
+/// to place an event on the waveform, since the game and device clocks drift. The writer ends
+/// after its last flush once the tap is dropped, so a join is the file complete. `None` when the
+/// file cannot be created.
 pub(super) fn install_at(
     builder: &mut kira::track::MainTrackBuilder,
     path: &std::path::Path,
     sample_rate: u32,
-) -> Option<Arc<AtomicU64>> {
+) -> Option<(Arc<AtomicU64>, std::thread::JoinHandle<()>)> {
     let file = match std::fs::File::create(path) {
         Ok(f) => f,
         Err(e) => {
@@ -52,7 +54,7 @@ pub(super) fn install_at(
         }
     };
     let (producer, consumer) = rtrb::RingBuffer::new(sample_rate as usize * 2 * RING_SECONDS);
-    std::thread::Builder::new()
+    let thread = std::thread::Builder::new()
         .name("mix-tap".into())
         .spawn(move || writer(file, consumer, sample_rate))
         .expect("spawn mix-tap writer");
@@ -62,7 +64,7 @@ pub(super) fn install_at(
         producer,
         frames: Arc::clone(&frames),
     });
-    Some(frames)
+    Some((frames, thread))
 }
 
 struct TapBuilder {
