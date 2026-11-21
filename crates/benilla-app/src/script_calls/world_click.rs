@@ -32,12 +32,7 @@ use super::{disjoint, ScriptCallHost, Signalled};
 /// callbacks write, which shapes the screen the records' pointer is read on.
 #[derive(SystemParam)]
 pub(crate) struct InputHost<'w, 's> {
-    set: disjoint::Pair<
-        'w,
-        's,
-        InputSide,
-        disjoint::ValidOnce<'static, 'static, ScriptCallHost<'static, 'static>>,
-    >,
+    set: disjoint::Pair<'w, 's, InputSide, Option<ScriptCallHost<'static, 'static>>>,
 }
 
 /// What the input records' walk holds beside the host: the tracer and `widescreen`.
@@ -59,7 +54,7 @@ impl InputHost<'_, '_> {
         script: &mut UiScript,
         f: impl FnOnce(&mut UiScript) -> R,
     ) -> R {
-        if self.set.p1().is_none() {
+        if self.set.p1_valid().is_none() {
             return f(script);
         }
         script.hosted(&mut Tracing(self), f)
@@ -72,7 +67,7 @@ struct Tracing<'a, 'w, 's>(&'a mut InputHost<'w, 's>);
 
 impl Tracing<'_, '_, '_> {
     fn host(&mut self) -> Option<ScriptCallHost<'_, '_>> {
-        self.0.set.p1().into_option()
+        self.0.set.p1_valid()
     }
 }
 

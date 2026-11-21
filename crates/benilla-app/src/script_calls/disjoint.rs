@@ -211,6 +211,8 @@ pub(crate) struct Pair<'w, 's, A: SystemParam, B: SystemParam> {
     meta: SystemMeta,
     world: UnsafeWorldCell<'w>,
     change_tick: Tick,
+    /// Whether the second member validated, once [`Pair::p1_valid`] has asked this run.
+    valid: Option<bool>,
     /// The tick and name of the first member's lend running now, while the census watches writes.
     #[cfg(debug_assertions)]
     lend: Option<(Tick, &'static str)>,
@@ -271,6 +273,7 @@ unsafe impl<A: SystemParam, B: SystemParam> SystemParam for Pair<'_, '_, A, B> {
             meta: meta.clone(),
             world,
             change_tick,
+            valid: None,
             #[cfg(debug_assertions)]
             lend: None,
         }
@@ -301,84 +304,17 @@ impl<A: SystemParam, B: SystemParam> Pair<'_, '_, A, B> {
     }
 }
 
-/// `Option<T>` validated once a run: nothing adds or removes a resource or an entity mid-run.
-pub(crate) struct ValidOnce<'w, 's, T: SystemParam>(Option<SystemParamItem<'w, 's, T>>);
-
-/// [`ValidOnce`]'s state: `T`'s, and the run tick its validation last ran at, with the result.
-pub(crate) struct ValidOnceState<S> {
-    inner: S,
-    checked: Option<(Tick, bool)>,
-}
-
-// SAFETY: delegates to `T`, as `Option<T>` does, and lends `T` only where `T` validated in the run.
-unsafe impl<T: SystemParam> SystemParam for ValidOnce<'_, '_, T> {
-    type State = ValidOnceState<T::State>;
-    type Item<'w, 's> = ValidOnce<'w, 's, T>;
-
-    fn init_state(world: &mut World) -> Self::State {
-        ValidOnceState {
-            inner: T::init_state(world),
-            checked: None,
-        }
-    }
-
-    fn init_access(
-        state: &Self::State,
-        meta: &mut SystemMeta,
-        access: &mut FilteredAccessSet,
-        world: &mut World,
-    ) {
-        T::init_access(&state.inner, meta, access, world);
-    }
-
-    fn apply(state: &mut Self::State, meta: &SystemMeta, world: &mut World) {
-        T::apply(&mut state.inner, meta, world);
-    }
-
-    fn queue(state: &mut Self::State, meta: &SystemMeta, world: DeferredWorld) {
-        T::queue(&mut state.inner, meta, world);
-    }
-
-    unsafe fn get_param<'w, 's>(
-        state: &'s mut Self::State,
-        meta: &SystemMeta,
-        world: UnsafeWorldCell<'w>,
-        change_tick: Tick,
-    ) -> Self::Item<'w, 's> {
-        let valid = match state.checked {
-            Some((tick, valid)) if tick == change_tick => valid,
-            _ => {
-                // SAFETY: upheld by the caller.
-                let valid = unsafe { T::validate_param(&mut state.inner, meta, world) }.is_ok();
-                state.checked = Some((change_tick, valid));
-                valid
-            }
-        };
-        // SAFETY: upheld by the caller, and `T` validated in this run.
-        ValidOnce(
-            valid.then(|| unsafe { T::get_param(&mut state.inner, meta, world, change_tick) }),
-        )
-    }
-}
-
-impl<'w, 's, T: SystemParam> ValidOnce<'w, 's, T> {
-    /// The lent `T`, `None` where it did not validate.
-    pub(crate) fn into_option(self) -> Option<SystemParamItem<'w, 's, T>> {
-        self.0
-    }
-}
-
-impl<'w, 's, T: SystemParam> std::ops::Deref for ValidOnce<'w, 's, T> {
-    type Target = Option<SystemParamItem<'w, 's, T>>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<T: SystemParam> std::ops::DerefMut for ValidOnce<'_, '_, T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+impl<A: SystemParam, T: SystemParam> Pair<'_, '_, A, Option<T>> {
+    /// The second member as `p1` lends it, validated once a run: nothing adds or removes a resource
+    /// or an entity mid-run.
+    pub(crate) fn p1_valid(&mut self) -> Option<SystemParamItem<'_, '_, T>> {
+        let (states, meta, world) = (&mut self.states.1, &self.meta, self.world);
+        // SAFETY: the pair registered `T`'s access, and `&mut self` keeps `A` unlent.
+        let valid = *self
+            .valid
+            .get_or_insert_with(|| unsafe { T::validate_param(states, meta, world) }.is_ok());
+        // SAFETY: as above, and `T` validated in this run.
+        valid.then(|| unsafe { T::get_param(states, meta, world, self.change_tick) })
     }
 }
 
@@ -511,18 +447,15 @@ mod tests {
     #[derive(Resource, Default)]
     struct Seen(Vec<bool>);
 
-    /// A `ValidOnce` member lends `None` while its resource is missing, every lend of the run, and
-    /// the next run validates again, so it lends the resource once it is there.
+    /// `p1_valid` lends `None` while its resource is missing, every lend of the run, and the next
+    /// run validates again, so it lends the resource once it is there.
     #[test]
-    fn a_valid_once_member_validates_once_a_run() {
+    fn p1_valid_validates_once_a_run() {
         let mut app = App::new();
         app.init_resource::<Seen>().add_systems(
             Update,
-            |mut pair: Pair<
-                ResMut<'static, Seen>,
-                super::ValidOnce<'static, 'static, Res<'static, Cell>>,
-            >| {
-                let lent = [pair.p1().is_some(), pair.p1().is_some()];
+            |mut pair: Pair<ResMut<'static, Seen>, Option<Res<'static, Cell>>>| {
+                let lent = [pair.p1_valid().is_some(), pair.p1_valid().is_some()];
                 pair.p0().0.extend(lent);
             },
         );
