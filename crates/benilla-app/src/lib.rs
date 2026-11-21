@@ -208,7 +208,7 @@ pub use benilla_world::worldview::run as run_worldview;
 pub use bevy::app::AppExit;
 // A crate on top of benilla reads objects and interacts through these, with no protocol dependency.
 pub use benilla_protocol::{messages::ObjectType, ObjectFields};
-pub use net::Objects;
+pub use net::{EndSession, Objects};
 pub use target::Interact;
 
 /// Builds and runs the client app. `build` is the launcher's compile-time git stamp, passed in as

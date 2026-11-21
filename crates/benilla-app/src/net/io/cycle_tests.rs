@@ -852,6 +852,34 @@ fn a_packet_left_in_flight_by_the_world_does_not_cost_the_link() {
     assert_eq!(world.open(), 1, "the world link is kept");
 }
 
+/// An `EndSession` (`ClientCommand::HangUp`) closes the world socket and says the session's end
+/// at once, as a logout's: `LoggedOut`, then a `Disconnected` that is not a loss. The socket's
+/// closing, which the read thread then sees, adds nothing, and a command sent after is dropped.
+#[test]
+fn a_hang_up_ends_the_session_without_a_loss() {
+    let (realmd, world) = fake::servers(|world| vec![FakeRealm::new(REALM, world)]);
+    let cycles = fake::spawn_cycles();
+    enter_world(&cycles, &realmd);
+    assert_eq!(world.open(), 1, "the world link is up");
+    cycles
+        .commands
+        .send(crate::net::ClientCommand::HangUp)
+        .unwrap();
+    expect_back(&cycles.events, |ev| matches!(ev, SessionEvent::LoggedOut));
+    wait_until(|| world.open() == 0, "the server saw the connection drop");
+    cycles
+        .commands
+        .send(crate::net::ClientCommand::PlayedTime)
+        .unwrap();
+    assert!(
+        cycles
+            .events
+            .recv_timeout(std::time::Duration::from_millis(600))
+            .is_err(),
+        "the closed socket was reported as well"
+    );
+}
+
 /// The write thread holds a lost link's dead writer until the next entry installs a new one, and
 /// a command can be ready in the same wake-up as that install. Every pending swap is applied
 /// before a command is judged, so the command goes out on the new link. The write thread is held
@@ -879,7 +907,9 @@ fn a_command_ready_with_an_install_goes_out_on_the_new_writer() {
     let (swap_tx, swap_rx) = crossbeam_channel::unbounded::<WriterSwap>();
     let clock = std::sync::Arc::new(Mutex::new(PingClock::default()));
     let thread_clock = std::sync::Arc::clone(&clock);
-    thread::spawn(move || writer_loop(&cmd_rx, swap_rx, &thread_clock));
+    let hung_up = std::sync::atomic::AtomicBool::new(false);
+    let (events_tx, _events) = crossbeam_channel::unbounded();
+    thread::spawn(move || writer_loop(&cmd_rx, swap_rx, &thread_clock, &hung_up, &events_tx));
 
     let played_in = |session: usize| {
         world

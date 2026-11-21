@@ -71,6 +71,13 @@ pub struct WorldWriter {
 }
 
 impl WorldWriter {
+    /// Close the socket both ways, so the read half's blocking poll ends at once instead of
+    /// waiting on the server. The server sees the connection drop.
+    pub fn shutdown(&self) -> anyhow::Result<()> {
+        self.stream.shutdown(std::net::Shutdown::Both)?;
+        Ok(())
+    }
+
     /// Frame, encrypt and write one packet: the sole write path every verb goes through.
     fn send(&mut self, opcode: u16, body: &[u8]) -> Result<()> {
         send_packet(
