@@ -29,6 +29,13 @@ impl<T: LiveFamily> LiveFamily for Option<T> {
     }
 }
 
+thread_local! {
+    /// Each question type's family, as its walk position, once a walk found it. It holds because
+    /// one family answers each question type: a second family for a type would never be asked.
+    static LIVE_ROUTES: std::cell::RefCell<std::collections::HashMap<std::any::TypeId, usize>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
 /// [`super::disjoint::disjoint_set!`] of live families, with the walk that hands a question to
 /// each member in turn until one takes it.
 macro_rules! live_reads {
@@ -46,14 +53,40 @@ macro_rules! live_reads {
         }
 
         impl $name<'_, '_> {
-            /// Hand `ask` to each family until one takes it; whether one did.
+            /// Hand `ask` to the family that took its type before, else walk them; whether one took it.
             pub(crate) fn answer(&mut self, ask: &mut LiveAsk<'_>) -> bool {
+                let question = ask.question();
+                if let Some(at) = LIVE_ROUTES.with(|r| r.borrow().get(&question).copied()) {
+                    return self.answer_at(at, ask);
+                }
+                let mut at = 0;
                 $(
                     $(#[cfg($cfg)])?
-                    if LiveFamily::answer(&mut self.$field(), ask) {
-                        return true;
+                    {
+                        if LiveFamily::answer(&mut self.$field(), ask) {
+                            LIVE_ROUTES.with(|r| r.borrow_mut().insert(question, at));
+                            return true;
+                        }
+                        at += 1;
                     }
                 )*
+                let _ = at;
+                false
+            }
+
+            /// Hand `ask` to the family at walk position `at` alone; whether it took it.
+            fn answer_at(&mut self, at: usize, ask: &mut LiveAsk<'_>) -> bool {
+                let mut i = 0;
+                $(
+                    $(#[cfg($cfg)])?
+                    {
+                        if i == at {
+                            return LiveFamily::answer(&mut self.$field(), ask);
+                        }
+                        i += 1;
+                    }
+                )*
+                let _ = i;
                 false
             }
         }
