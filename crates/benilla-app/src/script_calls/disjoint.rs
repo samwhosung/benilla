@@ -63,16 +63,17 @@ macro_rules! disjoint_set {
         // holds outside the set ([`crate::script_calls::disjoint::gather`]), and lends one member
         // at a time, through `&mut self`.
         unsafe impl bevy::ecs::system::SystemParam for $name<'_, '_> {
-            type State = $state;
+            // Boxed, as a system holds its params' state inline from the moment it is added.
+            type State = Box<$state>;
             type Item<'w, 's> = $name<'w, 's>;
 
             fn init_state(world: &mut bevy::ecs::world::World) -> Self::State {
-                $state {
+                Box::new($state {
                     $(
                         $(#[cfg($cfg)])?
                         $field: <$ty as bevy::ecs::system::SystemParam>::init_state(world),
                     )*
-                }
+                })
             }
 
             fn init_access(
@@ -142,7 +143,7 @@ macro_rules! disjoint_set {
                 change_tick: bevy::ecs::change_detection::Tick,
             ) -> Self::Item<'w, 's> {
                 $name {
-                    states: state,
+                    states: &mut **state,
                     meta: meta.clone(),
                     world,
                     change_tick,
@@ -386,6 +387,15 @@ mod tests {
     use bevy::prelude::*;
 
     use super::Pair;
+
+    /// A system holds the host's state inline from the moment it is added.
+    #[test]
+    fn the_hosts_state_is_a_few_words() {
+        use crate::script_calls::ScriptCallHost;
+        use bevy::ecs::system::SystemParam;
+        let size = size_of::<<ScriptCallHost<'static, 'static> as SystemParam>::State>();
+        assert!(size <= 64, "{size}");
+    }
 
     #[derive(Resource, Default)]
     struct Cell(u32);
