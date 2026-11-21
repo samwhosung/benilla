@@ -1047,6 +1047,16 @@ mod tests {
             )
             .unwrap();
         script.set_unit_guids(&guids);
+        // The token flags the seated units' writers leave (`0x60c520`).
+        let seated = [guids.player, guids.pet, guids.target]
+            .into_iter()
+            .chain(guids.party)
+            .chain(guids.party_pets)
+            .chain(guids.raid.iter().copied())
+            .chain(guids.raid_pets.iter().copied());
+        for guid in seated {
+            script.unit_token_flags(guid, benilla_ui::script::TokenChange::Update);
+        }
         app.insert_non_send_resource(script);
     }
 

@@ -1,5 +1,6 @@
 use benilla_ui::script::{
-    QuadContent, ScriptValue, SelectionRequest, SoundRequest, UiScript, UnitState,
+    QuadContent, ScriptValue, SelectionRequest, SoundRequest, TokenChange, UiScript, UnitState,
+    TOKEN_TARGET,
 };
 
 use super::test_ui::{hover, load_ui as load_xml, unhover};
@@ -1068,6 +1069,8 @@ fn a_live_faction_template_change_recolours_the_target_plate() {
 
     relations(&mut s, HUMAN);
     s.set_unit("target", Some(mob(5)));
+    // The selection's token flag its store writes (`0x49372a`).
+    s.unit_token_flags(MOB, TokenChange::Add(TOKEN_TARGET));
     s.fire_event("PLAYER_TARGET_CHANGED", vec![]);
     let before = plate_color(&mut s);
     assert!(
@@ -1192,6 +1195,13 @@ fn a_values_block_moves_the_target_health_bar_and_a_retarget_fires_no_unit_event
     };
     // Target `guid`: the selection's global, which the getters read through the host.
     let select = |app: &mut App, entity: Entity, guid: u64| {
+        // The selection's teardown and store move its token flag (`0x493910`, `0x49372a`).
+        let old = app.world().resource::<Selection>().guid;
+        let mut s = script(app);
+        if let Some(old) = old {
+            s.unit_token_flags(old, TokenChange::Remove(TOKEN_TARGET));
+        }
+        s.unit_token_flags(guid, TokenChange::Add(TOKEN_TARGET));
         *app.world_mut().resource_mut::<Selection>() = Selection {
             target: Some(entity),
             guid: Some(guid),

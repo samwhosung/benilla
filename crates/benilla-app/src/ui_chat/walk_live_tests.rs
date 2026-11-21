@@ -152,7 +152,7 @@ fn client(zone: u32, held: Option<&[(u16, u32)]>) -> Client {
     if let Some(fields) = held {
         crate::test_support::hold_self_player(world, ME, fields);
     }
-    let script = UiScript::new().expect("a VM");
+    let mut script = UiScript::new().expect("a VM");
     script
         .run(
             r#"
@@ -164,6 +164,13 @@ fn client(zone: u32, held: Option<&[(u16, u32)]>) -> Client {
             "#,
         )
         .expect("the spy");
+    if held.is_some() {
+        // The player's flag its create writes (`0x5fb880` → `0x60c520`).
+        script.unit_token_flags(
+            ME,
+            benilla_ui::script::TokenChange::Add(benilla_ui::script::TOKEN_PLAYER),
+        );
+    }
     world.insert_non_send_resource(script);
     Client { app, sent }
 }
