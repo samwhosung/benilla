@@ -30,7 +30,8 @@ impl<T: LiveFamily> LiveFamily for Option<T> {
 }
 
 thread_local! {
-    /// Each question type's family, as its walk position, once a walk found it.
+    /// Each question type's family, as its walk position, once a walk found it. It holds because
+    /// one family answers each question type: a second family for a type would never be asked.
     static LIVE_ROUTES: std::cell::RefCell<std::collections::HashMap<std::any::TypeId, usize>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
