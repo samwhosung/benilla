@@ -633,6 +633,8 @@ pub(super) const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "benilla_world::view::MsaaFormats",
     // A capture run, which parks the camera the view verbs would move.
     "::run_mode::CaptureMode",
+    // A host application that authors the camera instead.
+    "::run_mode::ExternalAuthority",
     "::net::game_time::ServerTime",
     "::net::GuidIndex",
     // The bag cache the open-container handler numbers its `BAG_OPEN`s from.
