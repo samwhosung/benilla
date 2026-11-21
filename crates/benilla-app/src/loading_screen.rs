@@ -393,12 +393,7 @@ impl Plugin for LoadingScreenPlugin {
             // In `WorldStage::Present`, after Input and Stream: a worldport snaps in Input and the
             // streamer refocuses in Stream, so the cover lands on the same frame, never a flash.
             .add_systems(Update, drive_loading_screen.in_set(WorldStage::Present))
-            .add_systems(
-                Update,
-                release_interface_on_arrival
-                    .in_set(WorldStage::Present)
-                    .before(drive_loading_screen),
-            )
+            .add_systems(Update, arrival_passes())
             .add_systems(
                 Update,
                 route::draw_route
@@ -419,6 +414,22 @@ impl Plugin for LoadingScreenPlugin {
         input::build(app);
         hold::build(app);
     }
+}
+
+/// The arrival pass before the drive and once after it. A worldport and our create read in one
+/// frame raise the screen in the drive, after the first pass saw the arrival, and only the second
+/// pass ends the wait the raise began.
+fn arrival_passes() -> bevy::ecs::schedule::ScheduleConfigs<bevy::ecs::system::ScheduleSystem> {
+    use bevy::ecs::schedule::IntoScheduleConfigs;
+    (
+        release_interface_on_arrival
+            .in_set(WorldStage::Present)
+            .before(drive_loading_screen),
+        release_interface_on_arrival
+            .in_set(WorldStage::Present)
+            .after(drive_loading_screen),
+    )
+        .into_configs()
 }
 
 /// Our own player's arrival (`0x5dea50`) lets the interface run: aboard a transport (slot 9's
@@ -1266,6 +1277,41 @@ mod tests {
             app.update();
         }
         assert!(!covering(&app), "our create ends the screen");
+    }
+
+    /// A worldport and our create read in the same frame: the arrival is seen before the raise that
+    /// waits for it, and the pass after the drive ends that wait. With one pass only, the screen
+    /// would wait for an arrival that had come.
+    #[test]
+    fn a_create_in_the_worldports_own_frame_ends_the_screen() {
+        let mut app = in_world(GM_ISLAND);
+        app.insert_resource(crate::pipe_warm::WarmPass::done_for_test());
+        app.add_systems(Update, arrival_passes());
+        app.world_mut().resource_mut::<crate::player::Player>().pos =
+            benilla_assets::coords::wow_to_bevy(NORTHSHIRE);
+        app.insert_resource(benilla_world::terrain_stream::ViewFocus::body(
+            NORTHSHIRE, true,
+        ));
+        app.world_mut().write_message(crate::net::WorldportMessage {
+            map_id: 0,
+            position: NORTHSHIRE,
+            orientation: 0.0,
+            needs_ack: true,
+            transport_entry: None,
+        });
+        app.world_mut().spawn(crate::net::SelfPlayer);
+        app.update();
+        assert!(
+            !app.world().resource::<LoadingScreen>().awaiting_arrival,
+            "the arrival it waited for had come"
+        );
+        for _ in 0..=CLEAR_AFTER_READY_FRAMES + 30 {
+            app.update();
+        }
+        assert!(
+            !covering(&app),
+            "our create in the worldport's frame ends the screen"
+        );
     }
 
     /// `0x407de0`, from the ship tick's leg change: it raises the screen, and with no route to
