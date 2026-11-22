@@ -1533,13 +1533,6 @@ fn a_self_flagged_create_of_a_new_guid_becomes_our_player() {
         "the new body is ours, the login one not"
     );
     assert!(world.get::<SelfPlayer>(login).is_none());
-    assert_eq!(
-        world
-            .resource::<NameCache>()
-            .resolve_player(BG_ME, crate::query_cache::Ask::Read),
-        Some("Probeseven"),
-        "the name follows the guid"
-    );
 }
 
 /// A guid the lookup finds, live or released, goes to the known object's update (`0x466350`),

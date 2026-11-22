@@ -276,14 +276,13 @@ fn item_type(container: bool) -> ObjectType {
 /// A create block's self flag, ahead of its create: a guid the lookup does not find, live or
 /// released, becomes the active player before its object exists (`0x46623b`, `0x466245`,
 /// `0x466254`); a held one's update (`0x466350`) stores nothing. A body tagged ours under another
-/// guid stops being ours, and the name the login seeded follows the guid.
+/// guid stops being ours. The new guid's name is the name cache's, asked as any other's.
 fn on_active_player_create(
     In(ev): In<SessionEvent>,
     mut commands: Commands,
     index: Res<super::super::GuidIndex>,
     released: Res<Released>,
     mut self_guid: ResMut<super::super::SelfGuid>,
-    mut names: ResMut<crate::names::NameCache>,
 ) {
     let SessionEvent::ActivePlayerCreate(guid) = ev else {
         return;
@@ -296,12 +295,6 @@ fn on_active_player_create(
     };
     if let Some(&e) = index.0.get(&old) {
         commands.entity(e).remove::<super::super::SelfPlayer>();
-    }
-    if let Some(name) = names.resolve_player(old, Ask::Read).map(str::to_owned) {
-        if names.resolve_player(guid, Ask::Read).is_none() {
-            let traits = names.player_traits(old);
-            names.insert_player(guid, name, traits);
-        }
     }
 }
 
