@@ -1481,3 +1481,87 @@ fn a_leaving_unit_and_a_freed_object_release_their_effects() {
     super::super::handlers::dispatch(world, vec![SessionEvent::ObjectDestroyed(CHEST)]);
     assert_eq!(released(world), [chest], "a freed object's destructor");
 }
+
+/// The guid a battleground realm streams us under instead of the login one.
+const BG_ME: u64 = 0xF921_0000_0000_0007;
+
+/// Our name as the login seeds it, and a world entry's body under `ME`, tagged ours.
+fn logged_in(world: &mut World) -> Entity {
+    world.resource_mut::<SelfGuid>().0 = Some(ME);
+    world
+        .resource_mut::<NameCache>()
+        .insert_player(ME, "Probeseven".into(), None);
+    super::super::handlers::dispatch(
+        world,
+        super::wire(vec![SessionEvent::ActivePlayerCreate(ME), player(ME, &[])]),
+    );
+    world.resource::<GuidIndex>().0[&ME]
+}
+
+fn ours(world: &mut World) -> Vec<u64> {
+    let mut q = world.query_filtered::<&Guid, With<SelfPlayer>>();
+    q.iter(world).map(|g| g.0).collect()
+}
+
+/// A self-flagged create of a guid the lookup does not find makes it the active player before
+/// its object exists (`0x46623b`, `0x466245`): the body is ours, the login one is not, and the
+/// name follows. On a stock server the flagged guid is the login one, and nothing moves.
+#[test]
+fn a_self_flagged_create_of_a_new_guid_becomes_our_player() {
+    let mut app = client();
+    let world = app.world_mut();
+    let login = logged_in(world);
+    assert_eq!(
+        world.resource::<SelfGuid>().0,
+        Some(ME),
+        "stock: the login guid"
+    );
+    assert_eq!(ours(world), [ME], "stock: the login body is ours");
+
+    super::super::handlers::dispatch(
+        world,
+        super::wire(vec![
+            SessionEvent::ActivePlayerCreate(BG_ME),
+            player(BG_ME, &[]),
+        ]),
+    );
+
+    assert_eq!(world.resource::<SelfGuid>().0, Some(BG_ME));
+    assert_eq!(
+        ours(world),
+        [BG_ME],
+        "the new body is ours, the login one not"
+    );
+    assert!(world.get::<SelfPlayer>(login).is_none());
+}
+
+/// A guid the lookup finds, live or released, goes to the known object's update (`0x466350`),
+/// which reads the flag and stores nothing.
+#[test]
+fn a_self_flagged_create_of_a_held_guid_moves_nothing() {
+    let mut app = client();
+    let world = app.world_mut();
+    logged_in(world);
+    super::super::handlers::dispatch(
+        world,
+        super::wire(vec![player(MATE, &[]), player(BG_ME, &[])]),
+    );
+    // MATE released, BG_ME live.
+    super::super::handlers::dispatch(
+        world,
+        super::wire(vec![SessionEvent::ObjectsRemoved(vec![MATE])]),
+    );
+
+    super::super::handlers::dispatch(
+        world,
+        super::wire(vec![
+            SessionEvent::ActivePlayerCreate(BG_ME),
+            player(BG_ME, &[]),
+            SessionEvent::ActivePlayerCreate(MATE),
+            player(MATE, &[]),
+        ]),
+    );
+
+    assert_eq!(world.resource::<SelfGuid>().0, Some(ME));
+    assert_eq!(ours(world), [ME]);
+}

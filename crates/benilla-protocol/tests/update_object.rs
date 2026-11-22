@@ -971,3 +971,57 @@ fn an_out_of_range_list_decodes_only_as_the_first_block() {
         ]
     );
 }
+
+/// A player create block with `flags`, as vmangos writes the receiver's own (`UPDATEFLAG_SELF |
+/// ALL | LIVING | HAS_POSITION`, 0x71) or another's (0x70): a level `LIVING` block, the `ALL`
+/// u32, no values.
+fn player_create(guid: u64, flags: u8) -> Vec<u8> {
+    let mut block = vec![3]; // CREATE_OBJECT2
+    write_packed_guid(guid, &mut block).unwrap();
+    block.push(4); // TypeId::Player
+    block.push(flags);
+    block.extend_from_slice(&0u32.to_le_bytes()); // movement flags
+    block.extend_from_slice(&1u32.to_le_bytes()); // time
+    for v in [10.0f32, 20.0, 30.0, 0.5] {
+        block.extend_from_slice(&v.to_le_bytes());
+    }
+    block.extend_from_slice(&0u32.to_le_bytes()); // fall time
+    for v in [2.5f32, 7.0, 4.5, 4.722_222_3, 2.5, std::f32::consts::PI] {
+        block.extend_from_slice(&v.to_le_bytes());
+    }
+    block.extend_from_slice(&1u32.to_le_bytes()); // UPDATEFLAG_ALL
+    block.push(0); // no mask words
+    block
+}
+
+/// Update flag 0x01 names the receiver's own player (`0x466237`): its create goes out just behind
+/// the block's guid as the active player, ahead of the create; a create without it carries none.
+#[test]
+fn a_self_flagged_create_names_the_active_player_ahead_of_it() {
+    let own = 0xF921_0000_0000_0007;
+    let mut body = hx("0200000000");
+    body.extend_from_slice(&player_create(own, 0x71));
+    body.extend_from_slice(&player_create(0x2A, 0x70));
+    assert_eq!(
+        player_create(own, 0x71),
+        hx(&[
+            "03c10721f90471",                   // create2, packed guid, player, flags
+            "0000000001000000",                 // movement flags, time
+            "000020410000a0410000f0410000003f", // x, y, z, facing
+            "00000000",                         // fall time
+            "000020400000e04000009040721c974000002040db0f4940", // speeds
+            "0100000000",                       // ALL, no mask words
+        ]
+        .concat()),
+        "the block as vmangos writes it"
+    );
+    assert_eq!(
+        update_shapes(&body),
+        [
+            format!("ActivePlayerCreate({own})"),
+            format!("create {own:#x}"),
+            "create 0x2a".into(),
+            "end".into(),
+        ]
+    );
+}

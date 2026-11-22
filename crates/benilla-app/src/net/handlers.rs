@@ -244,6 +244,7 @@ pub(crate) fn ends_its_packet(ev: &SessionEvent) -> bool {
     !matches!(
         ev,
         SessionEvent::SavedAnswer { .. }
+            | SessionEvent::ActivePlayerCreate(_)
             | SessionEvent::ObjectCreate { .. }
             | SessionEvent::ItemCreate { .. }
             | SessionEvent::ObjectValues { .. }

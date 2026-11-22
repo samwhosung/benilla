@@ -41,6 +41,7 @@ pub(super) fn register(app: &mut App) {
         .init_resource::<Released>()
         .init_resource::<ObjectList>()
         .init_resource::<crate::target::OwedSelects>()
+        .net_handler(K::ActivePlayerCreate, on_active_player_create)
         .net_handler(K::ObjectCreate, on_object_create)
         .net_handler(K::ItemCreate, on_item_create)
         .net_handler(K::ObjectValues, on_object_values)
@@ -226,6 +227,11 @@ impl Released {
         self.stale = 0;
     }
 
+    /// Whether `guid` is in the table: a block's lookup finds it (`0x464530`).
+    fn holds(&self, guid: u64) -> bool {
+        self.objects.contains_key(&guid)
+    }
+
     /// Frees every released object, as leaving the world does (`0x467700`).
     pub(crate) fn clear(&mut self) {
         self.objects.clear();
@@ -264,6 +270,31 @@ fn item_type(container: bool) -> ObjectType {
         ObjectType::Container
     } else {
         ObjectType::Item
+    }
+}
+
+/// A create block's self flag, ahead of its create: a guid the lookup does not find, live or
+/// released, becomes the active player before its object exists (`0x46623b`, `0x466245`,
+/// `0x466254`); a held one's update (`0x466350`) stores nothing. A body tagged ours under another
+/// guid stops being ours. The new guid's name is the name cache's, asked as any other's.
+fn on_active_player_create(
+    In(ev): In<SessionEvent>,
+    mut commands: Commands,
+    index: Res<super::super::GuidIndex>,
+    released: Res<Released>,
+    mut self_guid: ResMut<super::super::SelfGuid>,
+) {
+    let SessionEvent::ActivePlayerCreate(guid) = ev else {
+        return;
+    };
+    if index.0.contains_key(&guid) || released.holds(guid) || self_guid.0 == Some(guid) {
+        return;
+    }
+    let Some(old) = self_guid.0.replace(guid) else {
+        return;
+    };
+    if let Some(&e) = index.0.get(&old) {
+        commands.entity(e).remove::<super::super::SelfPlayer>();
     }
 }
 

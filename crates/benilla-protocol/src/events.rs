@@ -279,6 +279,10 @@ pub enum SessionEvent {
     /// its key the first dword (`0x556e5b`): emitted by the IO thread ahead of the answer's
     /// decoded events, never wire-decoded, for the app's on-disk template caches.
     SavedAnswer { opcode: u16, body: Vec<u8> },
+    /// A create block flagged as the receiver's own player (update flag `0x01`), just ahead of
+    /// its create: the reference takes its guid as the active player before the object exists,
+    /// for a guid its lookup does not hold (`0x46623b`, `0x466245`, `0x466254`).
+    ActivePlayerCreate(u64),
     /// A placed object entered view, its spawn identity decoded per object type.
     ObjectCreate {
         guid: u64,

@@ -1204,6 +1204,10 @@ fn decode_objects(first_pass: bool, objects: Vec<Object>) -> Vec<SessionEvent> {
                 movement,
                 mask,
             } => {
+                // The self flag travels just ahead of its create, in whichever pass writes it.
+                let active = movement
+                    .active_player
+                    .then_some(SessionEvent::ActivePlayerCreate(guid));
                 let Some(create) = create_event(guid, object_type, movement, mask) else {
                     continue;
                 };
@@ -1213,10 +1217,12 @@ fn decode_objects(first_pass: bool, objects: Vec<Object>) -> Vec<SessionEvent> {
                         _ => NotifyBlock::ItemCreate,
                     };
                     if first_pass {
+                        first.extend(active);
                         first.push(create);
                     }
                     second.push(SessionEvent::ObjectNotify { guid, block });
                 } else {
+                    second.extend(active);
                     second.push(create);
                 }
             }
