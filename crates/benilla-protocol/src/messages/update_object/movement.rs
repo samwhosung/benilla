@@ -37,6 +37,8 @@ impl ObjectType {
     }
 }
 
+/// `UPDATEFLAG_SELF`: the block is the receiver's own player; no field rides it.
+const UPDATE_FLAG_SELF: u8 = 0x01;
 const UPDATE_FLAG_TRANSPORT: u8 = 0x02;
 const UPDATE_FLAG_MELEE_ATTACKING: u8 = 0x04;
 const UPDATE_FLAG_HIGH_GUID: u8 = 0x08;
@@ -112,6 +114,9 @@ pub struct MovementBlock {
     pub transport: Option<TransportPose>,
     /// The path this unit is already walking at create (`MOVEFLAG_SPLINE_ENABLED`).
     pub spline: Option<CreateSpline>,
+    /// Flag `0x01`: the receiver's own player, which only a create of a new object acts on
+    /// (`0x466237`).
+    pub active_player: bool,
 }
 
 impl MovementBlock {
@@ -235,6 +240,7 @@ impl MovementBlock {
             transport_progress,
             transport,
             spline,
+            active_player: update_flag & UPDATE_FLAG_SELF != 0,
         })
     }
 }

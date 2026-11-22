@@ -635,6 +635,9 @@ pub(super) const READ_ONLY_TO_HANDLERS: &[&str] = &[
     "::run_mode::CaptureMode",
     "::net::game_time::ServerTime",
     "::net::GuidIndex",
+    // The released table, which a self-flagged create's lookup reads (`0x46623b`); the update
+    // packet's handlers write it through their own `ResMut`.
+    "::net::objects::update::Released",
     // The bag cache the open-container handler numbers its `BAG_OPEN`s from.
     "::item_watch::BagCache",
     "::net::NetCommands",
