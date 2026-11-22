@@ -1369,7 +1369,7 @@ fn deliver_hosted(
     let flag = set.p0().channels.defense_channel;
     let dropping = deliver_before(script, &mut set.p0().channels, event);
     defense_flip(script, set, flag);
-    crate::script_calls::lent(script, set.p1().as_mut(), |script| {
+    crate::script_calls::lent(script, set.p1_valid().as_mut(), |script| {
         route(script, windows, event)
     });
     let flag = set.p0().channels.defense_channel;
@@ -1389,7 +1389,7 @@ fn defense_flip(script: &mut benilla_ui::script::UiScript, set: &mut SlotsAndHos
         return;
     };
     let scoped = states.scope().is_some();
-    crate::script_calls::lent(script, set.p1().as_mut(), |script| {
+    crate::script_calls::lent(script, set.p1_valid().as_mut(), |script| {
         if scoped {
             script.fire_event("UPDATE_WORLD_STATES", Vec::new());
         }
@@ -1741,7 +1741,7 @@ fn fire_one(
         let slots = set.p0();
         (*slots.filters, *slots.bubbles)
     };
-    crate::script_calls::lent(script, set.p1().as_mut(), |script| {
+    crate::script_calls::lent(script, set.p1_valid().as_mut(), |script| {
         match item {
             Pending::UnitCombat(ev) => {
                 crate::ui_unit::fire_unit_combat(script, &ev);

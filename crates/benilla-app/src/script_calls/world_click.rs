@@ -54,7 +54,7 @@ impl InputHost<'_, '_> {
         script: &mut UiScript,
         f: impl FnOnce(&mut UiScript) -> R,
     ) -> R {
-        if self.set.p1().is_none() {
+        if self.set.p1_valid().is_none() {
             return f(script);
         }
         script.hosted(&mut Tracing(self), f)
@@ -67,7 +67,7 @@ struct Tracing<'a, 'w, 's>(&'a mut InputHost<'w, 's>);
 
 impl Tracing<'_, '_, '_> {
     fn host(&mut self) -> Option<ScriptCallHost<'_, '_>> {
-        self.0.set.p1()
+        self.0.set.p1_valid()
     }
 }
 
