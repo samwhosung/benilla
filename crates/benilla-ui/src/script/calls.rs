@@ -629,6 +629,14 @@ pub(crate) fn hold(lua: &Lua, held: Held) {
     super::census::held();
 }
 
+/// Whether anything waits for the host: a call, or a handler an engine step held.
+pub(crate) fn any_waiting(lua: &Lua) -> bool {
+    !lua.app_data_ref::<Model>()
+        .expect("model app_data")
+        .script_calls
+        .is_empty()
+}
+
 /// Whether a handler an engine step held waits for the host ([`Waiting::Lua`]).
 pub(crate) fn signal_waiting(lua: &Lua) -> bool {
     lua.app_data_ref::<Model>()
@@ -1312,6 +1320,30 @@ mod tests {
             ]
         );
         assert_eq!(*host.tails.borrow(), vec![InputEvents::NONE, KEY]);
+    }
+
+    /// What an engine turn leaves waits until a lend runs it: a turn that made no call and held
+    /// no handler leaves nothing, and a lend leaves nothing behind.
+    #[test]
+    fn waiting_is_what_an_engine_turn_left_until_a_lend_runs_it() {
+        let mut s = UiScript::new().unwrap();
+        s.run(
+            r#"local f = CreateFrame("Frame") f:RegisterEvent("LOOT_OPENED")
+            f:SetScript("OnEvent", function() Heard = true end)"#,
+        )
+        .unwrap();
+        s.host_out(|s| s.run("local x = 1")).unwrap();
+        assert!(!s.waiting());
+        s.host_out(|s| s.run(r#"TargetUnit("player")"#)).unwrap();
+        assert!(s.waiting());
+        let mut host = Events::default();
+        s.hosted(&mut host, |_| ());
+        assert!(!s.waiting());
+        s.host_out(|s| s.fire_event("LOOT_OPENED", vec![]));
+        assert!(s.waiting());
+        s.hosted(&mut host, |_| ());
+        assert!(!s.waiting());
+        assert!(s.eval::<bool>("return Heard").unwrap());
     }
 
     /// An engine turn with no host to lend after drops what it left: nothing waits past the entry

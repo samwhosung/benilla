@@ -1704,6 +1704,10 @@ impl<P: SystemParam + 'static> VmWith<'_, '_, P> {
             self.set.end_lend();
             r
         });
+        // Nothing waits: the lend would run nothing, so the host is not validated or lent.
+        if !script.waiting() {
+            return r;
+        }
         match self.set.p1_valid().as_mut() {
             Some(host) => script.hosted(host, |_| ()),
             None => {
