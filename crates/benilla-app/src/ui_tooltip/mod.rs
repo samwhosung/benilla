@@ -48,7 +48,10 @@ impl Plugin for UiTooltipPlugin {
 /// ceiling. What it last published is the VM's ([`UiScript::world_mouseover`]), which a hover
 /// leave in the UI's walk also writes.
 #[derive(bevy::ecs::system::SystemParam)]
-pub(crate) struct HoverMemo<'s> {
+pub(crate) struct HoverMemo<'w, 's> {
+    /// Whether this frame's walk left the hover on a window (or the dev overlay): the pick, taken
+    /// a frame before, stands only while the WorldFrame holds the hover.
+    over_ui: Option<Res<'w, crate::ui_script::PointerOverUi>>,
     /// The hover probe's last trace line, so a stationary probe logs it once.
     trace: Local<'s, String>,
     /// Whether the VM holds a `"mouseover"` unit, so the clear is pushed once.
@@ -141,6 +144,21 @@ pub(crate) fn drive_mouseover_tooltip(
         // The WorldFrame picks nothing in freelook (`0x483e80` sets `[wf+0x38c]&2`), from the
         // call that entered it (`0x483ec3`): a pick taken before that call names nobody.
         let (hovered, hovered_go) = if script.freelook_now() == Some(true) {
+            let blank = Hovered {
+                distance: f32::MAX,
+                ..Default::default()
+            };
+            let go = HoveredObject {
+                distance: f32::MAX,
+                ..Default::default()
+            };
+            (blank, go)
+        } else if memo.over_ui.as_deref().is_some_and(|o| o.0) && !hovered.plate {
+            // The WorldFrame picks only while it holds the hover (`0x4817ae`). The pick is the
+            // last frame's (`TargetUpdate` runs after this feed), so on the frame the cursor moves
+            // from a unit onto a window it still names that unit: published again, it would
+            // rebuild the unit's plate over the tooltip the window's `OnEnter` just took, and the
+            // next frame's loss would fade it out. A plate's pick is the plate's own hover.
             let blank = Hovered {
                 distance: f32::MAX,
                 ..Default::default()
