@@ -840,6 +840,30 @@ pub(super) fn control(
                 call.frame_wrote();
             }
         }
+        // The camera driver's swim levelling, after the pitch's other writers and before the swim
+        // mover reads it ([`swim::level_swim_pitch`]), banded against the pivot target as the
+        // camera's own corridor is.
+        {
+            let (band, _) =
+                super::camera_water::classify(surface_y, player.pos.y, rig.pivot.probe().1);
+            let gates = swim::LevelGates {
+                pitch_key: binds.pressed(crate::bindings::Input::PitchUp)
+                    || binds.pressed(crate::bindings::Input::PitchDown),
+                auto_moving: auto_move.1.as_deref().is_some_and(|a| a.active()),
+                drunk: body
+                    .single()
+                    .ok()
+                    .and_then(|(.., store, _, _, _, _)| store.and_then(|s| s.0.player_drunk_byte()))
+                    .is_some_and(|b| b > 0),
+                mouselook: follow_command & camera::follow_cmd::RIGHT_MOUSE != 0,
+                swimming,
+            };
+            if swim::level_swim_pitch(&mut player, band, &dynamics.options, gates) {
+                if let Some(call) = speed_capsule.13.as_deref_mut() {
+                    call.frame_wrote();
+                }
+            }
+        }
         let mut swim_pitch = 0.0_f32;
         // Pre-step feet Y, the true take-off height: the step already rises one jump tick.
         let launch_y = player.pos.y;

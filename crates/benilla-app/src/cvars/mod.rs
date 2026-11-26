@@ -2521,7 +2521,7 @@ mod tests {
         );
     }
 
-    /// A reference CVar nothing here reads (`cameraDive`, `0x50be03`) is found by Lua's lookup, so `SetCVar` neither raises nor warns; it persists as
+    /// A reference CVar nothing here reads (`cameraSmoothYaw`, `0x50ba71`) is found by Lua's lookup, so `SetCVar` neither raises nor warns; it persists as
     /// a diff like any row, and its flag-bit1 neighbour stays latched.
     #[test]
     fn a_reference_cvar_nothing_reads_is_settable_and_persists_as_a_diff() {
@@ -2529,17 +2529,17 @@ mod tests {
         let mut script = UiScript::new().expect("VM");
         script.seed_cvars(cvars.vm_seed());
         script
-            .run(r#"SetCVar("cameraDive", "0") SetCVar("SoundOutputSystem", "1")"#)
+            .run(r#"SetCVar("cameraSmoothYaw", "0") SetCVar("SoundOutputSystem", "1")"#)
             .expect("both names are the reference's registered ones");
         assert_eq!(
             script
-                .eval::<String>(r#"return GetCVarDefault("cameraDive")"#)
+                .eval::<String>(r#"return GetCVarDefault("cameraSmoothYaw")"#)
                 .unwrap(),
             "1"
         );
         assert_eq!(
             script
-                .eval::<String>(r#"return GetCVar("cameraDive")"#)
+                .eval::<String>(r#"return GetCVar("cameraSmoothYaw")"#)
                 .unwrap(),
             "0"
         );
@@ -2555,7 +2555,7 @@ mod tests {
             cvars.set_from_vm(&name, &value);
         }
         let out = cvars.compose();
-        assert_eq!(out.get("cameraDive").map(String::as_str), Some("0"));
+        assert_eq!(out.get("cameraSmoothYaw").map(String::as_str), Some("0"));
         assert_eq!(
             cvars.get("SoundOutputSystem"),
             Some("-1"),
@@ -2566,8 +2566,8 @@ mod tests {
             Some("1"),
             "but it is saved (`0x63da27`)"
         );
-        cvars.set("cameraDive", "1");
-        assert!(!cvars.compose().contains_key("cameraDive"));
+        cvars.set("cameraSmoothYaw", "1");
+        assert!(!cvars.compose().contains_key("cameraSmoothYaw"));
         // The camera block's range check rides along (`0x50c000`).
         let rate = cvars.set("cameraFoVSmoothSpeed", "9000");
         assert_eq!(rate, SetOutcome::Vetoed);

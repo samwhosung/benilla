@@ -189,6 +189,61 @@ pub(super) fn hand_off_pitch(player: &mut Player, aim: f32) {
     player.set_pitch_due = true;
 }
 
+/// What the camera driver's swim levelling reads besides the pitch, the band and the CVars.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct LevelGates {
+    /// Command bit 0x400 or 0x800, a pitch key held (`0x50ebf1`).
+    pub(super) pitch_key: bool,
+    /// `0x6103a0`, an approach in flight (`0x50ebfa`).
+    pub(super) auto_moving: bool,
+    /// The drunk byte above 0 (`0x50eb7d`-`0x50eba7`).
+    pub(super) drunk: bool,
+    /// Command bit 0x1, mouselook (TurnOrAction) held.
+    pub(super) mouselook: bool,
+    /// The unit swims (`0x50eb62`).
+    pub(super) swimming: bool,
+}
+
+/// The camera driver's swim levelling (`0x50e8d0`, `0x50eb62`-`0x50ec9d`): a swimmer whose pitch
+/// is off level, with `cameraDive` on and no pitch key held, not auto-moving and not drunk, is
+/// set level through the pitch setter (`0x515330` with 0) in the surface band while
+/// `cameraSubmergePitch` is above 0, or in the submerged band while `cameraSurfacePitch` is below
+/// 0. So a nose-down from the pitch keys levels again once the key is up near the surface, and a
+/// deeper swimmer keeps it. Returns whether it levelled.
+///
+/// Deviation: with mouselook held the reference levels only while the camera's final pitch lies
+/// in the facing commit's window; here mouselook never levels, as its own hand-off
+/// ([`hand_off_pitch`]) sets the pitch to the aim on every motion.
+pub(super) fn level_swim_pitch(
+    player: &mut Player,
+    band: super::camera_water::WaterBand,
+    options: &super::camera_dynamics::CameraOptions,
+    gates: LevelGates,
+) -> bool {
+    use super::camera_water::WaterBand;
+    // `0x50ebdd`: a pitch under 2^-22 is level already.
+    const LEVEL: f32 = 1.0 / 4_194_304.0;
+    if !gates.swimming
+        || !options.dive
+        || player.mover_pitch.abs() < LEVEL
+        || gates.pitch_key
+        || gates.auto_moving
+        || gates.drunk
+        || gates.mouselook
+    {
+        return false;
+    }
+    let levels = match band {
+        WaterBand::Surface => options.submerge_pitch > 0.0,
+        WaterBand::Submerge => options.surface_pitch < 0.0,
+        WaterBand::Clear => false,
+    };
+    if levels {
+        hand_off_pitch(player, 0.0);
+    }
+    levels
+}
+
 /// Tag 0xd (`0x61a2e0`): `0x7c6e30` clears both bits, and the drain sends 0xc1.
 fn stop_pitch_keys(player: &mut Player) {
     player.pitch_keys = None;
@@ -593,6 +648,95 @@ mod tests {
         );
         hand_off_pitch(&mut p, 2.0);
         assert_eq!(p.mover_pitch, super::super::state::MOUSELOOK_PITCH_CLAMP);
+    }
+
+    /// `0x50e8d0`'s swim levelling at the registered CVars (`cameraDive` 1, `cameraSurfacePitch`
+    /// 0, `cameraSubmergePitch` 18): a nose-down levels in the surface band once no pitch key is
+    /// held, and stays below it; a held key, mouselook, an approach, drink or `cameraDive` 0 keep
+    /// it; `cameraSurfacePitch` below 0 levels the submerged band too.
+    #[test]
+    fn the_camera_levels_a_key_pitched_swimmer_in_the_surface_band() {
+        use super::super::camera_dynamics::CameraOptions;
+        use super::super::camera_water::WaterBand;
+        let opts = CameraOptions::default();
+        let free = LevelGates {
+            swimming: true,
+            ..LevelGates::default()
+        };
+        let pitched = || Player {
+            mover_pitch: -1.2,
+            ..Player::default()
+        };
+
+        let mut p = pitched();
+        assert!(level_swim_pitch(&mut p, WaterBand::Surface, &opts, free));
+        assert_eq!(
+            (p.mover_pitch, p.set_pitch_due),
+            (0.0, true),
+            "sent as a set"
+        );
+
+        for band in [WaterBand::Submerge, WaterBand::Clear] {
+            let mut p = pitched();
+            assert!(!level_swim_pitch(&mut p, band, &opts, free), "{band:?}");
+            assert_eq!(p.mover_pitch, -1.2);
+        }
+        for gates in [
+            LevelGates {
+                pitch_key: true,
+                ..free
+            },
+            LevelGates {
+                mouselook: true,
+                ..free
+            },
+            LevelGates {
+                auto_moving: true,
+                ..free
+            },
+            LevelGates {
+                drunk: true,
+                ..free
+            },
+            LevelGates {
+                swimming: false,
+                ..free
+            },
+        ] {
+            let mut p = pitched();
+            assert!(
+                !level_swim_pitch(&mut p, WaterBand::Surface, &opts, gates),
+                "{gates:?}"
+            );
+        }
+        let off = CameraOptions {
+            dive: false,
+            ..opts
+        };
+        assert!(!level_swim_pitch(
+            &mut pitched(),
+            WaterBand::Surface,
+            &off,
+            free
+        ));
+        let below = CameraOptions {
+            surface_pitch: -10.0,
+            ..opts
+        };
+        assert!(level_swim_pitch(
+            &mut pitched(),
+            WaterBand::Submerge,
+            &below,
+            free
+        ));
+        let mut level = Player::default();
+        assert!(!level_swim_pitch(
+            &mut level,
+            WaterBand::Surface,
+            &opts,
+            free
+        ));
+        assert!(!level.set_pitch_due, "a level swimmer sends nothing");
     }
 
     /// `0x7c4f80` with the rate of `0x7c5c90`: the turn rate, three quarters while moving, held to
