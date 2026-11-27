@@ -651,13 +651,19 @@ pub(crate) fn ground_derived(
     }
 }
 
-/// How far above the seat an idle unit's settle probe starts (yd): the swept-prism TOI
-/// (`0x632830`) still counts a face up to `1/36` yd (`[0x7ff9c8]`) behind the probe as a hit.
-const IDLE_UP_BAND: f32 = 1.0 / 36.0;
 /// How far below the seat the settle probe reaches (yd). The reference's settle reaches
-/// `d·1.849 + 1/36` and a body beyond it falls; an idle unit here has no fall, so a miss leaves it
-/// at its seat, which is also the airborne gate.
+/// `d·1.849 + 1/36` and a body beyond it falls; a miss here lands the unit as its fall would,
+/// through a second probe [`FALL_REACH`] long.
 const GROUND_CLAMP_DOWN: f32 = 4.0;
+/// How far below the seat an idle unit's fall looks for its landing (yd); the reference's fall has
+/// no bound, and a unit with nothing this far below keeps its seat.
+const FALL_REACH: f32 = 500.0;
+/// The settle box's height over the feet, per yard of body radius (`0x634960`, `0x80c740`).
+const IDLE_SETTLE_BOX: f32 = 1.849_399;
+/// How far past its swim depth a fall into liquid carries a unit (yd): the last fall step crosses
+/// the boundary. Measured in the 1.12 client (Turtle, Windrunner Pier): two night elf females
+/// (enter depth 1.69) fell from 4.05 and 4.09 to 1.74 and 1.78 under the surface.
+const FALL_SWIM_OVERSHOOT: f32 = 0.05;
 
 /// The Y a grounded mover ends its frame at (`0x634040`'s walk resolve), shared by the clamp and
 /// [`crate::player::server_ride`]; a probe miss returns `seat_y`.
@@ -699,6 +705,10 @@ pub(in crate::net) fn ground_clamp_creatures(
     // unit's own `CreatureModelData` radius and height (`[CMovement+0xb0]`/`+0xb4`); per-unit
     // extents are not built.
     capsule: Res<crate::player::PlayerCapsule>,
+    // An idle unit falls only into a world that has arrived: the reference's world query fails,
+    // and the mover's step is skipped, while the map object, terrain chunk or doodad under it is
+    // not ready (`0x6aa8b0`). Deviation: benilla waits for the whole view neighbourhood instead.
+    progress: Option<Res<benilla_world::terrain_stream::WorldLoadProgress>>,
     mut commands: Commands,
     mut q: Query<
         (
@@ -714,6 +724,9 @@ pub(in crate::net) fn ground_clamp_creatures(
             Has<crate::net::Embodied>,
             // The mover state a re-grounded unit's dead-reckoning goes on from.
             Option<&mut crate::net::RemoteMotion>,
+            // A fall into liquid stops at the unit's swim depth, when it may swim.
+            Option<&CollisionHeight>,
+            Option<&ObjectStore>,
         ),
         // A mount is a model of its unit with no movement of its own (`0x607a00`), and its
         // `Transform` is host-local: a world probe there would sink it under the rider.
@@ -722,6 +735,9 @@ pub(in crate::net) fn ground_clamp_creatures(
 ) {
     let cost = clamp_cost_enabled();
     let legacy = clamp_seat_disabled();
+    let world_arrived = progress
+        .as_deref()
+        .is_some_and(|p| p.scene_ready && p.colliders_pending == 0 && p.placements_pending == 0);
     let t0 = cost.then(std::time::Instant::now);
     let (mut visited, mut skipped, mut held, mut cast, mut swept, mut hit_n, mut moved) =
         (0u32, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32);
@@ -734,7 +750,20 @@ pub(in crate::net) fn ground_clamp_creatures(
     // (`armed`); a nonzero steady-state `armed` means the collider set is churning.
     let (mut reseat, mut armed) = (0u32, 0u32);
 
-    for (entity, net, spline, mut t, mut clamped, swimming, modes, embodied, mut motion) in &mut q {
+    for (
+        entity,
+        net,
+        spline,
+        mut t,
+        mut clamped,
+        swimming,
+        modes,
+        embodied,
+        mut motion,
+        collision,
+        store,
+    ) in &mut q
+    {
         visited += 1;
         let self_moving = motion.as_deref().is_some_and(moves_itself);
         if !ground_derived(
@@ -876,11 +905,39 @@ pub(in crate::net) fn ground_clamp_creatures(
             }
             (y, g.ground.is_some())
         } else {
-            let origin = Vec3::new(t.translation.x, seat_y + IDLE_UP_BAND, t.translation.z);
-            let reach = IDLE_UP_BAND + GROUND_CLAMP_DOWN;
+            // The settle sweeps a box whose top corners stand `1.849·r` over the feet
+            // (`0x634960`): a face already inside it is a hit at distance 0, so a unit seated just
+            // under a floor stays at its seat and never climbs onto it.
+            let band = IDLE_SETTLE_BOX * crate::player::CAPSULE_RADIUS;
+            let origin = Vec3::new(t.translation.x, seat_y + band, t.translation.z);
+            let reach = band + GROUND_CLAMP_DOWN;
             // One-sided, as the player mover grounds: a face wound away is no floor.
-            let hit = world.ray_body(origin, Dir3::NEG_Y, reach);
-            let floor = hit.as_ref().map(|h| origin.y - h.distance);
+            let mut hit = world.ray_body(origin, Dir3::NEG_Y, reach);
+            let mut floor = hit.as_ref().map(|h| (origin.y - h.distance).min(seat_y));
+            // Nothing within the settle's reach: the walk step sets its no-floor flag and the
+            // mover falls (`0x7c61f0`) until it lands, or until liquid takes it past its swim
+            // depth (`0x6030c0`). Deviation: the fall's arc is not drawn; the unit lands at once.
+            // A levitating mover does not walk, so it keeps its seat; so does one with nothing
+            // below, and every unit while the world around the view is still streaming in.
+            let levitating = motion
+                .as_deref()
+                .is_some_and(|m| m.flags & crate::creature_anim::move_flags::LEVITATING != 0);
+            if hit.is_none() && !levitating && world_arrived {
+                hit = world.ray_body(origin, Dir3::NEG_Y, FALL_REACH);
+                floor = hit.as_ref().map(|h| origin.y - h.distance);
+                let flags = store.map_or(0, |s| s.0.unit_flags());
+                if let Some(f) = floor.filter(|_| crate::player::may_swim(flags)) {
+                    let wow = bevy_to_wow(t.translation);
+                    let who = benilla_world::world_point::Subject::Unit(entity);
+                    let depth = swim_enter_depth(collision.copied().unwrap_or_default().0)
+                        + FALL_SWIM_OVERSHOOT;
+                    let swim_y = points
+                        .liquid_at(who, wow)
+                        .map(|l| t.translation.y + (l.surface_z - wow[2]) - depth)
+                        .filter(|s| *s > f && *s < seat_y);
+                    floor = Some(swim_y.unwrap_or(f));
+                }
+            }
             let y = grounded_y(seat_y, floor, water, hover);
             // The `clmp` trace for one display (`WOW_CLAMP_TRACE=<display id>`): per cast, the
             // seat, the ray origin, the hit and the Z written, in WoW coordinates.
@@ -1276,6 +1333,96 @@ mod under_floor {
         );
     }
 
+    /// A unit the server seats farther above its floor than the settle reaches falls onto it, as
+    /// the reference's no-floor fall does (`0x7c61f0`); a levitating one keeps its seat. Seen at
+    /// Turtle's Windrunner Pier: an Alah'Thalas Sentinel seated 5.8 yd above the deck.
+    #[test]
+    fn a_unit_seated_high_above_its_floor_falls_onto_it() {
+        let (mut app, npc) = half_arrived_world();
+        let high = TERRAIN_Y + super::GROUND_CLAMP_DOWN + 1.8;
+        app.world_mut()
+            .entity_mut(npc)
+            .get_mut::<Transform>()
+            .unwrap()
+            .translation
+            .y = high;
+        // While the world streams in, a miss keeps the seat: the floor may not be there yet.
+        clamp(&mut app);
+        assert_eq!(
+            y_of(&app, npc),
+            high,
+            "no fall before the world has arrived"
+        );
+        app.insert_resource(benilla_world::terrain_stream::WorldLoadProgress {
+            scene_ready: true,
+            ..Default::default()
+        });
+        clamp(&mut app);
+        assert!(
+            (y_of(&app, npc) - TERRAIN_Y).abs() < 1.0e-3,
+            "past the settle's reach the unit falls, and lands on the floor below: {}",
+            y_of(&app, npc)
+        );
+
+        let levitating = app
+            .world_mut()
+            .spawn((
+                NetEntity {
+                    kind: EntityKind::Unit,
+                    display_id: None,
+                    scale: 1.0,
+                },
+                Transform::from_xyz(1.0, high, 1.0),
+                crate::net::RemoteMotion {
+                    wow_pos: [0.0, 0.0, 0.0],
+                    orientation: 0.0,
+                    flags: crate::creature_anim::move_flags::LEVITATING,
+                    pitch: 0.0,
+                    speed: 0.0,
+                    vertical_velocity: 0.0,
+                    jump_xy_vel: [0.0; 2],
+                    fall_start: None,
+                    pending: std::collections::VecDeque::new(),
+                    relay: Default::default(),
+                    last_apply_ms: 0.0,
+                    last_apply_pos: [0.0; 3],
+                    fired_at_ms: None,
+                },
+            ))
+            .id();
+        app.update();
+        clamp(&mut app);
+        assert_eq!(
+            y_of(&app, levitating),
+            high,
+            "a levitating mover does not walk, so it never falls"
+        );
+    }
+
+    /// A unit seated just under a floor stays at its seat: the face lies inside the settle box,
+    /// a hit at distance 0, so it neither climbs onto the floor nor falls through it. The 1.12
+    /// client keeps Captain Velari Shadelain (Windrunner Pier) at her seat 5 cm under the deck.
+    #[test]
+    fn a_unit_seated_just_under_a_floor_stays_at_its_seat() {
+        let (mut app, npc) = half_arrived_world();
+        let deck = TERRAIN_Y + super::GROUND_CLAMP_DOWN + 6.0;
+        floor_at(&mut app, deck);
+        let seat = deck - 0.05;
+        app.world_mut()
+            .entity_mut(npc)
+            .get_mut::<Transform>()
+            .unwrap()
+            .translation
+            .y = seat;
+        app.update();
+        clamp(&mut app);
+        assert_eq!(
+            y_of(&app, npc),
+            seat,
+            "the deck is inside the settle box: no climb, and no fall to the terrain below"
+        );
+    }
+
     /// A mount child is a model of its unit (`0x607a00`) with a host-local `Transform`: the clamp
     /// grounds the mounted unit and never probes the child's local origin as a world point, where
     /// a floor just under it would sink the mount by its host's height.
@@ -1364,17 +1511,22 @@ mod under_floor {
 
     #[test]
     fn a_unit_with_no_ground_in_reach_sits_where_the_server_put_it() {
-        // The whole reach below the seat is empty air: the miss leaves the unit at its seat.
+        // The whole fall below the seat is empty air: the miss leaves the unit at its seat.
         let (mut app, npc) = half_arrived_world();
+        app.insert_resource(benilla_world::terrain_stream::WorldLoadProgress {
+            scene_ready: true,
+            ..Default::default()
+        });
+        let seat = TERRAIN_Y + super::FALL_REACH + 40.0;
         app.world_mut()
             .get_mut::<Transform>(npc)
             .unwrap()
             .translation
-            .y = TERRAIN_Y + 40.0;
+            .y = seat;
         clamp(&mut app);
         assert_eq!(
             y_of(&app, npc),
-            TERRAIN_Y + 40.0,
+            seat,
             "no surface in reach ⇒ the wire's Z stands"
         );
     }
