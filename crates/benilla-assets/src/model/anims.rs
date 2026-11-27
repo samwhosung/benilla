@@ -63,6 +63,9 @@ pub struct AnimClip {
     pub upper_node: Option<AnimationNodeIndex>,
     /// This variation's weight in the reference's per-play roll (`M2Sequence+0x14`, `0x71248a`).
     pub frequency: u16,
+    /// The id's next variation (`M2Sequence+0x40`, a file slot) as an index into
+    /// [`ModelAnimations::clips`]; `None` at the chain's end.
+    pub variation_next: Option<usize>,
     /// `(minReplay, maxReplay)` (`M2Sequence+0x18/+0x1c`): each arm rolls a play count `R` from
     /// it, so a one-shot runs `R` times. A loop uses it too: a placed doodad re-rolls its
     /// variation when the window expires, every loop for `(0, 0)`.
@@ -173,19 +176,34 @@ impl ModelAnimations {
 
     /// Pick a variation of `anim_id` for a `rand()` roll, the reference's weighted walk
     /// (`0x7121a0`, variation −1). Exhaustion keeps the head: only the win path (`0x7124e9`)
-    /// overwrites the slot set at `0x71247a`. Variations are the sequences sharing `anim_id` in
-    /// file order, as retail files lay out the `variationNext` chain.
+    /// overwrites the slot set at `0x71247a`. The walk starts at the id's first clip and follows
+    /// each sequence's `variationNext` (`+0x40`), so a slot sharing the id that the chain does not
+    /// reach is never rolled (a converted model can carry such slots, unlinked).
     pub fn pick_variation(&self, anim_id: u16, roll: u16) -> Option<&AnimClip> {
+        let head = self.find(anim_id)?;
         let mut roll = i32::from(roll);
-        let mut head = None;
-        for c in self.clips.iter().filter(|c| c.anim_id == anim_id) {
-            head.get_or_insert(c);
+        let mut c = head;
+        // A malformed chain that loops is cut after one pass over the clips.
+        for _ in 0..self.clips.len() {
             if roll < i32::from(c.frequency) {
                 return Some(c);
             }
             roll -= i32::from(c.frequency);
+            let Some(next) = c.variation_next.and_then(|i| self.clips.get(i)) else {
+                break;
+            };
+            c = next;
         }
-        head
+        Some(head)
+    }
+
+    /// Links each clip to the next one sharing its id, in list order: the chain a retail file
+    /// authors, for a model built by hand (a test's, or a GameObject crate's).
+    pub fn link_variations_in_order(clips: &mut [AnimClip]) {
+        for i in 0..clips.len() {
+            let id = clips[i].anim_id;
+            clips[i].variation_next = (i + 1..clips.len()).find(|&j| clips[j].anim_id == id);
+        }
     }
 
     /// Resolve a requested id as the reference does before every sequence lookup (`0x711bf0`):
@@ -261,6 +279,7 @@ mod tests {
             arm_nodes: None,
             upper_node: None,
             frequency: 0,
+            variation_next: None,
             replay: (0, 0),
             poses_bones: true,
         }
@@ -507,7 +526,11 @@ mod tests {
     #[test]
     fn pick_variation_walks_the_weighted_chain() {
         let mut anims = test_anims(&[16, 16, 5], Vec::new());
+        for (slot, c) in anims.clips.iter_mut().enumerate() {
+            c.seq_index = slot;
+        }
         anims.clips[0].frequency = 0x6000; // Attack1H variation 0, the common arc
+        anims.clips[0].variation_next = Some(1);
         anims.clips[1].frequency = 0x1fff; // variation 1, the off-side swing
         let pick = |anims: &ModelAnimations, id, roll| {
             let c = anims.pick_variation(id, roll).unwrap();
@@ -521,5 +544,33 @@ mod tests {
         assert_eq!(pick(&anims, 16, 0x7fff), 0);
         assert_eq!(pick(&anims, 5, 0x7fff), 2); // lone variation wins by exhaustion→head (weight 0)
         assert!(anims.pick_variation(99, 0).is_none());
+    }
+
+    /// Only the `variationNext` chain is rolled: a slot sharing the id that no link reaches never
+    /// plays. Turtle's `highelfelfmale_guard.m2` carries three such Stand slots (next −1 on every
+    /// one); the 1.12 client plays only the head, and rolling the last one sank the guard into the
+    /// ground as its short keys ran into the next sequence's.
+    #[test]
+    fn an_unlinked_slot_sharing_the_id_is_never_rolled() {
+        let mut anims = test_anims(&[0, 0, 0], Vec::new());
+        for (slot, c) in anims.clips.iter_mut().enumerate() {
+            c.seq_index = slot;
+            c.frequency = 0x2000;
+        }
+        let pick = |anims: &ModelAnimations, roll| {
+            let c = anims.pick_variation(0, roll).unwrap();
+            anims.clips.iter().position(|x| std::ptr::eq(x, c)).unwrap()
+        };
+        for roll in [0x0000, 0x1fff, 0x2000, 0x5fff, 0x7fff] {
+            assert_eq!(pick(&anims, roll), 0, "unlinked: every roll keeps the head");
+        }
+        // Linking the last slot alone makes it the second variation; the middle one stays out.
+        anims.clips[0].variation_next = Some(2);
+        assert_eq!(pick(&anims, 0x2000), 2);
+        assert_eq!(
+            pick(&anims, 0x4000),
+            0,
+            "past the chain's weights: the head"
+        );
     }
 }

@@ -801,6 +801,7 @@ mod tests {
             bounds_min: [0.0; 3],
             bounds_max: [0.0; 3],
             frequency: 0,
+            variation_next: None,
             min_replay: 0,
             max_replay: 0,
             bones,

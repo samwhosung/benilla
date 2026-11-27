@@ -328,6 +328,9 @@ pub struct ModelAnimation {
     pub bounds_max: [f32; 3],
     /// `frequency` (`+0x14`): this variation's weight in the per-play roll (`0x7121a0`).
     pub frequency: u16,
+    /// `variationNext` (`+0x40`): the file slot of the id's next variation, `None` at the chain's
+    /// end (−1). The per-play roll walks this chain (`0x7121a0`), not every slot sharing the id.
+    pub variation_next: Option<usize>,
     /// The replay range (`+0x18`/`+0x1c`): each arm rolls a play count
     /// `R = max(1, min + ⌊rand·(max−min)/32768⌋)` (`0x712692..0x7126cd`) into the play window
     /// (`0x7126d8`); a looping sequence ignores it (`0x7145f1`).
@@ -637,6 +640,7 @@ pub fn parse_m2_animations(b: &[u8]) -> Vec<ModelAnimation> {
         ];
         let bounds_radius = le_f32(b, rec + 0x3c);
         let frequency = le_u16(b, rec + 0x14);
+        let variation_next = usize::try_from(le_u16(b, rec + 0x40) as i16).ok();
         let (min_replay, max_replay) = (le_u32(b, rec + 0x18), le_u32(b, rec + 0x1c));
         let duration = end.saturating_sub(start) as f32 / 1000.0;
         if duration <= 0.0 {
@@ -688,6 +692,7 @@ pub fn parse_m2_animations(b: &[u8]) -> Vec<ModelAnimation> {
             bounds_min: bmin,
             bounds_max: bmax,
             frequency,
+            variation_next,
             min_replay,
             max_replay,
             bones,

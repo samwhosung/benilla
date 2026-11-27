@@ -220,6 +220,7 @@ pub(crate) fn owned_anims(ids: &[u16]) -> ModelAnimations {
                 arm_nodes: None,
                 upper_node: None,
                 frequency: 0,
+                variation_next: None,
                 replay: (0, 0),
                 poses_bones: false,
             })
@@ -951,7 +952,7 @@ mod tests {
                 lookup[id as usize] = slot as u16;
             }
         }
-        let anims = ModelAnimations {
+        let mut anims = ModelAnimations {
             graph: graph.clone(),
             clips: authored
                 .iter()
@@ -973,6 +974,7 @@ mod tests {
                     events: Vec::new().into(),
                     arm_nodes: None,
                     upper_node: None,
+                    variation_next: None,
                     frequency,
                     replay: (0, 0),
                     poses_bones: true,
@@ -985,6 +987,8 @@ mod tests {
             first_seq: None,
             pose: Default::default(),
         };
+        ModelAnimations::link_variations_in_order(&mut anims.clips);
+
         // First sight is a closed chest, as it streams in.
         let go = app
             .world_mut()

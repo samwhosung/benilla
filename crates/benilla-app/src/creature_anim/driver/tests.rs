@@ -50,6 +50,7 @@ fn clip(anim_id: u16, node: u32, looping: bool) -> AnimClip {
         arm_nodes: None,
         upper_node: None,
         frequency: 0,
+        variation_next: None,
         replay: (0, 0),
         poses_bones: true,
     }
@@ -338,10 +339,11 @@ fn spawn_fidgeter(app: &mut App) -> (Entity, Vec<AnimationNodeIndex>) {
         duration,
         blend_time: 0.0,
         frequency,
+        variation_next: None,
         replay: (0, 0),
         ..clip(id, 0, true)
     };
-    let anims = ModelAnimations {
+    let mut anims = ModelAnimations {
         graph: graph_handle.clone(),
         clips: vec![
             seq(0, nodes[0], STAND_SPAN, 0),     // Stand, the head
@@ -355,6 +357,7 @@ fn spawn_fidgeter(app: &mut App) -> (Entity, Vec<AnimationNodeIndex>) {
         first_seq: None,
         pose: Default::default(),
     };
+    ModelAnimations::link_variations_in_order(&mut anims.clips);
     let unit = app
         .world_mut()
         .spawn((
@@ -1341,7 +1344,7 @@ fn a_looping_arm_advances_through_its_variations_at_window_end() {
         c.replay = (1, 1);
         c
     };
-    let anims = ModelAnimations {
+    let mut anims = ModelAnimations {
         graph: graph_handle.clone(),
         clips: vec![variation(nodes[0]), variation(nodes[1])],
         hand_close: [None, None],
@@ -1351,6 +1354,7 @@ fn a_looping_arm_advances_through_its_variations_at_window_end() {
         first_seq: None,
         pose: Default::default(),
     };
+    ModelAnimations::link_variations_in_order(&mut anims.clips);
     let unit = app
         .world_mut()
         .spawn((
