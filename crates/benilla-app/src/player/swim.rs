@@ -367,8 +367,8 @@ pub(super) struct SwimOutcome {
 /// the travel pitch. The 1.12 client is seen swimming level at full speed along the surface; its
 /// own-input resolver (`0x634640`) as read slides a steep aim along the cap at `cos(pitch)·speed`,
 /// near zero, so the mechanism behind the seen behaviour is untraced. `heading` is the level
-/// heading `h` of `0x7c5a20`, which a straight-up stroke turns along: at the pitch clamp
-/// `fl(cos π/2)` is -4.4e-8 (`0x7c5880`), so its own level part is noise pointing backwards.
+/// heading `h` of `0x7c5a20`, which a straight-up stroke turns along: the clamp `0x3fc90fdb`
+/// (`0x7c4f80`) gives `fl(cos P)` = -4.4e-8 in `0x7c5880`, so its level part is backward noise.
 fn cap_redirect(input_vel: Vec3, cap: f32, heading: Vec3) -> (Vec3, Option<f32>) {
     if input_vel.y <= 0.0 || input_vel.y <= cap {
         return (input_vel, None);
