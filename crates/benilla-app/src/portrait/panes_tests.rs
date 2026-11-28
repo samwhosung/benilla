@@ -25,10 +25,11 @@ fn turning_model() -> benilla_assets::ModelAnimations {
         arm_nodes: None,
         upper_node: None,
         frequency,
+        variation_next: None,
         replay: (0, 0),
         poses_bones: true,
     };
-    benilla_assets::ModelAnimations {
+    let mut anims = benilla_assets::ModelAnimations {
         graph: Handle::default(),
         clips: vec![
             clip(ANIM_STAND, 1, 0.5, 1), // the head, all but unreachable by the roll
@@ -42,7 +43,9 @@ fn turning_model() -> benilla_assets::ModelAnimations {
         global_bones: Vec::new(),
         first_seq: None,
         pose: Default::default(),
-    }
+    };
+    benilla_assets::ModelAnimations::link_variations_in_order(&mut anims.clips);
+    anims
 }
 
 fn node(n: usize) -> AnimationNodeIndex {

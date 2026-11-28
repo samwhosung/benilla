@@ -2904,6 +2904,7 @@ mod tests {
                 arm_nodes: None,
                 upper_node: None,
                 frequency: 0,
+                variation_next: None,
                 replay: (0, 0),
                 poses_bones: true,
             }],

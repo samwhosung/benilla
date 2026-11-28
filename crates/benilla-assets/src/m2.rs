@@ -555,6 +555,7 @@ impl AssetLoader for M2ModelLoader {
                         arm_nodes,
                         upper_node,
                         frequency: anim.frequency,
+                        variation_next: anim.variation_next,
                         replay: (anim.min_replay, anim.max_replay),
                         poses_bones,
                     });
@@ -606,6 +607,7 @@ impl AssetLoader for M2ModelLoader {
                 || (samples_sequence && !clips.is_empty()))
             .then(|| {
                 let graph = ctx.add_labeled_asset("anim_graph".to_string(), graph);
+                ModelAnimations::link_variations_by_slot(&mut clips);
                 ModelAnimations {
                     graph,
                     clips,

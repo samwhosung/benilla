@@ -328,6 +328,9 @@ pub struct ModelAnimation {
     pub bounds_max: [f32; 3],
     /// `frequency` (`+0x14`): this variation's weight in the per-play roll (`0x7121a0`).
     pub frequency: u16,
+    /// `variationNext` (`+0x40`): the file slot of the id's next variation, `None` at the chain's
+    /// end (−1). The per-play roll walks this chain (`0x7121a0`), not every slot sharing the id.
+    pub variation_next: Option<usize>,
     /// The replay range (`+0x18`/`+0x1c`): each arm rolls a play count
     /// `R = max(1, min + ⌊rand·(max−min)/32768⌋)` (`0x712692..0x7126cd`) into the play window
     /// (`0x7126d8`); a looping sequence ignores it (`0x7145f1`).
@@ -637,6 +640,9 @@ pub fn parse_m2_animations(b: &[u8]) -> Vec<ModelAnimation> {
         ];
         let bounds_radius = le_f32(b, rec + 0x3c);
         let frequency = le_u16(b, rec + 0x14);
+        // Deviation: any negative word ends the chain, because the reference ends it only on 0xffff
+        // (`0x7124d4`) and indexes any other value unchecked (`0x7124b6`), past its table.
+        let variation_next = usize::try_from(le_u16(b, rec + 0x40) as i16).ok();
         let (min_replay, max_replay) = (le_u32(b, rec + 0x18), le_u32(b, rec + 0x1c));
         let duration = end.saturating_sub(start) as f32 / 1000.0;
         if duration <= 0.0 {
@@ -688,6 +694,7 @@ pub fn parse_m2_animations(b: &[u8]) -> Vec<ModelAnimation> {
             bounds_min: bmin,
             bounds_max: bmax,
             frequency,
+            variation_next,
             min_replay,
             max_replay,
             bones,
@@ -823,6 +830,28 @@ mod tests {
             assert!(parse_m2_cch_marker(b).is_none(), "{len} bytes");
             assert!(parse_m2_animations(b).is_empty(), "{len} bytes");
         }
+    }
+
+    /// `variationNext` is the word at `+0x40` (`0x7124cf`), not `aliasNext` beside it: slot 0
+    /// links to 2, the end mark `0xffff` is `None`, and so is any other negative word.
+    #[test]
+    fn variation_next_is_the_sequence_word_at_0x40() {
+        let mut b = vec![0u8; 0x11c];
+        b[0..4].copy_from_slice(b"MD20");
+        b[0x1c..0x20].copy_from_slice(&3u32.to_le_bytes());
+        b[0x20..0x24].copy_from_slice(&0x11cu32.to_le_bytes());
+        for (next, alias) in [(2u16, 1u16), (0xffff, 0), (0x8000, 2)] {
+            let mut rec = [0u8; 0x44];
+            rec[0x08..0x0c].copy_from_slice(&1000u32.to_le_bytes());
+            rec[0x40..0x42].copy_from_slice(&next.to_le_bytes());
+            rec[0x42..0x44].copy_from_slice(&alias.to_le_bytes());
+            b.extend_from_slice(&rec);
+        }
+        let links: Vec<_> = parse_m2_animations(&b)
+            .iter()
+            .map(|a| a.variation_next)
+            .collect();
+        assert_eq!(links, [Some(2), None, None]);
     }
 
     /// `HumanMale.m2`'s one global-sequence bone, the eyelid (75), scales 0 (open) to 1 (shut).

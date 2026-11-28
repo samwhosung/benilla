@@ -1206,6 +1206,7 @@ mod tests {
                 arm_nodes: None,
                 upper_node: None,
                 frequency: 32767,
+                variation_next: None,
                 replay: (0, 0),
                 poses_bones: true,
             }],
