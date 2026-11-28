@@ -640,8 +640,8 @@ pub fn parse_m2_animations(b: &[u8]) -> Vec<ModelAnimation> {
         ];
         let bounds_radius = le_f32(b, rec + 0x3c);
         let frequency = le_u16(b, rec + 0x14);
-        // Deviation: the reference ends the chain only on 0xffff (`0x7124d4`) and indexes any other
-        // value unchecked (`0x7124b6`), past the table on a malformed file; here any negative ends it.
+        // Deviation: any negative word ends the chain, because the reference ends it only on 0xffff
+        // (`0x7124d4`) and indexes any other value unchecked (`0x7124b6`), past its table.
         let variation_next = usize::try_from(le_u16(b, rec + 0x40) as i16).ok();
         let (min_replay, max_replay) = (le_u32(b, rec + 0x18), le_u32(b, rec + 0x1c));
         let duration = end.saturating_sub(start) as f32 / 1000.0;
