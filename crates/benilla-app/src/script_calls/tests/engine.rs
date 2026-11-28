@@ -46,6 +46,34 @@ fn opening_cinematic_sends_inside_its_call() {
     );
 }
 
+/// An engine turn ([`crate::script_calls::VmWith::turn`]) lends the host as it ends whenever its
+/// body left something waiting: the call its chunk made applies, then the handler its signal
+/// held runs and its call applies, and nothing waits after.
+#[test]
+fn an_engine_turns_call_and_held_handler_apply_as_the_turn_ends() {
+    use bevy::ecs::system::RunSystemOnce;
+    let (mut app, rx) = client();
+    eval::<()>(
+        &mut app,
+        r#"local f = CreateFrame("Frame") f:RegisterEvent("LOOT_OPENED")
+        f:SetScript("OnEvent", function() RandomRoll(3, 4) end)"#,
+    );
+    app.world_mut()
+        .run_system_once(|mut vm: crate::script_calls::VmWith<()>| {
+            vm.turn(|s, ()| {
+                let s = s.expect("a VM");
+                s.run("RandomRoll(1, 2)").expect("the chunk runs");
+                s.fire_event("LOOT_OPENED", vec![]);
+            })
+        })
+        .expect("the turn runs");
+    assert_eq!(sent(&rx), ["roll 1", "roll 3"]);
+    assert!(!app
+        .world()
+        .non_send_resource::<benilla_ui::script::UiScript>()
+        .waiting());
+}
+
 /// The plate bits as the engine holds them: enemy, then friendly.
 fn plates(app: &App) -> (bool, bool) {
     let mode = app.world().resource::<crate::vplates::VPlateMode>();
