@@ -197,8 +197,8 @@ impl ModelAnimations {
         Some(head)
     }
 
-    /// Links each clip to the next one sharing its id, in list order: the chain a retail file
-    /// authors, for a model built by hand.
+    /// Links each clip to the next one sharing its id, in list order, the chain a retail file
+    /// authors: for tests and fixtures that build a model by hand (the loader links by slot).
     pub fn link_variations_in_order(clips: &mut [AnimClip]) {
         for i in 0..clips.len() {
             let id = clips[i].anim_id;
