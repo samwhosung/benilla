@@ -841,21 +841,26 @@ pub(super) fn control(
             }
         }
         // The camera driver's swim levelling, after the pitch's other writers and before the swim
-        // mover reads it ([`swim::level_swim_pitch`]), banded against the pivot target as the
-        // camera's own corridor is.
+        // mover reads it ([`swim::level_swim_pitch`]), banded as the camera's own corridor is:
+        // against the pivot target, and with no liquid under far sight (`0x511ad0`).
         {
-            let (band, _) =
-                super::camera_water::classify(surface_y, player.pos.y, rig.pivot.probe().1);
+            use camera::follow_cmd as bit;
+            let (band, _) = super::camera_water::classify(
+                view_subject.remote.is_none().then_some(surface_y).flatten(),
+                player.pos.y,
+                rig.pivot.probe().1,
+            );
             let gates = swim::LevelGates {
-                pitch_key: binds.pressed(crate::bindings::Input::PitchUp)
-                    || binds.pressed(crate::bindings::Input::PitchDown),
-                auto_moving: auto_move.1.as_deref().is_some_and(|a| a.active()),
+                pitch_key: follow_command & (bit::PITCH_UP | bit::PITCH_DOWN) != 0,
+                auto_moving: auto_move.0.as_deref().is_some_and(|f| f.guid.is_some())
+                    || auto_move.1.as_deref().is_some_and(|a| a.active()),
                 drunk: body
                     .single()
                     .ok()
                     .and_then(|(.., store, _, _, _, _)| store.and_then(|s| s.0.player_drunk_byte()))
                     .is_some_and(|b| b > 0),
-                mouselook: follow_command & camera::follow_cmd::RIGHT_MOUSE != 0,
+                mouselook_aim: (follow_command & bit::RIGHT_MOUSE != 0)
+                    .then(|| cam.pitch + rig.smart_pivot.bias()),
                 swimming,
             };
             if swim::level_swim_pitch(&mut player, band, &dynamics.options, gates) {
