@@ -240,23 +240,25 @@ impl Header<'_> {
             .ok_or(Error::OutOfBounds { level })
     }
 
-    /// A DXTC or palettized level `level` as the reference reads it: `need` bytes from the level's
-    /// offset, never the header's size, which `0x5a8558` and `0x5a7f53` only test for zero.
-    /// DXTC is `bpp·max(4,w)·max(4,h)/8` (`0x5a8555` points each level into the file; OpenGL
-    /// sizes the read at `0x59f4e6`–`0x59f515`, Direct3D copies `max(4,w)·max(4,h)` bytes via
-    /// `0x5a5780`); the encoder stores `max(1, (w/4)·(h/4))` blocks, one for a 2×16 level whose
-    /// grid needs four, so a short level takes the next levels' bytes. A palettized level is
-    /// sized by its dimensions too ([`palette_level_bytes`]): `0x5a8ce0` hands its converter the
-    /// level's `max(1,w>>l)·max(1,h>>l)` and the data pointer, no size. Deviation: past the file's
+    /// `need` bytes from level `level`'s offset, never the header's size: DXTC is
+    /// `bpp·max(4,w)·max(4,h)/8` (OpenGL sizes the read at `0x59f4e6`–`0x59f515`, Direct3D copies
+    /// `max(4,w)·max(4,h)` bytes via `0x5a5780`), so a level the encoder stored as one block where
+    /// its grid needs four takes the next levels' bytes; palettized is [`palette_level_bytes`]
+    /// (`0x5a8ce0` gets the dimensions and the data pointer, no size). Deviation: past the file's
     /// end [`pad_to`] zero-fills, because the reference reads stale buffer bytes there.
-    fn level_span<'b>(&self, bytes: &'b [u8], level: usize, need: usize) -> Option<&'b [u8]> {
+    fn level_span<'b>(&self, bytes: &'b [u8], level: usize, need: usize) -> &'b [u8] {
         let off = self.offsets[level] as usize;
-        if level > 0 && (self.sizes[level] == 0 || off == 0) {
-            return None;
-        }
         let start = off.min(bytes.len());
         let end = off.saturating_add(need).min(bytes.len());
-        Some(&bytes[start..end])
+        &bytes[start..end]
+    }
+
+    /// Whether a DXTC chain ends before level `level`, at a zero size or offset: the file load
+    /// `0x5a8430` points DXTC levels into the file while the size is non-zero (`0x5a8558`,
+    /// `0x5a8585`); its palette path (`0x5a8590` to `0x5a86af`) never reads the size, so a
+    /// palettized chain runs to the formula's count.
+    fn dxt_chain_ends(&self, level: usize) -> bool {
+        level > 0 && (self.sizes[level] == 0 || self.offsets[level] == 0)
     }
 
     /// The DXTC form by `alpha_type`. Any other value (a stale `2` on alpha-less particle atlases)
@@ -273,7 +275,7 @@ impl Header<'_> {
 /// Decode a BLP2 texture (raw archive bytes) to RGBA8 mip levels.
 pub fn decode(bytes: &[u8]) -> Result<DecodedBlp> {
     let h = parse_header(bytes)?;
-    // Level 0 always, then deeper levels up to the chain count while the file carries them.
+    // Level 0 always, then deeper levels up to the chain count; a DXTC or raw chain ends early.
     let n = h.chain.clamp(1, 16);
 
     let mut mips = Vec::with_capacity(n);
@@ -281,10 +283,10 @@ pub fn decode(bytes: &[u8]) -> Result<DecodedBlp> {
         let (lw, lh) = level_size(h.width, h.height, level);
         let data = match h.compression {
             2 => {
-                let texels = h.dxt_texels();
-                h.level_span(bytes, level, texels.level_bytes(lw, lh))
+                let need = h.dxt_texels().level_bytes(lw, lh);
+                (!h.dxt_chain_ends(level)).then(|| h.level_span(bytes, level, need))
             }
-            1 => h.level_span(bytes, level, palette_level_bytes(lw, lh, h.alpha_bits)),
+            1 => Some(h.level_span(bytes, level, palette_level_bytes(lw, lh, h.alpha_bits))),
             _ => h.level_data(bytes, level)?,
         };
         let Some(data) = data else {
@@ -330,8 +332,8 @@ pub fn decode_native(bytes: &[u8]) -> Result<NativeBlp> {
         let (lw, lh) = level_size(h.width, h.height, level);
         let need = texels.level_bytes(lw, lh);
         let data = match h.compression {
-            2 => h.level_span(bytes, level, need),
-            1 => h.level_span(bytes, level, palette_level_bytes(lw, lh, h.alpha_bits)),
+            2 => (!h.dxt_chain_ends(level)).then(|| h.level_span(bytes, level, need)),
+            1 => Some(h.level_span(bytes, level, palette_level_bytes(lw, lh, h.alpha_bits))),
             _ => h.level_data(bytes, level)?,
         };
         let Some(data) = data else {
@@ -728,6 +730,52 @@ mod tests {
         let native = decode_native(&b).expect("and natively");
         assert_eq!(native.mips.len(), 2);
         assert_eq!(native.mips[1].bytes, rgba.mips[1].rgba);
+    }
+
+    /// A palettized level is its dimensions' bytes from its offset, not its stored size: a 2×1
+    /// level with 8-bit alpha stored as 2 bytes still takes its alpha plane from the 2 after it.
+    #[test]
+    fn a_palettized_level_reads_past_a_short_stored_size() {
+        let level0 = (HEADER_SIZE + PALETTE_SIZE) as u32;
+        let mut offsets = [0u32; 16];
+        let mut sizes = [0u32; 16];
+        offsets[0] = level0;
+        sizes[0] = 2;
+        let mut b = header(1, 8, 8, 0, 2, 1, offsets, sizes);
+        b.resize(HEADER_SIZE + PALETTE_SIZE, 0);
+        b[HEADER_SIZE..HEADER_SIZE + 4].copy_from_slice(&[10, 20, 30, 0]); // palette 0, BGRA
+        b.extend_from_slice(&[0, 0, 64, 128]); // two indices, then two alpha bytes past the size
+        let rgba = decode(&b).expect("decodes");
+        assert_eq!(rgba.mips[0].rgba, [30, 20, 10, 64, 30, 20, 10, 128]);
+        let native = decode_native(&b).expect("and natively");
+        assert_eq!(native.mips[0].bytes, rgba.mips[0].rgba);
+    }
+
+    /// The file load's palette path (`0x5a8590` to `0x5a86af`) never reads a level's size, so a
+    /// palettized chain runs to the formula's count: a zero size is read from its offset, and a
+    /// zero offset from the file's first bytes.
+    #[test]
+    fn a_palettized_chain_runs_past_a_zero_size_or_offset() {
+        // 4×1 with 8-bit alpha: level 1 (2×1) with size 0, level 2 (1×1) with offset and size 0.
+        let level0 = (HEADER_SIZE + PALETTE_SIZE) as u32;
+        let mut offsets = [0u32; 16];
+        let mut sizes = [0u32; 16];
+        offsets[0] = level0;
+        sizes[0] = 8;
+        offsets[1] = level0 + 8;
+        let mut b = header(1, 8, 8, 1, 4, 1, offsets, sizes);
+        b.resize(HEADER_SIZE + PALETTE_SIZE, 0);
+        b[HEADER_SIZE..HEADER_SIZE + 4].copy_from_slice(&[10, 20, 30, 0]); // palette 0, BGRA
+        b.extend_from_slice(&[0, 0, 0, 0, 1, 2, 3, 4]);
+        b.extend_from_slice(&[0, 0, 77, 99]);
+        let rgba = decode(&b).expect("decodes");
+        assert_eq!(rgba.mips.len(), 3);
+        assert_eq!(rgba.mips[1].rgba, [30, 20, 10, 77, 30, 20, 10, 99]);
+        // Index `B` (0x42, an empty palette entry) and alpha `L` (0x4c) from the magic.
+        assert_eq!(rgba.mips[2].rgba, [0, 0, 0, 0x4c]);
+        let native = decode_native(&b).expect("and natively");
+        assert_eq!(native.mips.len(), 3);
+        assert_eq!(native.mips[2].bytes, rgba.mips[2].rgba);
     }
 
     /// A 2×8 DXT3 level is stored as one block (`max(1, (2/4)·(8/4))`) where the grid needs two;
