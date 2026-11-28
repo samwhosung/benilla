@@ -9,10 +9,13 @@ top of benilla, in a crate of its own or a fork, and both are welcome.
 
 The [issues](https://github.com/samwhosung/benilla/issues) the maintainers file are checked
 against 1.12.1 first: each says what 1.12.1 does, what benilla does instead, and where in the
-code, and any of them is a place to start. One labelled `in progress` is taken: someone is
-working on it or a pull request is open for it, so pick another. Once you start one, open a draft
-pull request that says `Fixes #N` as soon as you have a first commit, so the issue shows it is
-taken.
+code, and any of them is a place to start. The open
+[milestone](https://github.com/samwhosung/benilla/milestones) is the next release, and its
+description says what done means; its issues come first. Those labelled
+[`good first issue`](https://github.com/samwhosung/benilla/labels/good%20first%20issue) are small
+and self-contained. One labelled `in progress` is taken: someone is working on it or a pull
+request is open for it, so pick another. Once you start one, open a draft pull request that says
+`Fixes #N` as soon as you have a first commit, so the issue shows it is taken.
 
 ## What gets in
 
@@ -93,7 +96,8 @@ or a finding.
 
 A maintainer reads it, checks it against the reference, runs it and finishes it here: a rebase
 onto main, a fix, a test or a comment, added as commits on top of yours on your branch, so leave
-"Allow edits by maintainers" ticked. It lands as one squash-merged commit with you as its author.
+"Allow edits by maintainers" ticked, and fork samwhosung/benilla itself: GitHub refuses those
+edits on a fork of a fork. It lands as one squash-merged commit with you as its author.
 When what would land is mostly ours, we land our own version with you as a co-author and close
 yours with a note, and when main already has the fix, we close yours and say where. One that is
 out of scope is closed with the reason.
