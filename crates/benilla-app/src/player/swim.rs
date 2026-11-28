@@ -366,13 +366,21 @@ pub(super) struct SwimOutcome {
 /// frame, and turns the rest level at the same speed; returns the velocity and, when the cap bit,
 /// the travel pitch. The 1.12 client is seen swimming level at full speed along the surface; its
 /// own-input resolver (`0x634640`) as read slides a steep aim along the cap at `cos(pitch)·speed`,
-/// near zero, so the mechanism behind the seen behaviour is untraced.
-fn cap_redirect(input_vel: Vec3, cap: f32) -> (Vec3, Option<f32>) {
+/// near zero, so the mechanism behind the seen behaviour is untraced. `heading` is the level
+/// heading `h` of `0x7c5a20`, which a straight-up stroke turns along: the clamp `0x3fc90fdb`
+/// (`0x7c4f80`) gives `fl(cos P)` = -4.4e-8 in `0x7c5880`, so its level part is backward noise.
+fn cap_redirect(input_vel: Vec3, cap: f32, heading: Vec3) -> (Vec3, Option<f32>) {
     if input_vel.y <= 0.0 || input_vel.y <= cap {
         return (input_vel, None);
     }
     let speed = input_vel.length();
-    let level_dir = Vec3::new(input_vel.x, 0.0, input_vel.z).normalize_or_zero();
+    let level = Vec3::new(input_vel.x, 0.0, input_vel.z);
+    // A level part under 1e-4 of the stroke is that noise, not a direction.
+    let level_dir = if level.length() > speed * 1.0e-4 {
+        level.normalize()
+    } else {
+        heading
+    };
     let level_speed = (speed * speed - cap * cap).max(0.0).sqrt();
     (
         level_dir * level_speed + Vec3::Y * cap,
@@ -405,6 +413,7 @@ pub(super) fn swim_step(
     world: &benilla_world::collision::WorldCollision<'_, '_>,
     capsule: &Collider,
     input_vel: Vec3,
+    heading: Vec3,
     surface_y: Option<f32>,
     surface_at: impl Fn(Vec3) -> Option<f32>,
 ) -> SwimOutcome {
@@ -422,7 +431,7 @@ pub(super) fn swim_step(
         }
         _ => f32::INFINITY,
     };
-    let (vel, surface_pitch) = cap_redirect(input_vel, cap);
+    let (vel, surface_pitch) = cap_redirect(input_vel, cap, heading);
 
     let out = world.slide_body(
         capsule,
@@ -539,9 +548,18 @@ pub(super) fn drive_step(
         };
         return SwimFrame { outcome, pitch };
     }
-    let out = swim_step(player, time, collide, capsule, stroke, rest_line, |feet| {
-        surface_over_feet(world, feet)
-    });
+    // The level heading (`0x7c5a20`'s `h`): the facing turned by the direction keys.
+    let heading = (basis.0 * swim_fwd + basis.1 * swim_side).normalize_or_zero();
+    let out = swim_step(
+        player,
+        time,
+        collide,
+        capsule,
+        stroke,
+        heading,
+        rest_line,
+        |feet| surface_over_feet(world, feet),
+    );
     // After a surface redirect the pose and the wire show the travel pitch, while the raw aim
     // stays in `mover_pitch` so a nose-down dives at once.
     if let Some(p) = out.surface_pitch {
@@ -1187,24 +1205,35 @@ mod tests {
     #[test]
     fn the_rest_line_redirects_the_stroke_level_at_full_speed() {
         let free = Vec3::new(0.1, 3.0, 0.2);
-        assert_eq!(cap_redirect(free, 100.0), (free, None));
-        assert_eq!(cap_redirect(free, f32::INFINITY), (free, None));
+        assert_eq!(cap_redirect(free, 100.0, Vec3::X), (free, None));
+        assert_eq!(cap_redirect(free, f32::INFINITY, Vec3::X), (free, None));
         let dive = Vec3::new(1.0, -2.0, 0.0);
-        assert_eq!(cap_redirect(dive, 0.0), (dive, None));
+        assert_eq!(cap_redirect(dive, 0.0, Vec3::X), (dive, None));
 
         let steep = Vec3::new(0.08, 4.72, 0.0); // ~89° aim, forward at swim speed
-        let (vel, pitch) = cap_redirect(steep, 0.0);
+        let (vel, pitch) = cap_redirect(steep, 0.0, Vec3::X);
         assert!((vel.length() - steep.length()).abs() < 1e-4, "speed kept");
         assert_eq!(vel.y, 0.0, "level at the line");
         assert!(vel.x > 4.7, "the whole speed went forward");
         assert_eq!(pitch, Some(0.0), "the presented pitch levels out");
 
         // A partial cap, approaching the line.
-        let (vel2, pitch2) = cap_redirect(steep, 2.0);
+        let (vel2, pitch2) = cap_redirect(steep, 2.0, Vec3::X);
         assert!((vel2.length() - steep.length()).abs() < 1e-4);
         assert_eq!(vel2.y, 2.0);
         let aim = steep.y.atan2(steep.x);
         let eased = pitch2.expect("the cap bit");
         assert!(eased > 0.0 && eased < aim, "between level and the raw aim");
+
+        // Straight up at the pitch clamp: the stroke's level part is f32 noise (`cos(π/2)` is
+        // -4.4e-8, here pointing back along -X); the cap turns it along the heading, forward.
+        let (_, c) = std::f32::consts::FRAC_PI_2.sin_cos();
+        assert!(c < 0.0, "the f32 cosine at the clamp is negative");
+        let up = Vec3::new(c * 4.72, 4.72, 0.0);
+        let (vel3, _) = cap_redirect(up, 0.0, Vec3::X);
+        assert!(
+            vel3.x > 4.7,
+            "forward along the heading at full speed, not backwards"
+        );
     }
 }
