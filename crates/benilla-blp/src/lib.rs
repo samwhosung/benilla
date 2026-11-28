@@ -387,7 +387,8 @@ fn pad_to(data: &[u8], need: usize) -> Vec<u8> {
     out
 }
 
-/// A palettized level's bytes: one index per pixel, then its `alpha_bits` alpha block.
+/// A palettized level's bytes: one index per pixel, then the alpha plane `0x5a8790` and
+/// `0x5a87d0` read from the pixel count on, at 8, 4 or 1 bits per pixel; any other depth has none.
 fn palette_level_bytes(w: u32, h: u32, alpha_bits: u32) -> usize {
     let px = (w as usize) * (h as usize);
     px + match alpha_bits {
