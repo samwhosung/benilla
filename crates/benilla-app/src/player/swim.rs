@@ -366,15 +366,16 @@ pub(super) struct SwimOutcome {
 /// frame, and turns the rest level at the same speed; returns the velocity and, when the cap bit,
 /// the travel pitch. The 1.12 client is seen swimming level at full speed along the surface; its
 /// own-input resolver (`0x634640`) as read slides a steep aim along the cap at `cos(pitch)·speed`,
-/// near zero, so the mechanism behind the seen behaviour is untraced. `heading` is the stroke's
-/// level direction off the facing, which a straight-up aim, whose own level part is zero, turns
-/// along.
+/// near zero, so the mechanism behind the seen behaviour is untraced. `heading` is the level
+/// heading `h` of `0x7c5a20`, which a straight-up stroke turns along: at the pitch clamp
+/// `fl(cos π/2)` is -4.4e-8 (`0x7c5880`), so its own level part is noise pointing backwards.
 fn cap_redirect(input_vel: Vec3, cap: f32, heading: Vec3) -> (Vec3, Option<f32>) {
     if input_vel.y <= 0.0 || input_vel.y <= cap {
         return (input_vel, None);
     }
     let speed = input_vel.length();
     let level = Vec3::new(input_vel.x, 0.0, input_vel.z);
+    // A level part under 1e-4 of the stroke is that noise, not a direction.
     let level_dir = if level.length() > speed * 1.0e-4 {
         level.normalize()
     } else {
@@ -506,11 +507,7 @@ pub(super) fn drive_step(
     let mut pitch = player.mover_pitch;
     // The travel basis (`0x7c5880`): forward is the facing pitched by the swim pitch, strafe stays
     // level, and there is no vertical input; Space's one swim role is the jump.
-    // A swim pitch lies within ±π/2, where the cosine is not negative; at the clamp itself f32's
-    // `cos(π/2)` is -4.4e-8, which would point a straight-up stroke's level part backwards and
-    // the surface cap would turn it into a full-speed swim the wrong way.
     let (sp, cp) = player.mover_pitch.sin_cos();
-    let cp = cp.max(0.0);
     let fwd_axis = basis.0 * cp + Vec3::Y * sp;
     let v = fwd_axis * swim_fwd + basis.1 * swim_side;
     let dir3 = v.normalize_or_zero();
@@ -551,6 +548,7 @@ pub(super) fn drive_step(
         };
         return SwimFrame { outcome, pitch };
     }
+    // The level heading (`0x7c5a20`'s `h`): the facing turned by the direction keys.
     let heading = (basis.0 * swim_fwd + basis.1 * swim_side).normalize_or_zero();
     let out = swim_step(
         player,
