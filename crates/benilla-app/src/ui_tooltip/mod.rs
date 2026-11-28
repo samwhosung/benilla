@@ -142,23 +142,11 @@ pub(crate) fn drive_mouseover_tooltip(
             return;
         };
         // The WorldFrame picks nothing in freelook (`0x483e80` sets `[wf+0x38c]&2`), from the
-        // call that entered it (`0x483ec3`): a pick taken before that call names nobody.
-        let (hovered, hovered_go) = if script.freelook_now() == Some(true) {
-            let blank = Hovered {
-                distance: f32::MAX,
-                ..Default::default()
-            };
-            let go = HoveredObject {
-                distance: f32::MAX,
-                ..Default::default()
-            };
-            (blank, go)
-        } else if memo.over_ui.as_deref().is_some_and(|o| o.0) && !hovered.plate {
-            // The WorldFrame picks only while it holds the hover (`0x4817ae`). The pick is the
-            // last frame's (`TargetUpdate` runs after this feed), so on the frame the cursor moves
-            // from a unit onto a window it still names that unit: published again, it would
-            // rebuild the unit's plate over the tooltip the window's `OnEnter` just took, and the
-            // next frame's loss would fade it out. A plate's pick is the plate's own hover.
+        // call that entered it (`0x483ec3`), and only while it holds the hover (`0x4817ae`): a
+        // pick taken before that call, or before this frame's walk put a window under the cursor,
+        // names nobody. A plate's pick is the plate's own hover (`0x7cb850`).
+        let over_window = memo.over_ui.as_deref().is_some_and(|o| o.0) && !hovered.plate;
+        let (hovered, hovered_go) = if script.freelook_now() == Some(true) || over_window {
             let blank = Hovered {
                 distance: f32::MAX,
                 ..Default::default()
