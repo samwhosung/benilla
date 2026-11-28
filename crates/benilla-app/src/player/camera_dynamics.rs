@@ -57,6 +57,13 @@ pub(crate) struct CameraOptions {
     /// admits the pivot floor and cap block (`0x50e629`, [`super::camera_water`]). Neither works
     /// alone: that block lifts the sweep origin to `surface + 2/9`, clear of the solid waterline.
     pub(crate) water_collision: bool,
+    /// `cameraDive`: the swim levelling's and the facing commit's switch (`0x50ebc9`-`0x50ebd2`,
+    /// `0x510490`-`0x51049b`, [`super::swim::level_swim_pitch`], [`super::swim::commit_pitch`]).
+    pub(crate) dive: bool,
+    /// `cameraSurfacePitch`, degrees: below 0 the submerged band levels a swimmer.
+    pub(crate) surface_pitch: f32,
+    /// `cameraSubmergePitch`, degrees: above 0 the surface band levels a swimmer.
+    pub(crate) submerge_pitch: f32,
 }
 
 /// Applies a camera option CVar change. An out-of-range smooth speed, tilt time or bob rate never
@@ -70,6 +77,9 @@ pub(crate) fn on_cvar(
     match ev.key().as_str() {
         "camerapivot" => opts.pivot = v != 0.0,
         "camerawatercollision" => opts.water_collision = v != 0.0,
+        "cameradive" => opts.dive = v != 0.0,
+        "camerasurfacepitch" => opts.surface_pitch = v,
+        "camerasubmergepitch" => opts.submerge_pitch = v,
         "camerapivotdxmax" => opts.pivot_dx_max = v,
         "camerapivotdymin" => opts.pivot_dy_min = v,
         "cameratargetsmoothspeed" => opts.target_smooth_speed = v,
@@ -91,6 +101,9 @@ impl Default for CameraOptions {
         Self {
             pivot: true,
             water_collision: true,
+            dive: true,
+            surface_pitch: 0.0,
+            submerge_pitch: 18.0,
             pivot_dx_max: PIVOT_DX_MAX_DEFAULT,
             pivot_dy_min: PIVOT_DY_MIN_DEFAULT,
             target_smooth_speed: TARGET_SMOOTH_SPEED_DEFAULT,

@@ -543,6 +543,13 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // origin to `surface + 2/9`. Ours: `benilla_world::collision::camera_filter` and
     // `player::camera_water`.
     same("cameraWaterCollision", "1"),
+    // The swim levelling's switch and its two band gates (`0x50be03`, `0x50be26`, `0x50be49`):
+    // `0x50e8d0` levels a swimmer's pitch in the surface band while `cameraSubmergePitch` is above
+    // 0 and in the submerged band while `cameraSurfacePitch` is below 0. Ours:
+    // `player::swim::level_swim_pitch`.
+    same("cameraDive", "1"),
+    same("cameraSurfacePitch", "0.0").checked(benilla_ui::script::check_camera_pitch),
+    same("cameraSubmergePitch", "18.0").checked(benilla_ui::script::check_camera_pitch),
     // `cameraTerrainTilt` `[0xbe0fd4]` "0" (`0x50bcfd`), Follow Terrain: probe and staircase
     // `0x50d900`, arm `0x50dbc0`; ours is `player::camera_dynamics::TerrainTilt`.
     same("cameraTerrainTilt", "0"),
