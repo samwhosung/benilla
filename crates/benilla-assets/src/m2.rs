@@ -607,14 +607,7 @@ impl AssetLoader for M2ModelLoader {
                 || (samples_sequence && !clips.is_empty()))
             .then(|| {
                 let graph = ctx.add_labeled_asset("anim_graph".to_string(), graph);
-                // `variationNext` names a file slot; the roll walks clips, so each link becomes
-                // the index of the clip built from that slot (none for a dropped zero-length one).
-                let slots: Vec<usize> = clips.iter().map(|c| c.seq_index).collect();
-                for c in &mut clips {
-                    c.variation_next = c
-                        .variation_next
-                        .and_then(|slot| slots.iter().position(|&s| s == slot));
-                }
+                ModelAnimations::link_variations_by_slot(&mut clips);
                 ModelAnimations {
                     graph,
                     clips,

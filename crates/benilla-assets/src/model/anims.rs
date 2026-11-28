@@ -198,11 +198,23 @@ impl ModelAnimations {
     }
 
     /// Links each clip to the next one sharing its id, in list order: the chain a retail file
-    /// authors, for a model built by hand (a test's, or a GameObject crate's).
+    /// authors, for a model built by hand.
     pub fn link_variations_in_order(clips: &mut [AnimClip]) {
         for i in 0..clips.len() {
             let id = clips[i].anim_id;
             clips[i].variation_next = (i + 1..clips.len()).find(|&j| clips[j].anim_id == id);
+        }
+    }
+
+    /// Turns each clip's `variation_next` from the file slot its sequence names (`+0x40`) into
+    /// the index of the clip built from that slot; a link to a slot with no clip (a zero-length
+    /// sequence the parse drops) ends the chain.
+    pub(crate) fn link_variations_by_slot(clips: &mut [AnimClip]) {
+        let slots: Vec<usize> = clips.iter().map(|c| c.seq_index).collect();
+        for c in clips.iter_mut() {
+            c.variation_next = c
+                .variation_next
+                .and_then(|slot| slots.iter().position(|&s| s == slot));
         }
     }
 
@@ -526,9 +538,6 @@ mod tests {
     #[test]
     fn pick_variation_walks_the_weighted_chain() {
         let mut anims = test_anims(&[16, 16, 5], Vec::new());
-        for (slot, c) in anims.clips.iter_mut().enumerate() {
-            c.seq_index = slot;
-        }
         anims.clips[0].frequency = 0x6000; // Attack1H variation 0, the common arc
         anims.clips[0].variation_next = Some(1);
         anims.clips[1].frequency = 0x1fff; // variation 1, the off-side swing
@@ -546,15 +555,12 @@ mod tests {
         assert!(anims.pick_variation(99, 0).is_none());
     }
 
-    /// Only the `variationNext` chain is rolled: a slot sharing the id that no link reaches never
-    /// plays. Turtle's `highelfelfmale_guard.m2` carries three such Stand slots (next −1 on every
-    /// one); the 1.12 client plays only the head, and rolling the last one sank the guard into the
-    /// ground as its short keys ran into the next sequence's.
+    /// Only the `variationNext` chain is rolled (`0x7124cf`): a slot sharing the id that no link
+    /// reaches never plays.
     #[test]
     fn an_unlinked_slot_sharing_the_id_is_never_rolled() {
         let mut anims = test_anims(&[0, 0, 0], Vec::new());
-        for (slot, c) in anims.clips.iter_mut().enumerate() {
-            c.seq_index = slot;
+        for c in &mut anims.clips {
             c.frequency = 0x2000;
         }
         let pick = |anims: &ModelAnimations, roll| {
@@ -572,5 +578,22 @@ mod tests {
             0,
             "past the chain's weights: the head"
         );
+    }
+
+    /// A file's links name slots; the clips skip the zero-length ones, so a link lands on the
+    /// clip built from its slot, and one to a dropped slot ends the chain.
+    #[test]
+    fn variation_links_map_file_slots_to_clips() {
+        let mut clips: Vec<AnimClip> = [(0, Some(2)), (2, Some(3)), (3, Some(4)), (5, None)]
+            .into_iter()
+            .map(|(slot, next)| AnimClip {
+                seq_index: slot,
+                variation_next: next,
+                ..test_clip(0)
+            })
+            .collect();
+        ModelAnimations::link_variations_by_slot(&mut clips);
+        let links: Vec<_> = clips.iter().map(|c| c.variation_next).collect();
+        assert_eq!(links, [Some(1), Some(2), None, None]);
     }
 }
