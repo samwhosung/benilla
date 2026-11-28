@@ -56,7 +56,7 @@ macro_rules! disjoint_set {
 
         #[doc(hidden)]
         $vis struct $state {
-            $($(#[cfg($cfg)])? $field: <$ty as bevy::ecs::system::SystemParam>::State,)*
+            $($(#[cfg($cfg)])? $field: crate::script_calls::disjoint::Lent<<$ty as bevy::ecs::system::SystemParam>::State>,)*
         }
 
         // SAFETY: the set registers every member's access, each checked against what the system
@@ -71,7 +71,10 @@ macro_rules! disjoint_set {
                 Box::new($state {
                     $(
                         $(#[cfg($cfg)])?
-                        $field: <$ty as bevy::ecs::system::SystemParam>::init_state(world),
+                        $field: crate::script_calls::disjoint::Lent {
+                            state: <$ty as bevy::ecs::system::SystemParam>::init_state(world),
+                            lent: false,
+                        },
                     )*
                 })
             }
@@ -86,7 +89,7 @@ macro_rules! disjoint_set {
                 $(
                     $(#[cfg($cfg)])?
                     crate::script_calls::disjoint::gather::<$ty>(
-                        &state.$field,
+                        &state.$field.state,
                         meta,
                         access,
                         &mut gathered,
@@ -104,7 +107,9 @@ macro_rules! disjoint_set {
             ) {
                 $(
                     $(#[cfg($cfg)])?
-                    <$ty as bevy::ecs::system::SystemParam>::apply(&mut state.$field, meta, world);
+                    if std::mem::take(&mut state.$field.lent) {
+                        <$ty as bevy::ecs::system::SystemParam>::apply(&mut state.$field.state, meta, world);
+                    }
                 )*
             }
 
@@ -113,11 +118,13 @@ macro_rules! disjoint_set {
                 meta: &bevy::ecs::system::SystemMeta,
                 mut world: bevy::ecs::world::DeferredWorld,
             ) {
-                $($(#[cfg($cfg)])? <$ty as bevy::ecs::system::SystemParam>::queue(
-                    &mut state.$field,
-                    meta,
-                    world.reborrow(),
-                );)*
+                $($(#[cfg($cfg)])? if std::mem::take(&mut state.$field.lent) {
+                    <$ty as bevy::ecs::system::SystemParam>::queue(
+                        &mut state.$field.state,
+                        meta,
+                        world.reborrow(),
+                    );
+                })*
             }
 
             unsafe fn validate_param(
@@ -128,7 +135,7 @@ macro_rules! disjoint_set {
                 // SAFETY: upheld by the caller, for every member's access as for the set's.
                 unsafe {
                     $($(#[cfg($cfg)])? <$ty as bevy::ecs::system::SystemParam>::validate_param(
-                        &mut state.$field,
+                        &mut state.$field.state,
                         meta,
                         world,
                     )?;)*
@@ -187,11 +194,12 @@ macro_rules! disjoint_set {
                     };
                     #[cfg(not(debug_assertions))]
                     let change_tick = self.change_tick;
+                    self.states.$field.lent = true;
                     // SAFETY: the set registered this member's access, and `&mut self` keeps
                     // every other member of the set unlent while this one lives.
                     unsafe {
                         <$ty as bevy::ecs::system::SystemParam>::get_param(
-                            &mut self.states.$field,
+                            &mut self.states.$field.state,
                             &self.meta,
                             self.world,
                             change_tick,
@@ -207,7 +215,7 @@ pub(crate) use disjoint_set;
 /// Two params that may conflict, lent one at a time, as a two-member `ParamSet` with each
 /// member's access gathered once ([`gather`]).
 pub(crate) struct Pair<'w, 's, A: SystemParam, B: SystemParam> {
-    states: &'s mut (A::State, B::State),
+    states: &'s mut PairState<A::State, B::State>,
     meta: SystemMeta,
     world: UnsafeWorldCell<'w>,
     change_tick: Tick,
@@ -218,14 +226,35 @@ pub(crate) struct Pair<'w, 's, A: SystemParam, B: SystemParam> {
     lend: Option<(Tick, &'static str)>,
 }
 
+/// A set member's state, and whether it was lent since its deferred work last went out: a member
+/// not lent wrote nothing to its buffers, so its apply and queue are skipped.
+#[doc(hidden)]
+pub(crate) struct Lent<S> {
+    pub(crate) state: S,
+    pub(crate) lent: bool,
+}
+
+/// A [`Pair`]'s members' states, and whether the second was lent since its deferred work last went
+/// out: a member not lent wrote nothing to its buffers, so its apply and queue are skipped.
+#[doc(hidden)]
+pub(crate) struct PairState<A, B> {
+    first: A,
+    second: B,
+    second_lent: bool,
+}
+
 // SAFETY: as [`disjoint_set!`]'s: both members' access registered and checked against what the
 // system holds outside the pair, one member lent at a time.
 unsafe impl<A: SystemParam, B: SystemParam> SystemParam for Pair<'_, '_, A, B> {
-    type State = (A::State, B::State);
+    type State = PairState<A::State, B::State>;
     type Item<'w, 's> = Pair<'w, 's, A, B>;
 
     fn init_state(world: &mut World) -> Self::State {
-        (A::init_state(world), B::init_state(world))
+        PairState {
+            first: A::init_state(world),
+            second: B::init_state(world),
+            second_lent: false,
+        }
     }
 
     fn init_access(
@@ -235,19 +264,23 @@ unsafe impl<A: SystemParam, B: SystemParam> SystemParam for Pair<'_, '_, A, B> {
         world: &mut World,
     ) {
         let mut gathered = FilteredAccessSet::new();
-        gather::<A>(&state.0, meta, access, &mut gathered, world, "p0");
-        gather::<B>(&state.1, meta, access, &mut gathered, world, "p1");
+        gather::<A>(&state.first, meta, access, &mut gathered, world, "p0");
+        gather::<B>(&state.second, meta, access, &mut gathered, world, "p1");
         access.extend(gathered);
     }
 
     fn apply(state: &mut Self::State, meta: &SystemMeta, world: &mut World) {
-        A::apply(&mut state.0, meta, world);
-        B::apply(&mut state.1, meta, world);
+        A::apply(&mut state.first, meta, world);
+        if std::mem::take(&mut state.second_lent) {
+            B::apply(&mut state.second, meta, world);
+        }
     }
 
     fn queue(state: &mut Self::State, meta: &SystemMeta, mut world: DeferredWorld) {
-        A::queue(&mut state.0, meta, world.reborrow());
-        B::queue(&mut state.1, meta, world.reborrow());
+        A::queue(&mut state.first, meta, world.reborrow());
+        if std::mem::take(&mut state.second_lent) {
+            B::queue(&mut state.second, meta, world.reborrow());
+        }
     }
 
     unsafe fn validate_param(
@@ -257,8 +290,8 @@ unsafe impl<A: SystemParam, B: SystemParam> SystemParam for Pair<'_, '_, A, B> {
     ) -> Result<(), SystemParamValidationError> {
         // SAFETY: upheld by the caller, for each member's access as for the pair's.
         unsafe {
-            A::validate_param(&mut state.0, meta, world)?;
-            B::validate_param(&mut state.1, meta, world)
+            A::validate_param(&mut state.first, meta, world)?;
+            B::validate_param(&mut state.second, meta, world)
         }
     }
 
@@ -288,7 +321,7 @@ impl<A: SystemParam, B: SystemParam> Pair<'_, '_, A, B> {
         #[cfg(not(debug_assertions))]
         let change_tick = self.change_tick;
         // SAFETY: the pair registered `A`'s access, and `&mut self` keeps `B` unlent.
-        unsafe { A::get_param(&mut self.states.0, &self.meta, self.world, change_tick) }
+        unsafe { A::get_param(&mut self.states.first, &self.meta, self.world, change_tick) }
     }
 
     /// The first member's lend has ended, for the census ([`end_lend`]): its item has dropped.
@@ -299,8 +332,16 @@ impl<A: SystemParam, B: SystemParam> Pair<'_, '_, A, B> {
 
     /// The second member, the first unlent while it lives.
     pub(crate) fn p1(&mut self) -> SystemParamItem<'_, '_, B> {
+        self.states.second_lent = true;
         // SAFETY: the pair registered `B`'s access, and `&mut self` keeps `A` unlent.
-        unsafe { B::get_param(&mut self.states.1, &self.meta, self.world, self.change_tick) }
+        unsafe {
+            B::get_param(
+                &mut self.states.second,
+                &self.meta,
+                self.world,
+                self.change_tick,
+            )
+        }
     }
 }
 
@@ -308,11 +349,12 @@ impl<A: SystemParam, T: SystemParam> Pair<'_, '_, A, Option<T>> {
     /// The second member as `p1` lends it, validated once a run: nothing adds or removes a resource
     /// or an entity mid-run.
     pub(crate) fn p1_valid(&mut self) -> Option<SystemParamItem<'_, '_, T>> {
-        let (states, meta, world) = (&mut self.states.1, &self.meta, self.world);
+        let (states, meta, world) = (&mut self.states.second, &self.meta, self.world);
         // SAFETY: the pair registered `T`'s access, and `&mut self` keeps `A` unlent.
         let valid = *self
             .valid
             .get_or_insert_with(|| unsafe { T::validate_param(states, meta, world) }.is_ok());
+        self.states.second_lent |= valid;
         // SAFETY: as above, and `T` validated in this run.
         valid.then(|| unsafe { T::get_param(states, meta, world, self.change_tick) })
     }
@@ -442,6 +484,141 @@ mod tests {
             |_outside: ResMut<Cell>, _pair: Pair<Res<'static, Cell>, Res<'static, Cell>>| {},
         );
         app.update();
+    }
+
+    /// Counts its applies.
+    #[derive(Default)]
+    struct Applies;
+
+    static APPLIES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+    impl bevy::ecs::system::SystemBuffer for Applies {
+        fn apply(&mut self, _: &bevy::ecs::system::SystemMeta, _: &mut World) {
+            APPLIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// The second member's deferred work goes out after a run that lent it, and not after one that
+    /// did not.
+    #[test]
+    fn the_second_members_buffers_apply_only_after_a_run_that_lent_it() {
+        let mut app = App::new();
+        app.init_resource::<Cell>().add_systems(
+            Update,
+            |mut pair: Pair<
+                ResMut<'static, Cell>,
+                bevy::ecs::system::Deferred<'static, Applies>,
+            >| {
+                pair.p0().0 += 1;
+                if pair.p0().0 == 2 {
+                    pair.p1();
+                }
+            },
+        );
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(APPLIES.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
+
+    static SET_APPLIES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+    /// Counts its applies, for the set.
+    #[derive(Default)]
+    struct SetApplies;
+
+    impl bevy::ecs::system::SystemBuffer for SetApplies {
+        fn apply(&mut self, _: &bevy::ecs::system::SystemMeta, _: &mut World) {
+            SET_APPLIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    disjoint_set! {
+        /// A set whose second member counts its applies.
+        struct Counted, CountedState {
+            cell: ResMut<'static, Cell>,
+            applies: bevy::ecs::system::Deferred<'static, SetApplies>,
+        }
+    }
+
+    /// A set member's deferred work goes out after a run that lent it, and not after one that did
+    /// not, whatever the set's other members did.
+    #[test]
+    fn a_set_members_buffers_apply_only_after_a_run_that_lent_it() {
+        let mut app = App::new();
+        app.init_resource::<Cell>()
+            .add_systems(Update, |mut set: Counted| {
+                set.cell().0 += 1;
+                if set.cell().0 == 2 {
+                    set.applies();
+                }
+            });
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(SET_APPLIES.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
+
+    /// Counts the runs whose deferred work went out by queue, as a one-shot run sends it.
+    #[derive(Default)]
+    struct Queues;
+
+    #[derive(Resource, Default)]
+    struct Queued(u32);
+
+    impl bevy::ecs::system::SystemBuffer for Queues {
+        fn apply(&mut self, _: &bevy::ecs::system::SystemMeta, _: &mut World) {}
+
+        fn queue(
+            &mut self,
+            _: &bevy::ecs::system::SystemMeta,
+            mut world: bevy::ecs::world::DeferredWorld,
+        ) {
+            world.resource_mut::<Queued>().0 += 1;
+        }
+    }
+
+    disjoint_set! {
+        /// A set whose second member counts its queues.
+        struct QueuedSet, QueuedSetState {
+            cell: ResMut<'static, Cell>,
+            queues: bevy::ecs::system::Deferred<'static, Queues>,
+        }
+    }
+
+    /// A one-shot run queues a pair's second member and a set's member after a run that lent it,
+    /// and not after one that did not.
+    #[test]
+    fn a_one_shot_run_queues_only_the_members_it_lent() {
+        let mut world = World::new();
+        world.init_resource::<Cell>();
+        world.init_resource::<Queued>();
+        let pair = world.register_system(
+            |mut pair: Pair<
+                ResMut<'static, Cell>,
+                bevy::ecs::system::Deferred<'static, Queues>,
+            >| {
+                pair.p0().0 += 1;
+                if pair.p0().0 == 2 {
+                    pair.p1();
+                }
+            },
+        );
+        for _ in 0..3 {
+            world.run_system(pair).unwrap();
+        }
+        assert_eq!(world.resource::<Queued>().0, 1);
+        world.resource_mut::<Cell>().0 = 0;
+        let set = world.register_system(|mut set: QueuedSet| {
+            set.cell().0 += 1;
+            if set.cell().0 == 2 {
+                set.queues();
+            }
+        });
+        for _ in 0..3 {
+            world.run_system(set).unwrap();
+        }
+        assert_eq!(world.resource::<Queued>().0, 2);
     }
 
     #[derive(Resource, Default)]
