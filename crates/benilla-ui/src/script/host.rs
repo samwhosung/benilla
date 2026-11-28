@@ -424,6 +424,12 @@ impl UiScript {
         r
     }
 
+    /// Whether a call or a held handler waits for the host: what an engine turn's lend
+    /// ([`Self::hosted`]) would run.
+    pub fn waiting(&self) -> bool {
+        super::calls::any_waiting(self.lua())
+    }
+
     /// Run the handlers an engine turn left with no host to lend them, and drop its calls and
     /// theirs, for a harness without the engine's half; the count of calls dropped.
     pub fn refuse_waiting(&mut self) -> usize {
