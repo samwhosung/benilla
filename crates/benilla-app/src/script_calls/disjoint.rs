@@ -354,8 +354,8 @@ impl<A: SystemParam, T: SystemParam> Pair<'_, '_, A, Option<T>> {
         let valid = *self
             .valid
             .get_or_insert_with(|| unsafe { T::validate_param(states, meta, world) }.is_ok());
-        // SAFETY: as above, and `T` validated in this run.
         self.states.second_lent |= valid;
+        // SAFETY: as above, and `T` validated in this run.
         valid.then(|| unsafe { T::get_param(states, meta, world, self.change_tick) })
     }
 }
@@ -557,6 +557,68 @@ mod tests {
             app.update();
         }
         assert_eq!(SET_APPLIES.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
+
+    /// Counts the runs whose deferred work went out by queue, as a one-shot run sends it.
+    #[derive(Default)]
+    struct Queues;
+
+    #[derive(Resource, Default)]
+    struct Queued(u32);
+
+    impl bevy::ecs::system::SystemBuffer for Queues {
+        fn apply(&mut self, _: &bevy::ecs::system::SystemMeta, _: &mut World) {}
+
+        fn queue(
+            &mut self,
+            _: &bevy::ecs::system::SystemMeta,
+            mut world: bevy::ecs::world::DeferredWorld,
+        ) {
+            world.resource_mut::<Queued>().0 += 1;
+        }
+    }
+
+    disjoint_set! {
+        /// A set whose second member counts its queues.
+        struct QueuedSet, QueuedSetState {
+            cell: ResMut<'static, Cell>,
+            queues: bevy::ecs::system::Deferred<'static, Queues>,
+        }
+    }
+
+    /// A one-shot run queues a pair's second member and a set's member after a run that lent it,
+    /// and not after one that did not.
+    #[test]
+    fn a_one_shot_run_queues_only_the_members_it_lent() {
+        let mut world = World::new();
+        world.init_resource::<Cell>();
+        world.init_resource::<Queued>();
+        let pair = world.register_system(
+            |mut pair: Pair<
+                ResMut<'static, Cell>,
+                bevy::ecs::system::Deferred<'static, Queues>,
+            >| {
+                pair.p0().0 += 1;
+                if pair.p0().0 == 2 {
+                    pair.p1();
+                }
+            },
+        );
+        for _ in 0..3 {
+            world.run_system(pair).unwrap();
+        }
+        assert_eq!(world.resource::<Queued>().0, 1);
+        world.resource_mut::<Cell>().0 = 0;
+        let set = world.register_system(|mut set: QueuedSet| {
+            set.cell().0 += 1;
+            if set.cell().0 == 2 {
+                set.queues();
+            }
+        });
+        for _ in 0..3 {
+            world.run_system(set).unwrap();
+        }
+        assert_eq!(world.resource::<Queued>().0, 2);
     }
 
     #[derive(Resource, Default)]
