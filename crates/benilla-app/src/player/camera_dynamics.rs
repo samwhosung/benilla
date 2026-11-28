@@ -57,7 +57,8 @@ pub(crate) struct CameraOptions {
     /// admits the pivot floor and cap block (`0x50e629`, [`super::camera_water`]). Neither works
     /// alone: that block lifts the sweep origin to `surface + 2/9`, clear of the solid waterline.
     pub(crate) water_collision: bool,
-    /// `cameraDive`: the swim levelling's switch (`0x50ebb5`, [`super::swim::level_swim_pitch`]).
+    /// `cameraDive`: the swim levelling's and the facing commit's switch (`0x50ebc9`-`0x50ebd2`,
+    /// `0x510490`-`0x51049b`, [`super::swim::level_swim_pitch`], [`super::swim::commit_pitch`]).
     pub(crate) dive: bool,
     /// `cameraSurfacePitch`, degrees: below 0 the submerged band levels a swimmer.
     pub(crate) surface_pitch: f32,
