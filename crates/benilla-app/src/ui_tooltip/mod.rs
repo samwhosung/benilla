@@ -48,7 +48,10 @@ impl Plugin for UiTooltipPlugin {
 /// ceiling. What it last published is the VM's ([`UiScript::world_mouseover`]), which a hover
 /// leave in the UI's walk also writes.
 #[derive(bevy::ecs::system::SystemParam)]
-pub(crate) struct HoverMemo<'s> {
+pub(crate) struct HoverMemo<'w, 's> {
+    /// Whether this frame's walk left the hover on a window (or the dev overlay): the pick, taken
+    /// a frame before, stands only while the WorldFrame holds the hover.
+    over_ui: Option<Res<'w, crate::ui_script::PointerOverUi>>,
     /// The hover probe's last trace line, so a stationary probe logs it once.
     trace: Local<'s, String>,
     /// Whether the VM holds a `"mouseover"` unit, so the clear is pushed once.
@@ -139,8 +142,11 @@ pub(crate) fn drive_mouseover_tooltip(
             return;
         };
         // The WorldFrame picks nothing in freelook (`0x483e80` sets `[wf+0x38c]&2`), from the
-        // call that entered it (`0x483ec3`): a pick taken before that call names nobody.
-        let (hovered, hovered_go) = if script.freelook_now() == Some(true) {
+        // call that entered it (`0x483ec3`), and only while it holds the hover (`0x4817ae`): a
+        // pick taken before that call, or before this frame's walk put a window under the cursor,
+        // names nobody. A plate's pick is the plate's own hover (`0x7cb850`).
+        let over_window = memo.over_ui.as_deref().is_some_and(|o| o.0) && !hovered.plate;
+        let (hovered, hovered_go) = if script.freelook_now() == Some(true) || over_window {
             let blank = Hovered {
                 distance: f32::MAX,
                 ..Default::default()

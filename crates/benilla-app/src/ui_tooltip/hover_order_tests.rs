@@ -87,6 +87,50 @@ fn a_window_entered_from_a_world_unit_keeps_its_tooltip() {
     assert!(script(&mut app).take_errors().is_empty());
 }
 
+/// The pick the driver reads is the last frame's (`TargetUpdate` runs after the UI feed), so on
+/// the frame the walk moves the cursor from a world unit onto a window it still names that unit.
+/// The WorldFrame picks only while it holds the hover (`0x4817ae`): that stale pick must not be
+/// published again, or the unit's plate is rebuilt over the tooltip the window's `OnEnter` took
+/// (a loot row's item, replaced by the mob behind the loot window) and faded out a frame later.
+#[test]
+fn a_stale_world_pick_does_not_take_back_a_window_tooltip() {
+    let (mut app, wolf, _) = mouseover_app();
+    app.init_resource::<crate::ui_script::PointerOverUi>();
+    world_and_bag(&mut app, "ANCHOR_NONE");
+    hover_unit(&mut app, wolf, WOLF);
+    assert_eq!(
+        eval(&mut app, "return UnitExists('mouseover') and 1"),
+        Some(1)
+    );
+
+    // This frame's walk takes the bag, and the arbiter marks the pointer over the UI; the pick
+    // is still last frame's wolf.
+    script(&mut app).mouse_move(120.0, 120.0);
+    app.world_mut()
+        .resource_mut::<crate::ui_script::PointerOverUi>()
+        .0 = true;
+    hover_unit(&mut app, wolf, WOLF);
+    assert_eq!(
+        eval(&mut app, "return UnitExists('mouseover') and 1"),
+        None,
+        "the stale pick is not published again"
+    );
+    // The next frame's pick stands down over the UI.
+    hover(&mut app, Hovered::default(), HoveredObject::default());
+    script(&mut app).tick(2.5);
+    assert_eq!(
+        eval(
+            &mut app,
+            r#"return GameTooltip:IsShown() and GameTooltip:IsOwned(Bag)
+                and GameTooltipTextLeft1:GetText() == "Bag slot"
+                and GameTooltip:GetAlpha() == 1 and 1"#
+        ),
+        Some(1),
+        "the bag keeps its tooltip at full alpha"
+    );
+    assert!(script(&mut app).take_errors().is_empty());
+}
+
 /// With the cursor on the world, every mouseover change requests the fade on `GameTooltip`
 /// (`0x492909`), whoever holds it: an addon's tooltip shown over the world fades with the hover.
 #[test]
